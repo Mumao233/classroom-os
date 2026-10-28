@@ -1,0 +1,58 @@
+name: PR-00 Windows regression
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  local-product-regression:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      PYTHONUTF8: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Configure workspace temporary and cache directories
+        shell: pwsh
+        run: |
+          $pr00Root = Join-Path $env:GITHUB_WORKSPACE 'work/pr00'
+          foreach ($name in @('tmp', 'cache/pip', 'cache/hf')) {
+            New-Item -ItemType Directory -Force -Path (Join-Path $pr00Root $name) | Out-Null
+          }
+          "TEMP=$(Join-Path $pr00Root 'tmp')" >> $env:GITHUB_ENV
+          "TMP=$(Join-Path $pr00Root 'tmp')" >> $env:GITHUB_ENV
+          "PIP_CACHE_DIR=$(Join-Path $pr00Root 'cache/pip')" >> $env:GITHUB_ENV
+          "HF_HOME=$(Join-Path $pr00Root 'cache/hf')" >> $env:GITHUB_ENV
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.19.0'
+      - name: Install unchanged development requirements
+        run: python -m pip install -r requirements-dev.txt -c tools/pr00/constraints-py310-windows.txt
+      - name: Record resolved dependencies
+        shell: pwsh
+        run: python -m pip freeze | Out-File -Encoding utf8 work/pr00/pip-freeze.txt
+      - name: Run guarded baseline and static checks
+        run: python tools/pr00/run_checks.py --output-dir work/pr00/ci-checks
+      - name: Save synthetic check evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr00-windows-evidence
+          path: |
+            work/pr00/ci-checks/*.log
+            work/pr00/ci-checks/*.json
+            work/pr00/ci-checks/*.xml
+            work/pr00/ci-checks/*.md
+            work/pr00/pip-freeze.txt
+          if-no-files-found: warn
+          retention-days: 7

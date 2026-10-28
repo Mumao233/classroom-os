@@ -1,0 +1,7 @@
+{
+  "wall_seconds": 72.0028644,
+  "guard": "socket connect/bind/getaddrinfo limited to loopback",
+  "completed_at": "2026-10-28T14:46:29.7913556+08:00",
+  "python": "J:\\class-assistant\\classroom-os\\work\\pr00\\venv\\Scripts\\python.exe",
+  "exit_code": 0
+}

@@ -1,0 +1,337 @@
+{
+  "schema_version": 1,
+  "started_at": "2026-10-28T06:56:58.012492+00:00",
+  "repository": "J:\\class-assistant\\classroom-os",
+  "output": "J:\\class-assistant\\classroom-os\\work\\pr00\\runner-acceptance",
+  "python": "3.10.4 (tags/v3.10.4:9d38120, Mar 23 2022, 23:13:41) [MSC v.1929 64 bit (AMD64)]",
+  "python_executable": "J:\\class-assistant\\classroom-os\\work\\pr00\\venv\\Scripts\\python.exe",
+  "platform": "Windows-10-10.0.26300-SP0",
+  "baseline_commit": "43fa23c141e3350e90d72ed7768e3b8de7d68337",
+  "network_policy": "test children: loopback only; real subprocesses denied; HF offline",
+  "scope": "existing synthetic tests; no microphone, model inference, deployment or Web E2E",
+  "steps": [
+    {
+      "name": "git-head",
+      "command": [
+        "git",
+        "rev-parse",
+        "HEAD"
+      ],
+      "exit_code": 0,
+      "seconds": 0.109,
+      "log": "git-head.log"
+    },
+    {
+      "name": "git-status",
+      "command": [
+        "git",
+        "status",
+        "--short",
+        "--branch"
+      ],
+      "exit_code": 0,
+      "seconds": 0.109,
+      "log": "git-status.log"
+    },
+    {
+      "name": "node-version",
+      "command": [
+        "C:\\Users\\Mumao\\.cache\\codex-runtimes\\codex-primary-runtime\\dependencies\\node\\bin\\node.exe",
+        "--version"
+      ],
+      "exit_code": 0,
+      "seconds": 0.141,
+      "log": "node-version.log"
+    },
+    {
+      "name": "powershell-version",
+      "command": [
+        "powershell",
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        "$PSVersionTable.PSVersion.ToString()"
+      ],
+      "exit_code": 0,
+      "seconds": 0.359,
+      "log": "powershell-version.log"
+    },
+    {
+      "name": "python-guard",
+      "command": [
+        "J:\\class-assistant\\classroom-os\\work\\pr00\\venv\\Scripts\\python.exe",
+        "J:\\class-assistant\\classroom-os\\tools\\pr00\\selftest_guards.py"
+      ],
+      "exit_code": 0,
+      "seconds": 0.36,
+      "log": "python-guard.log"
+    },
+    {
+      "name": "node-guard",
+      "command": [
+        "C:\\Users\\Mumao\\.cache\\codex-runtimes\\codex-primary-runtime\\dependencies\\node\\bin\\node.exe",
+        "--require",
+        "J:\\class-assistant\\classroom-os\\tools\\pr00\\node_guard.cjs",
+        "tools/pr00/selftest_guards.cjs"
+      ],
+      "exit_code": 0,
+      "seconds": 0.156,
+      "log": "node-guard.log"
+    },
+    {
+      "name": "junit-gate-selftest",
+      "command": [
+        "J:\\class-assistant\\classroom-os\\work\\pr00\\venv\\Scripts\\python.exe",
+        "tools/pr00/selftest_junit.py"
+      ],
+      "exit_code": 0,
+      "seconds": 0.297,
+      "log": "junit-gate-selftest.log"
+    },
+    {
+      "name": "pytest",
+      "command": [
+        "J:\\class-assistant\\classroom-os\\work\\pr00\\venv\\Scripts\\python.exe",
+        "-m",
+        "pytest",
+        "tests",
+        "-q",
+        "--basetemp=J:\\class-assistant\\classroom-os\\work\\pr00\\runner-acceptance\\tmp\\pytest",
+        "--junitxml=J:\\class-assistant\\classroom-os\\work\\pr00\\runner-acceptance\\pytest-junit.xml",
+        "-o",
+        "cache_dir=J:\\class-assistant\\classroom-os\\work\\pr00\\runner-acceptance\\cache\\pytest"
+      ],
+      "exit_code": 0,
+      "seconds": 76.422,
+      "log": "pytest.log"
+    },
+    {
+      "name": "node-audio",
+      "command": [
+        "C:\\Users\\Mumao\\.cache\\codex-runtimes\\codex-primary-runtime\\dependencies\\node\\bin\\node.exe",
+        "--require",
+        "J:\\class-assistant\\classroom-os\\tools\\pr00\\node_guard.cjs",
+        "tests/audio.cjs"
+      ],
+      "exit_code": 0,
+      "seconds": 0.547,
+      "log": "node-audio.log"
+    },
+    {
+      "name": "node-ai-settings",
+      "command": [
+        "C:\\Users\\Mumao\\.cache\\codex-runtimes\\codex-primary-runtime\\dependencies\\node\\bin\\node.exe",
+        "--require",
+        "J:\\class-assistant\\classroom-os\\tools\\pr00\\node_guard.cjs",
+        "tests/ai-settings.cjs"
+      ],
+      "exit_code": 0,
+      "seconds": 0.172,
+      "log": "node-ai-settings.log"
+    },
+    {
+      "name": "node-input-limits",
+      "command": [
+        "C:\\Users\\Mumao\\.cache\\codex-runtimes\\codex-primary-runtime\\dependencies\\node\\bin\\node.exe",
+        "--require",
+        "J:\\class-assistant\\classroom-os\\tools\\pr00\\node_guard.cjs",
+        "tests/input-limits.cjs"
+      ],
+      "exit_code": 0,
+      "seconds": 0.171,
+      "log": "node-input-limits.log"
+    },
+    {
+      "name": "node-study-ui",
+      "command": [
+        "C:\\Users\\Mumao\\.cache\\codex-runtimes\\codex-primary-runtime\\dependencies\\node\\bin\\node.exe",
+        "--require",
+        "J:\\class-assistant\\classroom-os\\tools\\pr00\\node_guard.cjs",
+        "tests/study-ui.cjs"
+      ],
+      "exit_code": 0,
+      "seconds": 0.219,
+      "log": "node-study-ui.log"
+    },
+    {
+      "name": "node-study-cache",
+      "command": [
+        "C:\\Users\\Mumao\\.cache\\codex-runtimes\\codex-primary-runtime\\dependencies\\node\\bin\\node.exe",
+        "--require",
+        "J:\\class-assistant\\classroom-os\\tools\\pr00\\node_guard.cjs",
+        "tests/study-cache.cjs"
+      ],
+      "exit_code": 0,
+      "seconds": 0.156,
+      "log": "node-study-cache.log"
+    },
+    {
+      "name": "node-review-render",
+      "command": [
+        "C:\\Users\\Mumao\\.cache\\codex-runtimes\\codex-primary-runtime\\dependencies\\node\\bin\\node.exe",
+        "--require",
+        "J:\\class-assistant\\classroom-os\\tools\\pr00\\node_guard.cjs",
+        "tests/review-render.cjs"
+      ],
+      "exit_code": 0,
+      "seconds": 0.141,
+      "log": "node-review-render.log"
+    },
+    {
+      "name": "node-review-ui",
+      "command": [
+        "C:\\Users\\Mumao\\.cache\\codex-runtimes\\codex-primary-runtime\\dependencies\\node\\bin\\node.exe",
+        "--require",
+        "J:\\class-assistant\\classroom-os\\tools\\pr00\\node_guard.cjs",
+        "tests/review-ui.cjs"
+      ],
+      "exit_code": 0,
+      "seconds": 0.14,
+      "log": "node-review-ui.log"
+    },
+    {
+      "name": "node-review-mount",
+      "command": [
+        "C:\\Users\\Mumao\\.cache\\codex-runtimes\\codex-primary-runtime\\dependencies\\node\\bin\\node.exe",
+        "--require",
+        "J:\\class-assistant\\classroom-os\\tools\\pr00\\node_guard.cjs",
+        "tests/review-mount.cjs"
+      ],
+      "exit_code": 0,
+      "seconds": 0.157,
+      "log": "node-review-mount.log"
+    },
+    {
+      "name": "node-portable-reader",
+      "command": [
+        "C:\\Users\\Mumao\\.cache\\codex-runtimes\\codex-primary-runtime\\dependencies\\node\\bin\\node.exe",
+        "--require",
+        "J:\\class-assistant\\classroom-os\\tools\\pr00\\node_guard.cjs",
+        "tests/portable-reader.cjs"
+      ],
+      "exit_code": 0,
+      "seconds": 0.125,
+      "log": "node-portable-reader.log"
+    },
+    {
+      "name": "pytest-baseline-gate",
+      "exit_code": 0,
+      "detail": "At least 525 testcase nodes plus 171 subtests; zero failures/errors/skips. Count is not a substitute for test preservation."
+    },
+    {
+      "name": "python-ast",
+      "exit_code": 0,
+      "baseline_files": 44,
+      "total_files": 48,
+      "errors": []
+    },
+    {
+      "name": "js-syntax-app.js",
+      "command": [
+        "C:\\Users\\Mumao\\.cache\\codex-runtimes\\codex-primary-runtime\\dependencies\\node\\bin\\node.exe",
+        "--check",
+        "static/app.js"
+      ],
+      "exit_code": 0,
+      "seconds": 0.109,
+      "log": "js-syntax-app.js.log"
+    },
+    {
+      "name": "js-syntax-pcm-worklet.js",
+      "command": [
+        "C:\\Users\\Mumao\\.cache\\codex-runtimes\\codex-primary-runtime\\dependencies\\node\\bin\\node.exe",
+        "--check",
+        "static/pcm-worklet.js"
+      ],
+      "exit_code": 0,
+      "seconds": 0.094,
+      "log": "js-syntax-pcm-worklet.js.log"
+    },
+    {
+      "name": "js-syntax-study-cache.js",
+      "command": [
+        "C:\\Users\\Mumao\\.cache\\codex-runtimes\\codex-primary-runtime\\dependencies\\node\\bin\\node.exe",
+        "--check",
+        "static/study-cache.js"
+      ],
+      "exit_code": 0,
+      "seconds": 0.078,
+      "log": "js-syntax-study-cache.js.log"
+    },
+    {
+      "name": "js-syntax-review-render.js",
+      "command": [
+        "C:\\Users\\Mumao\\.cache\\codex-runtimes\\codex-primary-runtime\\dependencies\\node\\bin\\node.exe",
+        "--check",
+        "static/review-render.js"
+      ],
+      "exit_code": 0,
+      "seconds": 0.094,
+      "log": "js-syntax-review-render.js.log"
+    },
+    {
+      "name": "js-syntax-review.js",
+      "command": [
+        "C:\\Users\\Mumao\\.cache\\codex-runtimes\\codex-primary-runtime\\dependencies\\node\\bin\\node.exe",
+        "--check",
+        "static/review.js"
+      ],
+      "exit_code": 0,
+      "seconds": 0.093,
+      "log": "js-syntax-review.js.log"
+    },
+    {
+      "name": "js-syntax-portable-reader.js",
+      "command": [
+        "C:\\Users\\Mumao\\.cache\\codex-runtimes\\codex-primary-runtime\\dependencies\\node\\bin\\node.exe",
+        "--check",
+        "static/portable-reader.js"
+      ],
+      "exit_code": 0,
+      "seconds": 0.078,
+      "log": "js-syntax-portable-reader.js.log"
+    },
+    {
+      "name": "powershell-parse",
+      "command": [
+        "powershell",
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        "$failed = $false; foreach ($name in @('setup.ps1','start.ps1','stop.ps1')) { $tokens = $null; $errors = $null; [void][System.Management.Automation.Language.Parser]::ParseFile((Join-Path (Get-Location) $name), [ref]$tokens, [ref]$errors); if ($errors.Count) { $failed = $true; $errors | ForEach-Object { Write-Output ($name + ': ' + $_.Message) } } else { Write-Output ($name + ': parsed') } }; if ($failed) { exit 1 }"
+      ],
+      "exit_code": 0,
+      "seconds": 0.5,
+      "log": "powershell-parse.log"
+    },
+    {
+      "name": "git-diff-check",
+      "command": [
+        "git",
+        "diff",
+        "--check"
+      ],
+      "exit_code": 0,
+      "seconds": 0.079,
+      "log": "git-diff-check.log"
+    }
+  ],
+  "dependencies": {
+    "pytest": "9.2.0",
+    "fastapi": "0.162.0",
+    "uvicorn": "0.54.0",
+    "httpx": "0.28.1",
+    "faster-whisper": "1.2.1",
+    "Pillow": "12.3.0"
+  },
+  "pytest_junit": {
+    "tests": 696,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "parent_testcases": 525,
+    "subtests": 171
+  },
+  "finished_at": "2026-10-28T06:58:19.137725+00:00",
+  "passed": true
+}

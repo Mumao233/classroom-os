@@ -1,0 +1,59 @@
+.............. [  2%]
+....................................................... [ 13%]
+................................................................. [ 25%]
+.................................................................. [ 38%]
+...............................FF... [ 44%]
+........................................................................ [ 58%]
+........................................................................ [ 72%]
+........................................................................ [ 86%]
+................................................................ [ 98%]
+.........                         [100%]
+================================== FAILURES ===================================
+__ KeyStoreTests.test_non_windows_cannot_load_but_can_delete_existing_store ___
+
+self = <test_key_store.KeyStoreTests testMethod=test_non_windows_cannot_load_but_can_delete_existing_store>
+
+    def test_non_windows_cannot_load_but_can_delete_existing_store(self):
+        self.write_envelope(self.envelope())
+        with patch("key_store.os.name", "posix"):
+            with self.assertRaises(KeyStoreError) as caught:
+                self.store.load()
+>           self.assertEqual(caught.exception.kind, "unsupported")
+E           AssertionError: 'read_failed' != 'unsupported'
+E           - read_failed
+E           + unsupported
+
+tests\test_key_store.py:85: AssertionError
+___ KeyStoreTests.test_non_windows_never_saves_even_with_mocked_encryption ____
+
+self = <test_key_store.KeyStoreTests testMethod=test_non_windows_never_saves_even_with_mocked_encryption>
+
+    def test_non_windows_never_saves_even_with_mocked_encryption(self):
+        with patch("key_store.os.name", "posix"), patch("key_store._dpapi") as crypt:
+            with self.assertRaises(KeyStoreError) as caught:
+                self.store.save("synthetic-key")
+            self.assertEqual(caught.exception.kind, "unsupported")
+>           self.assertIsNone(self.store.load())
+
+tests\test_key_store.py:76:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <key_store.KeyStore object at 0x0000000039A19750>
+
+    def load(self) -> str | None:
+        """Read a supported encrypted key, or return None when none is saved."""
+        with self._lock:
+            try:
+                with self.path.open("rb") as stream:
+                    payload = stream.read(_MAX_FILE_BYTES + 1)
+            except FileNotFoundError:
+                return None
+            except Exception:
+>               raise KeyStoreError("无法读取已保存的 API Key，请重新填写。", "read_failed") from None
+E               key_store.KeyStoreError: 无法读取已保存的 API Key，请重新填写。
+
+key_store.py:137: KeyStoreError
+=========================== short test summary info ===========================
+FAILED tests/test_key_store.py::KeyStoreTests::test_non_windows_cannot_load_but_can_delete_existing_store
+FAILED tests/test_key_store.py::KeyStoreTests::test_non_windows_never_saves_even_with_mocked_encryption
+2 failed, 523 passed, 171 subtests passed in 83.93s (0:01:23)

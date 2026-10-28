@@ -1,0 +1,392 @@
+{
+  "reviewed_at": "2026-10-28T15:33:36.461486+08:00",
+  "phase": "working-tree-precommit",
+  "repository": "J:\\class-assistant\\classroom-os",
+  "branch": "feature/web-alpha-0.1.0",
+  "refs_before_commit": {
+    "HEAD": "43fa23c141e3350e90d72ed7768e3b8de7d68337",
+    "main": "43fa23c141e3350e90d72ed7768e3b8de7d68337",
+    "origin/main": "43fa23c141e3350e90d72ed7768e3b8de7d68337",
+    "v1.3.0^{commit}": "43fa23c141e3350e90d72ed7768e3b8de7d68337"
+  },
+  "scope": "PR-00 local commit only; no PR-01, remote push, merge, tag, release or deployment",
+  "files_reviewed": 35,
+  "manifest": [
+    {
+      "path": ".github/workflows/pr00-windows.yml",
+      "change": "A",
+      "bytes": 2048,
+      "sha256": "ddaa48a7355c622bfa93b5309c5df69ccd8ef48b2b1c6e25d26ab624a0e18114",
+      "kind": "text"
+    },
+    {
+      "path": "AGENTS.md",
+      "change": "A",
+      "bytes": 3221,
+      "sha256": "191d7b8b52cc483782deb01b50dc7a491cfd71da1fc2772f57f2fc2d172165ba",
+      "kind": "text"
+    },
+    {
+      "path": "docs/web-alpha/BASELINE.md",
+      "change": "A",
+      "bytes": 3751,
+      "sha256": "12218129c2ff493f4ccd7cd7e40139862dd4b60cfe757ef487baaa82752e4045",
+      "kind": "text"
+    },
+    {
+      "path": "docs/web-alpha/CONFLICTS.md",
+      "change": "A",
+      "bytes": 8972,
+      "sha256": "86300680464f05c42b0c454b388cd403ebc8a0809b3e6f13552d09bc9f9f275f",
+      "kind": "text"
+    },
+    {
+      "path": "docs/web-alpha/Classroom_OS_Web_Alpha_0.1.0_PRD_v1.2.pdf",
+      "change": "A",
+      "bytes": 16455605,
+      "sha256": "dd7d970d54fb443969ce6bb210b0b18053bfecf972cf419efa57edb51b2ff5b8",
+      "kind": "authorized-prd-pdf"
+    },
+    {
+      "path": "docs/web-alpha/DECISIONS.md",
+      "change": "A",
+      "bytes": 13387,
+      "sha256": "9fed41ac62aca761e5ee8449233b8faf03843cac220a26e7f8cdf6f711eab0bb",
+      "kind": "text"
+    },
+    {
+      "path": "docs/web-alpha/PR00_ACCEPTANCE.md",
+      "change": "A",
+      "bytes": 14034,
+      "sha256": "6d5d0d00f13871b8696a922718e0f224747c1bcd8e3850184eb24bd15cf35f9e",
+      "kind": "text"
+    },
+    {
+      "path": "docs/web-alpha/PRD_PROVENANCE.md",
+      "change": "A",
+      "bytes": 1943,
+      "sha256": "2821aad95509d1372a3fba1361dc64cb7d70dd07a92413a823f129c4bed05abc",
+      "kind": "text"
+    },
+    {
+      "path": "docs/web-alpha/README.md",
+      "change": "A",
+      "bytes": 2644,
+      "sha256": "752bf6faec3b6fcdc745ce35394e0d939844a8e90b7f4dbfa39c57f6a2ccb003",
+      "kind": "text"
+    },
+    {
+      "path": "docs/web-alpha/REQUIREMENTS_MATRIX.md",
+      "change": "A",
+      "bytes": 25236,
+      "sha256": "17bafdfcded93556fe553636e5f2d76f010ab7fda4ec5b32819e6f4a3a1eb98c",
+      "kind": "text"
+    },
+    {
+      "path": "docs/web-alpha/SHA256SUMS.txt",
+      "change": "A",
+      "bytes": 109,
+      "sha256": "1fa11241bf1d18a47ebe52e64e798ab4d110046a982c62ef3f39fd08ad3b56a6",
+      "kind": "text"
+    },
+    {
+      "path": "docs/web-alpha/TESTING.md",
+      "change": "A",
+      "bytes": 5608,
+      "sha256": "2c1a12ea93b7e331f470bee8c730e72bdddd321def2c28ff259796034e788717",
+      "kind": "text"
+    },
+    {
+      "path": "docs/web-alpha/WEB_TEST_GATES.md",
+      "change": "A",
+      "bytes": 5228,
+      "sha256": "6ac53d79e8d4162dad1fbaa6479452def9a317df36a8424212b2079c0dacec83",
+      "kind": "text"
+    },
+    {
+      "path": "docs/web-alpha/archive/2026-10-28-initial-analysis.md",
+      "change": "A",
+      "bytes": 68106,
+      "sha256": "80f2fb6cecf88f8189ffbaf229e47a0cb7908a2d958d26b0262977171c096108",
+      "kind": "text"
+    },
+    {
+      "path": "docs/web-alpha/evidence/baseline-manifest.json",
+      "change": "A",
+      "bytes": 17582,
+      "sha256": "a6685f896d9867537b4c329329a7aa00c97bad1cfe4bb9824fac70366129a129",
+      "kind": "text"
+    },
+    {
+      "path": "docs/web-alpha/evidence/check-tooling-result.md",
+      "change": "A",
+      "bytes": 4157,
+      "sha256": "eab395c00e6df0833b1c5021947e5fa4aa763bdbf1de88ef1d2dcdb0835b6b8b",
+      "kind": "text"
+    },
+    {
+      "path": "docs/web-alpha/evidence/dependency-versions.txt",
+      "change": "A",
+      "bytes": 256,
+      "sha256": "6bf2dd915b9c6ec0516fae308ca19e75099e625e593ab3d67fecfcd349ca81da",
+      "kind": "text"
+    },
+    {
+      "path": "docs/web-alpha/evidence/final-integrity.json",
+      "change": "A",
+      "bytes": 8486,
+      "sha256": "73ecfb7c2b17b2ec32812d4a195c460c795a9e475cf55fa1bd9239063b503b48",
+      "kind": "text"
+    },
+    {
+      "path": "docs/web-alpha/evidence/final-pytest-junit.xml",
+      "change": "A",
+      "bytes": 71963,
+      "sha256": "3faa91c65f67e8c08f1abc3669c0307f7a7be242b07232edeb4eb3eaedb68dd7",
+      "kind": "text"
+    },
+    {
+      "path": "docs/web-alpha/evidence/final-pytest.txt",
+      "change": "A",
+      "bytes": 692,
+      "sha256": "0cc9bd01d4292169d1c64e2024f5b47e325f98f4cb7517e4084fa3acad0d214f",
+      "kind": "text"
+    },
+    {
+      "path": "docs/web-alpha/evidence/final-results.json",
+      "change": "A",
+      "bytes": 10764,
+      "sha256": "60f34eaacf4edd8438db8a8a78ce1d2403c76617a779e721ec22decabe1480e0",
+      "kind": "text"
+    },
+    {
+      "path": "docs/web-alpha/evidence/final-step-logs.txt",
+      "change": "A",
+      "bytes": 3877,
+      "sha256": "4566d9ace613fe6c0312683121fa7f3a793ab9a7e729e632adbf8350a0649feb",
+      "kind": "text"
+    },
+    {
+      "path": "docs/web-alpha/evidence/final-summary.md",
+      "change": "A",
+      "bytes": 1136,
+      "sha256": "04211f1a806243619268baf60ee4c9b1d6872324f6722be012688f90398af419",
+      "kind": "text"
+    },
+    {
+      "path": "docs/web-alpha/evidence/first-run-pytest-failure.txt",
+      "change": "A",
+      "bytes": 3151,
+      "sha256": "a5ee7c60ba5af9f89a8589f1e6f817183aa3c0f2b82c5cf530564d823ea3354f",
+      "kind": "text"
+    },
+    {
+      "path": "docs/web-alpha/evidence/pip-freeze.txt",
+      "change": "A",
+      "bytes": 881,
+      "sha256": "94ad6bc8f87c5879f4ac55f9eb1bb480888adb03b3a9c47c2433a218aa930424",
+      "kind": "text"
+    },
+    {
+      "path": "docs/web-alpha/evidence/rollback-baseline-result.md",
+      "change": "A",
+      "bytes": 5351,
+      "sha256": "8293708429876a4a793d7116b6341588e9350447445e42ce2e066be3a7788bd5",
+      "kind": "text"
+    },
+    {
+      "path": "docs/web-alpha/evidence/rollback-pytest-result.json",
+      "change": "A",
+      "bytes": 267,
+      "sha256": "62fd49ed6b857a0c53684e771bcb8ae5526fe8a2852135e5bc9f3b5bb6514e63",
+      "kind": "text"
+    },
+    {
+      "path": "docs/web-alpha/evidence/rollback-pytest.txt",
+      "change": "A",
+      "bytes": 692,
+      "sha256": "227b89fc4e16edc6c80301586fe7050695119bebd612676a1ba2aa4f7df1146a",
+      "kind": "text"
+    },
+    {
+      "path": "tools/pr00/constraints-py310-windows.txt",
+      "change": "A",
+      "bytes": 973,
+      "sha256": "9457e2bed4a993ce37792a1a542a08348f0ab15ac37da0af72d89a7cd9521b86",
+      "kind": "text"
+    },
+    {
+      "path": "tools/pr00/node_guard.cjs",
+      "change": "A",
+      "bytes": 2159,
+      "sha256": "432887b39284c03223e45d50c1bcf272b687a8e4feb66de44cabf3216a8335d2",
+      "kind": "text"
+    },
+    {
+      "path": "tools/pr00/run_checks.py",
+      "change": "A",
+      "bytes": 11080,
+      "sha256": "a9a1c735282c7e527a47b4d92b8beb52582082628cf678411e33f050ba7a14c9",
+      "kind": "text"
+    },
+    {
+      "path": "tools/pr00/runtime_guard/sitecustomize.py",
+      "change": "A",
+      "bytes": 2740,
+      "sha256": "4fa24387ef4cc4ed135616ceeb5f269fc9f4183f4e8f586917dca49778820534",
+      "kind": "text"
+    },
+    {
+      "path": "tools/pr00/selftest_guards.cjs",
+      "change": "A",
+      "bytes": 1175,
+      "sha256": "02fa97930dc170faca476e57096f0e0ffdf5adb364d3c1de8c64ffe004664a52",
+      "kind": "text"
+    },
+    {
+      "path": "tools/pr00/selftest_guards.py",
+      "change": "A",
+      "bytes": 1655,
+      "sha256": "a473651e8629bb78ccc603505e36e3254805e1f16aed535aff619c815995b187",
+      "kind": "text"
+    },
+    {
+      "path": "tools/pr00/selftest_junit.py",
+      "change": "A",
+      "bytes": 1034,
+      "sha256": "2377189d673a4d684031fda46a880bea1681dadd976dbab56f043bd8d0dd49d6",
+      "kind": "text"
+    }
+  ],
+  "credential_pattern_categories": [
+    "private-key",
+    "github-token",
+    "cloud-access-key",
+    "model-api-token",
+    "jwt",
+    "credential-url",
+    "secret-assignment"
+  ],
+  "credential_candidates": [],
+  "private_data_and_runtime_files_in_commit": [],
+  "original_tracked_files": {
+    "count": 149,
+    "changed": []
+  },
+  "original_document_files": {
+    "count": 7,
+    "changed": []
+  },
+  "preserved_test_evidence_hashes": {
+    "docs/web-alpha/evidence/baseline-manifest.json": "a6685f896d9867537b4c329329a7aa00c97bad1cfe4bb9824fac70366129a129",
+    "docs/web-alpha/evidence/check-tooling-result.md": "eab395c00e6df0833b1c5021947e5fa4aa763bdbf1de88ef1d2dcdb0835b6b8b",
+    "docs/web-alpha/evidence/dependency-versions.txt": "6bf2dd915b9c6ec0516fae308ca19e75099e625e593ab3d67fecfcd349ca81da",
+    "docs/web-alpha/evidence/final-integrity.json": "73ecfb7c2b17b2ec32812d4a195c460c795a9e475cf55fa1bd9239063b503b48",
+    "docs/web-alpha/evidence/final-pytest-junit.xml": "3faa91c65f67e8c08f1abc3669c0307f7a7be242b07232edeb4eb3eaedb68dd7",
+    "docs/web-alpha/evidence/final-pytest.txt": "0cc9bd01d4292169d1c64e2024f5b47e325f98f4cb7517e4084fa3acad0d214f",
+    "docs/web-alpha/evidence/final-results.json": "60f34eaacf4edd8438db8a8a78ce1d2403c76617a779e721ec22decabe1480e0",
+    "docs/web-alpha/evidence/final-step-logs.txt": "4566d9ace613fe6c0312683121fa7f3a793ab9a7e729e632adbf8350a0649feb",
+    "docs/web-alpha/evidence/final-summary.md": "04211f1a806243619268baf60ee4c9b1d6872324f6722be012688f90398af419",
+    "docs/web-alpha/evidence/first-run-pytest-failure.txt": "a5ee7c60ba5af9f89a8589f1e6f817183aa3c0f2b82c5cf530564d823ea3354f",
+    "docs/web-alpha/evidence/pip-freeze.txt": "94ad6bc8f87c5879f4ac55f9eb1bb480888adb03b3a9c47c2433a218aa930424",
+    "docs/web-alpha/evidence/rollback-baseline-result.md": "8293708429876a4a793d7116b6341588e9350447445e42ce2e066be3a7788bd5",
+    "docs/web-alpha/evidence/rollback-pytest-result.json": "62fd49ed6b857a0c53684e771bcb8ae5526fe8a2852135e5bc9f3b5bb6514e63",
+    "docs/web-alpha/evidence/rollback-pytest.txt": "227b89fc4e16edc6c80301586fe7050695119bebd612676a1ba2aa4f7df1146a",
+    "work/pr00/ci-result.md": "eab395c00e6df0833b1c5021947e5fa4aa763bdbf1de88ef1d2dcdb0835b6b8b",
+    "work/pr00/logs/network-guard.log": "979d73621b4becdbafdf125b468888c17fc83b9b4019fc1052a31ef3c6229274",
+    "work/pr00/logs/pip-install.log": "56be492c2c6f0cfa6253fe02f377ce5cd401d42ab722b2123f234f64c7fa915f",
+    "work/pr00/logs/pytest-baseline.log": "227b89fc4e16edc6c80301586fe7050695119bebd612676a1ba2aa4f7df1146a",
+    "work/pr00/pip-freeze.txt": "94ad6bc8f87c5879f4ac55f9eb1bb480888adb03b3a9c47c2433a218aa930424",
+    "work/pr00/pytest-result.json": "62fd49ed6b857a0c53684e771bcb8ae5526fe8a2852135e5bc9f3b5bb6514e63",
+    "work/pr00/runner-acceptance/git-diff-check.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "work/pr00/runner-acceptance/git-head.log": "7efe9054ec40e028129c4ad2c43d07801940b93f743a1b5a2a322330779f21ba",
+    "work/pr00/runner-acceptance/git-status.log": "cfa1708dd7860ce301d601e0bb26dbb869e112c4c326981d890f17e1c1dc0d8b",
+    "work/pr00/runner-acceptance/js-syntax-app.js.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "work/pr00/runner-acceptance/js-syntax-pcm-worklet.js.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "work/pr00/runner-acceptance/js-syntax-portable-reader.js.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "work/pr00/runner-acceptance/js-syntax-review-render.js.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "work/pr00/runner-acceptance/js-syntax-review.js.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "work/pr00/runner-acceptance/js-syntax-study-cache.js.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "work/pr00/runner-acceptance/junit-gate-selftest.log": "30843368557a34576abd6cd68469309b80195a22ba972a028b6b4cda603f5386",
+    "work/pr00/runner-acceptance/node-ai-settings.log": "ab1c1f093fe0fabca51a0afa380d714285cb662be8b8413d576df8f60f8571d4",
+    "work/pr00/runner-acceptance/node-audio.log": "7cc64e6a1d27a7c050a409a5fb4e9a7397301becf3410b492cbf4fbffb75b189",
+    "work/pr00/runner-acceptance/node-guard.log": "2a37a450d928749bb02dc6c857598860f025af5c05ba955703b9bd8c3f42e5df",
+    "work/pr00/runner-acceptance/node-input-limits.log": "318c1ee5cc4aaf5e3d8675a0f90fdfa65d60e5fe0b28cc1196a1c6b75f62c3e1",
+    "work/pr00/runner-acceptance/node-portable-reader.log": "84faf08938886897c7be0e24fdde8912bc38781ad22a0746c9927b810d1dee94",
+    "work/pr00/runner-acceptance/node-review-mount.log": "d375e2ce3f40a7c37d6eaf2d4f1b4926de85666b33b2e3635a32cf26f343df97",
+    "work/pr00/runner-acceptance/node-review-render.log": "ea8027ce322cd9fdf715e492b3aac4b18a0d1d3f59351ae81570f493b8d184ae",
+    "work/pr00/runner-acceptance/node-review-ui.log": "3802f6fa846eb7a0e5bc211e5bc66db11f4355b1b1818928a582b0a25ebb40e1",
+    "work/pr00/runner-acceptance/node-study-cache.log": "6987d66d8a383bd25672859eaf0ce304a7d398cdb65dcb74c23e47f28ddbc73a",
+    "work/pr00/runner-acceptance/node-study-ui.log": "c9bf4202787ad998d2abbca5108ea47cbcbeb81103080853e026155750b7bbb3",
+    "work/pr00/runner-acceptance/node-version.log": "bc697de995dc791df53d688ef69c08994cdffc8ce30c906b1ffc65b131ccd0eb",
+    "work/pr00/runner-acceptance/powershell-parse.log": "606b19ffdd76451cd1efad5236d105a1ecc5b05c0a45a07c718df62bf1b1244a",
+    "work/pr00/runner-acceptance/powershell-version.log": "21422c9c0c7f64853d26c1b033586145d7d9a49471b5bad8dc99e542fa3acd07",
+    "work/pr00/runner-acceptance/pytest-junit.xml": "3faa91c65f67e8c08f1abc3669c0307f7a7be242b07232edeb4eb3eaedb68dd7",
+    "work/pr00/runner-acceptance/pytest.log": "0cc9bd01d4292169d1c64e2024f5b47e325f98f4cb7517e4084fa3acad0d214f",
+    "work/pr00/runner-acceptance/python-guard.log": "187b1f5a2a68a6eb502655d3a7b4435a38cb3fc43013697f5a7f1be71d6804d3",
+    "work/pr00/runner-acceptance/results.json": "60f34eaacf4edd8438db8a8a78ce1d2403c76617a779e721ec22decabe1480e0",
+    "work/pr00/runner-acceptance/summary.md": "04211f1a806243619268baf60ee4c9b1d6872324f6722be012688f90398af419",
+    "work/pr00/runner-validation/git-diff-check.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "work/pr00/runner-validation/git-head.log": "7efe9054ec40e028129c4ad2c43d07801940b93f743a1b5a2a322330779f21ba",
+    "work/pr00/runner-validation/git-status.log": "cfa1708dd7860ce301d601e0bb26dbb869e112c4c326981d890f17e1c1dc0d8b",
+    "work/pr00/runner-validation/js-syntax-app.js.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "work/pr00/runner-validation/js-syntax-pcm-worklet.js.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "work/pr00/runner-validation/js-syntax-portable-reader.js.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "work/pr00/runner-validation/js-syntax-review-render.js.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "work/pr00/runner-validation/js-syntax-review.js.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "work/pr00/runner-validation/js-syntax-study-cache.js.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "work/pr00/runner-validation/node-ai-settings.log": "ab1c1f093fe0fabca51a0afa380d714285cb662be8b8413d576df8f60f8571d4",
+    "work/pr00/runner-validation/node-audio.log": "7cc64e6a1d27a7c050a409a5fb4e9a7397301becf3410b492cbf4fbffb75b189",
+    "work/pr00/runner-validation/node-guard.log": "2a37a450d928749bb02dc6c857598860f025af5c05ba955703b9bd8c3f42e5df",
+    "work/pr00/runner-validation/node-input-limits.log": "318c1ee5cc4aaf5e3d8675a0f90fdfa65d60e5fe0b28cc1196a1c6b75f62c3e1",
+    "work/pr00/runner-validation/node-portable-reader.log": "84faf08938886897c7be0e24fdde8912bc38781ad22a0746c9927b810d1dee94",
+    "work/pr00/runner-validation/node-review-mount.log": "d375e2ce3f40a7c37d6eaf2d4f1b4926de85666b33b2e3635a32cf26f343df97",
+    "work/pr00/runner-validation/node-review-render.log": "ea8027ce322cd9fdf715e492b3aac4b18a0d1d3f59351ae81570f493b8d184ae",
+    "work/pr00/runner-validation/node-review-ui.log": "3802f6fa846eb7a0e5bc211e5bc66db11f4355b1b1818928a582b0a25ebb40e1",
+    "work/pr00/runner-validation/node-study-cache.log": "6987d66d8a383bd25672859eaf0ce304a7d398cdb65dcb74c23e47f28ddbc73a",
+    "work/pr00/runner-validation/node-study-ui.log": "c9bf4202787ad998d2abbca5108ea47cbcbeb81103080853e026155750b7bbb3",
+    "work/pr00/runner-validation/node-version.log": "bc697de995dc791df53d688ef69c08994cdffc8ce30c906b1ffc65b131ccd0eb",
+    "work/pr00/runner-validation/powershell-parse.log": "606b19ffdd76451cd1efad5236d105a1ecc5b05c0a45a07c718df62bf1b1244a",
+    "work/pr00/runner-validation/powershell-version.log": "21422c9c0c7f64853d26c1b033586145d7d9a49471b5bad8dc99e542fa3acd07",
+    "work/pr00/runner-validation/pytest-junit.xml": "70a3064bd8e6472d9f211280054fc4ec69b2ed8c8f96f9c25049fd618ea69c7b",
+    "work/pr00/runner-validation/pytest.log": "ab6ab58b305de3cb8036738270316c9bc2b59ac9e821f3c0d979bc40be503475",
+    "work/pr00/runner-validation/python-guard.log": "187b1f5a2a68a6eb502655d3a7b4435a38cb3fc43013697f5a7f1be71d6804d3",
+    "work/pr00/runner-validation/results.json": "2950aa1efaaff1499683f0a125ec332597c31eae54a646806c5d44ae804285a5",
+    "work/pr00/runner-validation/summary.md": "9b9bdff5873a0e2127f172e032480013aa47576d9a3b70b10ccd1d4a4a2f3c41",
+    "work/pr00/runner-validation-final/git-diff-check.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "work/pr00/runner-validation-final/git-head.log": "7efe9054ec40e028129c4ad2c43d07801940b93f743a1b5a2a322330779f21ba",
+    "work/pr00/runner-validation-final/git-status.log": "cfa1708dd7860ce301d601e0bb26dbb869e112c4c326981d890f17e1c1dc0d8b",
+    "work/pr00/runner-validation-final/js-syntax-app.js.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "work/pr00/runner-validation-final/js-syntax-pcm-worklet.js.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "work/pr00/runner-validation-final/js-syntax-portable-reader.js.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "work/pr00/runner-validation-final/js-syntax-review-render.js.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "work/pr00/runner-validation-final/js-syntax-review.js.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "work/pr00/runner-validation-final/js-syntax-study-cache.js.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "work/pr00/runner-validation-final/node-ai-settings.log": "ab1c1f093fe0fabca51a0afa380d714285cb662be8b8413d576df8f60f8571d4",
+    "work/pr00/runner-validation-final/node-audio.log": "7cc64e6a1d27a7c050a409a5fb4e9a7397301becf3410b492cbf4fbffb75b189",
+    "work/pr00/runner-validation-final/node-guard.log": "2a37a450d928749bb02dc6c857598860f025af5c05ba955703b9bd8c3f42e5df",
+    "work/pr00/runner-validation-final/node-input-limits.log": "318c1ee5cc4aaf5e3d8675a0f90fdfa65d60e5fe0b28cc1196a1c6b75f62c3e1",
+    "work/pr00/runner-validation-final/node-portable-reader.log": "84faf08938886897c7be0e24fdde8912bc38781ad22a0746c9927b810d1dee94",
+    "work/pr00/runner-validation-final/node-review-mount.log": "d375e2ce3f40a7c37d6eaf2d4f1b4926de85666b33b2e3635a32cf26f343df97",
+    "work/pr00/runner-validation-final/node-review-render.log": "ea8027ce322cd9fdf715e492b3aac4b18a0d1d3f59351ae81570f493b8d184ae",
+    "work/pr00/runner-validation-final/node-review-ui.log": "3802f6fa846eb7a0e5bc211e5bc66db11f4355b1b1818928a582b0a25ebb40e1",
+    "work/pr00/runner-validation-final/node-study-cache.log": "6987d66d8a383bd25672859eaf0ce304a7d398cdb65dcb74c23e47f28ddbc73a",
+    "work/pr00/runner-validation-final/node-study-ui.log": "c9bf4202787ad998d2abbca5108ea47cbcbeb81103080853e026155750b7bbb3",
+    "work/pr00/runner-validation-final/node-version.log": "bc697de995dc791df53d688ef69c08994cdffc8ce30c906b1ffc65b131ccd0eb",
+    "work/pr00/runner-validation-final/powershell-parse.log": "606b19ffdd76451cd1efad5236d105a1ecc5b05c0a45a07c718df62bf1b1244a",
+    "work/pr00/runner-validation-final/powershell-version.log": "21422c9c0c7f64853d26c1b033586145d7d9a49471b5bad8dc99e542fa3acd07",
+    "work/pr00/runner-validation-final/pytest-junit.xml": "cef925d5a90768917ef17bdc7ab7f36928b517aaf7399eb4d287385c2c7ed2f4",
+    "work/pr00/runner-validation-final/pytest.log": "b2f8040a20c7354be009ccde18118cc904d09873b67a2f0d92b41958bdd80b70",
+    "work/pr00/runner-validation-final/python-guard.log": "187b1f5a2a68a6eb502655d3a7b4435a38cb3fc43013697f5a7f1be71d6804d3",
+    "work/pr00/runner-validation-final/results.json": "b362790b7a9cac84a2ce75deebc181a880b47aab6e432617793d6694f1bbf0d2",
+    "work/pr00/runner-validation-final/summary.md": "f28a626d93916e4c493b5708eebba7a8fef114c99b6c0940c1c9ea2088b21477",
+    "work/pr00/testing-result.md": "8293708429876a4a793d7116b6341588e9350447445e42ce2e066be3a7788bd5"
+  },
+  "evidence_scope": "Historical full tests and failed attempts retained; no full test rerun in closeout",
+  "ac_00_09": "本地通过，远端CI待验证",
+  "independent_review": "Second agent reviewed the original 35 additions: zero credential candidates; synthetic logs and original PRD provenance confirmed",
+  "limits": "Pattern scanning is not proof against every possible secret. PDF is the byte-identical approved PRD already read; it was not decoded again. Evidence contains local paths and host metadata.",
+  "git_diff_check_exit": 0,
+  "failures": [],
+  "passed": true
+}

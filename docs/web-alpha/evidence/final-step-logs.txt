@@ -1,0 +1,117 @@
+[git-diff-check.log]
+
+
+[git-head.log]
+43fa23c141e3350e90d72ed7768e3b8de7d68337
+
+
+[git-status.log]
+## feature/web-alpha-0.1.0
+?? .github/
+?? AGENTS.md
+?? docs/web-alpha/
+?? tools/
+
+
+[js-syntax-app.js.log]
+
+
+[js-syntax-pcm-worklet.js.log]
+
+
+[js-syntax-portable-reader.js.log]
+
+
+[js-syntax-review-render.js.log]
+
+
+[js-syntax-review.js.log]
+
+
+[js-syntax-study-cache.js.log]
+
+
+[junit-gate-selftest.log]
+PASS: JUnit parent/subtest separation, missing cases, failures, errors, skips and empty report
+
+
+[node-ai-settings.log]
+{"test":"AI settings and streamed-answer UI","result":"passed","mockRequests":28,"realNetwork":false,"realMicrophoneOpened":false,"checks":["DOM references","password lifecycle and browser storage","poll preserves unsaved edits","test never saves settings or overlaps save","save and clear-key contracts","pending switch and resume race","Codex switch preserves API configuration","formal and temporary answer separation","formal/stream/error/model HTML escaping","default-model retry attribution","API inference verification state","reported versus unknown usage"]}
+
+
+[node-audio.log]
+{"test":"AudioWorklet continuous resampling","inputRate":48000,"inputFrames":624017,"outputFrames":208006,"expectedFrames":208006,"maxInterpolationError":1.3007588867131048e-8,"partialFlushes":132}
+{"test":"AudioWorklet continuous resampling","inputRate":44100,"inputFrames":573317,"outputFrames":208006,"expectedFrames":208006,"maxInterpolationError":2.3897212597656647e-8,"partialFlushes":122}
+{"test":"Audio segmenter and WAV encoder","silenceSkipped":true,"shortTailPreserved":true,"silenceBoundary":true,"maxChunkSeconds":12,"chunkTimelineContinuous":true,"wav":"16 kHz mono PCM16"}
+
+
+[node-guard.log]
+PASS: Node guard, loopback, external/DNS/bind/subprocess denial; synthetic only
+
+
+[node-input-limits.log]
+{
+  "test": "Unicode input limits",
+  "passed": 55,
+  "failed": 0,
+  "mockRequests": 91,
+  "realNetwork": false,
+  "failures": []
+}
+
+
+[node-portable-reader.log]
+portable-reader: 18 checks passed (synthetic DOM; real local KaTeX; no browser/network/media)
+
+
+[node-review-mount.log]
+review-mount passed: plan/billing consent, frozen click selection, mark UI, CAS conflict/rebase, class draft recovery, source jump, package preflight/native download/lookup/import (synthetic DOM/API)
+
+
+[node-review-render.log]
+review-render: 20 checks passed (real offline KaTeX; no browser/network)
+
+
+[node-review-ui.log]
+review-ui passed: class isolation, durable request lookup, CAS draft retention, tab-local drafts, source safety/audio offsets (synthetic)
+
+
+[node-study-cache.log]
+study-cache multi-tab regressions passed
+study-cache: persistence, isolation, identity, limits, no eviction, quota fallback passed
+
+
+[node-study-ui.log]
+study-ui passed: consent, frozen snapshots, recovery, image selection, input preservation, busy switching; synthetic DOM/API only
+
+
+[node-version.log]
+v24.19.0
+
+
+[powershell-parse.log]
+setup.ps1: parsed
+start.ps1: parsed
+stop.ps1: parsed
+
+
+[powershell-version.log]
+5.1.26100.9711
+
+
+[pytest.log]
+.............. [  2%]
+....................................................... [ 13%]
+................................................................. [ 25%]
+.................................................................. [ 38%]
+.................................... [ 44%]
+........................................................................ [ 58%]
+........................................................................ [ 72%]
+........................................................................ [ 86%]
+................................................................ [ 98%]
+.........                         [100%]
+525 passed, 171 subtests passed in 74.68s (0:01:14)
+
+
+[python-guard.log]
+PASS: Python guard, loopback, external/DNS/bind/subprocess/private-path denial; synthetic data only

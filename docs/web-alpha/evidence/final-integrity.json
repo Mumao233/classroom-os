@@ -1,0 +1,184 @@
+{
+  "recorded_at": "2026-10-28T15:11:50.255124+08:00",
+  "repository": "J:\\class-assistant\\classroom-os",
+  "baseline_commit": "43fa23c141e3350e90d72ed7768e3b8de7d68337",
+  "scope": "Documentation, integrity and Git checks; no business code execution, external APIs or real user data",
+  "original_tracked_files": {
+    "count": 149,
+    "changed": []
+  },
+  "original_document_files": {
+    "count": 7,
+    "changed": [],
+    "current_files": [
+      "ChatGPT 图像 2026年10月28日 14_02_25.png",
+      "Classroom_OS_Web_Alpha_0.1.0_CODEX_HANDOFF.md",
+      "Classroom_OS_Web_Alpha_0.1.0_PRD_v1.1.docx",
+      "Classroom_OS_Web_Alpha_0.1.0_PRD_v1.1.md",
+      "Classroom_OS_Web_Alpha_0.1.0_PRD_v1.1.pdf",
+      "Classroom_OS_Web_Alpha_0.1.0_PRD_v1.2_含预览_阿里云ASR接入方案.pdf",
+      "START_HERE.md"
+    ]
+  },
+  "prd_sha256": {
+    "source": "dd7d970d54fb443969ce6bb210b0b18053bfecf972cf419efa57edb51b2ff5b8",
+    "archive": "dd7d970d54fb443969ce6bb210b0b18053bfecf972cf419efa57edb51b2ff5b8"
+  },
+  "git": {
+    "branch": {
+      "exit_code": 0,
+      "stdout": "feature/web-alpha-0.1.0",
+      "stderr": ""
+    },
+    "head": {
+      "exit_code": 0,
+      "stdout": "43fa23c141e3350e90d72ed7768e3b8de7d68337",
+      "stderr": ""
+    },
+    "main": {
+      "exit_code": 0,
+      "stdout": "43fa23c141e3350e90d72ed7768e3b8de7d68337",
+      "stderr": ""
+    },
+    "origin_main": {
+      "exit_code": 0,
+      "stdout": "43fa23c141e3350e90d72ed7768e3b8de7d68337",
+      "stderr": ""
+    },
+    "v1_3_0_commit": {
+      "exit_code": 0,
+      "stdout": "43fa23c141e3350e90d72ed7768e3b8de7d68337",
+      "stderr": ""
+    },
+    "origin": {
+      "exit_code": 0,
+      "stdout": "https://github.com/Mumao233/classroom-assistant.git",
+      "stderr": ""
+    },
+    "is_shallow": {
+      "exit_code": 0,
+      "stdout": "false",
+      "stderr": ""
+    },
+    "commit_count": {
+      "exit_code": 0,
+      "stdout": "8",
+      "stderr": ""
+    },
+    "tags": {
+      "exit_code": 0,
+      "stdout": "v1.0.0\nv1.1.0\nv1.1.1\nv1.2.0\nv1.2.1\nv1.3.0",
+      "stderr": ""
+    },
+    "fsck": {
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    "diff_check": {
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": "warning: in the working copy of '.github/workflows/pr00-windows.yml', LF will be replaced by CRLF the next time Git touches it\nwarning: in the working copy of 'docs/web-alpha/evidence/baseline-manifest.json', CRLF will be replaced by LF the next time Git touches it\nwarning: in the working copy of 'docs/web-alpha/evidence/final-integrity.json', CRLF will be replaced by LF the next time Git touches it\nwarning: in the working copy of 'docs/web-alpha/evidence/final-results.json', CRLF will be replaced by LF the next time Git touches it\nwarning: in the working copy of 'docs/web-alpha/evidence/final-step-logs.txt', LF will be replaced by CRLF the next time Git touches it\nwarning: in the working copy of 'docs/web-alpha/evidence/final-summary.md', CRLF will be replaced by LF the next time Git touches it\nwarning: in the working copy of 'docs/web-alpha/evidence/rollback-baseline-result.md', CRLF will be replaced by LF the next time Git touches it\nwarning: in the working copy of 'docs/web-alpha/evidence/rollback-pytest-result.json', CRLF will be replaced by LF the next time Git touches it\nwarning: in the working copy of 'tools/pr00/constraints-py310-windows.txt', LF will be replaced by CRLF the next time Git touches it"
+    },
+    "staged_content": {
+      "exit_code": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    "new_files_diff": {
+      "exit_code": 0,
+      "stdout": "A\t.github/workflows/pr00-windows.yml\nA\tAGENTS.md\nA\tdocs/web-alpha/BASELINE.md\nA\tdocs/web-alpha/CONFLICTS.md\nA\tdocs/web-alpha/Classroom_OS_Web_Alpha_0.1.0_PRD_v1.2.pdf\nA\tdocs/web-alpha/DECISIONS.md\nA\tdocs/web-alpha/PR00_ACCEPTANCE.md\nA\tdocs/web-alpha/PRD_PROVENANCE.md\nA\tdocs/web-alpha/README.md\nA\tdocs/web-alpha/REQUIREMENTS_MATRIX.md\nA\tdocs/web-alpha/SHA256SUMS.txt\nA\tdocs/web-alpha/TESTING.md\nA\tdocs/web-alpha/WEB_TEST_GATES.md\nA\tdocs/web-alpha/archive/2026-10-28-initial-analysis.md\nA\tdocs/web-alpha/evidence/baseline-manifest.json\nA\tdocs/web-alpha/evidence/check-tooling-result.md\nA\tdocs/web-alpha/evidence/dependency-versions.txt\nA\tdocs/web-alpha/evidence/final-integrity.json\nA\tdocs/web-alpha/evidence/final-pytest-junit.xml\nA\tdocs/web-alpha/evidence/final-pytest.txt\nA\tdocs/web-alpha/evidence/final-results.json\nA\tdocs/web-alpha/evidence/final-step-logs.txt\nA\tdocs/web-alpha/evidence/final-summary.md\nA\tdocs/web-alpha/evidence/first-run-pytest-failure.txt\nA\tdocs/web-alpha/evidence/pip-freeze.txt\nA\tdocs/web-alpha/evidence/rollback-baseline-result.md\nA\tdocs/web-alpha/evidence/rollback-pytest-result.json\nA\tdocs/web-alpha/evidence/rollback-pytest.txt\nA\ttools/pr00/constraints-py310-windows.txt\nA\ttools/pr00/node_guard.cjs\nA\ttools/pr00/run_checks.py\nA\ttools/pr00/runtime_guard/sitecustomize.py\nA\ttools/pr00/selftest_guards.cjs\nA\ttools/pr00/selftest_guards.py\nA\ttools/pr00/selftest_junit.py",
+      "stderr": ""
+    },
+    "status": {
+      "exit_code": 0,
+      "stdout": "## feature/web-alpha-0.1.0\n A .github/workflows/pr00-windows.yml\n A AGENTS.md\n A docs/web-alpha/BASELINE.md\n A docs/web-alpha/CONFLICTS.md\n A docs/web-alpha/Classroom_OS_Web_Alpha_0.1.0_PRD_v1.2.pdf\n A docs/web-alpha/DECISIONS.md\n A docs/web-alpha/PR00_ACCEPTANCE.md\n A docs/web-alpha/PRD_PROVENANCE.md\n A docs/web-alpha/README.md\n A docs/web-alpha/REQUIREMENTS_MATRIX.md\n A docs/web-alpha/SHA256SUMS.txt\n A docs/web-alpha/TESTING.md\n A docs/web-alpha/WEB_TEST_GATES.md\n A docs/web-alpha/archive/2026-10-28-initial-analysis.md\n A docs/web-alpha/evidence/baseline-manifest.json\n A docs/web-alpha/evidence/check-tooling-result.md\n A docs/web-alpha/evidence/dependency-versions.txt\n A docs/web-alpha/evidence/final-integrity.json\n A docs/web-alpha/evidence/final-pytest-junit.xml\n A docs/web-alpha/evidence/final-pytest.txt\n A docs/web-alpha/evidence/final-results.json\n A docs/web-alpha/evidence/final-step-logs.txt\n A docs/web-alpha/evidence/final-summary.md\n A docs/web-alpha/evidence/first-run-pytest-failure.txt\n A docs/web-alpha/evidence/pip-freeze.txt\n A docs/web-alpha/evidence/rollback-baseline-result.md\n A docs/web-alpha/evidence/rollback-pytest-result.json\n A docs/web-alpha/evidence/rollback-pytest.txt\n A tools/pr00/constraints-py310-windows.txt\n A tools/pr00/node_guard.cjs\n A tools/pr00/run_checks.py\n A tools/pr00/runtime_guard/sitecustomize.py\n A tools/pr00/selftest_guards.cjs\n A tools/pr00/selftest_guards.py\n A tools/pr00/selftest_junit.py",
+      "stderr": ""
+    }
+  },
+  "document_coverage": {
+    "requirements_rows": 118,
+    "unique_requirement_ids": 118,
+    "body_requirement_ids_count": 108,
+    "appendix_sections": [
+      "A1",
+      "A2",
+      "A3",
+      "A4",
+      "A5",
+      "A6",
+      "A7",
+      "A8",
+      "A9",
+      "A10"
+    ],
+    "appendix_ids": [
+      "ASR-Aliyun-01",
+      "ASR-Aliyun-02",
+      "ASR-Aliyun-03",
+      "ASR-Aliyun-04",
+      "ASR-Aliyun-05",
+      "ASR-Aliyun-06",
+      "ASR-Aliyun-07",
+      "ASR-Aliyun-08",
+      "ASR-Aliyun-09",
+      "ASR-Aliyun-10"
+    ],
+    "tbd_ids": [
+      "TBD-01",
+      "TBD-02",
+      "TBD-03",
+      "TBD-04",
+      "TBD-05",
+      "TBD-06",
+      "TBD-07",
+      "TBD-08",
+      "TBD-09",
+      "TBD-10",
+      "TBD-11"
+    ],
+    "acceptance_ids": [
+      "AC-00-01",
+      "AC-00-02",
+      "AC-00-03",
+      "AC-00-04",
+      "AC-00-05",
+      "AC-00-06",
+      "AC-00-07",
+      "AC-00-08",
+      "AC-00-09",
+      "AC-00-10",
+      "AC-00-11",
+      "AC-00-12",
+      "AC-00-13",
+      "AC-00-14"
+    ]
+  },
+  "markdown": {
+    "relative_links_checked": 73,
+    "missing_links": [],
+    "unbalanced_fences": []
+  },
+  "workflow": {
+    "parse": "PASS",
+    "triggers": [
+      "pull_request",
+      "workflow_dispatch"
+    ],
+    "permissions": {
+      "contents": "read"
+    },
+    "runner": "windows-latest",
+    "remote_execution": "NOT RUN; no push authorized"
+  },
+  "junit": {
+    "parent_testcases": 525,
+    "tests_including_subtests": 696,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "subtests": 171
+  },
+  "failures": [],
+  "passed": true
+}
