@@ -1,0 +1,125 @@
+{
+  "date": "2026-10-28",
+  "timezone": "Asia/Shanghai",
+  "base": "1c3ef02eaba060d9ca9bc173e5bf1b8ab906ee5f",
+  "branch": "feature/web-pr02a-data",
+  "contract_package": "0.1.0",
+  "postgresql": {
+    "version": "PostgreSQL 17.11 on x86_64-windows, compiled by msvc-19.44.35228, 64-bit",
+    "host": "127.0.0.1",
+    "port": 4979,
+    "source": "https://conda.anaconda.org/conda-forge/win-64/postgresql-17.11-h3efdd6b_1.conda",
+    "sha256": "0697165c1a42adcc4bb6f7eecebaa610f912a24fa42ebc6fd6bd52350262c102",
+    "scope": "native private synthetic cluster; no system service",
+    "final_cleanup": {
+      "random_test_databases_remaining": 0,
+      "random_test_login_roles_remaining": 0,
+      "private_cluster_stopped": true
+    }
+  },
+  "web_pg_test": {
+    "python": "3.12.14 (main, Aug 25 2026, 14:01:42) [MSC v.1944 64 bit (AMD64)]",
+    "executable": "J:\\class-assistant\\worktrees\\web-pr02a-data\\work\\pr02a\\venv\\Scripts\\python.exe",
+    "command": [
+      "J:\\class-assistant\\worktrees\\web-pr02a-data\\work\\pr02a\\venv\\Scripts\\python.exe",
+      "-m",
+      "pytest",
+      "-q",
+      "--basetemp=J:\\class-assistant\\worktrees\\web-pr02a-data\\work\\pr02a\\runs\\20261028T100259.971569Z\\tmp\\pytest",
+      "--junitxml=J:\\class-assistant\\worktrees\\web-pr02a-data\\outputs\\pr02a\\20261028T100259.971569Z\\pytest.xml",
+      "-o",
+      "cache_dir=J:\\class-assistant\\worktrees\\web-pr02a-data\\work\\pr02a\\runs\\20261028T100259.971569Z\\cache"
+    ],
+    "exit_code": 0,
+    "seconds": 12.094,
+    "target": {
+      "host": "127.0.0.1",
+      "port": 4979,
+      "synthetic_database": "pr02a_synthetic"
+    },
+    "isolation": "fixture creates random pr02a_test database and restricted login, then drops both",
+    "limitations": "PostgreSQL data foundation only; no HTTP/frontend/worker/provider or production migration",
+    "junit": {
+      "name": "pytest",
+      "errors": "0",
+      "failures": "0",
+      "skipped": "0",
+      "tests": "40",
+      "time": "11.385",
+      "timestamp": "2026-10-28T18:03:00.434615+08:00",
+      "hostname": "Mumao"
+    },
+    "evidence": "outputs/pr02a/20261028T100259.971569Z"
+  },
+  "local_product": {
+    "python": "3.10.4 (tags/v3.10.4:9d38120, Mar 23 2022, 23:13:41) [MSC v.1929 64 bit (AMD64)]",
+    "dependencies": {
+      "pytest": "9.2.0",
+      "fastapi": "0.162.0",
+      "uvicorn": "0.54.0",
+      "httpx": "0.28.1",
+      "faster-whisper": "1.2.1",
+      "Pillow": "12.3.0"
+    },
+    "passed": true,
+    "junit": {
+      "tests": 696,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "parent_testcases": 525,
+      "subtests": 171
+    },
+    "checks": 27,
+    "node_suites": [
+      "node-audio",
+      "node-ai-settings",
+      "node-input-limits",
+      "node-study-ui",
+      "node-study-cache",
+      "node-review-render",
+      "node-review-ui",
+      "node-review-mount",
+      "node-portable-reader"
+    ],
+    "evidence": "work/pr00/runs/20261028T095804.972718Z"
+  },
+  "protected_files": {
+    "base": "1c3ef02eaba060d9ca9bc173e5bf1b8ab906ee5f",
+    "baseline_files_checked": 212,
+    "changed": [],
+    "prd_sha256": "dd7d970d54fb443969ce6bb210b0b18053bfecf972cf419efa57edb51b2ff5b8",
+    "passed": true
+  },
+  "other_checks": {
+    "pip_check_exit": 0,
+    "python_ast_files": 16,
+    "python_ast_exit": 0,
+    "git_diff_check_exit": 0,
+    "offline_migration_sql": "rendered; valid JSON default and COMMIT",
+    "documentation_links_broken": 0,
+    "limited_secret_pattern_findings": 0
+  },
+  "retained_failures": [
+    {
+      "attempt": "EDB PostgreSQL17.7 ZIP",
+      "result": "download stopped at ~3KiB/s; incomplete ZIP never executed; native conda-forge packages checksum verified instead"
+    },
+    {
+      "attempt": "outputs/pr02a/pg-first.xml",
+      "exit_code": 1,
+      "setup_errors": 26,
+      "cause": "SQLAlchemy interpreted JSON default colon as bind while compiling/executing migration snapshot",
+      "resolution": "literal JSON defaults and raw online SQL/escaped offline SQL; later real-PG runs 30/37/40 passed"
+    }
+  ],
+  "boundaries": [
+    "frontend unchanged",
+    "212 baseline tracked files unchanged",
+    "frozen contracts unchanged",
+    "no HTTP/auth workflow/PR02b task or outbox",
+    "no paid calls or private classroom data",
+    "no production migration, deployment, push, merge or remote CI run"
+  ],
+  "migration_snapshot_sha256": "dd8065aa02c121e74a29207bdf15ad1a6599aacdd988e573faefb5202f67198c"
+}

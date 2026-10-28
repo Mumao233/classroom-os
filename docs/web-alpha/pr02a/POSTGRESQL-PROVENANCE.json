@@ -1,0 +1,108 @@
+[
+  {
+    "name": "krb5",
+    "file": "win-64/krb5-1.22.2-h719d79b_2.conda",
+    "sha256": "63ff03324e903eb01a715ccf357df56d66224e61952fd6615d86490ebefb3285",
+    "bytes": 753425,
+    "dependencies": [
+      "openssl >=3.5.7,<4.0a0",
+      "ucrt >=10.0.20348.0",
+      "vc >=14.3,<15",
+      "vc14_runtime >=14.44.35208"
+    ],
+    "url": "https://conda.anaconda.org/conda-forge/win-64/krb5-1.22.2-h719d79b_2.conda"
+  },
+  {
+    "name": "icu",
+    "file": "win-64/icu-78.3-h5112557_2.conda",
+    "sha256": "75c549b55b673e15de8785a8e5dd85bca7eb612eee0ff4dc8d7bdaa15eacbdbb",
+    "bytes": 16835644,
+    "dependencies": [
+      "vc >=14.3,<15",
+      "vc14_runtime >=14.44.35208",
+      "ucrt >=10.0.20348.0"
+    ],
+    "url": "https://conda.anaconda.org/conda-forge/win-64/icu-78.3-h5112557_2.conda"
+  },
+  {
+    "name": "libxml2-16",
+    "file": "win-64/libxml2-16-2.15.4-h3cfd58e_1.conda",
+    "sha256": "819c4edd7b7bcfa9461aeccb56c0a7e9fa7c251163333e64222c142499822958",
+    "bytes": 515690,
+    "dependencies": [
+      "icu >=78.3,<79.0a0",
+      "libiconv >=1.18,<2.0a0",
+      "liblzma >=5.8.3,<6.0a0",
+      "libzlib >=1.3.2,<2.0a0",
+      "ucrt >=10.0.20348.0",
+      "vc >=14.3,<15",
+      "vc14_runtime >=14.44.35208"
+    ],
+    "url": "https://conda.anaconda.org/conda-forge/win-64/libxml2-16-2.15.4-h3cfd58e_1.conda"
+  },
+  {
+    "name": "lz4-c",
+    "file": "win-64/lz4-c-1.10.0-h6a83c73_2.conda",
+    "sha256": "6824e36be0f95ae516dc36dddd18f69cbad0e4e07906fcb10a5f26a8dc471903",
+    "bytes": 150673,
+    "dependencies": [
+      "vc >=14.3,<15",
+      "vc14_runtime >=14.44.35208",
+      "ucrt >=10.0.20348.0"
+    ],
+    "url": "https://conda.anaconda.org/conda-forge/win-64/lz4-c-1.10.0-h6a83c73_2.conda"
+  },
+  {
+    "name": "openssl",
+    "file": "win-64/openssl-3.5.9-hf411b9b_0.conda",
+    "sha256": "827e55e37cc3208f285ae435b13bd1f389d35728d3aa6974ee447c7086232cc5",
+    "bytes": 9273586,
+    "dependencies": [
+      "ca-certificates",
+      "ucrt >=10.0.20348.0",
+      "vc >=14.3,<15",
+      "vc14_runtime >=14.44.35208"
+    ],
+    "url": "https://conda.anaconda.org/conda-forge/win-64/openssl-3.5.9-hf411b9b_0.conda"
+  },
+  {
+    "name": "libzlib",
+    "file": "win-64/libzlib-1.3.2-hfd05255_3.conda",
+    "sha256": "0629c2cc0404d3bb29d6baa7b4ba62da80797015e86de050db81ea5a07050527",
+    "bytes": 58529,
+    "dependencies": [
+      "ucrt >=10.0.20348.0",
+      "vc >=14.3,<15",
+      "vc14_runtime >=14.44.35208"
+    ],
+    "url": "https://conda.anaconda.org/conda-forge/win-64/libzlib-1.3.2-hfd05255_3.conda"
+  },
+  {
+    "name": "zstd",
+    "file": "win-64/zstd-1.5.7-h534d264_7.conda",
+    "sha256": "ca7daae4f218a11fab82cc2857f0ea518ec3f46acec60490485347a4c22c6b3e",
+    "bytes": 387535,
+    "dependencies": [
+      "vc >=14.3,<15",
+      "vc14_runtime >=14.44.35208",
+      "ucrt >=10.0.20348.0",
+      "libzlib >=1.3.2,<2.0a0"
+    ],
+    "url": "https://conda.anaconda.org/conda-forge/win-64/zstd-1.5.7-h534d264_7.conda"
+  },
+  {
+    "name": "libpq",
+    "file": "win-64/libpq-17.11-h6b13b41_1.conda",
+    "sha256": "93756768492eeceef634e93c4cf2b0a2f43bd8e6d9ce214b1fe578ef9e78caae",
+    "bytes": 3955104,
+    "dependencies": [
+      "icu >=78.3,<79.0a0",
+      "krb5 >=1.22.2,<1.23.0a0",
+      "openssl >=3.5.8,<4.0a0",
+      "ucrt >=10.0.20348.0",
+      "vc >=14.3,<15",
+      "vc14_runtime >=14.44.35208"
+    ],
+    "url": "https://conda.anaconda.org/conda-forge/win-64/libpq-17.11-h6b13b41_1.conda"
+  }
+]

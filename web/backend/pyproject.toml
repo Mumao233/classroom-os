@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools==80.9.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "classroom-os-web-backend"
+version = "0.1.0a1"
+description = "Independent Classroom OS Web data foundation"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "SQLAlchemy==2.0.46",
+  "alembic==1.18.4",
+  "psycopg[binary]==3.3.3",
+]
+
+[project.optional-dependencies]
+test = ["pytest==9.2.0"]
+
+[tool.setuptools.packages.find]
+include = ["classroom_web*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "--strict-markers"
