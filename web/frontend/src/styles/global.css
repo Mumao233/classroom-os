@@ -38,6 +38,29 @@
   --color-status-bg: #eef1fc;
   --shadow-panel: 0 12px 36px rgba(36, 51, 91, .07);
   --button-height: 44px;
+  /* Aurora navigation glass, web approximation. Primitive values feed semantic
+     surface roles; the nav component consumes them without fixing a theme. */
+  --nav-desktop-line: rgba(68, 93, 158, .28);
+  --nav-desktop-fill: rgba(228, 235, 252, .80);
+  --nav-desktop-inner: rgba(255, 255, 255, .57);
+  --nav-desktop-top: rgba(255, 255, 255, .85);
+  --nav-desktop-shadow: 0 13px 32px rgba(50, 68, 115, .13), inset 0 1px rgba(255, 255, 255, .96);
+  --nav-glass-fill: rgba(219, 226, 236, .71);
+  --nav-glass-edge: rgba(255, 255, 255, .80);
+  --nav-glass-top: rgba(255, 255, 255, .92);
+  --nav-glass-inset: rgba(255, 255, 255, .8);
+  --nav-glass-shadow: rgba(35, 50, 94, .23);
+  --nav-glass-wash: rgba(161, 175, 206, .20);
+  --nav-glass-reflection: rgba(255, 255, 255, .12);
+  --nav-glass-side: rgba(255, 255, 255, .18);
+  --nav-glass-inner-edge: rgba(255, 255, 255, .10);
+  --nav-selection-top: rgba(255, 255, 255, .82);
+  --nav-selection-bottom: rgba(233, 239, 250, .52);
+  --nav-selection-border: rgba(255, 255, 255, .95);
+  --nav-selection-ring: rgba(255, 255, 255, .15);
+  --nav-selection-light: rgba(255, 255, 255, .6);
+  --nav-item: #384960;
+  --nav-item-selected: #273aa6;
 }
 :root[data-theme="night"] {
   color-scheme: dark;
@@ -62,6 +85,27 @@
   --color-info: #b9c7ff;
   --color-status-bg: #25334d;
   --shadow-panel: 0 16px 40px rgba(0, 0, 0, .18);
+  --nav-desktop-line: rgba(188, 206, 255, .30);
+  --nav-desktop-fill: rgba(22, 35, 72, .76);
+  --nav-desktop-inner: rgba(198, 214, 255, .12);
+  --nav-desktop-top: rgba(220, 231, 255, .19);
+  --nav-desktop-shadow: 0 13px 32px rgba(2, 6, 18, .32), inset 0 1px rgba(236, 242, 255, .14);
+  --nav-glass-fill: rgba(20, 31, 52, .76);
+  --nav-glass-edge: rgba(145, 168, 219, .32);
+  --nav-glass-top: rgba(159, 179, 230, .28);
+  --nav-glass-inset: rgba(163, 184, 235, .23);
+  --nav-glass-shadow: rgba(0, 4, 19, .55);
+  --nav-glass-wash: rgba(100, 122, 184, .12);
+  --nav-glass-reflection: rgba(159, 180, 234, .12);
+  --nav-glass-side: rgba(148, 173, 225, .12);
+  --nav-glass-inner-edge: rgba(150, 177, 226, .10);
+  --nav-selection-top: rgba(126, 148, 200, .39);
+  --nav-selection-bottom: rgba(82, 102, 151, .24);
+  --nav-selection-border: rgba(163, 182, 231, .33);
+  --nav-selection-ring: rgba(166, 186, 238, .10);
+  --nav-selection-light: rgba(177, 194, 245, .28);
+  --nav-item: #bdc9df;
+  --nav-item-selected: #eef3ff;
 }
 *, *::before, *::after { box-sizing: border-box; }
 html { min-width: 0; background: var(--color-canvas); }

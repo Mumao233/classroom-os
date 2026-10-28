@@ -23,6 +23,7 @@ export class MockEventClient {
   subscribe(listener: (event: ClassroomOSWebV1EventEnvelope) => void) { this.listeners.add(listener); return () => this.listeners.delete(listener); }
   emit(event: ClassroomOSWebV1EventEnvelope) { this.listeners.forEach(listener => listener(event)); }
   clear() { this.listeners.clear(); }
+  listenerCount() { return this.listeners.size; }
 }
 
 export class MockUploadPort {

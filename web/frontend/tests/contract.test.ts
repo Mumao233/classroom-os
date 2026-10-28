@@ -3,7 +3,8 @@ import Ajv2020 from 'ajv/dist/2020.js';
 import addFormats from 'ajv-formats';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { coursePage, meta, semesterPage } from '../src/mock/fixtures';
+import { coursePage, coursePages, meta, semesterPage, unauthenticated } from '../src/mock/fixtures';
+import { eventScripts } from '../src/mock/event-scripts';
 
 const source = resolve(process.cwd(), '../../docs/web-alpha/architecture/contracts');
 const read = (name: string) => JSON.parse(readFileSync(resolve(source, name), 'utf8'));
@@ -26,10 +27,28 @@ describe('approved PR-01 contract examples', () => {
 });
 
 describe('mock HTTP fixtures', () => {
-  for (const [schema, fixture] of [['CoursePage', coursePage], ['SemesterPage', semesterPage], ['Meta', meta]] as const) {
-    it(`${schema} conforms`, () => {
+  for (const [name, schema, fixture] of [['empty', 'CoursePage', coursePage], ['account A', 'CoursePage', coursePages.A], ['account B', 'CoursePage', coursePages.B], ['session revoked', 'Error', unauthenticated], ['semesters', 'SemesterPage', semesterPage], ['meta', 'Meta', meta]] as const) {
+    it(`${name}: ${schema} conforms`, () => {
       const validate = ajv.compile({ $ref: `https://classroom.invalid/openapi#/components/schemas/${schema}` });
       expect(validate(fixture), JSON.stringify(validate.errors)).toBe(true);
     });
   }
+});
+
+describe('scripted mock event envelopes', () => {
+  const validate = ajv.getSchema('https://classroom.invalid/events')!;
+  for (const [script, steps] of Object.entries(eventScripts)) {
+    for (const [index, value] of steps.entries()) {
+      it(`${script} step ${index + 1}: ${value.type}`, () => {
+        expect(validate(value), JSON.stringify(validate.errors)).toBe(true);
+      });
+    }
+  }
+  it('rejects a malformed final and a frame claiming durable persistence', () => {
+    const final = structuredClone(eventScripts.transcript[1]);
+    const missingCursor = { ...final, cursor: undefined };
+    expect(validate(missingCursor)).toBe(false);
+    const frame = structuredClone(eventScripts.upload[0]);
+    expect(validate({ ...frame, data: { ...frame.data, durable: true } })).toBe(false);
+  });
 });

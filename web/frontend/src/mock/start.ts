@@ -1,8 +1,11 @@
 import { delay, http, HttpResponse, passthrough } from 'msw';
 import { setupWorker } from 'msw/browser';
-import { coursePage, meta, semesterPage } from './fixtures';
+import { coursePages, meta, semesterPage, unauthenticated } from './fixtures';
 
 const headers = { 'Cache-Control': 'no-store' };
+// Development-only in-memory session identity; never a new HTTP field or real credential.
+let mockAccount: 'A' | 'B' | null = 'A';
+export function setMockAccount(account: 'A' | 'B' | null) { mockAccount = account; }
 function viteAsset(request: Request) {
   const url = new URL(request.url);
   return url.origin === location.origin && request.method === 'GET' &&
@@ -12,11 +15,13 @@ function viteAsset(request: Request) {
 const worker = setupWorker(
   http.get('/api/web/v1/meta', () => HttpResponse.json(meta, { headers })),
   http.get('/api/web/v1/courses', async () => {
+    const requestAccount = mockAccount;
+    if (!requestAccount) return HttpResponse.json(unauthenticated, { status: 401, headers });
     // Browser-test-only timing control; it never changes the HTTP contract.
     if (localStorage.getItem('mock-test-delay') === '1') await delay(1200);
-    return HttpResponse.json(coursePage, { headers });
+    return HttpResponse.json(coursePages[requestAccount], { headers });
   }),
-  http.get('/api/web/v1/semesters', () => HttpResponse.json(semesterPage, { headers })),
+  http.get('/api/web/v1/semesters', () => mockAccount ? HttpResponse.json(semesterPage, { headers }) : HttpResponse.json(unauthenticated, { status: 401, headers })),
   // Explicit catch-all is essential: throwing in onUnhandledRequest alone can
   // fall back to the network in the browser worker.
   http.all('*', ({ request }) => viteAsset(request) ? passthrough() : HttpResponse.error()),
