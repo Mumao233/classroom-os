@@ -1,0 +1,85 @@
+/* Aurora: primitive values -> semantic roles -> component defaults. */
+:root {
+  font-family: Inter, "Segoe UI", "Microsoft YaHei UI", "PingFang SC", sans-serif;
+  font-size: 16px;
+  line-height: 1.6;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  --primitive-day-canvas: #f6f8fe;
+  --primitive-day-surface: #ffffff;
+  --primitive-night-canvas: #0b1121;
+  --primitive-night-surface: #162038;
+  --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px;
+  --space-6: 24px; --space-8: 32px;
+  --radius-small: 8px; --radius-control: 12px; --radius-card: 12px;
+  --radius-hero: 16px; --radius-dialog: 22px;
+  --motion-control: 150ms; --motion-panel: 220ms;
+  --z-nav: 20; --z-toolbar: 30; --z-popover: 40; --z-modal: 50; --z-critical: 60;
+  color-scheme: light;
+  --color-canvas: var(--primitive-day-canvas);
+  --color-surface: var(--primitive-day-surface);
+  --color-surface-secondary: #eef1fc;
+  --color-glass: rgba(255, 255, 255, .88);
+  --color-card: rgba(255, 255, 255, .94);
+  --color-text: #16233b;
+  --color-text-secondary: #526079;
+  --color-primary: #4256d6;
+  --color-on-primary: #fff;
+  --color-cyan: #1686ad;
+  --color-border: #dae2f1;
+  --color-control-border: #8490ab;
+  --color-focus: #304bd0;
+  --color-success: #13714c;
+  --color-warning: #815400;
+  --color-danger: #a52c46;
+  --color-recording: #b42e53;
+  --color-offline: #61578d;
+  --color-info: #3552ac;
+  --color-status-bg: #eef1fc;
+  --shadow-panel: 0 12px 36px rgba(36, 51, 91, .07);
+  --button-height: 44px;
+}
+:root[data-theme="night"] {
+  color-scheme: dark;
+  --color-canvas: var(--primitive-night-canvas);
+  --color-surface: var(--primitive-night-surface);
+  --color-surface-secondary: #25334d;
+  --color-glass: rgba(22, 32, 56, .88);
+  --color-card: rgba(22, 32, 56, .94);
+  --color-text: #eef2ff;
+  --color-text-secondary: #b7c3dc;
+  --color-primary: #adb9ff;
+  --color-on-primary: #10182b;
+  --color-cyan: #50c6da;
+  --color-border: #35425c;
+  --color-control-border: #8390ad;
+  --color-focus: #c8d1ff;
+  --color-success: #85e2b5;
+  --color-warning: #ffd48a;
+  --color-danger: #ffb1bf;
+  --color-recording: #ff9db3;
+  --color-offline: #d6c6ff;
+  --color-info: #b9c7ff;
+  --color-status-bg: #25334d;
+  --shadow-panel: 0 16px 40px rgba(0, 0, 0, .18);
+}
+*, *::before, *::after { box-sizing: border-box; }
+html { min-width: 0; background: var(--color-canvas); }
+body { margin: 0; min-width: 0; background: var(--color-canvas); color: var(--color-text); }
+button, input, textarea, select { font: inherit; }
+button { cursor: pointer; }
+button:disabled { cursor: not-allowed; }
+a { color: inherit; }
+:focus-visible { outline: 3px solid var(--color-focus); outline-offset: 3px; }
+::selection { background: var(--color-primary); color: var(--color-on-primary); }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; transition-duration: .01ms !important; }
+  :root { --color-glass: var(--color-surface); --color-card: var(--color-surface); }
+}
+@media (forced-colors: active) {
+  :root { --color-glass: Canvas; --color-card: Canvas; --shadow-panel: none; }
+}
+:root[data-effects="reduced"] { --color-glass: var(--color-surface); --color-card: var(--color-surface); --shadow-panel: none; }
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  :root { --color-glass: var(--color-surface); --color-card: var(--color-surface); }
+}
