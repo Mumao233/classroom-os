@@ -1,0 +1,98 @@
+{
+  "at_utc": "2026-10-28T09:24:50.349Z",
+  "node": "v24.19.0",
+  "scope": "Mermaid syntax parse, not visual/product validation",
+  "passed": true,
+  "results": [
+    {
+      "file": "01-SYSTEM.md",
+      "diagram": 1,
+      "status": "passed",
+      "type": "flowchart-v2"
+    },
+    {
+      "file": "01-SYSTEM.md",
+      "diagram": 2,
+      "status": "passed",
+      "type": "flowchart-v2"
+    },
+    {
+      "file": "02-FRONTEND-AURORA.md",
+      "diagram": 1,
+      "status": "passed",
+      "type": "flowchart-v2"
+    },
+    {
+      "file": "02-FRONTEND-AURORA.md",
+      "diagram": 2,
+      "status": "passed",
+      "type": "sequence"
+    },
+    {
+      "file": "02-FRONTEND-AURORA.md",
+      "diagram": 3,
+      "status": "passed",
+      "type": "flowchart-v2"
+    },
+    {
+      "file": "03-DATA-BACKEND.md",
+      "diagram": 1,
+      "status": "passed",
+      "type": "er"
+    },
+    {
+      "file": "04-CONTRACTS-FLOWS.md",
+      "diagram": 1,
+      "status": "passed",
+      "type": "stateDiagram"
+    },
+    {
+      "file": "04-CONTRACTS-FLOWS.md",
+      "diagram": 2,
+      "status": "passed",
+      "type": "sequence"
+    },
+    {
+      "file": "04-CONTRACTS-FLOWS.md",
+      "diagram": 3,
+      "status": "passed",
+      "type": "sequence"
+    },
+    {
+      "file": "04-CONTRACTS-FLOWS.md",
+      "diagram": 4,
+      "status": "passed",
+      "type": "sequence"
+    },
+    {
+      "file": "05-SECURITY-OFFLINE.md",
+      "diagram": 1,
+      "status": "passed",
+      "type": "stateDiagram"
+    },
+    {
+      "file": "05-SECURITY-OFFLINE.md",
+      "diagram": 2,
+      "status": "passed",
+      "type": "stateDiagram"
+    },
+    {
+      "file": "06-COST-OPERATIONS.md",
+      "diagram": 1,
+      "status": "passed",
+      "type": "stateDiagram"
+    },
+    {
+      "file": "06-COST-OPERATIONS.md",
+      "diagram": 2,
+      "status": "passed",
+      "type": "flowchart-v2"
+    },
+    {
+      "file": "08-IMPLEMENTATION.md",
+      "diagram": 1,
+      "status": "passed",
+      "type": "flowchart-v2"
+    }
+  ]
+}

@@ -1,0 +1,316 @@
+{
+  "at_utc": "2026-10-28T09:25:58.376139+00:00",
+  "python": "3.12.14",
+  "checks": [
+    {
+      "name": "OpenAPI3.1 + unique operationId",
+      "status": "passed",
+      "details": {
+        "operations": 134,
+        "paths": 118,
+        "schemas": 149
+      }
+    },
+    {
+      "name": "Events JSON Schema 2020-12",
+      "status": "passed",
+      "details": {
+        "event_types": 21
+      }
+    },
+    {
+      "name": "All local JSON refs resolve",
+      "status": "passed",
+      "details": 599
+    },
+    {
+      "name": "Synthetic positive and negative contract fixtures",
+      "status": "passed",
+      "details": [
+        {
+          "name": "semester_ok",
+          "expected_valid": true
+        },
+        {
+          "name": "owner_injection_rejected",
+          "expected_valid": false
+        },
+        {
+          "name": "cas_required",
+          "expected_valid": false
+        },
+        {
+          "name": "candidate_unadopted",
+          "expected_valid": true
+        },
+        {
+          "name": "execute_without_send_confirmation",
+          "expected_valid": false
+        },
+        {
+          "name": "execute_confirmed",
+          "expected_valid": true
+        },
+        {
+          "name": "chunk_descriptor_ok",
+          "expected_valid": true
+        },
+        {
+          "name": "declared_wrong_sample_rate",
+          "expected_valid": false
+        },
+        {
+          "name": "bad_hash",
+          "expected_valid": false
+        },
+        {
+          "name": "unknown_task_preserved",
+          "expected_valid": true
+        },
+        {
+          "name": "floating_point_money_rejected",
+          "expected_valid": false
+        },
+        {
+          "name": "unknown_state_not_success",
+          "expected_valid": false
+        },
+        {
+          "name": "delete_failure_not_deleted",
+          "expected_valid": true
+        },
+        {
+          "name": "review_minimum_valid",
+          "expected_valid": true
+        },
+        {
+          "name": "review_notes_required",
+          "expected_valid": false
+        },
+        {
+          "name": "invalid_card_type",
+          "expected_valid": false
+        },
+        {
+          "name": "durable_final_event",
+          "expected_valid": true
+        },
+        {
+          "name": "durable_event_missing_cursor",
+          "expected_valid": false
+        },
+        {
+          "name": "partial_cannot_be_final_evidence",
+          "expected_valid": false
+        },
+        {
+          "name": "partial_ephemeral",
+          "expected_valid": true
+        },
+        {
+          "name": "partial_must_not_claim_durable",
+          "expected_valid": false
+        },
+        {
+          "name": "ack_not_durable",
+          "expected_valid": true
+        },
+        {
+          "name": "memory_ack_cannot_claim_saved",
+          "expected_valid": false
+        },
+        {
+          "name": "source_ref_rejects_partial_kind",
+          "expected_valid": false
+        },
+        {
+          "name": "invitation_cannot_grant_admin",
+          "expected_valid": false
+        },
+        {
+          "name": "typed_course_sync",
+          "expected_valid": true
+        },
+        {
+          "name": "course_sync_rejects_note_body",
+          "expected_valid": false
+        },
+        {
+          "name": "bootstrap_watermark_complete",
+          "expected_valid": true
+        },
+        {
+          "name": "bootstrap_never_silent_truncation",
+          "expected_valid": false
+        },
+        {
+          "name": "unknown_cannot_claim_no_charge",
+          "expected_valid": false
+        },
+        {
+          "name": "mark_before_final",
+          "expected_valid": true
+        },
+        {
+          "name": "mark_ambiguous_anchor_rejected",
+          "expected_valid": false
+        },
+        {
+          "name": "three_hour_manifest_compact",
+          "expected_valid": true
+        },
+        {
+          "name": "course_material_aggregate_version",
+          "expected_valid": true
+        }
+      ]
+    },
+    {
+      "name": "Five workflow transition guards and negative traces",
+      "status": "passed",
+      "details": {
+        "machines": 5,
+        "guard_cases": 16,
+        "scope": "contract guard design; runtime race/transaction behavior not tested"
+      }
+    },
+    {
+      "name": "Domain model keys, FK targets/types and owner scope",
+      "status": "passed",
+      "details": {
+        "tables": 60,
+        "columns": 688,
+        "foreign_keys": 164,
+        "scope": "structural model only; SQL checks/triggers/RLS not executed"
+      }
+    },
+    {
+      "name": "28 PR DAG hard + integration + paid dependencies",
+      "status": "passed",
+      "details": {
+        "hard": [
+          "00",
+          "01",
+          "02a",
+          "05a",
+          "06a",
+          "09a",
+          "02b",
+          "03a",
+          "03b",
+          "04a",
+          "09b",
+          "11a",
+          "04b",
+          "07a",
+          "05b",
+          "07b",
+          "08a",
+          "06b",
+          "08b",
+          "06c",
+          "08c",
+          "10a",
+          "10b",
+          "11b",
+          "11c",
+          "12a",
+          "12b",
+          "12c"
+        ],
+        "all": [
+          "00",
+          "01",
+          "02a",
+          "09a",
+          "02b",
+          "03a",
+          "03b",
+          "04a",
+          "05a",
+          "11a",
+          "04b",
+          "07a",
+          "05b",
+          "08a",
+          "06a",
+          "06b",
+          "06c",
+          "07b",
+          "08b",
+          "08c",
+          "09b",
+          "10a",
+          "10b",
+          "11b",
+          "11c",
+          "12a",
+          "12b",
+          "12c"
+        ]
+      }
+    },
+    {
+      "name": "118 requirement IDs fully mapped",
+      "status": "passed",
+      "details": {
+        "requirements": 118,
+        "original_matrix_modified": false
+      }
+    },
+    {
+      "name": "Markdown local links, fences and whitespace",
+      "status": "passed",
+      "details": {
+        "markdown_files": 17,
+        "local_links": 258,
+        "mermaid_blocks": 15
+      }
+    },
+    {
+      "name": "Legacy/PR00/PRD/AGENTS/scope protection",
+      "status": "passed",
+      "details": {
+        "legacy_files_hash_unchanged": 149,
+        "original_document_hashes_unchanged": 7,
+        "AGENTS_original_prefix_preserved": true,
+        "PRD_sha256_unchanged": true,
+        "HEAD": "f7731002d974ea29296090c366b68569fc69ba89",
+        "PR00_base": "f7731002d974ea29296090c366b68569fc69ba89",
+        "PR01_files": [
+          "AGENTS.md",
+          "CLAUDE.md",
+          "docs/web-alpha/architecture/01-SYSTEM.md",
+          "docs/web-alpha/architecture/02-FRONTEND-AURORA.md",
+          "docs/web-alpha/architecture/03-DATA-BACKEND.md",
+          "docs/web-alpha/architecture/04-CONTRACTS-FLOWS.md",
+          "docs/web-alpha/architecture/05-SECURITY-OFFLINE.md",
+          "docs/web-alpha/architecture/06-COST-OPERATIONS.md",
+          "docs/web-alpha/architecture/07-ADR-REGISTER.md",
+          "docs/web-alpha/architecture/08-IMPLEMENTATION.md",
+          "docs/web-alpha/architecture/09-CLAUDE-FRONTEND-HANDOFF.md",
+          "docs/web-alpha/architecture/10-TRACEABILITY.md",
+          "docs/web-alpha/architecture/PR01-ACCEPTANCE.md",
+          "docs/web-alpha/architecture/PR01-CLOSEOUT.md",
+          "docs/web-alpha/architecture/README.md",
+          "docs/web-alpha/architecture/contracts/CHANGELOG.md",
+          "docs/web-alpha/architecture/contracts/domain-model.json",
+          "docs/web-alpha/architecture/contracts/events.schema.json",
+          "docs/web-alpha/architecture/contracts/examples.json",
+          "docs/web-alpha/architecture/contracts/openapi.json",
+          "docs/web-alpha/architecture/contracts/pr-dependencies.json",
+          "docs/web-alpha/architecture/contracts/requirements-traceability.json",
+          "docs/web-alpha/architecture/contracts/state-machines.json",
+          "docs/web-alpha/architecture/evidence/INDEPENDENT-REVIEW.md",
+          "docs/web-alpha/architecture/evidence/architecture-validation.json",
+          "docs/web-alpha/architecture/evidence/diagram-validation.json",
+          "tools/pr01/check_diagrams.mjs",
+          "tools/pr01/validate_architecture.py"
+        ],
+        "business_or_PR00_changes": "none; AGENTS explicitly authorized append only"
+      }
+    }
+  ],
+  "passed": true,
+  "scope": "static architecture/contract validation; no runtime product/paid/browser/DB integration tests"
+}

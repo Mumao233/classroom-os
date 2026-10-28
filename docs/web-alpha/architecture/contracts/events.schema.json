@@ -1,0 +1,1449 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://classroom.invalid/contracts/events.schema.json",
+  "title": "Classroom OS Web v1 event envelope",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/Hello"
+    },
+    {
+      "$ref": "#/$defs/Authenticate"
+    },
+    {
+      "$ref": "#/$defs/Resume"
+    },
+    {
+      "$ref": "#/$defs/ReplayComplete"
+    },
+    {
+      "$ref": "#/$defs/ResyncRequired"
+    },
+    {
+      "$ref": "#/$defs/Heartbeat"
+    },
+    {
+      "$ref": "#/$defs/CaptureReady"
+    },
+    {
+      "$ref": "#/$defs/CaptureChunkStart"
+    },
+    {
+      "$ref": "#/$defs/FrameHeader"
+    },
+    {
+      "$ref": "#/$defs/FrameReceived"
+    },
+    {
+      "$ref": "#/$defs/ChunkDurable"
+    },
+    {
+      "$ref": "#/$defs/TranscriptPartial"
+    },
+    {
+      "$ref": "#/$defs/TranscriptFinal"
+    },
+    {
+      "$ref": "#/$defs/TaskChanged"
+    },
+    {
+      "$ref": "#/$defs/AIDelta"
+    },
+    {
+      "$ref": "#/$defs/ObjectChanged"
+    },
+    {
+      "$ref": "#/$defs/ObjectDeleted"
+    },
+    {
+      "$ref": "#/$defs/QuotaChanged"
+    },
+    {
+      "$ref": "#/$defs/NotificationCreated"
+    },
+    {
+      "$ref": "#/$defs/CaptureLost"
+    },
+    {
+      "$ref": "#/$defs/WsError"
+    }
+  ],
+  "$defs": {
+    "Hello": {
+      "type": "object",
+      "properties": {
+        "protocol_version": {
+          "const": 1
+        },
+        "type": {
+          "const": "hello"
+        },
+        "sent_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "connection_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "heartbeat_seconds": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "resume_cursor": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 512
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "connection_id",
+            "heartbeat_seconds",
+            "resume_cursor"
+          ],
+          "additionalProperties": false
+        },
+        "connection_seq": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "protocol_version",
+        "type",
+        "sent_at",
+        "data",
+        "connection_seq"
+      ],
+      "additionalProperties": false
+    },
+    "Authenticate": {
+      "type": "object",
+      "properties": {
+        "protocol_version": {
+          "const": 1
+        },
+        "type": {
+          "const": "authenticate"
+        },
+        "sent_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "ticket": {
+              "type": "string",
+              "maxLength": 256
+            }
+          },
+          "required": [
+            "ticket"
+          ],
+          "additionalProperties": false
+        },
+        "connection_seq": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "protocol_version",
+        "type",
+        "sent_at",
+        "data",
+        "connection_seq"
+      ],
+      "additionalProperties": false
+    },
+    "Resume": {
+      "type": "object",
+      "properties": {
+        "protocol_version": {
+          "const": 1
+        },
+        "type": {
+          "const": "resume"
+        },
+        "sent_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "after": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 512
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "after"
+          ],
+          "additionalProperties": false
+        },
+        "connection_seq": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "protocol_version",
+        "type",
+        "sent_at",
+        "data",
+        "connection_seq"
+      ],
+      "additionalProperties": false
+    },
+    "ReplayComplete": {
+      "type": "object",
+      "properties": {
+        "protocol_version": {
+          "const": 1
+        },
+        "type": {
+          "const": "replay.complete"
+        },
+        "sent_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "cursor": {
+              "type": "string",
+              "maxLength": 512
+            }
+          },
+          "required": [
+            "cursor"
+          ],
+          "additionalProperties": false
+        },
+        "connection_seq": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "protocol_version",
+        "type",
+        "sent_at",
+        "data",
+        "connection_seq"
+      ],
+      "additionalProperties": false
+    },
+    "ResyncRequired": {
+      "type": "object",
+      "properties": {
+        "protocol_version": {
+          "const": 1
+        },
+        "type": {
+          "const": "resync.required"
+        },
+        "sent_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "reason": {
+              "type": "string",
+              "enum": [
+                "cursor_expired",
+                "incompatible_version"
+              ]
+            },
+            "snapshot_path": {
+              "const": "/api/web/v1/sync/bootstrap"
+            }
+          },
+          "required": [
+            "reason",
+            "snapshot_path"
+          ],
+          "additionalProperties": false
+        },
+        "connection_seq": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "protocol_version",
+        "type",
+        "sent_at",
+        "data",
+        "connection_seq"
+      ],
+      "additionalProperties": false
+    },
+    "Heartbeat": {
+      "type": "object",
+      "properties": {
+        "protocol_version": {
+          "const": 1
+        },
+        "type": {
+          "const": "heartbeat"
+        },
+        "sent_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "last_cursor": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 512
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "last_cursor"
+          ],
+          "additionalProperties": false
+        },
+        "connection_seq": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "protocol_version",
+        "type",
+        "sent_at",
+        "data",
+        "connection_seq"
+      ],
+      "additionalProperties": false
+    },
+    "CaptureReady": {
+      "type": "object",
+      "properties": {
+        "protocol_version": {
+          "const": 1
+        },
+        "type": {
+          "const": "capture.ready"
+        },
+        "sent_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "class_session_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "capture_epoch_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "fence_token": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "max_frame_bytes": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "inflight_window_bytes": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "required": [
+            "class_session_id",
+            "capture_epoch_id",
+            "fence_token",
+            "max_frame_bytes",
+            "inflight_window_bytes"
+          ],
+          "additionalProperties": false
+        },
+        "connection_seq": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "protocol_version",
+        "type",
+        "sent_at",
+        "data",
+        "connection_seq"
+      ],
+      "additionalProperties": false
+    },
+    "CaptureChunkStart": {
+      "type": "object",
+      "properties": {
+        "protocol_version": {
+          "const": 1
+        },
+        "type": {
+          "const": "capture.chunk_start"
+        },
+        "sent_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "op_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "class_session_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "capture_epoch_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "fence_token": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "chunk_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "seq": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "start_sample": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "end_sample": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "byte_length": {
+              "type": "integer",
+              "minimum": 2
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            }
+          },
+          "required": [
+            "op_id",
+            "class_session_id",
+            "capture_epoch_id",
+            "fence_token",
+            "chunk_id",
+            "seq",
+            "start_sample",
+            "end_sample",
+            "byte_length",
+            "sha256"
+          ],
+          "additionalProperties": false
+        },
+        "connection_seq": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "protocol_version",
+        "type",
+        "sent_at",
+        "data",
+        "connection_seq"
+      ],
+      "additionalProperties": false
+    },
+    "FrameHeader": {
+      "type": "object",
+      "properties": {
+        "protocol_version": {
+          "const": 1
+        },
+        "type": {
+          "const": "capture.frame"
+        },
+        "sent_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "class_session_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "capture_epoch_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "fence_token": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "chunk_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "frame_seq": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "start_sample": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "sample_count": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "byte_length": {
+              "type": "integer",
+              "minimum": 2
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "chunk_final_frame": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "class_session_id",
+            "capture_epoch_id",
+            "fence_token",
+            "chunk_id",
+            "frame_seq",
+            "start_sample",
+            "sample_count",
+            "byte_length",
+            "sha256",
+            "chunk_final_frame"
+          ],
+          "additionalProperties": false
+        },
+        "connection_seq": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "protocol_version",
+        "type",
+        "sent_at",
+        "data",
+        "connection_seq"
+      ],
+      "additionalProperties": false
+    },
+    "FrameReceived": {
+      "type": "object",
+      "properties": {
+        "protocol_version": {
+          "const": 1
+        },
+        "type": {
+          "const": "capture.frame_received"
+        },
+        "sent_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "chunk_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "frame_seq": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "durable": {
+              "const": false
+            }
+          },
+          "required": [
+            "chunk_id",
+            "frame_seq",
+            "durable"
+          ],
+          "additionalProperties": false
+        },
+        "connection_seq": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "protocol_version",
+        "type",
+        "sent_at",
+        "data",
+        "connection_seq"
+      ],
+      "additionalProperties": false
+    },
+    "ChunkDurable": {
+      "type": "object",
+      "properties": {
+        "protocol_version": {
+          "const": 1
+        },
+        "type": {
+          "const": "audio.chunk_durable"
+        },
+        "sent_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "class_session_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "capture_epoch_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "chunk_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "seq": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "end_sample": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "receipt_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "durable_at": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          "required": [
+            "class_session_id",
+            "capture_epoch_id",
+            "chunk_id",
+            "seq",
+            "sha256",
+            "end_sample",
+            "receipt_id",
+            "durable_at"
+          ],
+          "additionalProperties": false
+        },
+        "event_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "cursor": {
+          "type": "string",
+          "maxLength": 512,
+          "minLength": 1
+        }
+      },
+      "required": [
+        "protocol_version",
+        "type",
+        "sent_at",
+        "data",
+        "event_id",
+        "cursor"
+      ],
+      "additionalProperties": false
+    },
+    "TranscriptPartial": {
+      "type": "object",
+      "properties": {
+        "protocol_version": {
+          "const": 1
+        },
+        "type": {
+          "const": "transcript.partial"
+        },
+        "sent_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "class_session_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "stream_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "segment_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "sequence": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "audio_offset_ms": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "status": {
+              "const": "partial"
+            },
+            "text": {
+              "type": "string",
+              "maxLength": 20000
+            },
+            "provider_request_id": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 200
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "revision": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "required": [
+            "class_session_id",
+            "stream_id",
+            "segment_id",
+            "sequence",
+            "audio_offset_ms",
+            "status",
+            "text",
+            "provider_request_id",
+            "revision"
+          ],
+          "additionalProperties": false
+        },
+        "connection_seq": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "protocol_version",
+        "type",
+        "sent_at",
+        "data",
+        "connection_seq"
+      ],
+      "additionalProperties": false
+    },
+    "TranscriptFinal": {
+      "type": "object",
+      "properties": {
+        "protocol_version": {
+          "const": 1
+        },
+        "type": {
+          "const": "transcript.final"
+        },
+        "sent_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "class_session_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "stream_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "segment_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "segment_revision_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "transcript_version_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "sequence": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "audio_offset_ms": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "end_ms": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "status": {
+              "const": "final"
+            },
+            "text": {
+              "type": "string",
+              "maxLength": 20000
+            },
+            "provider_request_id": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 200
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "revision": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "timestamp_source": {
+              "type": "string",
+              "enum": [
+                "provider_segment",
+                "capture_mapping"
+              ]
+            }
+          },
+          "required": [
+            "class_session_id",
+            "stream_id",
+            "segment_id",
+            "segment_revision_id",
+            "transcript_version_id",
+            "sequence",
+            "audio_offset_ms",
+            "end_ms",
+            "status",
+            "text",
+            "provider_request_id",
+            "revision",
+            "timestamp_source"
+          ],
+          "additionalProperties": false
+        },
+        "event_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "cursor": {
+          "type": "string",
+          "maxLength": 512,
+          "minLength": 1
+        }
+      },
+      "required": [
+        "protocol_version",
+        "type",
+        "sent_at",
+        "data",
+        "event_id",
+        "cursor"
+      ],
+      "additionalProperties": false
+    },
+    "TaskChanged": {
+      "type": "object",
+      "properties": {
+        "protocol_version": {
+          "const": 1
+        },
+        "type": {
+          "const": "task.changed"
+        },
+        "sent_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "task_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "class_session_id": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "revision": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "state": {
+              "type": "string",
+              "enum": [
+                "queued",
+                "running",
+                "succeeded",
+                "failed",
+                "unknown",
+                "cancel_requested",
+                "cancelled"
+              ]
+            },
+            "error_code": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 64
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "may_have_charged": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "task_id",
+            "class_session_id",
+            "revision",
+            "state",
+            "error_code",
+            "may_have_charged"
+          ],
+          "additionalProperties": false
+        },
+        "event_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "cursor": {
+          "type": "string",
+          "maxLength": 512,
+          "minLength": 1
+        }
+      },
+      "required": [
+        "protocol_version",
+        "type",
+        "sent_at",
+        "data",
+        "event_id",
+        "cursor"
+      ],
+      "additionalProperties": false
+    },
+    "AIDelta": {
+      "type": "object",
+      "properties": {
+        "protocol_version": {
+          "const": 1
+        },
+        "type": {
+          "const": "ai.delta"
+        },
+        "sent_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "task_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "attempt_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "delta_seq": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "text": {
+              "type": "string",
+              "maxLength": 8000
+            },
+            "provisional": {
+              "const": true
+            }
+          },
+          "required": [
+            "task_id",
+            "attempt_id",
+            "delta_seq",
+            "text",
+            "provisional"
+          ],
+          "additionalProperties": false
+        },
+        "connection_seq": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "protocol_version",
+        "type",
+        "sent_at",
+        "data",
+        "connection_seq"
+      ],
+      "additionalProperties": false
+    },
+    "ObjectChanged": {
+      "type": "object",
+      "properties": {
+        "protocol_version": {
+          "const": 1
+        },
+        "type": {
+          "const": "object.changed"
+        },
+        "sent_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "object_type": {
+              "type": "string",
+              "enum": [
+                "semester",
+                "course",
+                "class_session",
+                "slide",
+                "question",
+                "review_document",
+                "mark",
+                "preferences"
+              ]
+            },
+            "object_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "revision": {
+              "type": "integer",
+              "minimum": 1
+            }
+          },
+          "required": [
+            "object_type",
+            "object_id",
+            "revision"
+          ],
+          "additionalProperties": false
+        },
+        "event_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "cursor": {
+          "type": "string",
+          "maxLength": 512,
+          "minLength": 1
+        }
+      },
+      "required": [
+        "protocol_version",
+        "type",
+        "sent_at",
+        "data",
+        "event_id",
+        "cursor"
+      ],
+      "additionalProperties": false
+    },
+    "ObjectDeleted": {
+      "type": "object",
+      "properties": {
+        "protocol_version": {
+          "const": 1
+        },
+        "type": {
+          "const": "object.deleted"
+        },
+        "sent_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "object_type": {
+              "type": "string",
+              "enum": [
+                "account",
+                "semester",
+                "course",
+                "class_session",
+                "audio",
+                "media_asset"
+              ]
+            },
+            "object_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "deletion_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "state": {
+              "type": "string",
+              "enum": [
+                "access_revoked",
+                "pending_delete",
+                "delete_failed",
+                "deleted"
+              ]
+            }
+          },
+          "required": [
+            "object_type",
+            "object_id",
+            "deletion_id",
+            "state"
+          ],
+          "additionalProperties": false
+        },
+        "event_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "cursor": {
+          "type": "string",
+          "maxLength": 512,
+          "minLength": 1
+        }
+      },
+      "required": [
+        "protocol_version",
+        "type",
+        "sent_at",
+        "data",
+        "event_id",
+        "cursor"
+      ],
+      "additionalProperties": false
+    },
+    "QuotaChanged": {
+      "type": "object",
+      "properties": {
+        "protocol_version": {
+          "const": 1
+        },
+        "type": {
+          "const": "quota.changed"
+        },
+        "sent_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "reason": {
+              "type": "string",
+              "enum": [
+                "reserved",
+                "settled",
+                "unknown",
+                "adjusted",
+                "period_changed"
+              ]
+            },
+            "billing_state": {
+              "type": "string",
+              "enum": [
+                "normal",
+                "warning60",
+                "warning80",
+                "blocked100",
+                "paused"
+              ]
+            }
+          },
+          "required": [
+            "reason",
+            "billing_state"
+          ],
+          "additionalProperties": false
+        },
+        "event_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "cursor": {
+          "type": "string",
+          "maxLength": 512,
+          "minLength": 1
+        }
+      },
+      "required": [
+        "protocol_version",
+        "type",
+        "sent_at",
+        "data",
+        "event_id",
+        "cursor"
+      ],
+      "additionalProperties": false
+    },
+    "NotificationCreated": {
+      "type": "object",
+      "properties": {
+        "protocol_version": {
+          "const": 1
+        },
+        "type": {
+          "const": "notification.created"
+        },
+        "sent_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "notification_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "severity": {
+              "type": "string",
+              "enum": [
+                "info",
+                "warning",
+                "critical"
+              ]
+            },
+            "message_code": {
+              "type": "string",
+              "maxLength": 64
+            }
+          },
+          "required": [
+            "notification_id",
+            "severity",
+            "message_code"
+          ],
+          "additionalProperties": false
+        },
+        "event_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "cursor": {
+          "type": "string",
+          "maxLength": 512,
+          "minLength": 1
+        }
+      },
+      "required": [
+        "protocol_version",
+        "type",
+        "sent_at",
+        "data",
+        "event_id",
+        "cursor"
+      ],
+      "additionalProperties": false
+    },
+    "CaptureLost": {
+      "type": "object",
+      "properties": {
+        "protocol_version": {
+          "const": 1
+        },
+        "type": {
+          "const": "capture.lease_lost"
+        },
+        "sent_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "class_session_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "capture_epoch_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "fence_token": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "reason": {
+              "type": "string",
+              "enum": [
+                "expired",
+                "takeover",
+                "revoked"
+              ]
+            }
+          },
+          "required": [
+            "class_session_id",
+            "capture_epoch_id",
+            "fence_token",
+            "reason"
+          ],
+          "additionalProperties": false
+        },
+        "event_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "cursor": {
+          "type": "string",
+          "maxLength": 512,
+          "minLength": 1
+        }
+      },
+      "required": [
+        "protocol_version",
+        "type",
+        "sent_at",
+        "data",
+        "event_id",
+        "cursor"
+      ],
+      "additionalProperties": false
+    },
+    "WsError": {
+      "type": "object",
+      "properties": {
+        "protocol_version": {
+          "const": 1
+        },
+        "type": {
+          "const": "error"
+        },
+        "sent_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "data": {
+          "type": "object",
+          "properties": {
+            "code": {
+              "type": "string",
+              "enum": [
+                "AUTH_REVOKED",
+                "STALE_FENCE",
+                "RATE_LIMITED",
+                "INVALID_FRAME",
+                "STORAGE_UNAVAILABLE",
+                "BUDGET_BLOCKED",
+                "RESULT_UNKNOWN"
+              ]
+            },
+            "message": {
+              "type": "string",
+              "maxLength": 300
+            },
+            "request_id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "retryable": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "request_id",
+            "retryable"
+          ],
+          "additionalProperties": false
+        },
+        "connection_seq": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "protocol_version",
+        "type",
+        "sent_at",
+        "data",
+        "connection_seq"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

@@ -1,0 +1,1067 @@
+{
+  "source": "../REQUIREMENTS_MATRIX.md",
+  "requirements": [
+    {
+      "requirement_id": "PRODUCT-01",
+      "summary": "中英混合大学课堂学习闭环，邀请制10→30人；p5",
+      "design": "01-SYSTEM.md",
+      "section": "范围/边界/全局闭环",
+      "implementation_pr": "03、05–10、12b",
+      "acceptance": "受邀学生完整课堂到复习路径；未受邀注册拒绝；不自动授权录音/模型",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "PRODUCT-02",
+      "summary": "注册→课程→采集→问答→课后→跨设备；p5",
+      "design": "01-SYSTEM.md",
+      "section": "范围/边界/全局闭环",
+      "implementation_pr": "03、05–10、12a",
+      "acceptance": "预定义E2E分别核对采集/上传/ASR/AI/同步状态，第二设备读取正式记录",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "PRODUCT-03",
+      "summary": "账号、课程、课堂、复习、数据、运营、视觉全范围；p5",
+      "design": "01-SYSTEM.md",
+      "section": "范围/边界/全局闭环",
+      "implementation_pr": "01–12",
+      "acceptance": "本表全部必达项有完成/阻塞证据；不以单一录音页代替完整Alpha",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "PRODUCT-04",
+      "summary": "明确范围外能力；p6",
+      "design": "01-SYSTEM.md",
+      "section": "范围/边界/全局闭环",
+      "implementation_pr": "00、01",
+      "acceptance": "范围评审核对文末排除清单；新增需求须变更记录",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "PRODUCT-05",
+      "summary": "保留本地v1.3.0并渐进复用；p6",
+      "design": "01-SYSTEM.md",
+      "section": "范围/边界/全局闭环",
+      "implementation_pr": "01、02、07、08",
+      "acceptance": "两入口/依赖/数据隔离；共享变更同时过旧完整回归和新增Web测试",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "ASR-01",
+      "summary": "语言、热词、稳定段落与修订；p7",
+      "design": "04-CONTRACTS-FLOWS.md",
+      "section": "采集/ASR/时间与未知收费契约",
+      "implementation_pr": "06a、06b",
+      "acceptance": "中文/英文/混合与词表A/B；partial不引用；时间戳来源明确；人工稿不覆盖",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "ASR-02",
+      "summary": "同源30段基准与长课堂；p7、A8",
+      "design": "04-CONTRACTS-FLOWS.md",
+      "section": "采集/ASR/时间与未知收费契约",
+      "implementation_pr": "06a、12b",
+      "acceptance": "30段授权/合成音频及人工参考；WER/CER/混合规则/术语/P50/P95/费用；至少3轮长时",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "ASR-03",
+      "summary": "主动重转写，一次/课及默认月额度20%；p8",
+      "design": "04-CONTRACTS-FLOWS.md",
+      "section": "采集/ASR/时间与未知收费契约",
+      "implementation_pr": "06c",
+      "acceptance": "2.4/3.6h默认月额；超次数审批；过期音拒绝；候选比较和主动采用",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "ASR-04",
+      "summary": "回看保护、状态与数据去向；p9",
+      "design": "04-CONTRACTS-FLOWS.md",
+      "section": "采集/ASR/时间与未知收费契约",
+      "implementation_pr": "03、06b、10a",
+      "acceptance": "回看不抢滚动；临时/正式非仅颜色区分；ASR/AI/存储告知；Key不入浏览器",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "ASR-05",
+      "summary": "结果未知先核对，不自动重发收费；p9",
+      "design": "04-CONTRACTS-FLOWS.md",
+      "section": "采集/ASR/时间与未知收费契约",
+      "implementation_pr": "02b、06b、11a",
+      "acceptance": "发出后断流置unknown；无法核对须确认重复费风险；不虚构取消退款",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "REC-01",
+      "summary": "分片归属、序号、时间、hash、持久ACK；p8",
+      "design": "04-CONTRACTS-FLOWS.md",
+      "section": "采集/ASR/时间与未知收费契约",
+      "implementation_pr": "04a、05b",
+      "acceptance": "同键同体回原结果、异体拒绝；对象+DB持久后才云已保存；上传/ASR幂等分开",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "REC-02",
+      "summary": "断网/刷新/休眠/满盘/额度不足恢复；p8",
+      "design": "04-CONTRACTS-FLOWS.md",
+      "section": "采集/ASR/时间与未知收费契约",
+      "implementation_pr": "05b、06b",
+      "acceptance": "故障注入；按原偏移补缺；刷新不自动开麦；未知缺口和本地写失败持续告警",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "REC-03",
+      "summary": "云原音7天及完整删除；p9",
+      "design": "04-CONTRACTS-FLOWS.md",
+      "section": "采集/ASR/时间与未知收费契约",
+      "implementation_pr": "04b",
+      "acceptance": "可控时钟、访问先拒绝、历史对象/分片/临时件清除、删除失败与恢复防复活",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "AUTH-01",
+      "summary": "邮箱/密码/验证/重置与敏感再认证；p10",
+      "design": "05-SECURITY-OFFLINE.md",
+      "section": "认证/租户/隐私与生命周期",
+      "implementation_pr": "03a、03b",
+      "acceptance": "30分钟单次验证、重置撤全部旧会话、改邮箱验证、限流；哈希/12字符初值安全评审",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "AUTH-02",
+      "summary": "指定邮箱/通用单次邀请，7天；p10",
+      "design": "05-SECURITY-OFFLINE.md",
+      "section": "认证/租户/隐私与生命周期",
+      "implementation_pr": "03a",
+      "acceptance": "同码并发仅一激活；验证/激活/消耗事务；过期/撤销/满额不吞码或泄露邮箱",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "AUTH-03",
+      "summary": "多设备会话与单账号单采集；p10–11",
+      "design": "05-SECURITY-OFFLINE.md",
+      "section": "认证/租户/隐私与生命周期",
+      "implementation_pr": "03b、05b",
+      "acceptance": "可撤销Cookie/CSRF；多设备可读；采集租约竞争、失联接管与旧fencing拒绝",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "AUTH-04",
+      "summary": "学生可选MFA、管理员强制及恢复；p11",
+      "design": "05-SECURITY-OFFLINE.md",
+      "section": "认证/租户/隐私与生命周期",
+      "implementation_pr": "03b",
+      "acceptance": "TOTP/单次恢复码、敏感再认证；邀请不授Admin；管理员无后门恢复演练",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "AUTH-05",
+      "summary": "Student/Admin资源权限边界；p11",
+      "design": "05-SECURITY-OFFLINE.md",
+      "section": "认证/租户/隐私与生命周期",
+      "implementation_pr": "03a、04a、11b",
+      "acceptance": "列表/WS/任务/搜索/文件/历史/导入导出全A/B越权矩阵；Admin无默认正文或冒充",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "AUTH-06",
+      "summary": "禁用/删除/归档/注销/导出；p11–12",
+      "design": "05-SECURITY-OFFLINE.md",
+      "section": "认证/租户/隐私与生命周期",
+      "implementation_pr": "03b、04b、08c",
+      "acceptance": "注销立即撤会话；禁用不等于删除；课程级联显式选择；24h删除目标实测；离线撤销边界",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "AUTH-07",
+      "summary": "后台四页、审计及独立限流；p12",
+      "design": "05-SECURITY-OFFLINE.md",
+      "section": "认证/租户/隐私与生命周期",
+      "implementation_pr": "11a、11b",
+      "acceptance": "用户/邀请/用量/运行状态；管理操作MFA审计；日志无正文/密码/Key/恢复码",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "AUTH-08",
+      "summary": "完整认证与越权验收；p12",
+      "design": "05-SECURITY-OFFLINE.md",
+      "section": "认证/租户/隐私与生命周期",
+      "implementation_pr": "12a",
+      "acceptance": "邀请竞态、验证失效、重置/MFA、CSRF、撤销、导出和注销测试；无已知认证绕过",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "DATA-01",
+      "summary": "PG/私有对象/浏览器/持久任务分工；p13",
+      "design": "03-DATA-BACKEND.md",
+      "section": "数据/来源/缓存/恢复设计",
+      "implementation_pr": "01、02a、02b、04a",
+      "acceptance": "事务/重启恢复；User→Semester→Course→ClassSession；ID不信任客户端owner",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "DATA-02",
+      "summary": "原稿/个人稿/候选/采用及固定材料版本；p13",
+      "design": "03-DATA-BACKEND.md",
+      "section": "数据/来源/缓存/恢复设计",
+      "implementation_pr": "02a、07b",
+      "acceptance": "材料改变不偷换历史快照；来源坏显示不可用；生成冻结模型/提示/结构版本",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "DATA-03",
+      "summary": "主动信任设备及限定缓存范围；p13–14",
+      "design": "05-SECURITY-OFFLINE.md",
+      "section": "数据/来源/缓存/恢复设计",
+      "implementation_pr": "05a、08a",
+      "acceptance": "未信任仅当页有限离线；音频/Key/全转写不入学习缓存；图片预览明确",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "DATA-04",
+      "summary": "已同步学习缓存14天/20节/50MB；p14",
+      "design": "05-SECURITY-OFFLINE.md",
+      "section": "数据/来源/缓存/恢复设计",
+      "implementation_pr": "08a",
+      "acceptance": "TTL从云版本核验计、LRU课堂、字节单位一致；未同步稿/音频不被清理",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "DATA-05",
+      "summary": "本次录音恢复单独授权与生命周期；p14",
+      "design": "05-SECURITY-OFFLINE.md",
+      "section": "数据/来源/缓存/恢复设计",
+      "implementation_pr": "05a、05b",
+      "acceptance": "不可信设备不缓存历史；安全写入失败降级明示；云durable后清理；未确认可恢复/导出",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "DATA-06",
+      "summary": "加密、联网重登解锁、退出与撤销；p15",
+      "design": "05-SECURITY-OFFLINE.md",
+      "section": "数据/来源/缓存/恢复设计",
+      "implementation_pr": "05a、08a",
+      "acceptance": "不同时持久化明文钥匙；关闭重开需联网；换号不可读；重置/离线撤销边界实测",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "DATA-07",
+      "summary": "JSON/MD/ZIP独立导入与平台备份；p15",
+      "design": "05-SECURITY-OFFLINE.md",
+      "section": "数据/来源/缓存/恢复设计",
+      "implementation_pr": "04b、08c",
+      "acceptance": "黄金旧包独立副本；不导凭据/队列/授权；穿越/炸弹/hash校验；恢复不复活过期音",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "SYNC-01",
+      "summary": "五保存状态和稳定操作标识；p15",
+      "design": "04-CONTRACTS-FLOWS.md",
+      "section": "op/CAS/typed冲突/墓碑",
+      "implementation_pr": "02b、08b",
+      "acceptance": "op_id同请求同结果；未服务端确认不显示云保存；对象/DB故障核对；不触发AI",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "SYNC-02",
+      "summary": "版本冲突、候选采用、墓碑优先；p15",
+      "design": "04-CONTRACTS-FLOWS.md",
+      "section": "op/CAS/typed冲突/墓碑",
+      "implementation_pr": "07b、08b",
+      "acceptance": "双设备保留双方稿并比较；AI首稿亦为候选；删后旧设备不复活对象",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "UI-DASH-01",
+      "summary": "学习首页；p16",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "09b",
+      "acceptance": "首屏围绕继续学习与课程，不变录音首页/统计大屏",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "UI-DASH-02",
+      "summary": "桌面导航/顶部工具/中央内容；p16",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "09a、09b",
+      "acceptance": "导航可折叠，键盘可达，内容宽度与课堂断点独立",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "UI-DASH-03",
+      "summary": "继续→快速开始→最近课→待办→动态；p16",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "09b",
+      "acceptance": "空态/有数据状态均核对模块顺序，不用假数字占位",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "UI-DASH-04",
+      "summary": "确定性继续入口，采集/本地风险优先；p16",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "09b、11c",
+      "acceptance": "活动采集、本地未存、最近课/笔记组合用例核对入口优先级",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "UI-DASH-05",
+      "summary": "真实最近课程和课堂；p16",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "09b",
+      "acceptance": "依据真实记录排序；无记录不虚构未来排课",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "UI-DASH-06",
+      "summary": "仅真实待办；p16",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "09b、11c",
+      "acceptance": "未同步/冲突/失败/未懂/临近到期可定位；已解问题移除",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "UI-DASH-07",
+      "summary": "五流状态正常摘要/异常展开；p16",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "09b、11c",
+      "acceptance": "录音正常但上传失败等组合不显示整课完成",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "UI-DASH-08",
+      "summary": "Aurora品牌与稳定阅读，不做评分；p16",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "09a、09b",
+      "acceptance": "双主题截图/交互核对；无积分/签到/停留时长掌握度",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "UI-DASH-09",
+      "summary": "新老用户/离线/删除后入口；p16",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "09b、12a",
+      "acceptance": "新用户创建课程；老用户继续；离线范围明示；删除不留失效入口",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "UI-COURSE-01",
+      "summary": "学期→课程→实际课堂稳定ID；p16",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "02a、09b",
+      "acceptance": "关系/owner外键；改名不改ID；同名不合并",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "UI-COURSE-02",
+      "summary": "学期名称/学年/日期编辑；p16",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "02a、09b",
+      "acceptance": "自定义/历史学期创建编辑及日期校验、版本冲突",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "UI-COURSE-03",
+      "summary": "学期优先、卡片列表、搜索排序；p16",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "09b",
+      "acceptance": "筛选/排序/视图切换保持上下文，仅显示本人课程",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "UI-COURSE-04",
+      "summary": "卡片中英名/语言/色图标/数量/最近课；p16",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "09b",
+      "acceptance": "字段真实且长名称不溢出；数量和最近课随归档/删除一致",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "UI-COURSE-05",
+      "summary": "必填/默认/可后补及允许同名；p16",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "02a、09b",
+      "acceptance": "名称学期必填、语言默认；同名独立ID；教师/教室/大纲词表可缺省",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "UI-COURSE-06",
+      "summary": "概览/课堂/资料/复习四标签；p16",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "09b",
+      "acceptance": "四标签路由/焦点/空态与切换状态验收",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "UI-COURSE-07",
+      "summary": "课程概览实际成果；p16",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "09b",
+      "acceptance": "继续/最近/疑问/成果来自同课程真实对象",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "UI-COURSE-08",
+      "summary": "课堂时间/时长/状态及明确改归属；p16",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "09b、10b",
+      "acceptance": "改归属事务和版本校验；历史来源/采集时间不变",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "UI-COURSE-09",
+      "summary": "大纲词表与课堂图片分离；p17",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "09b、10a",
+      "acceptance": "课程材料和课堂图片分别管理；语言词表变更仅影响后续默认",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "UI-COURSE-10",
+      "summary": "课程复习筛选共享对象；p17",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "09b、10b",
+      "acceptance": "全局/课程/单课编辑同一对象，无复制或串课",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "UI-COURSE-11",
+      "summary": "归档/删除/版本检查与离线元数据；p17",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "09b、08b",
+      "acceptance": "归档保内容；删除展示影响和取消；离线只读必要元数据",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "UI-COURSE-12",
+      "summary": "计划课独立于实际课；p17",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "01、02a、09b",
+      "acceptance": "预留关联不实现智能课表；计划变更不改历史证据",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "UI-CLASS-01",
+      "summary": "顶部状态/学习区/底部采集；p17",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "10a",
+      "acceptance": "关键状态和停止入口在缩放/移动键盘下可达",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "UI-CLASS-02",
+      "summary": "原文/解释/问答可拖动折叠重置；p17",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "10a",
+      "acceptance": "比例服从最小宽度；拖动/重置有键盘触控替代；布局按设备记忆",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "UI-CLASS-03",
+      "summary": "专注保留原文与必要控制告警；p17",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "10a",
+      "acceptance": "进入/退出不掉采集、不丢稿；重要故障仍可见",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "UI-CLASS-04",
+      "summary": "准备页核对设备/网络/额度/授权；p17",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "05b、10a",
+      "acceptance": "试音独立于正式课堂；点击开始前展示用途/7天；不隐式开麦",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "UI-CLASS-05",
+      "summary": "采集与标记/课件工具始终可达；p17",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "05b、10a",
+      "acceptance": "开始/暂停/继续/结束/重点/没懂/课件/详情的键盘触控用例",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "UI-CLASS-06",
+      "summary": "采集全状态；p17",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "05b、10a",
+      "acceptance": "未开始/录音/暂停/离线本地/故障/结束处理中均有真实状态",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "UI-CLASS-07",
+      "summary": "临时正式、回看修订、补写顺序；p17",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "06b、10a",
+      "acceptance": "重连/迟到结果按原时间；回看不抢滚动；修订保机器稿",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "UI-CLASS-08",
+      "summary": "图片操作、时间/历史依据与发送确认；p17",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "04a、07a、10a",
+      "acceptance": "粘贴/旋转/移除后旧来源不变；未发送确认不调用模型",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "UI-CLASS-09",
+      "summary": "按需默认与显式自动解释计量；p17",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "07a、11a",
+      "acceptance": "30秒/2分钟/意群/课件范围正确；自动批次不绕过额度",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "UI-CLASS-10",
+      "summary": "五流状态不虚假合并；p17",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "10a",
+      "acceptance": "采集结束但上传/ASR/AI/同步未完成时分别展示",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "UI-CLASS-11",
+      "summary": "独立课后处理和主动总结；p17–18",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "10a、10b",
+      "acceptance": "停采集先落范围；仅服务端已收任务可后台；材料不齐显示部分总结；不自动收费",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "UI-CLASS-12",
+      "summary": "桌面三/平板双/手机单栏且不丢稿串课；p17–18",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "10a",
+      "acceptance": "容器断点、最小宽度、软键盘安全区、路由切换与双课堂隔离",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "UI-REVIEW-01",
+      "summary": "任务优先与完整资料库；p18",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "10b",
+      "acceptance": "继续/未解决/待处理优先，资料库仍可访问",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "UI-REVIEW-02",
+      "summary": "学期/课程/课堂/类型/状态筛选；p18",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "09b、10b",
+      "acceptance": "组合筛选与返回上下文，结果授权过滤",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "UI-REVIEW-03",
+      "summary": "三入口同一对象；p18",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "10b",
+      "acceptance": "全局/课程/单课对象ID一致，课程默认按课堂分组",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "UI-REVIEW-04",
+      "summary": "沉浸正文与按需来源侧栏；p18",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "10b",
+      "acceptance": "阅读位置/目录/字号保留，来源侧栏不挤坏长公式",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "UI-REVIEW-05",
+      "summary": "概念/推导/例题/易错点卡片；p18",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "07b、10b",
+      "acceptance": "原schema回归；揭晓/前后/来源/标记，无强凑卡片数",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "UI-REVIEW-06",
+      "summary": "理解状态用户确认；p18",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "07b、10b",
+      "acceptance": "生成答案不自动已理解；手动切换跨设备版本一致",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "UI-REVIEW-07",
+      "summary": "原文/图片历史/时间与可用原音追溯；p18",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "07b、10b",
+      "acceptance": "固定来源版本；音过期保时间文字且不可播；图片离线缺失明示",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "UI-REVIEW-08",
+      "summary": "AI/候选/个人/采用分开；p18",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "07b、08b",
+      "acceptance": "首次和后续AI稿均候选；个人稿不覆盖；采用明确操作",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "UI-REVIEW-09",
+      "summary": "新旧比较与来源变化/并发冲突；p18",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "07b、08b",
+      "acceptance": "双设备base_revision冲突留双方；材料变更提示、不偷换来源",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "UI-REVIEW-10",
+      "summary": "正式文本关键词搜索定位；p18",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "11c",
+      "acceptance": "搜索不调AI/不扣次数；无OCR/语义承诺；删除/权限过滤",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "UI-REVIEW-11",
+      "summary": "可信有限离线与个人草稿状态；p18",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "08a、08b、10b",
+      "acceptance": "已解锁缓存范围明示；本机/云端区分；关闭重开解锁规则",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "UI-REVIEW-12",
+      "summary": "导出/错误反馈/损坏失败恢复；p18–19",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "08c、10b、11c",
+      "acceptance": "导出范围可查；反馈片段显式确认；缺失不伪造已读取",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "UX-01",
+      "summary": "桌面课堂优先且响应式；p19",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "09a、10a",
+      "acceptance": "手机不能机械缩小三栏；桌面/平板/手机核心控制可达",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "UX-02",
+      "summary": "桌面五入口、手机四入口、头像设置；p19",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "09a、10a",
+      "acceptance": "全局课堂回活动会话；站内导航保持采集控制器，不隐式新建录音",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "UX-03",
+      "summary": "全局关键词搜索、权限、快捷键；p19",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "11c",
+      "acceptance": "Ctrl/⌘K；正式对象定位；离线仅当前账号解锁缓存并提示不完整；索引规则审查",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "UX-04",
+      "summary": "站内任务通知和安全邮件；p19",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "11c",
+      "acceptance": "高危持续可见、普通去重；已读不等于解决；跳转再授权且不泄露删除内容",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "UX-05",
+      "summary": "全状态/输入保留与安全重试；p19",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "10、11c",
+      "acceptance": "空/加载/成功/失败/unknown统一；普通重试与收费风险重试分开",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "UX-06",
+      "summary": "双主题跟系统、稳定阅读与降级；p19",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "09a、12a",
+      "acceptance": "系统/手动切换不丢稿/停录音/重发任务；低特效仍完整可用",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "UX-07",
+      "summary": "WCAG2.2 AA设计验证目标；p19",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "12a、12b",
+      "acceptance": "键盘/读屏/触控/缩放矩阵，未验证不声称全面合规",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "DS-01",
+      "summary": "科技玻璃品牌与稳定阅读强度分区；p20",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "09a",
+      "acceptance": "登录/Dashboard强、Review/设置弱；正文高不透明，专注保留告警",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "DS-02",
+      "summary": "Aurora Day/Nebula Night色彩初值；p20",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "09a、12a",
+      "acceptance": "双主题全状态混合后对比；浅青不作普通小正文；功能边界不只装饰色",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "DS-03",
+      "summary": "玻璃/渐变与无模糊降级；p22",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "09a、12b",
+      "acceptance": "L1/L2/L3表面不透明度不施于子文字；长正文无渐变干扰；低特效回退",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "DS-04",
+      "summary": "联合要求：排版与空间；p22",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "09a、10",
+      "acceptance": "DS-04～06联合：字体/行高、16–24px字幕、正文宽度、公式局部滚动、间距圆角触控",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "DS-05",
+      "summary": "联合要求：排版与空间；p22",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "09a、10",
+      "acceptance": "同一联合用例检查字号/屏幕收缩、4px节律及控件触控；数值为初值非硬锁",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "DS-06",
+      "summary": "联合要求：排版与空间；p22",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "09a、10",
+      "acceptance": "同一联合用例检查跨平台字体、长公式/缩放、无整页横溢出",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "DS-07",
+      "summary": "导航/按钮/输入/模态完整状态；p22",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "09a、10",
+      "acceptance": "焦点可见、标签/错误关联；模态焦点返回；tooltip非悬停独占；录音中不抢焦点",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "DS-08",
+      "summary": "联合要求：AI标识与动效；p23",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "09a、10",
+      "acceptance": "DS-08～09联合：待命/分析/完成/失败/unknown/额度状态真实，无伪百分比",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "DS-09",
+      "summary": "联合要求：AI标识与动效；p23",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "09a、10",
+      "acceptance": "同一联合用例：减动效停循环、保静态信息、手动低特效；音量来自实际采集",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "DS-10",
+      "summary": "联合要求：可读与无障碍；p23",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "12a、12b",
+      "acceptance": "DS-10～12联合：普通字4.5:1/大字及适用控件3:1，透明混合后最差状态",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "DS-11",
+      "summary": "联合要求：可读与无障碍；p23",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "12a、12b",
+      "acceptance": "同一联合用例：200%文字/320CSS px重排/键盘焦点/标签，44px偏好与24pxAA规则区分",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "DS-12",
+      "summary": "联合要求：可读与无障碍；p23",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "12a、12b",
+      "acceptance": "同一联合用例：临时字幕不持续强播，故障可读，减动效/高对比不隐藏关键操作",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "DS-13",
+      "summary": "全页面全状态设计QA；p23",
+      "design": "02-FRONTEND-AURORA.md",
+      "section": "前端路由、状态和Aurora验收",
+      "implementation_pr": "12a、12b",
+      "acceptance": "浅/深/跟系统×空/加载/失败/unknown/离线/冲突/禁用/聚焦；真机与长时资源",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "COST-01",
+      "summary": "10人500元/30人2000元含20%预留；p24",
+      "design": "06-COST-OPERATIONS.md",
+      "section": "双账本、预算闸门与资源成本",
+      "implementation_pr": "11a、12b",
+      "acceptance": "基础设施/ASR/重写/AI/预留分别估算；满配额成本实测，不当厂商封顶",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "COST-02",
+      "summary": "次数与实际费用分账；p25",
+      "design": "06-COST-OPERATIONS.md",
+      "section": "双账本、预算闸门与资源成本",
+      "implementation_pr": "02b、11a",
+      "acceptance": "预留→提交→核对→结算/释放；批次/汇总逐调用记费；unknown不按0或自动退款",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "COST-03",
+      "summary": "60/80/100%阈值与独立停用；p25",
+      "design": "06-COST-OPERATIONS.md",
+      "section": "双账本、预算闸门与资源成本",
+      "implementation_pr": "11a",
+      "acceptance": "并发/在途风险纳入；停止新收费帧；阅读/导出/管理仍可用；不删学习资料",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "QUOTA-01",
+      "summary": "月12/18h、日3h、重写2.4/3.6h、互动20/36、总结8/12、单采集；p24",
+      "design": "06-COST-OPERATIONS.md",
+      "section": "双账本、预算闸门与资源成本",
+      "implementation_pr": "11a",
+      "acceptance": "北京自然月不结转；多设备不绕过；追加留理由；阅读揭晓搜索不扣AI次数",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "QA-01",
+      "summary": "回归、40次E2E、隔离恢复长时与生命周期；p26",
+      "design": "08-IMPLEMENTATION.md",
+      "section": "对应PR验收和Gate",
+      "implementation_pr": "00、12a、12b",
+      "acceptance": "保留旧测试；≥40次预定义目标≥95%；3次90–120分钟；零未解P0/P1及失败证据",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "QA-02",
+      "summary": "ASR与AI语义质量；p26",
+      "design": "08-IMPLEMENTATION.md",
+      "section": "对应PR验收和Gate",
+      "implementation_pr": "06a、12b",
+      "acceptance": "首字幕P95≤3秒为优化目标；另测final；事实/数字/公式人工查；质量阈值开放学生前冻结",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "QA-03",
+      "summary": "分级浏览器支持与真机矩阵；p27",
+      "design": "08-IMPLEMENTATION.md",
+      "section": "对应PR验收和Gate",
+      "implementation_pr": "12b",
+      "acceptance": "冻结一级最新两稳定大版本；Safari/Firefox/移动范围按实测；内置浏览器不正式支持",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "TEST-01",
+      "summary": "2–3→10→30人验证；p27",
+      "design": "08-IMPLEMENTATION.md",
+      "section": "对应PR验收和Gate",
+      "implementation_pr": "12b及后续内测",
+      "acceptance": "10人各两课堂一复习，观察8完成/6自愿复用；30人约4教学周；仅授权资料且不编提升",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "RELEASE-01",
+      "summary": "Gate0–3与回退/发布材料；p27–28",
+      "design": "06-COST-OPERATIONS.md",
+      "section": "发布/兼容迁移/回退",
+      "implementation_pr": "12c",
+      "acceptance": "逐Gate证据；邀请/ASR/AI开关；DB兼容迁移和恢复演练；通过门槛不等于授权发布",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "DEV-01",
+      "summary": "小PR、保留用户改动与本地边界；p29",
+      "design": "08-IMPLEMENTATION.md",
+      "section": "对应PR验收和Gate",
+      "implementation_pr": "所有PR",
+      "acceptance": "开始核对状态，diff单一目标；不删除local_only或全量改框架开放公网",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "DEV-02",
+      "summary": "00–12依赖与计量前置；p29",
+      "design": "08-IMPLEMENTATION.md",
+      "section": "对应PR验收和Gate",
+      "implementation_pr": "00、01及所有PR",
+      "acceptance": "按DECISIONS硬依赖；11a在06/07收费前，05a在持久恢复前",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "DEV-03",
+      "summary": "PR证据格式与不降测试；p30",
+      "design": "08-IMPLEMENTATION.md",
+      "section": "对应PR验收和Gate",
+      "implementation_pr": "所有PR",
+      "acceptance": "需求ID/文件/实际命令/模拟边界/安全成本/回退/复现完整；失败不删测试",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "DEV-04",
+      "summary": "首轮只读交接、后续明确授权；p30",
+      "design": "08-IMPLEMENTATION.md",
+      "section": "对应PR验收和Gate",
+      "implementation_pr": "00",
+      "acceptance": "PR-00仅文档/CI/运行配置；不把本授权扩为01–12业务开发/收费/部署",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "A1",
+      "summary": "文件示例与真实双向流的适用边界；p35",
+      "design": "04-CONTRACTS-FLOWS.md",
+      "section": "采集/ASR/时间与未知收费契约",
+      "implementation_pr": "06a",
+      "acceptance": "锁定SDK/API族；文件demo通过不冒充麦克风流；发送接收并发与收尾契约",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "A2",
+      "summary": "浏览器→受控后端→ASR→数据服务；p35",
+      "design": "04-CONTRACTS-FLOWS.md",
+      "section": "采集/ASR/时间与未知收费契约",
+      "implementation_pr": "03、04a、06b",
+      "acceptance": "浏览器无Key；owner/配额/预算先检查；持久最终稿与授权推送；日志脱敏",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "A3",
+      "summary": "真实16k/mono/PCM16与分帧；p35",
+      "design": "04-CONTRACTS-FLOWS.md",
+      "section": "采集/ASR/时间与未知收费契约",
+      "implementation_pr": "05b、06a",
+      "acceptance": "真实重采样/混声/量化；约100ms/1–16KB为建议；格式字节一致；双链路故障",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "A4",
+      "summary": "流生命周期和课堂状态；p36",
+      "design": "04-CONTRACTS-FLOWS.md",
+      "section": "采集/ASR/时间与未知收费契约",
+      "implementation_pr": "06b",
+      "acceptance": "start/并发send+events/stop/drain；重连新epoch；unknown不自动收费重放",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "A5",
+      "summary": "事件字段、final幂等和来源；p36",
+      "design": "04-CONTRACTS-FLOWS.md",
+      "section": "采集/ASR/时间与未知收费契约",
+      "implementation_pr": "06b、07b",
+      "acceptance": "classroom/stream/segment/seq/offset/status/provider/revision映射；迟到去重；时间戳来源",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "A6",
+      "summary": "Filetrans独立POC与候选保留；p36",
+      "design": "04-CONTRACTS-FLOWS.md",
+      "section": "采集/ASR/时间与未知收费契约",
+      "implementation_pr": "06c",
+      "acceptance": "streaming/filetrans不混接口；默认月额20%；一次/课；7天到期不再发起原音任务",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "A7",
+      "summary": "首选模型/北京/Workspace/密钥/热词配置；p36",
+      "design": "04-CONTRACTS-FLOWS.md",
+      "section": "采集/ASR/时间与未知收费契约",
+      "implementation_pr": "06a",
+      "acceptance": "精确模型qwen-audio-3.1-asr-flash-streaming；端点占位配置；仅服务端Key；词表A/B",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "A8",
+      "summary": "文件、真流、中英混合、断网、长时、安全POC；p37",
+      "design": "04-CONTRACTS-FLOWS.md",
+      "section": "采集/ASR/时间与未知收费契约",
+      "implementation_pr": "06a、12b",
+      "acceptance": "授权WAV/30段参考；requestId与延迟；至少3轮90–120分钟；跨用户拒绝及7天删除",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "A9",
+      "summary": "既定预算/时长额与真实Token账本；p37",
+      "design": "04-CONTRACTS-FLOWS.md",
+      "section": "采集/ASR/时间与未知收费契约",
+      "implementation_pr": "11a、12b",
+      "acceptance": "12/18h及默认额20%；实际输入输出Token与账单对账；不套旧模型小时价",
+      "status": "design mapped; implementation not performed in PR-01"
+    },
+    {
+      "requirement_id": "A10",
+      "summary": "Adapter、权限/额度前置、本地保留与发布声明；p37",
+      "design": "04-CONTRACTS-FLOWS.md",
+      "section": "采集/ASR/时间与未知收费契约",
+      "implementation_pr": "03、04、05、06、11a",
+      "acceptance": "先POC及权限/文件/密钥/预算；Whisper保留；真实验收前不声称已支持云ASR",
+      "status": "design mapped; implementation not performed in PR-01"
+    }
+  ]
+}

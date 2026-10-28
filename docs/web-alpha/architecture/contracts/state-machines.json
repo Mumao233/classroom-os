@@ -1,0 +1,84 @@
+{
+  "version": "0.1.0",
+  "scope": "Design transition and guard fixtures; not a runtime implementation or distributed transaction proof",
+  "machines": {
+    "capture": {
+      "states": ["idle","recording","paused","local_only","failed","ended"],
+      "transitions": [
+        {"from":"idle","to":"recording","event":"start","requires":["user_gesture","valid_lease","permission","safe_local_store"]},
+        {"from":"recording","to":"paused","event":"pause","requires":["tail_flushed"]},
+        {"from":"paused","to":"recording","event":"resume","requires":["user_gesture","valid_lease","new_epoch","safe_local_store"]},
+        {"from":"recording","to":"local_only","event":"cloud_unavailable","requires":["informed_user","safe_local_store"]},
+        {"from":"local_only","to":"recording","event":"reconnect","requires":["valid_lease","budget_permit","unknown_ranges_excluded"]},
+        {"from":["recording","local_only","paused"],"to":"failed","event":"capture_failure","requires":["gap_recorded"]},
+        {"from":["recording","paused","local_only","failed"],"to":"ended","event":"end","requires":["input_stopped","manifest_sealed"]}
+      ]
+    },
+    "upload": {
+      "states":["pending","uploading","durable","failed"],
+      "transitions":[
+        {"from":"pending","to":"uploading","event":"send","requires":["local_durable","owner_authorized"]},
+        {"from":"uploading","to":"durable","event":"ack","requires":["object_durable","database_committed","hash_matches"]},
+        {"from":"uploading","to":"failed","event":"error","requires":[]},
+        {"from":"failed","to":"uploading","event":"retry","requires":["same_op","same_hash","server_reconciled"]}
+      ]
+    },
+    "asr": {
+      "states":["idle","streaming","catching_up","draining","succeeded","failed","unknown"],
+      "transitions":[
+        {"from":"idle","to":"streaming","event":"start","requires":["durable_audio","budget_permit","consent","dispatch_intent"]},
+        {"from":"idle","to":"catching_up","event":"catch_up","requires":["durable_audio","budget_permit","consent","known_unsent_only"]},
+        {"from":["streaming","catching_up"],"to":"draining","event":"finish","requires":["no_new_frames"]},
+        {"from":"draining","to":"succeeded","event":"terminal","requires":["provider_terminal","finals_committed"]},
+        {"from":["streaming","catching_up","draining"],"to":"unknown","event":"lost_outcome","requires":["dispatch_intent"]},
+        {"from":["idle","streaming","catching_up","draining"],"to":"failed","event":"known_failure","requires":["provider_or_negative_evidence"]},
+        {"from":"unknown","to":"succeeded","event":"reconcile","requires":["provider_result_proven","finals_committed"]}
+      ]
+    },
+    "ai": {
+      "states":["idle","queued","running","succeeded","failed","unknown","cancel_requested","cancelled"],
+      "transitions":[
+        {"from":"idle","to":"queued","event":"execute_plan","requires":["plan_confirmed","plan_unconsumed","budget_reserved","task_committed"]},
+        {"from":"queued","to":"running","event":"dispatch","requires":["lease_valid","dispatch_intent","current_authorization"]},
+        {"from":"running","to":"succeeded","event":"result","requires":["raw_durable","validated","candidate_committed"]},
+        {"from":"running","to":"failed","event":"invalid_output","requires":["raw_durable","billing_preserved"]},
+        {"from":"running","to":"unknown","event":"lost_outcome","requires":["dispatch_intent","billing_preserved"]},
+        {"from":"unknown","to":"succeeded","event":"reconcile","requires":["provider_result_proven","validated","candidate_committed"]},
+        {"from":"queued","to":"cancelled","event":"cancel","requires":["proven_not_sent","reservation_released"]},
+        {"from":"running","to":"cancel_requested","event":"cancel","requires":["billing_preserved"]},
+        {"from":"cancel_requested","to":"cancelled","event":"stop_confirmed","requires":["provider_stop_proven","usage_recorded"]},
+        {"from":"cancel_requested","to":"unknown","event":"lost_outcome","requires":["billing_preserved"]},
+        {"from":"cancel_requested","to":"succeeded","event":"late_result","requires":["raw_durable","validated","candidate_committed"]}
+      ]
+    },
+    "sync": {
+      "states":["local_only","syncing","synced","failed","conflict"],
+      "transitions":[
+        {"from":"local_only","to":"syncing","event":"submit","requires":["local_durable","stable_op","base_revision"]},
+        {"from":"syncing","to":"synced","event":"ack","requires":["server_receipt","matching_generation"]},
+        {"from":"syncing","to":"failed","event":"error","requires":[]},
+        {"from":"failed","to":"syncing","event":"retry","requires":["same_op","same_payload","not_deleted"]},
+        {"from":"syncing","to":"conflict","event":"cas_rejected","requires":["both_branches_preserved"]},
+        {"from":"conflict","to":"syncing","event":"resolve","requires":["user_choice","current_base","new_op","not_deleted"]}
+      ]
+    }
+  },
+  "cases": [
+    {"name":"recording_requires_gesture","machine":"capture","from":"idle","to":"recording","event":"start","facts":["valid_lease","permission","safe_local_store"],"allowed":false},
+    {"name":"recording_start","machine":"capture","from":"idle","to":"recording","event":"start","facts":["user_gesture","valid_lease","permission","safe_local_store"],"allowed":true},
+    {"name":"unsafe_offline_capture","machine":"capture","from":"recording","to":"local_only","event":"cloud_unavailable","facts":["informed_user"],"allowed":false},
+    {"name":"object_only_not_cloud_saved","machine":"upload","from":"uploading","to":"durable","event":"ack","facts":["object_durable","hash_matches"],"allowed":false},
+    {"name":"dual_confirmation","machine":"upload","from":"uploading","to":"durable","event":"ack","facts":["object_durable","database_committed","hash_matches"],"allowed":true},
+    {"name":"different_hash_not_retry","machine":"upload","from":"failed","to":"uploading","event":"retry","facts":["same_op","server_reconciled"],"allowed":false},
+    {"name":"unknown_asr_no_auto_restart","machine":"asr","from":"unknown","to":"streaming","event":"reconnect","facts":["budget_permit","consent"],"allowed":false},
+    {"name":"socket_close_not_success","machine":"asr","from":"draining","to":"succeeded","event":"terminal","facts":["finals_committed"],"allowed":false},
+    {"name":"known_result_reconciled","machine":"asr","from":"unknown","to":"succeeded","event":"reconcile","facts":["provider_result_proven","finals_committed"],"allowed":true},
+    {"name":"no_second_plan_execution","machine":"ai","from":"idle","to":"queued","event":"execute_plan","facts":["plan_confirmed","budget_reserved","task_committed"],"allowed":false},
+    {"name":"raw_invalid_not_success","machine":"ai","from":"running","to":"succeeded","event":"result","facts":["raw_durable","candidate_committed"],"allowed":false},
+    {"name":"valid_candidate","machine":"ai","from":"running","to":"succeeded","event":"result","facts":["raw_durable","validated","candidate_committed"],"allowed":true},
+    {"name":"unknown_ai_no_retry_transition","machine":"ai","from":"unknown","to":"running","event":"retry","facts":[],"allowed":false},
+    {"name":"late_ack_cannot_confirm_new_typing","machine":"sync","from":"syncing","to":"synced","event":"ack","facts":["server_receipt"],"allowed":false},
+    {"name":"matching_ack","machine":"sync","from":"syncing","to":"synced","event":"ack","facts":["server_receipt","matching_generation"],"allowed":true},
+    {"name":"deleted_never_revives","machine":"sync","from":"conflict","to":"syncing","event":"resolve","facts":["user_choice","current_base","new_op"],"allowed":false}
+  ]
+}

@@ -1,0 +1,7577 @@
+{
+  "schema_version": "1.0.0",
+  "status": "PR-01 architecture baseline pending user review; not applied migrations",
+  "database": "PostgreSQL 17 target; patch/driver lock and actual validation in PR-02",
+  "runtime": "Python 3.12 target; independent Web dependency environment",
+  "id_strategy": "UUIDv4; no semantic IDs or course-name keys",
+  "money": "PostgreSQL bigint micro-CNY; JSON decimal integer string; 1 CNY = 1000000 micro-CNY",
+  "time": "timestamptz UTC; Beijing quota calendar; sample indexes bigint, half-open ranges",
+  "common_rules": [
+    "JSONB fields require versioned schemas and explicit size limits in service; not an unbounded catch-all",
+    "Every private FK includes owner_id; same-class/document lineage checks are additional deferred constraint triggers or transaction assertions where noted",
+    "No automatic cascade deleting learning trees; access tombstone then durable deletion workflow",
+    "Private read operations always apply owner+active-account+tombstone checks; RLS is defense in depth",
+    "All nullable FK pairs use PostgreSQL MATCH SIMPLE; common owner_id remains not-null",
+    "References forming pointer cycles use DEFERRABLE INITIALLY DEFERRED; publication validates final membership in one transaction",
+    "Architecture schema includes later PR tables; create in dependency migrations as required, not all services upfront"
+  ],
+  "tables": [
+    {
+      "name": "users",
+      "module": "identity",
+      "tenant_scope": "control_plane",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "server-generated UUIDv4"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "revision",
+          "type": "bigint",
+          "nullable": false,
+          "default": "1"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "deleted_at",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "normalized_email",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "password_hash",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "role",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "state",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "email_verified_at",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "security_epoch",
+          "type": "bigint",
+          "nullable": false,
+          "default": "1"
+        },
+        {
+          "name": "profile",
+          "type": "jsonb",
+          "nullable": false,
+          "default": "{}"
+        },
+        {
+          "name": "preferences",
+          "type": "jsonb",
+          "nullable": false,
+          "default": "{}"
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "normalized_email"
+        ]
+      ],
+      "foreign_keys": [],
+      "indexes": [],
+      "checks": [
+        "role IN ('student','admin')",
+        "state IN ('active','disabled','erasing','erased')",
+        "revision >= 1"
+      ],
+      "transactional_invariants": [
+        "email is normalized by documented policy; no provider-specific dot/plus rewriting",
+        "erased principal retains opaque UUID only until tombstone/accounting retention approved; email and secrets nulled"
+      ],
+      "row_security": "No general owner API grant; dedicated identity/control repository only"
+    },
+    {
+      "name": "invitations",
+      "module": "identity",
+      "tenant_scope": "control_plane",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "server-generated UUIDv4"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "token_hash",
+          "type": "bytea",
+          "nullable": false
+        },
+        {
+          "name": "email_binding",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "expires_at",
+          "type": "timestamptz",
+          "nullable": false
+        },
+        {
+          "name": "activated_user_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "created_by",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "revision",
+          "type": "bigint",
+          "nullable": false,
+          "default": "1"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "token_hash"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "created_by"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "activated_user_id"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [],
+      "checks": [
+        "status IN ('open','consumed','revoked','expired')"
+      ],
+      "transactional_invariants": [
+        "one activation per invite; lock invite and enrollment control row before active-user count check"
+      ],
+      "row_security": "No general owner API grant; dedicated identity/control repository only"
+    },
+    {
+      "name": "pending_registrations",
+      "module": "identity",
+      "tenant_scope": "control_plane",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "server-generated UUIDv4"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "normalized_email",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "password_hash",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "invitation_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "expires_at",
+          "type": "timestamptz",
+          "nullable": false
+        },
+        {
+          "name": "email_proof_hash",
+          "type": "bytea",
+          "nullable": false
+        },
+        {
+          "name": "consumed_at",
+          "type": "timestamptz",
+          "nullable": true
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "email_proof_hash"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "invitation_id"
+          ],
+          "references": {
+            "table": "invitations",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [],
+      "checks": [],
+      "transactional_invariants": [
+        "pending account is not enrolled and owns no learning objects; verification+invite consume+user activation single transaction"
+      ],
+      "row_security": "No general owner API grant; dedicated identity/control repository only"
+    },
+    {
+      "name": "email_actions",
+      "module": "identity",
+      "tenant_scope": "owner",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "server-generated UUIDv4"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "owner_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "kind",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "token_hash",
+          "type": "bytea",
+          "nullable": false
+        },
+        {
+          "name": "target_email",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "security_epoch",
+          "type": "bigint",
+          "nullable": false
+        },
+        {
+          "name": "expires_at",
+          "type": "timestamptz",
+          "nullable": false
+        },
+        {
+          "name": "consumed_at",
+          "type": "timestamptz",
+          "nullable": true
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "owner_id",
+          "id"
+        ],
+        [
+          "token_hash"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "owner_id"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [],
+      "checks": [
+        "kind IN ('reset_password','change_email','verify_email')"
+      ],
+      "transactional_invariants": [
+        "single-use consume under row lock; reset increments user security_epoch and revokes all sessions"
+      ],
+      "row_security": "FORCE RLS: owner_id = nullif(current_setting('app.owner_id', true), '')::uuid; empty scope denies"
+    },
+    {
+      "name": "auth_sessions",
+      "module": "identity",
+      "tenant_scope": "owner",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "server-generated UUIDv4"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "owner_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "token_hash",
+          "type": "bytea",
+          "nullable": false
+        },
+        {
+          "name": "csrf_hash",
+          "type": "bytea",
+          "nullable": false
+        },
+        {
+          "name": "security_epoch",
+          "type": "bigint",
+          "nullable": false
+        },
+        {
+          "name": "device_label",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "last_seen_at",
+          "type": "timestamptz",
+          "nullable": false
+        },
+        {
+          "name": "idle_expires_at",
+          "type": "timestamptz",
+          "nullable": false
+        },
+        {
+          "name": "absolute_expires_at",
+          "type": "timestamptz",
+          "nullable": false
+        },
+        {
+          "name": "mfa_verified_at",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "reauthenticated_at",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "revoked_at",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "device_id",
+          "type": "uuid",
+          "nullable": false
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "owner_id",
+          "id"
+        ],
+        [
+          "token_hash"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "owner_id"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "device_id"
+          ],
+          "references": {
+            "table": "devices",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [
+        [
+          "owner_id",
+          "revoked_at"
+        ]
+      ],
+      "checks": [],
+      "transactional_invariants": [
+        "token and CSRF plaintext never persisted; live HTTP/WS validate revocation and security_epoch"
+      ],
+      "row_security": "FORCE RLS: owner_id = nullif(current_setting('app.owner_id', true), '')::uuid; empty scope denies"
+    },
+    {
+      "name": "mfa_credentials",
+      "module": "identity",
+      "tenant_scope": "owner",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "server-generated UUIDv4"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "owner_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "secret_ciphertext",
+          "type": "bytea",
+          "nullable": false
+        },
+        {
+          "name": "kek_version",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "last_accepted_step",
+          "type": "bigint",
+          "nullable": true
+        },
+        {
+          "name": "enabled_at",
+          "type": "timestamptz",
+          "nullable": true
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "owner_id",
+          "id"
+        ],
+        [
+          "owner_id"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "owner_id"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [],
+      "checks": [],
+      "transactional_invariants": [
+        "TOTP replay prevention compares last_accepted_step transactionally; admin login requires enabled MFA"
+      ],
+      "row_security": "FORCE RLS: owner_id = nullif(current_setting('app.owner_id', true), '')::uuid; empty scope denies"
+    },
+    {
+      "name": "mfa_recovery_codes",
+      "module": "identity",
+      "tenant_scope": "owner",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "server-generated UUIDv4"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "owner_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "credential_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "code_hash",
+          "type": "bytea",
+          "nullable": false
+        },
+        {
+          "name": "used_at",
+          "type": "timestamptz",
+          "nullable": true
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "owner_id",
+          "id"
+        ],
+        [
+          "owner_id",
+          "code_hash"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "owner_id"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "credential_id"
+          ],
+          "references": {
+            "table": "mfa_credentials",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [],
+      "checks": [],
+      "transactional_invariants": [
+        "successful recovery consumes exactly one row under lock"
+      ],
+      "row_security": "FORCE RLS: owner_id = nullif(current_setting('app.owner_id', true), '')::uuid; empty scope denies"
+    },
+    {
+      "name": "devices",
+      "module": "cache",
+      "tenant_scope": "owner",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "server-generated UUIDv4"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "owner_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "revision",
+          "type": "bigint",
+          "nullable": false,
+          "default": "1"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "deleted_at",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "device_token_hash",
+          "type": "bytea",
+          "nullable": false
+        },
+        {
+          "name": "label",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "trusted_at",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "revoked_at",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "security_epoch",
+          "type": "bigint",
+          "nullable": false
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "owner_id",
+          "id"
+        ],
+        [
+          "device_token_hash"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "owner_id"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [],
+      "checks": [
+        "revision >= 1"
+      ],
+      "transactional_invariants": [
+        "device identity is not an authentication credential; recording recovery consent is separate from trusted learning cache"
+      ],
+      "row_security": "FORCE RLS: owner_id = nullif(current_setting('app.owner_id', true), '')::uuid; empty scope denies"
+    },
+    {
+      "name": "cache_keys",
+      "module": "cache",
+      "tenant_scope": "owner",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "server-generated UUIDv4"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "owner_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "device_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "purpose",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "class_session_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "wrapped_dek",
+          "type": "bytea",
+          "nullable": false
+        },
+        {
+          "name": "kek_version",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "key_version",
+          "type": "integer",
+          "nullable": false
+        },
+        {
+          "name": "revoked_at",
+          "type": "timestamptz",
+          "nullable": true
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "owner_id",
+          "id"
+        ],
+        [
+          "owner_id",
+          "device_id",
+          "purpose",
+          "class_session_id",
+          "key_version"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "owner_id"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "device_id"
+          ],
+          "references": {
+            "table": "devices",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "class_session_id"
+          ],
+          "references": {
+            "table": "class_sessions",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [],
+      "checks": [
+        "purpose IN ('learning','draft','recording')",
+        "(purpose = 'recording') = (class_session_id IS NOT NULL)"
+      ],
+      "transactional_invariants": [
+        "partial UNIQUE(owner_id,device_id,purpose,key_version) WHERE class_session_id IS NULL",
+        "all key release requires authenticated same owner and purpose-specific consent; POC-gated"
+      ],
+      "row_security": "FORCE RLS: owner_id = nullif(current_setting('app.owner_id', true), '')::uuid; empty scope denies"
+    },
+    {
+      "name": "consent_records",
+      "module": "privacy",
+      "tenant_scope": "owner",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "server-generated UUIDv4"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "owner_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "kind",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "class_session_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "snapshot_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "device_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "destination_revision",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "policy_version",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "scope",
+          "type": "jsonb",
+          "nullable": false
+        },
+        {
+          "name": "accepted_at",
+          "type": "timestamptz",
+          "nullable": false
+        },
+        {
+          "name": "revoked_at",
+          "type": "timestamptz",
+          "nullable": true
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "owner_id",
+          "id"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "owner_id"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "class_session_id"
+          ],
+          "references": {
+            "table": "class_sessions",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "snapshot_id"
+          ],
+          "references": {
+            "table": "source_snapshots",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "device_id"
+          ],
+          "references": {
+            "table": "devices",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [],
+      "checks": [],
+      "transactional_invariants": [
+        "scope stores bounded identifiers and policy acknowledgement, not a substitute for current authorization"
+      ],
+      "row_security": "FORCE RLS: owner_id = nullif(current_setting('app.owner_id', true), '')::uuid; empty scope denies"
+    },
+    {
+      "name": "semesters",
+      "module": "catalog",
+      "tenant_scope": "owner",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "server-generated UUIDv4"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "owner_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "revision",
+          "type": "bigint",
+          "nullable": false,
+          "default": "1"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "deleted_at",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "academic_year",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "start_date",
+          "type": "date",
+          "nullable": true
+        },
+        {
+          "name": "end_date",
+          "type": "date",
+          "nullable": true
+        },
+        {
+          "name": "archived_at",
+          "type": "timestamptz",
+          "nullable": true
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "owner_id",
+          "id"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "owner_id"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [],
+      "checks": [
+        "start_date IS NULL OR end_date IS NULL OR start_date <= end_date",
+        "revision >= 1"
+      ],
+      "transactional_invariants": [],
+      "row_security": "FORCE RLS: owner_id = nullif(current_setting('app.owner_id', true), '')::uuid; empty scope denies"
+    },
+    {
+      "name": "courses",
+      "module": "catalog",
+      "tenant_scope": "owner",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "server-generated UUIDv4"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "owner_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "revision",
+          "type": "bigint",
+          "nullable": false,
+          "default": "1"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "deleted_at",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "semester_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "english_name",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "language",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "teacher",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "room",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "color_token",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "icon_key",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "current_material_version_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "archived_at",
+          "type": "timestamptz",
+          "nullable": true
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "owner_id",
+          "id"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "owner_id"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "semester_id"
+          ],
+          "references": {
+            "table": "semesters",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "current_material_version_id"
+          ],
+          "references": {
+            "table": "course_material_versions",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [
+        [
+          "owner_id",
+          "semester_id",
+          "updated_at"
+        ]
+      ],
+      "checks": [
+        "revision >= 1"
+      ],
+      "transactional_invariants": [
+        "duplicate names allowed; current material version must belong to this course; no name-based merge",
+        "new course transaction creates empty material version revision=1 even without optional syllabus/glossary; then fills current_material_version_id"
+      ],
+      "row_security": "FORCE RLS: owner_id = nullif(current_setting('app.owner_id', true), '')::uuid; empty scope denies"
+    },
+    {
+      "name": "course_material_versions",
+      "module": "catalog",
+      "tenant_scope": "owner",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "server-generated UUIDv4"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "owner_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "course_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "revision",
+          "type": "bigint",
+          "nullable": false
+        },
+        {
+          "name": "syllabus",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "glossary",
+          "type": "jsonb",
+          "nullable": false
+        },
+        {
+          "name": "language",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "content_sha256",
+          "type": "char(64)",
+          "nullable": false
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "owner_id",
+          "id"
+        ],
+        [
+          "owner_id",
+          "course_id",
+          "revision"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "owner_id"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "course_id"
+          ],
+          "references": {
+            "table": "courses",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [],
+      "checks": [],
+      "transactional_invariants": [
+        "immutable; edits change future defaults only"
+      ],
+      "row_security": "FORCE RLS: owner_id = nullif(current_setting('app.owner_id', true), '')::uuid; empty scope denies"
+    },
+    {
+      "name": "class_sessions",
+      "module": "classroom",
+      "tenant_scope": "owner",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "server-generated UUIDv4"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "owner_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "revision",
+          "type": "bigint",
+          "nullable": false,
+          "default": "1"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "deleted_at",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "course_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "title",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "scheduled_class_ref",
+          "type": "uuid",
+          "nullable": true,
+          "description": "reserved; must be NULL in Alpha; no schedule implementation"
+        },
+        {
+          "name": "course_material_version_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "capture_status",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "started_at",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "ended_at",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "all_expected_uploaded_at",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "audio_expires_at",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "adopted_transcript_version_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "legacy_origin",
+          "type": "jsonb",
+          "nullable": true
+        },
+        {
+          "name": "archived_at",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "automatic_explanation_policy",
+          "type": "jsonb",
+          "nullable": false,
+          "default": "disabled versioned policy"
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "owner_id",
+          "id"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "owner_id"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "course_id"
+          ],
+          "references": {
+            "table": "courses",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "course_material_version_id"
+          ],
+          "references": {
+            "table": "course_material_versions",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "adopted_transcript_version_id"
+          ],
+          "references": {
+            "table": "transcript_versions",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [
+        [
+          "owner_id",
+          "course_id",
+          "started_at"
+        ]
+      ],
+      "checks": [
+        "scheduled_class_ref IS NULL",
+        "revision >= 1"
+      ],
+      "transactional_invariants": [
+        "adopted transcript belongs to same class session; reassignment changes course_id only, preserving source snapshot and capture clock",
+        "retention expiry is server-calculated from approved normal/abnormal policy, never client-clock extended",
+        "course_material_version_id and adopted transcript lineage enforced by deferred constraint triggers; all posted content references same class unless explicitly historical origin"
+      ],
+      "row_security": "FORCE RLS: owner_id = nullif(current_setting('app.owner_id', true), '')::uuid; empty scope denies"
+    },
+    {
+      "name": "capture_leases",
+      "module": "capture",
+      "tenant_scope": "owner",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "server-generated UUIDv4"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "owner_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "class_session_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "device_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "capture_epoch_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "fence_token",
+          "type": "bigint",
+          "nullable": false
+        },
+        {
+          "name": "expires_at",
+          "type": "timestamptz",
+          "nullable": false
+        },
+        {
+          "name": "renewed_at",
+          "type": "timestamptz",
+          "nullable": false
+        },
+        {
+          "name": "released_at",
+          "type": "timestamptz",
+          "nullable": true
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "owner_id",
+          "id"
+        ],
+        [
+          "owner_id"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "owner_id"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "class_session_id"
+          ],
+          "references": {
+            "table": "class_sessions",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "device_id"
+          ],
+          "references": {
+            "table": "devices",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "capture_epoch_id"
+          ],
+          "references": {
+            "table": "capture_epochs",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [],
+      "checks": [
+        "fence_token >= 1"
+      ],
+      "transactional_invariants": [
+        "one row per owner; acquire/renew/takeover SELECT FOR UPDATE; fence monotonically increases even after release",
+        "expired lease requires explicit takeover, never automatic remote microphone activation"
+      ],
+      "row_security": "FORCE RLS: owner_id = nullif(current_setting('app.owner_id', true), '')::uuid; empty scope denies"
+    },
+    {
+      "name": "capture_epochs",
+      "module": "capture",
+      "tenant_scope": "owner",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "server-generated UUIDv4"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "owner_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "class_session_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "device_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "fence_token",
+          "type": "bigint",
+          "nullable": false
+        },
+        {
+          "name": "timeline_offset_ms",
+          "type": "bigint",
+          "nullable": false
+        },
+        {
+          "name": "sample_rate",
+          "type": "integer",
+          "nullable": false,
+          "default": "16000"
+        },
+        {
+          "name": "wall_started_at",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "wall_ended_at",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "last_expected_seq",
+          "type": "bigint",
+          "nullable": true
+        },
+        {
+          "name": "end_sample",
+          "type": "bigint",
+          "nullable": true
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "nullable": false
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "owner_id",
+          "id"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "owner_id"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "class_session_id"
+          ],
+          "references": {
+            "table": "class_sessions",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "device_id"
+          ],
+          "references": {
+            "table": "devices",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [],
+      "checks": [
+        "timeline_offset_ms >= 0",
+        "sample_rate = 16000"
+      ],
+      "transactional_invariants": [
+        "samples monotonic per epoch; new epoch on takeover/restart; wall-clock uncertainty preserved; final manifest is explicit, not inferred from socket close"
+      ],
+      "row_security": "FORCE RLS: owner_id = nullif(current_setting('app.owner_id', true), '')::uuid; empty scope denies"
+    },
+    {
+      "name": "capture_gaps",
+      "module": "capture",
+      "tenant_scope": "owner",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "server-generated UUIDv4"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "owner_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "class_session_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "capture_epoch_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "start_sample",
+          "type": "bigint",
+          "nullable": true
+        },
+        {
+          "name": "end_sample",
+          "type": "bigint",
+          "nullable": true
+        },
+        {
+          "name": "wall_start",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "wall_end",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "kind",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "reason_code",
+          "type": "text",
+          "nullable": false
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "owner_id",
+          "id"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "owner_id"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "class_session_id"
+          ],
+          "references": {
+            "table": "class_sessions",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "capture_epoch_id"
+          ],
+          "references": {
+            "table": "capture_epochs",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [],
+      "checks": [
+        "kind IN ('pause','known_missing','unknown','overlap')"
+      ],
+      "transactional_invariants": [
+        "unknown boundary remains nullable rather than invented precision"
+      ],
+      "row_security": "FORCE RLS: owner_id = nullif(current_setting('app.owner_id', true), '')::uuid; empty scope denies"
+    },
+    {
+      "name": "media_assets",
+      "module": "media",
+      "tenant_scope": "owner",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "server-generated UUIDv4"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "owner_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "class_session_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "kind",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "object_key",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "object_version",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "sha256",
+          "type": "char(64)",
+          "nullable": false
+        },
+        {
+          "name": "size_bytes",
+          "type": "bigint",
+          "nullable": false
+        },
+        {
+          "name": "mime_type",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "expires_at",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "confirmed_at",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "access_revoked_at",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "deleted_at",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "first_cloud_received_at",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "retention_anchor_at",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "hard_expire_at",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "retention_policy_version",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "revision",
+          "type": "bigint",
+          "nullable": false,
+          "default": "1"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "owner_id",
+          "id"
+        ],
+        [
+          "object_key"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "owner_id"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "class_session_id"
+          ],
+          "references": {
+            "table": "class_sessions",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [
+        [
+          "owner_id",
+          "class_session_id",
+          "kind"
+        ],
+        [
+          "status",
+          "expires_at"
+        ]
+      ],
+      "checks": [
+        "size_bytes >= 0",
+        "status IN ('staging','verified','committed','delete_pending','delete_failed','deleted')"
+      ],
+      "transactional_invariants": [
+        "private storage only; upload ACK requires verified durable object and DB committed metadata; key is server-generated and immutable",
+        "no cross-owner content-address dedupe; storage versions tracked explicitly",
+        "first_cloud_received_at null while staging empty; created_at bounds staging cleanup; committed audio requires server-approved expiry policy"
+      ],
+      "row_security": "FORCE RLS: owner_id = nullif(current_setting('app.owner_id', true), '')::uuid; empty scope denies"
+    },
+    {
+      "name": "audio_chunks",
+      "module": "capture",
+      "tenant_scope": "owner",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "server-generated UUIDv4"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "owner_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "class_session_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "capture_epoch_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "asset_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "seq",
+          "type": "bigint",
+          "nullable": false
+        },
+        {
+          "name": "start_sample",
+          "type": "bigint",
+          "nullable": false
+        },
+        {
+          "name": "end_sample",
+          "type": "bigint",
+          "nullable": false
+        },
+        {
+          "name": "sha256",
+          "type": "char(64)",
+          "nullable": false
+        },
+        {
+          "name": "ingest_mode",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "accepted_fence",
+          "type": "bigint",
+          "nullable": false
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "owner_id",
+          "id"
+        ],
+        [
+          "owner_id",
+          "capture_epoch_id",
+          "seq"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "owner_id"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "class_session_id"
+          ],
+          "references": {
+            "table": "class_sessions",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "capture_epoch_id"
+          ],
+          "references": {
+            "table": "capture_epochs",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "asset_id"
+          ],
+          "references": {
+            "table": "media_assets",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [
+        [
+          "owner_id",
+          "class_session_id",
+          "capture_epoch_id",
+          "start_sample"
+        ]
+      ],
+      "checks": [
+        "seq >= 0",
+        "start_sample >= 0",
+        "end_sample > start_sample",
+        "ingest_mode IN ('live','recovery')"
+      ],
+      "transactional_invariants": [
+        "same epoch/seq with different sha256 or range is conflict; same content returns original receipt",
+        "byte length is 2*(end_sample-start_sample) for mono PCM16; epoch/session/asset lineage equal",
+        "recovery upload validates old epoch without using old fencing to resume live send; overlap flagged"
+      ],
+      "row_security": "FORCE RLS: owner_id = nullif(current_setting('app.owner_id', true), '')::uuid; empty scope denies"
+    },
+    {
+      "name": "asr_streams",
+      "module": "asr",
+      "tenant_scope": "owner",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "server-generated UUIDv4"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "owner_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "class_session_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "capture_epoch_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "task_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "provider",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "model",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "region",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "config_revision",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "provider_request_id",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "submitted_through_sample",
+          "type": "bigint",
+          "nullable": true
+        },
+        {
+          "name": "confirmed_through_sample",
+          "type": "bigint",
+          "nullable": true
+        },
+        {
+          "name": "ended_at",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "mode",
+          "type": "text",
+          "nullable": false
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "owner_id",
+          "id"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "owner_id"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "class_session_id"
+          ],
+          "references": {
+            "table": "class_sessions",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "capture_epoch_id"
+          ],
+          "references": {
+            "table": "capture_epochs",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "task_id"
+          ],
+          "references": {
+            "table": "tasks",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [],
+      "checks": [
+        "status IN ('not_submitted','streaming','draining','completed','failed','result_unknown')",
+        "mode IN ('live','catch_up')"
+      ],
+      "transactional_invariants": [
+        "single live sender per stream; submitted high-water persisted before send; no result implies unknown, not unsubmitted"
+      ],
+      "row_security": "FORCE RLS: owner_id = nullif(current_setting('app.owner_id', true), '')::uuid; empty scope denies"
+    },
+    {
+      "name": "asr_dispatches",
+      "module": "asr",
+      "tenant_scope": "owner",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "server-generated UUIDv4"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "owner_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "stream_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "chunk_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "attempt_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "start_sample",
+          "type": "bigint",
+          "nullable": false
+        },
+        {
+          "name": "end_sample",
+          "type": "bigint",
+          "nullable": false
+        },
+        {
+          "name": "state",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "dispatch_seq",
+          "type": "bigint",
+          "nullable": false
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "owner_id",
+          "id"
+        ],
+        [
+          "owner_id",
+          "stream_id",
+          "dispatch_seq"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "owner_id"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "stream_id"
+          ],
+          "references": {
+            "table": "asr_streams",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "chunk_id"
+          ],
+          "references": {
+            "table": "audio_chunks",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "attempt_id"
+          ],
+          "references": {
+            "table": "task_attempts",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [],
+      "checks": [
+        "end_sample > start_sample",
+        "state IN ('planned','submitting','confirmed','unknown','not_sent')"
+      ],
+      "transactional_invariants": [
+        "durable send intent covers bounded sample range; uncertain send must never be inferred as safely retryable"
+      ],
+      "row_security": "FORCE RLS: owner_id = nullif(current_setting('app.owner_id', true), '')::uuid; empty scope denies"
+    },
+    {
+      "name": "transcript_versions",
+      "module": "transcript",
+      "tenant_scope": "owner",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "server-generated UUIDv4"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "owner_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "class_session_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "kind",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "task_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "status",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "config_revision",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "coverage",
+          "type": "jsonb",
+          "nullable": false
+        },
+        {
+          "name": "legacy_provenance",
+          "type": "jsonb",
+          "nullable": true
+        },
+        {
+          "name": "revision",
+          "type": "bigint",
+          "nullable": false,
+          "default": "1"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "owner_id",
+          "id"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "owner_id"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "class_session_id"
+          ],
+          "references": {
+            "table": "class_sessions",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "task_id"
+          ],
+          "references": {
+            "table": "tasks",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [],
+      "checks": [
+        "kind IN ('realtime','retranscription','imported')",
+        "status IN ('open','sealed')"
+      ],
+      "transactional_invariants": [
+        "retranscription never replaces realtime or personal text; explicit adopted pointer change"
+      ],
+      "row_security": "FORCE RLS: owner_id = nullif(current_setting('app.owner_id', true), '')::uuid; empty scope denies"
+    },
+    {
+      "name": "transcript_segments",
+      "module": "transcript",
+      "tenant_scope": "owner",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "server-generated UUIDv4"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "owner_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "revision",
+          "type": "bigint",
+          "nullable": false,
+          "default": "1"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "deleted_at",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "class_session_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "transcript_version_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "asr_stream_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "provider_segment_key",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "capture_epoch_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "start_sample",
+          "type": "bigint",
+          "nullable": true
+        },
+        {
+          "name": "end_sample",
+          "type": "bigint",
+          "nullable": true
+        },
+        {
+          "name": "timestamp_source",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "current_machine_revision_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "adopted_revision_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "origin",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "start_ms",
+          "type": "bigint",
+          "nullable": true
+        },
+        {
+          "name": "end_ms",
+          "type": "bigint",
+          "nullable": true
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "owner_id",
+          "id"
+        ],
+        [
+          "owner_id",
+          "transcript_version_id",
+          "provider_segment_key"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "owner_id"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "class_session_id"
+          ],
+          "references": {
+            "table": "class_sessions",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "transcript_version_id"
+          ],
+          "references": {
+            "table": "transcript_versions",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "asr_stream_id"
+          ],
+          "references": {
+            "table": "asr_streams",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "capture_epoch_id"
+          ],
+          "references": {
+            "table": "capture_epochs",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "current_machine_revision_id"
+          ],
+          "references": {
+            "table": "transcript_segment_revisions",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "adopted_revision_id"
+          ],
+          "references": {
+            "table": "transcript_segment_revisions",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [],
+      "checks": [
+        "timestamp_source IN ('provider_segment','capture_mapping','legacy_fragment','unknown','import_declared','user_declared')",
+        "origin IN ('live_asr','retranscription','import','manual')",
+        "start_ms IS NULL OR end_ms IS NULL OR end_ms >= start_ms"
+      ],
+      "transactional_invariants": [
+        "only final segments stored as evidence; repeated words are not dedupe keys",
+        "adopted/current revisions must belong to this segment; provider key includes stream scope when provider IDs reset"
+      ],
+      "row_security": "FORCE RLS: owner_id = nullif(current_setting('app.owner_id', true), '')::uuid; empty scope denies"
+    },
+    {
+      "name": "transcript_segment_revisions",
+      "module": "transcript",
+      "tenant_scope": "owner",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "server-generated UUIDv4"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "owner_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "segment_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "revision",
+          "type": "bigint",
+          "nullable": false
+        },
+        {
+          "name": "kind",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "text",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "sha256",
+          "type": "char(64)",
+          "nullable": false
+        },
+        {
+          "name": "provider_revision_key",
+          "type": "text",
+          "nullable": true
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "owner_id",
+          "id"
+        ],
+        [
+          "owner_id",
+          "segment_id",
+          "revision"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "owner_id"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "segment_id"
+          ],
+          "references": {
+            "table": "transcript_segments",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [],
+      "checks": [
+        "kind IN ('machine','personal')"
+      ],
+      "transactional_invariants": [
+        "immutable revisions; provider duplicates do not create additional final records; machine update cannot overwrite personal adopted revision"
+      ],
+      "row_security": "FORCE RLS: owner_id = nullif(current_setting('app.owner_id', true), '')::uuid; empty scope denies"
+    },
+    {
+      "name": "slides",
+      "module": "media",
+      "tenant_scope": "owner",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "server-generated UUIDv4"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "owner_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "revision",
+          "type": "bigint",
+          "nullable": false,
+          "default": "1"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "deleted_at",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "class_session_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "title",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "current_version_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "start_ms",
+          "type": "bigint",
+          "nullable": false
+        },
+        {
+          "name": "end_ms",
+          "type": "bigint",
+          "nullable": true
+        },
+        {
+          "name": "removed_at",
+          "type": "timestamptz",
+          "nullable": true
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "owner_id",
+          "id"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "owner_id"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "class_session_id"
+          ],
+          "references": {
+            "table": "class_sessions",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "current_version_id"
+          ],
+          "references": {
+            "table": "slide_versions",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [],
+      "checks": [
+        "start_ms >= 0",
+        "end_ms IS NULL OR end_ms >= start_ms",
+        "revision >= 1"
+      ],
+      "transactional_invariants": [
+        "remove from current timeline differs from explicit erasure; current_version must belong to slide"
+      ],
+      "row_security": "FORCE RLS: owner_id = nullif(current_setting('app.owner_id', true), '')::uuid; empty scope denies"
+    },
+    {
+      "name": "slide_versions",
+      "module": "media",
+      "tenant_scope": "owner",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "server-generated UUIDv4"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "owner_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "slide_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "asset_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "revision",
+          "type": "bigint",
+          "nullable": false
+        },
+        {
+          "name": "rotation",
+          "type": "integer",
+          "nullable": false
+        },
+        {
+          "name": "sha256",
+          "type": "char(64)",
+          "nullable": false
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "owner_id",
+          "id"
+        ],
+        [
+          "owner_id",
+          "slide_id",
+          "revision"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "owner_id"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "slide_id"
+          ],
+          "references": {
+            "table": "slides",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "asset_id"
+          ],
+          "references": {
+            "table": "media_assets",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [],
+      "checks": [
+        "rotation IN (0,90,180,270)"
+      ],
+      "transactional_invariants": [
+        "immutable history; historical snapshots keep exact asset version until explicit deletion"
+      ],
+      "row_security": "FORCE RLS: owner_id = nullif(current_setting('app.owner_id', true), '')::uuid; empty scope denies"
+    },
+    {
+      "name": "source_snapshots",
+      "module": "evidence",
+      "tenant_scope": "owner",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "server-generated UUIDv4"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "owner_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "class_session_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "scope",
+          "type": "jsonb",
+          "nullable": false
+        },
+        {
+          "name": "course_material_version_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "snapshot_hash",
+          "type": "char(64)",
+          "nullable": false
+        },
+        {
+          "name": "coverage",
+          "type": "jsonb",
+          "nullable": false
+        },
+        {
+          "name": "legacy_provenance",
+          "type": "jsonb",
+          "nullable": true
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "owner_id",
+          "id"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "owner_id"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "class_session_id"
+          ],
+          "references": {
+            "table": "class_sessions",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "course_material_version_id"
+          ],
+          "references": {
+            "table": "course_material_versions",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [],
+      "checks": [],
+      "transactional_invariants": [
+        "immutable frozen range, source versions and missing ranges; do not mutate hash after import remap",
+        "classroom move must not silently rebind frozen course material version"
+      ],
+      "row_security": "FORCE RLS: owner_id = nullif(current_setting('app.owner_id', true), '')::uuid; empty scope denies"
+    },
+    {
+      "name": "source_items",
+      "module": "evidence",
+      "tenant_scope": "owner",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "server-generated UUIDv4"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "owner_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "snapshot_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "source_key",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "segment_revision_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "slide_version_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "frozen_text",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "source_hash",
+          "type": "char(64)",
+          "nullable": false
+        },
+        {
+          "name": "availability",
+          "type": "text",
+          "nullable": false
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "owner_id",
+          "id"
+        ],
+        [
+          "owner_id",
+          "snapshot_id",
+          "source_key"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "owner_id"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "snapshot_id"
+          ],
+          "references": {
+            "table": "source_snapshots",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "segment_revision_id"
+          ],
+          "references": {
+            "table": "transcript_segment_revisions",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "slide_version_id"
+          ],
+          "references": {
+            "table": "slide_versions",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [],
+      "checks": [
+        "num_nonnulls(segment_revision_id, slide_version_id) = 1",
+        "availability IN ('available','removed','expired','missing','corrupt')"
+      ],
+      "transactional_invariants": [
+        "lineage trigger ensures referenced segment/slide belongs to snapshot class session; partial forbidden",
+        "content frozen; availability overlay may change upon erasure without substituting another source"
+      ],
+      "row_security": "FORCE RLS: owner_id = nullif(current_setting('app.owner_id', true), '')::uuid; empty scope denies"
+    },
+    {
+      "name": "questions",
+      "module": "learning",
+      "tenant_scope": "owner",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "server-generated UUIDv4"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "owner_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "revision",
+          "type": "bigint",
+          "nullable": false,
+          "default": "1"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "deleted_at",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "class_session_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "snapshot_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "prompt",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "mode",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "task_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "result_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "understanding",
+          "type": "text",
+          "nullable": false,
+          "default": "unresolved"
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "owner_id",
+          "id"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "owner_id"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "class_session_id"
+          ],
+          "references": {
+            "table": "class_sessions",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "snapshot_id"
+          ],
+          "references": {
+            "table": "source_snapshots",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "task_id"
+          ],
+          "references": {
+            "table": "tasks",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "result_id"
+          ],
+          "references": {
+            "table": "provider_results",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [],
+      "checks": [
+        "mode IN ('question','explanation','automatic_explanation')",
+        "revision >= 1",
+        "understanding IN ('unresolved','understood')"
+      ],
+      "transactional_invariants": [
+        "prepare freezes snapshot; dispatch requires consent and budget; creation never sends model implicitly"
+      ],
+      "row_security": "FORCE RLS: owner_id = nullif(current_setting('app.owner_id', true), '')::uuid; empty scope denies"
+    },
+    {
+      "name": "marks",
+      "module": "learning",
+      "tenant_scope": "owner",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "server-generated UUIDv4"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "owner_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "revision",
+          "type": "bigint",
+          "nullable": false,
+          "default": "1"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "deleted_at",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "class_session_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "segment_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "slide_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "review_document_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "kind",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "understanding",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "capture_epoch_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "sample_offset",
+          "type": "bigint",
+          "nullable": true
+        },
+        {
+          "name": "segment_revision_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "slide_version_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "review_revision_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "content_sha256",
+          "type": "char(64)",
+          "nullable": true
+        },
+        {
+          "name": "note",
+          "type": "text",
+          "nullable": false,
+          "default": ""
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "owner_id",
+          "id"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "owner_id"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "class_session_id"
+          ],
+          "references": {
+            "table": "class_sessions",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "segment_id"
+          ],
+          "references": {
+            "table": "transcript_segments",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "slide_id"
+          ],
+          "references": {
+            "table": "slides",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "review_document_id"
+          ],
+          "references": {
+            "table": "review_documents",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "capture_epoch_id"
+          ],
+          "references": {
+            "table": "capture_epochs",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "segment_revision_id"
+          ],
+          "references": {
+            "table": "transcript_segment_revisions",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "slide_version_id"
+          ],
+          "references": {
+            "table": "slide_versions",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "review_revision_id"
+          ],
+          "references": {
+            "table": "review_revisions",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [],
+      "checks": [
+        "num_nonnulls(segment_id,slide_id,review_document_id,capture_epoch_id) = 1",
+        "kind IN ('important','unclear')",
+        "understanding IN ('unresolved','understood')",
+        "revision >= 1",
+        "(capture_epoch_id IS NOT NULL) = (sample_offset IS NOT NULL)",
+        "sample_offset IS NULL OR sample_offset >= 0",
+        "(segment_id IS NOT NULL) = (segment_revision_id IS NOT NULL)",
+        "(slide_id IS NOT NULL) = (slide_version_id IS NOT NULL)",
+        "(review_document_id IS NOT NULL) = (review_revision_id IS NOT NULL)"
+      ],
+      "transactional_invariants": [
+        "only explicit user mutation changes understanding; no AI completion auto-resolve",
+        "exact revision and hash verified against target lineage; timepoint usable before ASR final; cannot silently rebind to a later transcript"
+      ],
+      "row_security": "FORCE RLS: owner_id = nullif(current_setting('app.owner_id', true), '')::uuid; empty scope denies"
+    },
+    {
+      "name": "review_runs",
+      "module": "review",
+      "tenant_scope": "owner",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "server-generated UUIDv4"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "owner_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "class_session_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "snapshot_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "root_task_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "prompt_version",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "output_schema_version",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "model_config_revision",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "options",
+          "type": "jsonb",
+          "nullable": false
+        },
+        {
+          "name": "coverage",
+          "type": "jsonb",
+          "nullable": false
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "owner_id",
+          "id"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "owner_id"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "class_session_id"
+          ],
+          "references": {
+            "table": "class_sessions",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "snapshot_id"
+          ],
+          "references": {
+            "table": "source_snapshots",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "root_task_id"
+          ],
+          "references": {
+            "table": "tasks",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [],
+      "checks": [],
+      "transactional_invariants": [
+        "one user summary operation; each batch and merge separately costed; partial coverage shown"
+      ],
+      "row_security": "FORCE RLS: owner_id = nullif(current_setting('app.owner_id', true), '')::uuid; empty scope denies"
+    },
+    {
+      "name": "review_batches",
+      "module": "review",
+      "tenant_scope": "owner",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "server-generated UUIDv4"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "owner_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "run_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "ordinal",
+          "type": "integer",
+          "nullable": false
+        },
+        {
+          "name": "snapshot_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "task_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "kind",
+          "type": "text",
+          "nullable": false
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "owner_id",
+          "id"
+        ],
+        [
+          "owner_id",
+          "run_id",
+          "ordinal"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "owner_id"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "run_id"
+          ],
+          "references": {
+            "table": "review_runs",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "snapshot_id"
+          ],
+          "references": {
+            "table": "source_snapshots",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "task_id"
+          ],
+          "references": {
+            "table": "tasks",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [],
+      "checks": [
+        "kind IN ('source_batch','merge')"
+      ],
+      "transactional_invariants": [
+        "frozen execution plan; batch ordering does not imply auto-retry of unknown attempts"
+      ],
+      "row_security": "FORCE RLS: owner_id = nullif(current_setting('app.owner_id', true), '')::uuid; empty scope denies"
+    },
+    {
+      "name": "review_documents",
+      "module": "review",
+      "tenant_scope": "owner",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "server-generated UUIDv4"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "owner_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "revision",
+          "type": "bigint",
+          "nullable": false,
+          "default": "1"
+        },
+        {
+          "name": "updated_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "deleted_at",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "class_session_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "kind",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "title",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "adopted_revision_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "understanding",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "read_position",
+          "type": "jsonb",
+          "nullable": true
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "owner_id",
+          "id"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "owner_id"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "class_session_id"
+          ],
+          "references": {
+            "table": "class_sessions",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "adopted_revision_id"
+          ],
+          "references": {
+            "table": "review_revisions",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [],
+      "checks": [
+        "kind IN ('summary','note','concept','derivation','example','pitfall')",
+        "revision >= 1"
+      ],
+      "transactional_invariants": [
+        "global/course/class views refer to same id; initial adopted_revision_id is NULL even for first AI candidate",
+        "adopted revision belongs to same document; understanding not auto-updated by generation"
+      ],
+      "row_security": "FORCE RLS: owner_id = nullif(current_setting('app.owner_id', true), '')::uuid; empty scope denies"
+    },
+    {
+      "name": "review_revisions",
+      "module": "review",
+      "tenant_scope": "owner",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "server-generated UUIDv4"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "owner_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "document_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "revision",
+          "type": "bigint",
+          "nullable": false
+        },
+        {
+          "name": "kind",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "content",
+          "type": "jsonb",
+          "nullable": false
+        },
+        {
+          "name": "snapshot_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "provider_result_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "base_revision_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "content_hash",
+          "type": "char(64)",
+          "nullable": false
+        },
+        {
+          "name": "author_device_id",
+          "type": "uuid",
+          "nullable": true
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "owner_id",
+          "id"
+        ],
+        [
+          "owner_id",
+          "document_id",
+          "revision"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "owner_id"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "document_id"
+          ],
+          "references": {
+            "table": "review_documents",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "snapshot_id"
+          ],
+          "references": {
+            "table": "source_snapshots",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "provider_result_id"
+          ],
+          "references": {
+            "table": "provider_results",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "base_revision_id"
+          ],
+          "references": {
+            "table": "review_revisions",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "author_device_id"
+          ],
+          "references": {
+            "table": "devices",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [],
+      "checks": [
+        "kind IN ('ai_candidate','personal')"
+      ],
+      "transactional_invariants": [
+        "immutable; draft save may append revision but does not mutate adopted pointer unless explicit adopt operation",
+        "base_revision belongs to document; AI candidate requires validated provider result and snapshot; personal text not indexed until server-confirmed"
+      ],
+      "row_security": "FORCE RLS: owner_id = nullif(current_setting('app.owner_id', true), '')::uuid; empty scope denies"
+    },
+    {
+      "name": "operation_receipts",
+      "module": "operations",
+      "tenant_scope": "owner",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "server-generated UUIDv4"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "owner_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "operation",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "op_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "request_hash",
+          "type": "char(64)",
+          "nullable": false
+        },
+        {
+          "name": "resource_type",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "resource_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "response_status",
+          "type": "integer",
+          "nullable": false
+        },
+        {
+          "name": "response_body",
+          "type": "jsonb",
+          "nullable": false
+        },
+        {
+          "name": "schema_version",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "expires_at",
+          "type": "timestamptz",
+          "nullable": true
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "owner_id",
+          "id"
+        ],
+        [
+          "owner_id",
+          "operation",
+          "op_id"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "owner_id"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [],
+      "checks": [],
+      "transactional_invariants": [
+        "receipt insert and domain write in same transaction; conflict hash returns 409; deleted-resource replay returns tombstone outcome, never resurrects body",
+        "not polymorphic authorization: resource_type whitelist and owner-scoped loader required; receipt stores minimized response, no private raw content unnecessarily",
+        "Never store session cookies, MFA seeds, recovery codes, cache key material or signed download bearer URLs in response_body; sensitive issuance stores nonsecret status/reference only, replay reauthenticates and reauthorizes before fresh issuance"
+      ],
+      "row_security": "FORCE RLS: owner_id = nullif(current_setting('app.owner_id', true), '')::uuid; empty scope denies"
+    },
+    {
+      "name": "tasks",
+      "module": "execution",
+      "tenant_scope": "owner",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "server-generated UUIDv4"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "owner_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "class_session_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "parent_task_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "kind",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "state",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "input_ref",
+          "type": "jsonb",
+          "nullable": false
+        },
+        {
+          "name": "schema_version",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "priority",
+          "type": "integer",
+          "nullable": false
+        },
+        {
+          "name": "not_before",
+          "type": "timestamptz",
+          "nullable": false
+        },
+        {
+          "name": "lease_token",
+          "type": "bigint",
+          "nullable": false,
+          "default": "0"
+        },
+        {
+          "name": "leased_by",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "lease_expires_at",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "error_code",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "cancel_requested_at",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "completed_at",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "plan_id",
+          "type": "uuid",
+          "nullable": true
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "owner_id",
+          "id"
+        ],
+        [
+          "owner_id",
+          "plan_id"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "owner_id"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "class_session_id"
+          ],
+          "references": {
+            "table": "class_sessions",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "parent_task_id"
+          ],
+          "references": {
+            "table": "tasks",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "plan_id"
+          ],
+          "references": {
+            "table": "generation_plans",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [
+        [
+          "state",
+          "not_before",
+          "priority"
+        ],
+        [
+          "owner_id",
+          "class_session_id",
+          "created_at"
+        ]
+      ],
+      "checks": [
+        "state IN ('queued','running','succeeded','failed','unknown','cancel_requested','cancelled')",
+        "kind IN ('asr_live','asr_retranscribe','ai_question','ai_explanation','review_summary','export','import','delete')"
+      ],
+      "transactional_invariants": [
+        "SKIP LOCKED claim and lease token increment in transaction; every writeback checks current lease token",
+        "input_ref is schema-validated ID data not executable code/URL; worker reauthorizes owner and deletion state"
+      ],
+      "row_security": "FORCE RLS: owner_id = nullif(current_setting('app.owner_id', true), '')::uuid; empty scope denies"
+    },
+    {
+      "name": "task_attempts",
+      "module": "execution",
+      "tenant_scope": "owner",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "server-generated UUIDv4"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "owner_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "task_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "attempt_number",
+          "type": "integer",
+          "nullable": false
+        },
+        {
+          "name": "state",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "provider",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "provider_request_id",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "model",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "price_revision",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "submitted_at",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "finished_at",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "raw_output_ref",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "provider_outcome",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "error_code",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "duplicate_billing_ack",
+          "type": "boolean",
+          "nullable": false,
+          "default": "false"
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "owner_id",
+          "id"
+        ],
+        [
+          "owner_id",
+          "task_id",
+          "attempt_number"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "owner_id"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "task_id"
+          ],
+          "references": {
+            "table": "tasks",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "raw_output_ref"
+          ],
+          "references": {
+            "table": "provider_results",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [],
+      "checks": [
+        "state IN ('planned','submitting','accepted','succeeded','failed','unknown','cancel_requested','cancelled')"
+      ],
+      "transactional_invariants": [
+        "commit submitting before external send; crash after this boundary => unknown unless negative provider proof",
+        "new attempt after unknown requires explicit repeat-cost acknowledgement; no SDK hidden retries for charged sends"
+      ],
+      "row_security": "FORCE RLS: owner_id = nullif(current_setting('app.owner_id', true), '')::uuid; empty scope denies"
+    },
+    {
+      "name": "provider_results",
+      "module": "execution",
+      "tenant_scope": "owner",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "server-generated UUIDv4"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "owner_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "attempt_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "raw_output",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "asset_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "sha256",
+          "type": "char(64)",
+          "nullable": false
+        },
+        {
+          "name": "validation_status",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "validated_payload",
+          "type": "jsonb",
+          "nullable": true
+        },
+        {
+          "name": "received_at",
+          "type": "timestamptz",
+          "nullable": false
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "owner_id",
+          "id"
+        ],
+        [
+          "owner_id",
+          "attempt_id"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "owner_id"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "attempt_id"
+          ],
+          "references": {
+            "table": "task_attempts",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "asset_id"
+          ],
+          "references": {
+            "table": "media_assets",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [],
+      "checks": [
+        "num_nonnulls(raw_output,asset_id) = 1",
+        "validation_status IN ('pending','valid','invalid')"
+      ],
+      "transactional_invariants": [
+        "provider success with invalid output leaves task failed/OUTPUT_INVALID and retains billable raw result; no automatic model repair call"
+      ],
+      "row_security": "FORCE RLS: owner_id = nullif(current_setting('app.owner_id', true), '')::uuid; empty scope denies"
+    },
+    {
+      "name": "owner_event_counters",
+      "module": "events",
+      "tenant_scope": "owner",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "server-generated UUIDv4"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "owner_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "next_sequence",
+          "type": "bigint",
+          "nullable": false,
+          "default": "1"
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "owner_id",
+          "id"
+        ],
+        [
+          "owner_id"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "owner_id"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [],
+      "checks": [],
+      "transactional_invariants": [
+        "row locked to allocate event sequence in same transaction as state mutation; avoids global sequence commit-order holes",
+        "bootstrap reads projections and next_sequence minus one from a single REPEATABLE READ snapshot; never use global BIGSERIAL/MAX as a completeness watermark"
+      ],
+      "row_security": "FORCE RLS: owner_id = nullif(current_setting('app.owner_id', true), '')::uuid; empty scope denies"
+    },
+    {
+      "name": "outbox_events",
+      "module": "events",
+      "tenant_scope": "owner",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "server-generated UUIDv4"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "owner_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "event_sequence",
+          "type": "bigint",
+          "nullable": false
+        },
+        {
+          "name": "event_type",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "aggregate_type",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "aggregate_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "aggregate_revision",
+          "type": "bigint",
+          "nullable": true
+        },
+        {
+          "name": "payload",
+          "type": "jsonb",
+          "nullable": false
+        },
+        {
+          "name": "schema_version",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "published_at",
+          "type": "timestamptz",
+          "nullable": true
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "owner_id",
+          "id"
+        ],
+        [
+          "owner_id",
+          "event_sequence"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "owner_id"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [
+        [
+          "owner_id",
+          "event_sequence"
+        ],
+        [
+          "published_at",
+          "created_at"
+        ]
+      ],
+      "checks": [],
+      "transactional_invariants": [
+        "payload contains bounded IDs/status, not transcript/secret bodies; replay same event id safely",
+        "opaque cursor scoped to owner; retention-expired cursor yields resync_required; pg_notify only hints",
+        "transcript.final wire text is hydrated from immutable revision after current owner/tombstone authorization; no text duplicate in outbox",
+        "event_sequence allocated from locked owner_event_counters row in same domain transaction, not independent sequence allocation; lock held through commit; cursor cannot skip late commits"
+      ],
+      "row_security": "FORCE RLS: owner_id = nullif(current_setting('app.owner_id', true), '')::uuid; empty scope denies"
+    },
+    {
+      "name": "quota_periods",
+      "module": "billing",
+      "tenant_scope": "owner",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "server-generated UUIDv4"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "owner_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "resource",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "period_start",
+          "type": "timestamptz",
+          "nullable": false
+        },
+        {
+          "name": "period_end",
+          "type": "timestamptz",
+          "nullable": false
+        },
+        {
+          "name": "period_kind",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "unit",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "limit_value",
+          "type": "bigint",
+          "nullable": false
+        },
+        {
+          "name": "reserved_value",
+          "type": "bigint",
+          "nullable": false,
+          "default": "0"
+        },
+        {
+          "name": "committed_value",
+          "type": "bigint",
+          "nullable": false,
+          "default": "0"
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "owner_id",
+          "id"
+        ],
+        [
+          "owner_id",
+          "resource",
+          "period_kind",
+          "period_start"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "owner_id"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [],
+      "checks": [
+        "period_end > period_start",
+        "limit_value >= 0",
+        "reserved_value >= 0",
+        "committed_value >= 0"
+      ],
+      "transactional_invariants": [
+        "Beijing calendar periods stored as UTC boundaries; no carryover; each account claims both daily and monthly ASR rows"
+      ],
+      "row_security": "FORCE RLS: owner_id = nullif(current_setting('app.owner_id', true), '')::uuid; empty scope denies"
+    },
+    {
+      "name": "platform_budgets",
+      "module": "billing",
+      "tenant_scope": "control_plane",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "server-generated UUIDv4"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "period_start",
+          "type": "timestamptz",
+          "nullable": false
+        },
+        {
+          "name": "period_end",
+          "type": "timestamptz",
+          "nullable": false
+        },
+        {
+          "name": "budget_micro_cny",
+          "type": "bigint",
+          "nullable": false
+        },
+        {
+          "name": "safety_reserve_micro_cny",
+          "type": "bigint",
+          "nullable": false
+        },
+        {
+          "name": "fixed_committed_micro_cny",
+          "type": "bigint",
+          "nullable": false
+        },
+        {
+          "name": "reserved_micro_cny",
+          "type": "bigint",
+          "nullable": false
+        },
+        {
+          "name": "settled_micro_cny",
+          "type": "bigint",
+          "nullable": false
+        },
+        {
+          "name": "stage",
+          "type": "text",
+          "nullable": false
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "period_start"
+        ]
+      ],
+      "foreign_keys": [],
+      "indexes": [],
+      "checks": [
+        "period_end > period_start",
+        "budget_micro_cny >= 0",
+        "reserved_micro_cny >= 0"
+      ],
+      "transactional_invariants": [
+        "20% safety reserve excluded from routine spend pool; fixed infrastructure costs and unknown commitments counted; no provider hard-cap promise"
+      ],
+      "row_security": "No general owner API grant; dedicated identity/control repository only"
+    },
+    {
+      "name": "quota_reservations",
+      "module": "billing",
+      "tenant_scope": "owner",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "server-generated UUIDv4"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "owner_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "task_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "attempt_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "budget_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "purpose",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "state",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "reserved_micro_cny",
+          "type": "bigint",
+          "nullable": false
+        },
+        {
+          "name": "settled_micro_cny",
+          "type": "bigint",
+          "nullable": true
+        },
+        {
+          "name": "price_revision",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "expires_at",
+          "type": "timestamptz",
+          "nullable": true
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "owner_id",
+          "id"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "owner_id"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "task_id"
+          ],
+          "references": {
+            "table": "tasks",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "attempt_id"
+          ],
+          "references": {
+            "table": "task_attempts",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "budget_id"
+          ],
+          "references": {
+            "table": "platform_budgets",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [],
+      "checks": [
+        "state IN ('reserved','submitted','unknown','settled','released')",
+        "reserved_micro_cny >= 0"
+      ],
+      "transactional_invariants": [
+        "platform budget then owner quota rows locked in deterministic order; user operation count reservation distinct from per-attempt money",
+        "timeout cannot release submitted/unknown reservations; proof of not-submitted permits release"
+      ],
+      "row_security": "FORCE RLS: owner_id = nullif(current_setting('app.owner_id', true), '')::uuid; empty scope denies"
+    },
+    {
+      "name": "reservation_allocations",
+      "module": "billing",
+      "tenant_scope": "owner",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "server-generated UUIDv4"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "owner_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "reservation_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "quota_period_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "quantity",
+          "type": "bigint",
+          "nullable": false
+        },
+        {
+          "name": "consumed_quantity",
+          "type": "bigint",
+          "nullable": true
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "owner_id",
+          "id"
+        ],
+        [
+          "owner_id",
+          "reservation_id",
+          "quota_period_id"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "owner_id"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "reservation_id"
+          ],
+          "references": {
+            "table": "quota_reservations",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "quota_period_id"
+          ],
+          "references": {
+            "table": "quota_periods",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [],
+      "checks": [
+        "quantity >= 0"
+      ],
+      "transactional_invariants": [
+        "one reservation can cover monthly+daily quantities; summary root consumes one operation, children only money/tokens"
+      ],
+      "row_security": "FORCE RLS: owner_id = nullif(current_setting('app.owner_id', true), '')::uuid; empty scope denies"
+    },
+    {
+      "name": "usage_receipts",
+      "module": "billing",
+      "tenant_scope": "owner",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "server-generated UUIDv4"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "owner_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "attempt_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "reservation_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "provider",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "provider_usage_key",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "metric_revision",
+          "type": "bigint",
+          "nullable": false
+        },
+        {
+          "name": "input_tokens",
+          "type": "bigint",
+          "nullable": true
+        },
+        {
+          "name": "output_tokens",
+          "type": "bigint",
+          "nullable": true
+        },
+        {
+          "name": "audio_duration_ms",
+          "type": "bigint",
+          "nullable": true
+        },
+        {
+          "name": "amount_micro_cny",
+          "type": "bigint",
+          "nullable": true
+        },
+        {
+          "name": "price_revision",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "measurement_kind",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "bill_month",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "reconciled_at",
+          "type": "timestamptz",
+          "nullable": true
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "owner_id",
+          "id"
+        ],
+        [
+          "provider",
+          "provider_usage_key",
+          "metric_revision"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "owner_id"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "attempt_id"
+          ],
+          "references": {
+            "table": "task_attempts",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "reservation_id"
+          ],
+          "references": {
+            "table": "quota_reservations",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [],
+      "checks": [
+        "measurement_kind IN ('provider_cumulative','provider_delta','estimate','invoice_adjustment')"
+      ],
+      "transactional_invariants": [
+        "cumulative values compute delta under attempt lock; unknown/null never zero; same receipt not double counted",
+        "retain original month and price revision; corrected invoices append adjustment not overwrite history"
+      ],
+      "row_security": "FORCE RLS: owner_id = nullif(current_setting('app.owner_id', true), '')::uuid; empty scope denies"
+    },
+    {
+      "name": "quota_adjustments",
+      "module": "billing",
+      "tenant_scope": "owner",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "server-generated UUIDv4"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "owner_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "quota_period_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "delta",
+          "type": "bigint",
+          "nullable": false
+        },
+        {
+          "name": "reason",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "admin_actor_id",
+          "type": "uuid",
+          "nullable": false
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "owner_id",
+          "id"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "owner_id"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "quota_period_id"
+          ],
+          "references": {
+            "table": "quota_periods",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "admin_actor_id"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [],
+      "checks": [],
+      "transactional_invariants": [
+        "admin MFA/re-auth and append-only audit; quota increase does not increase platform budget"
+      ],
+      "row_security": "FORCE RLS: owner_id = nullif(current_setting('app.owner_id', true), '')::uuid; empty scope denies"
+    },
+    {
+      "name": "price_catalog",
+      "module": "billing",
+      "tenant_scope": "control_plane",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "server-generated UUIDv4"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "provider",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "model",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "region",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "revision",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "currency",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "rates",
+          "type": "jsonb",
+          "nullable": false
+        },
+        {
+          "name": "effective_at",
+          "type": "timestamptz",
+          "nullable": false
+        },
+        {
+          "name": "verified_at",
+          "type": "timestamptz",
+          "nullable": true
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "provider",
+          "model",
+          "region",
+          "revision"
+        ]
+      ],
+      "foreign_keys": [],
+      "indexes": [],
+      "checks": [
+        "currency = 'CNY'"
+      ],
+      "transactional_invariants": [
+        "versioned token/rounding/minimum-charge rules; unverified provider parameters block charged execution"
+      ],
+      "row_security": "No general owner API grant; dedicated identity/control repository only"
+    },
+    {
+      "name": "feature_controls",
+      "module": "operations",
+      "tenant_scope": "control_plane",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "server-generated UUIDv4"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "key",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "value",
+          "type": "jsonb",
+          "nullable": false
+        },
+        {
+          "name": "revision",
+          "type": "bigint",
+          "nullable": false
+        },
+        {
+          "name": "changed_by",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "reason",
+          "type": "text",
+          "nullable": false
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "key"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "changed_by"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [],
+      "checks": [],
+      "transactional_invariants": [
+        "enrollment count cap and signup/asr/ai stop switches; task dispatch and live frame budgets recheck revision; safe defaults deny paid calls"
+      ],
+      "row_security": "No general owner API grant; dedicated identity/control repository only"
+    },
+    {
+      "name": "deletion_requests",
+      "module": "privacy",
+      "tenant_scope": "owner",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "server-generated UUIDv4"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "owner_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "scope_type",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "scope_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "state",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "access_revoked_at",
+          "type": "timestamptz",
+          "nullable": false
+        },
+        {
+          "name": "deadline_at",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "completed_at",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "last_error_code",
+          "type": "text",
+          "nullable": true
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "owner_id",
+          "id"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "owner_id"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [],
+      "checks": [
+        "state IN ('access_revoked','pending','failed','complete')"
+      ],
+      "transactional_invariants": [
+        "scope whitelist + owner-loaded lineage; denial and tombstone committed before physical work; erasure covers history/temp/export versions"
+      ],
+      "row_security": "FORCE RLS: owner_id = nullif(current_setting('app.owner_id', true), '')::uuid; empty scope denies"
+    },
+    {
+      "name": "deletion_tombstones",
+      "module": "privacy",
+      "tenant_scope": "owner",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "server-generated UUIDv4"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "owner_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "request_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "resource_type",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "resource_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "deleted_revision",
+          "type": "bigint",
+          "nullable": true
+        },
+        {
+          "name": "erasure_epoch",
+          "type": "bigint",
+          "nullable": false
+        },
+        {
+          "name": "ledger_sequence",
+          "type": "bigint",
+          "nullable": false
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "owner_id",
+          "id"
+        ],
+        [
+          "owner_id",
+          "resource_type",
+          "resource_id"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "owner_id"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "request_id"
+          ],
+          "references": {
+            "table": "deletion_requests",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [
+        [
+          "ledger_sequence"
+        ]
+      ],
+      "checks": [],
+      "transactional_invariants": [
+        "minimal immutable identifiers, no content; restore replays latest independent ledger before reads",
+        "FK resource pointer intentionally absent so erased resource can be physically removed; type whitelist required"
+      ],
+      "row_security": "FORCE RLS: owner_id = nullif(current_setting('app.owner_id', true), '')::uuid; empty scope denies"
+    },
+    {
+      "name": "deletion_assets",
+      "module": "privacy",
+      "tenant_scope": "owner",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "server-generated UUIDv4"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "owner_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "request_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "asset_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "object_key",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "object_version",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "state",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "attempt_count",
+          "type": "integer",
+          "nullable": false
+        },
+        {
+          "name": "last_error_code",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "confirmed_absent_at",
+          "type": "timestamptz",
+          "nullable": true
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "owner_id",
+          "id"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "owner_id"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "request_id"
+          ],
+          "references": {
+            "table": "deletion_requests",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "asset_id"
+          ],
+          "references": {
+            "table": "media_assets",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [],
+      "checks": [],
+      "transactional_invariants": [
+        "inventory includes object versions and derivative temp exports; delete idempotent; only absence proof closes entry"
+      ],
+      "row_security": "FORCE RLS: owner_id = nullif(current_setting('app.owner_id', true), '')::uuid; empty scope denies"
+    },
+    {
+      "name": "transfer_jobs",
+      "module": "transfer",
+      "tenant_scope": "owner",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "server-generated UUIDv4"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "owner_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "task_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "direction",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "format",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "schema_version",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "input_asset_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "output_asset_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "target_course_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "class_session_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "manifest",
+          "type": "jsonb",
+          "nullable": false
+        },
+        {
+          "name": "preview_hash",
+          "type": "char(64)",
+          "nullable": false
+        },
+        {
+          "name": "confirmed_at",
+          "type": "timestamptz",
+          "nullable": true
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "owner_id",
+          "id"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "owner_id"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "task_id"
+          ],
+          "references": {
+            "table": "tasks",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "input_asset_id"
+          ],
+          "references": {
+            "table": "media_assets",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "output_asset_id"
+          ],
+          "references": {
+            "table": "media_assets",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "target_course_id"
+          ],
+          "references": {
+            "table": "courses",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "class_session_id"
+          ],
+          "references": {
+            "table": "class_sessions",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [],
+      "checks": [
+        "direction IN ('import','export')"
+      ],
+      "transactional_invariants": [
+        "preview/hash/caps before publish; untrusted embedded scripts never run; import credentials, active tasks, old consent excluded"
+      ],
+      "row_security": "FORCE RLS: owner_id = nullif(current_setting('app.owner_id', true), '')::uuid; empty scope denies"
+    },
+    {
+      "name": "import_id_maps",
+      "module": "transfer",
+      "tenant_scope": "owner",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "server-generated UUIDv4"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "owner_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "transfer_job_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "source_type",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "source_id",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "target_type",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "target_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "original_hash",
+          "type": "char(64)",
+          "nullable": true
+        },
+        {
+          "name": "normalized_hash",
+          "type": "char(64)",
+          "nullable": true
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "owner_id",
+          "id"
+        ],
+        [
+          "owner_id",
+          "transfer_job_id",
+          "source_type",
+          "source_id"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "owner_id"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "transfer_job_id"
+          ],
+          "references": {
+            "table": "transfer_jobs",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [],
+      "checks": [],
+      "transactional_invariants": [
+        "legacy source identity is provenance not authority; each import receives new owner-scoped UUIDs; map target validated in commit transaction"
+      ],
+      "row_security": "FORCE RLS: owner_id = nullif(current_setting('app.owner_id', true), '')::uuid; empty scope denies"
+    },
+    {
+      "name": "notifications",
+      "module": "operations",
+      "tenant_scope": "owner",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "server-generated UUIDv4"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "owner_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "event_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "dedupe_key",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "severity",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "kind",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "target_ref",
+          "type": "jsonb",
+          "nullable": false
+        },
+        {
+          "name": "read_at",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "resolved_at",
+          "type": "timestamptz",
+          "nullable": true
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "owner_id",
+          "id"
+        ],
+        [
+          "owner_id",
+          "dedupe_key"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "owner_id"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "event_id"
+          ],
+          "references": {
+            "table": "outbox_events",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [],
+      "checks": [],
+      "transactional_invariants": [
+        "read does not resolve fault; target reauthorized, deleted target hides historical text; no private body in notification payload"
+      ],
+      "row_security": "FORCE RLS: owner_id = nullif(current_setting('app.owner_id', true), '')::uuid; empty scope denies"
+    },
+    {
+      "name": "feedback_reports",
+      "module": "operations",
+      "tenant_scope": "owner",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "server-generated UUIDv4"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "owner_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "category",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "user_text",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "diagnostics",
+          "type": "jsonb",
+          "nullable": false
+        },
+        {
+          "name": "consent_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "snapshot_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "state",
+          "type": "text",
+          "nullable": false
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "owner_id",
+          "id"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "owner_id"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "consent_id"
+          ],
+          "references": {
+            "table": "consent_records",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "snapshot_id"
+          ],
+          "references": {
+            "table": "source_snapshots",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [],
+      "checks": [],
+      "transactional_invariants": [
+        "diagnostics allowlist; shared content excerpt only with explicit consent and scope; no automatic whole-class upload to admin"
+      ],
+      "row_security": "FORCE RLS: owner_id = nullif(current_setting('app.owner_id', true), '')::uuid; empty scope denies"
+    },
+    {
+      "name": "audit_events",
+      "module": "audit",
+      "tenant_scope": "control_plane",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "server-generated UUIDv4"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "actor_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "subject_owner_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "action",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "target_type",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "target_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "outcome",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "reason_code",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "request_id",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "metadata",
+          "type": "jsonb",
+          "nullable": false
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [],
+      "foreign_keys": [
+        {
+          "columns": [
+            "actor_id"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "subject_owner_id"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [
+        [
+          "created_at",
+          "action"
+        ],
+        [
+          "subject_owner_id",
+          "created_at"
+        ]
+      ],
+      "checks": [],
+      "transactional_invariants": [
+        "append only by narrow writer; metadata schema forbids classroom text, email tokens, secrets, raw prompts and recovery codes",
+        "admin reads operational allowlist, never content tables; retention and erasure minimization policy required"
+      ],
+      "row_security": "No general owner API grant; dedicated identity/control repository only"
+    },
+    {
+      "name": "generation_plans",
+      "module": "execution",
+      "tenant_scope": "owner",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "server-generated UUIDv4"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "owner_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "class_session_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "snapshot_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "kind",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "plan_hash",
+          "type": "char(64)",
+          "nullable": false
+        },
+        {
+          "name": "model_config_revision",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "price_revision",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "max_cost_micro_cny",
+          "type": "bigint",
+          "nullable": false
+        },
+        {
+          "name": "estimated_usage",
+          "type": "jsonb",
+          "nullable": false
+        },
+        {
+          "name": "quota_requirements",
+          "type": "jsonb",
+          "nullable": false
+        },
+        {
+          "name": "audio_manifest_sha256",
+          "type": "char(64)",
+          "nullable": true
+        },
+        {
+          "name": "audio_chunk_ids",
+          "type": "uuid[]",
+          "nullable": true
+        },
+        {
+          "name": "batch_plan",
+          "type": "jsonb",
+          "nullable": false
+        },
+        {
+          "name": "consent_scope",
+          "type": "jsonb",
+          "nullable": false
+        },
+        {
+          "name": "expires_at",
+          "type": "timestamptz",
+          "nullable": false
+        },
+        {
+          "name": "consumed_task_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "consumed_at",
+          "type": "timestamptz",
+          "nullable": true
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "owner_id",
+          "id"
+        ],
+        [
+          "owner_id",
+          "consumed_task_id"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "owner_id"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "class_session_id"
+          ],
+          "references": {
+            "table": "class_sessions",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "snapshot_id"
+          ],
+          "references": {
+            "table": "source_snapshots",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "consumed_task_id"
+          ],
+          "references": {
+            "table": "tasks",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [],
+      "checks": [
+        "max_cost_micro_cny >= 0"
+      ],
+      "transactional_invariants": [
+        "immutable prepared plan until atomic consume; plan row lock prevents execute with a different op_id creating another task",
+        "expired or changed model/price/material requires fresh plan and confirmation; audio_chunk_ids validated against owned class and frozen manifest in same transaction",
+        "task/reservations/plan consume/receipt/outbox committed together; no external request before commit"
+      ],
+      "row_security": "FORCE RLS: owner_id = nullif(current_setting('app.owner_id', true), '')::uuid; empty scope denies"
+    },
+    {
+      "name": "sync_conflicts",
+      "module": "sync",
+      "tenant_scope": "owner",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "server-generated UUIDv4"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "owner_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "object_type",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "object_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "op_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "base_revision",
+          "type": "bigint",
+          "nullable": false
+        },
+        {
+          "name": "server_revision",
+          "type": "bigint",
+          "nullable": false
+        },
+        {
+          "name": "client_payload",
+          "type": "jsonb",
+          "nullable": false
+        },
+        {
+          "name": "server_payload",
+          "type": "jsonb",
+          "nullable": false
+        },
+        {
+          "name": "state",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "resolved_op_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "resolved_at",
+          "type": "timestamptz",
+          "nullable": true
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "owner_id",
+          "id"
+        ],
+        [
+          "owner_id",
+          "op_id"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "owner_id"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [],
+      "checks": [
+        "state IN ('open','resolved','deleted')"
+      ],
+      "transactional_invariants": [
+        "bounded versioned typed payload; explicit authorized resource loader by object_type, not arbitrary table names",
+        "preserves both branches until explicit resolution; deletion purges branch content and retains minimal operation tombstone",
+        "resolved operation must pass current CAS and owner/deletion policy; same resolution op replay cannot create another copy"
+      ],
+      "row_security": "FORCE RLS: owner_id = nullif(current_setting('app.owner_id', true), '')::uuid; empty scope denies"
+    },
+    {
+      "name": "auth_challenges",
+      "module": "identity",
+      "tenant_scope": "control_plane",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "server-generated UUIDv4"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "owner_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "session_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "token_hash",
+          "type": "bytea",
+          "nullable": false
+        },
+        {
+          "name": "kind",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "scope",
+          "type": "jsonb",
+          "nullable": false
+        },
+        {
+          "name": "expires_at",
+          "type": "timestamptz",
+          "nullable": false
+        },
+        {
+          "name": "consumed_at",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "security_epoch",
+          "type": "bigint",
+          "nullable": true
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "token_hash"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "owner_id"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "session_id"
+          ],
+          "references": {
+            "table": "auth_sessions",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [],
+      "checks": [
+        "kind IN ('preauth','login_mfa','reauth','ws_ticket','media_ticket','deletion_preview')"
+      ],
+      "transactional_invariants": [
+        "dedicated auth repository only; preauth has null owner and cannot authorize learning access",
+        "bounded scope binds channel/resource/version/fence; one-time grants consume under lock; never store plaintext bearer or returned secret",
+        "non-preauth grants require valid owner and current security epoch; session FK if grant depends on session"
+      ],
+      "row_security": "No general owner API grant; dedicated identity/control repository only"
+    },
+    {
+      "name": "preauth_receipts",
+      "module": "identity",
+      "tenant_scope": "control_plane",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false,
+          "default": "server-generated UUIDv4"
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "preauth_scope_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "operation",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "op_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "request_hmac",
+          "type": "bytea",
+          "nullable": false
+        },
+        {
+          "name": "result_code",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "result_reference",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "expires_at",
+          "type": "timestamptz",
+          "nullable": false
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "preauth_scope_id",
+          "operation",
+          "op_id"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "preauth_scope_id"
+          ],
+          "references": {
+            "table": "auth_challenges",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [],
+      "checks": [],
+      "transactional_invariants": [
+        "HMAC request fingerprint with server key rather than offline-guessable plain password digest",
+        "short-lived minimized receipt; no password/token/seed/email-link response payload; replay reauthenticates; scope never transfers to another browser"
+      ],
+      "row_security": "No general owner API grant; dedicated identity/control repository only"
+    }
+  ]
+}
