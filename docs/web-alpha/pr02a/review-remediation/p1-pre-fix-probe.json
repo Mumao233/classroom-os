@@ -1,0 +1,21 @@
+{
+  "scope": "pure mocked pre-fix guard reproduction; no database/network/subprocess execution",
+  "records": [
+    {
+      "case": "fixture_query_hostaddr",
+      "reached_create_engine_before_rejection": true,
+      "actual_connects": 0
+    },
+    {
+      "case": "fixture_libpq_PGHOSTADDR",
+      "reached_create_engine_before_rejection": true,
+      "actual_connects": 0
+    },
+    {
+      "case": "runner_libpq_PGHOSTADDR",
+      "reached_subprocess_before_rejection": true,
+      "actual_subprocesses": 0,
+      "actual_connects": 0
+    }
+  ]
+}

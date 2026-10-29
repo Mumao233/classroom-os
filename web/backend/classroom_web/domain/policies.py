@@ -4,6 +4,8 @@ import json
 
 
 LANGUAGES = frozenset({"auto", "zh", "en", "mixed"})
+SEMESTER_NAME_MAX_LENGTH = 100
+SEMESTER_ACADEMIC_YEAR_MAX_LENGTH = 30
 
 
 def bounded_text(value: str, limit: int, *, nonempty: bool = False) -> str:

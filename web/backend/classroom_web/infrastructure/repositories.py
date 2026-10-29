@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 from uuid import UUID, uuid4
+from typing import Any
 
 from sqlalchemy import func, insert, select, update
 
 from ..domain.data import (ClassSession, Course, Gone, MaterialVersion, NotFound,
                            Resource, RevisionConflict, Semester, Tombstone)
-from ..domain.policies import base_revision, bounded_text, language_value, material_payload
+from ..domain.policies import (SEMESTER_ACADEMIC_YEAR_MAX_LENGTH,
+                               SEMESTER_NAME_MAX_LENGTH, base_revision, bounded_text,
+                               language_value, material_payload)
 from .schema import tables
 
 
@@ -84,9 +87,9 @@ class PgCatalogRepository:
         return record_type(**row)
 
     def create_semester(self, name, *, academic_year=None, start_date=None, end_date=None):
-        bounded_text(name, 160, nonempty=True)
+        bounded_text(name, SEMESTER_NAME_MAX_LENGTH, nonempty=True)
         if academic_year is not None:
-            bounded_text(academic_year, 40)
+            bounded_text(academic_year, SEMESTER_ACADEMIC_YEAR_MAX_LENGTH)
         if start_date and end_date and start_date > end_date:
             raise ValueError("start date must not follow end date")
         return self._insert(tables["semesters"], Semester, id=uuid4(), name=name,
@@ -97,11 +100,11 @@ class PgCatalogRepository:
 
     def update_semester(self, resource_id, base_revision, *, name=_UNSET,
                         academic_year=_UNSET, start_date=_UNSET, end_date=_UNSET):
-        fields = {}
+        fields: dict[str, Any] = {}
         if name is not _UNSET:
-            fields["name"] = bounded_text(name, 160, nonempty=True)
+            fields["name"] = bounded_text(name, SEMESTER_NAME_MAX_LENGTH, nonempty=True)
         if academic_year is not _UNSET:
-            fields["academic_year"] = (bounded_text(academic_year, 40)
+            fields["academic_year"] = (bounded_text(academic_year, SEMESTER_ACADEMIC_YEAR_MAX_LENGTH)
                                        if academic_year is not None else None)
         if start_date is not _UNSET:
             fields["start_date"] = start_date
@@ -160,7 +163,12 @@ class PgCatalogRepository:
         return MaterialVersion(**row)
 
     def update_material(self, course_id, base_revision, *, syllabus, glossary, language):
-        """CAS compares material revision, independently from course metadata revision."""
+        """CAS material revision; lock course before append/pointer/revocation checks.
+
+        The tombstone database guard locks the same course row. Keep this
+        ancestor-first FOR UPDATE lock before inserting a material version;
+        taking a shared material/course lock then upgrading can deadlock.
+        """
         payload, digest = material_payload(syllabus, glossary, language)
         from ..domain.policies import base_revision as validate_revision
         validate_revision(base_revision)

@@ -1,0 +1,147 @@
+{
+  "date": "2026-10-30",
+  "timezone": "Asia/Shanghai",
+  "original_commit": "272d1175b1919f76905861c0490a5253a25148d3",
+  "architecture_base": "1c3ef02eaba060d9ca9bc173e5bf1b8ab906ee5f",
+  "contract_package": "0.1.0",
+  "web_tests": {
+    "python": "3.12.14 (main, Aug 25 2026, 14:01:42) [MSC v.1944 64 bit (AMD64)]",
+    "executable": "J:\\class-assistant\\worktrees\\web-pr02a-data\\work\\pr02a\\venv\\Scripts\\python.exe",
+    "command": [
+      "J:\\class-assistant\\worktrees\\web-pr02a-data\\work\\pr02a\\venv\\Scripts\\python.exe",
+      "-m",
+      "pytest",
+      "-q",
+      "--basetemp=J:\\class-assistant\\worktrees\\web-pr02a-data\\work\\pr02a\\runs\\20261029T184939.304210Z\\tmp\\pytest",
+      "--junitxml=J:\\class-assistant\\worktrees\\web-pr02a-data\\outputs\\pr02a\\20261029T184939.304210Z\\pytest.xml",
+      "-o",
+      "cache_dir=J:\\class-assistant\\worktrees\\web-pr02a-data\\work\\pr02a\\runs\\20261029T184939.304210Z\\cache"
+    ],
+    "exit_code": 0,
+    "seconds": 18.297,
+    "target": {
+      "host": "127.0.0.1",
+      "port": 4979,
+      "synthetic_database": "pr02a_synthetic"
+    },
+    "isolation": "fixture creates random pr02a_test database and restricted login, then drops both",
+    "limitations": "PostgreSQL data foundation only; no HTTP/frontend/worker/provider or production migration",
+    "total_testcases": 128,
+    "module_counts": {
+      "tests.integration.test_data_foundation": 40,
+      "tests.integration.test_material_revocation_race": 4,
+      "tests.integration.test_migration_remediation": 3,
+      "tests.integration.test_semester_limits": 26,
+      "tests.unit.test_test_database_target": 55
+    },
+    "postgresql_cases": 72,
+    "pure_cases": 56,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "warnings": 0,
+    "evidence": "outputs\\pr02a\\20261029T184939.304210Z"
+  },
+  "old_product": {
+    "python": "3.10.4 (tags/v3.10.4:9d38120, Mar 23 2022, 23:13:41) [MSC v.1929 64 bit (AMD64)]",
+    "passed": true,
+    "junit": {
+      "tests": 696,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "parent_testcases": 525,
+      "subtests": 171
+    },
+    "runner_checks": 27,
+    "evidence": "work\\pr00\\runs\\20261029T183208.162672Z",
+    "node_suites": [
+      "node-audio",
+      "node-ai-settings",
+      "node-input-limits",
+      "node-study-ui",
+      "node-study-cache",
+      "node-review-render",
+      "node-review-ui",
+      "node-review-mount",
+      "node-portable-reader"
+    ]
+  },
+  "static": {
+    "python_ast_files": 23,
+    "migration_heads": [
+      "0002_pr02a_review"
+    ],
+    "initial_migrations_unchanged": {
+      "web/backend/migrations/versions/0001_data_foundation.py": "d7f5bf06145eb21f9cd5d8f6ec093ecb1deebfb590b2829f39ce7e05fcbedf16",
+      "web/backend/migrations/versions/0001_data_foundation.sql": "dd8065aa02c121e74a29207bdf15ad1a6599aacdd988e573faefb5202f67198c"
+    },
+    "current_ddl_equals_0002_function": true,
+    "semester_contract_limits": [
+      100,
+      30
+    ],
+    "offline_head_rendered": true,
+    "limited_secret_pattern_findings": [],
+    "passed": true
+  },
+  "mypy": {
+    "version": "1.19.1",
+    "sources": 12,
+    "passed": true,
+    "mode": "check-untyped-defs; follow-imports=silent; ignore-missing-imports",
+    "evidence": "outputs/pr02a/remediation/mypy-final.log",
+    "initial_errors": 2,
+    "initial_log": "outputs/pr02a/remediation/mypy-before-fix.log"
+  },
+  "pip_check_exit": 0,
+  "architecture_protected": {
+    "base": "1c3ef02eaba060d9ca9bc173e5bf1b8ab906ee5f",
+    "baseline_files_checked": 212,
+    "changed": [],
+    "prd_sha256": "dd7d970d54fb443969ce6bb210b0b18053bfecf972cf419efa57edb51b2ff5b8",
+    "passed": true
+  },
+  "frontend_worktrees": {
+    "unchanged": true,
+    "evidence_before": "outputs/pr02a/remediation/frontend-before.json",
+    "evidence_after": "outputs/pr02a/remediation/frontend-after.json",
+    "roots": [
+      {
+        "root": "J:\\class-assistant\\classroom-os\\.claude\\worktrees\\web-alpha-aurora-design-28bac7",
+        "head": "43fa23c141e3350e90d72ed7768e3b8de7d68337",
+        "frontend_files": 0,
+        "unchanged_status": "?? .claude/\n"
+      },
+      {
+        "root": "J:\\class-assistant\\worktrees\\web-pr09a-aurora",
+        "head": "b134db9e1eee54c18fd3147accc39932a91e3186",
+        "frontend_files": 34,
+        "unchanged_status": ""
+      }
+    ]
+  },
+  "notes": [
+    "All 40 original PostgreSQL cases retained.",
+    "0001 Python/SQL immutable; additive0002 repairs existing applied schema.",
+    "Invalid original101/31 values abort migration transaction; no truncation.",
+    "No frontend/contracts/local-product modifications; no remote CI, deployment or PR02b/03."
+  ],
+  "postgresql_cleanup": {
+    "version": "PostgreSQL 17.11 on x86_64-windows, compiled by msvc-19.44.35228, 64-bit",
+    "remaining_synthetic_databases": [
+      "pr02a_synthetic"
+    ],
+    "remaining_random_test_logins": [],
+    "private_cluster_stopped": true
+  },
+  "remaining_review": "Astra review pending; no remote actions authorized or taken",
+  "final_precommit": {
+    "changed_files": 25,
+    "modified": 10,
+    "added": 15,
+    "broken_links": 0,
+    "initial0001_unchanged": true,
+    "working_branch": "feature/web-pr02a-data"
+  }
+}

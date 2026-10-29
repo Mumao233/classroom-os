@@ -1,0 +1,33 @@
+{
+  "method": "Original repository validation executed with only persistence boundaries stubbed; no PostgreSQL claim",
+  "cases": [
+    {
+      "operation": "create",
+      "field": "name",
+      "characters": 101,
+      "frozen_contract_maxLength": 100,
+      "original_repository_accepted": true
+    },
+    {
+      "operation": "create",
+      "field": "academic_year",
+      "characters": 31,
+      "frozen_contract_maxLength": 30,
+      "original_repository_accepted": true
+    },
+    {
+      "operation": "update",
+      "field": "name",
+      "characters": 101,
+      "frozen_contract_maxLength": 100,
+      "original_repository_accepted": true
+    },
+    {
+      "operation": "update",
+      "field": "academic_year",
+      "characters": 31,
+      "frozen_contract_maxLength": 30,
+      "original_repository_accepted": true
+    }
+  ]
+}

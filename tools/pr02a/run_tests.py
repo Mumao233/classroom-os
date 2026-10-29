@@ -10,32 +10,32 @@ import subprocess
 import sys
 import time
 
-from sqlalchemy.engine import make_url
-
-
 ROOT = Path(__file__).resolve().parents[2]
+# Direct CLI execution must import the same repository-owned guard as pytest.
+sys.path.insert(0, str(ROOT / "web/backend"))
+from classroom_web.test_support import UnsafeTestDatabaseTarget, validate_test_database_target
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--admin-url", required=True,
-                        help="Loopback, non-default port, database name starting pr02a_ only")
+                        help="Literal 127.0.0.1, non-5432 port, pr02a_ database/login; no URL query or PG* environment")
     args = parser.parse_args()
-    url = make_url(args.admin_url)
-    if (url.drivername != "postgresql+psycopg" or url.host not in {"127.0.0.1", "localhost"}
-            or not url.port or url.port == 5432 or not (url.database or "").startswith("pr02a_")
-            or url.query):
-        parser.error("refusing a non-synthetic PostgreSQL target")
+    try:
+        url = validate_test_database_target(args.admin_url)
+    except UnsafeTestDatabaseTarget as error:
+        parser.error(str(error))
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
     work = ROOT / "work/pr02a/runs" / stamp
     output = ROOT / "outputs/pr02a" / stamp
     for folder in (work / "tmp", work / "cache", output):
         folder.mkdir(parents=True, exist_ok=False)
     env = {key: value for key, value in os.environ.items()
-           if not any(part in key.upper() for part in ("TOKEN", "SECRET", "PASSWORD", "KEY"))
+           if not key.upper().startswith("PG")
+           and not any(part in key.upper() for part in ("TOKEN", "SECRET", "PASSWORD", "KEY"))
            and key.upper() not in {"PYTEST_ADDOPTS", "PYTEST_PLUGINS", "PYTHONPATH",
                                    "PYTHONPYCACHEPREFIX", "CLASSROOM_WEB_DATABASE_URL"}}
-    env.update(PR02A_TEST_ADMIN_URL=args.admin_url,
+    env.update(PR02A_TEST_ADMIN_URL=url.render_as_string(hide_password=False),
                TEMP=str(work / "tmp"), TMP=str(work / "tmp"), TMPDIR=str(work / "tmp"),
                PYTHONDONTWRITEBYTECODE="1", PYTHONNOUSERSITE="1", PYTHONUTF8="1",
                PYTEST_DISABLE_PLUGIN_AUTOLOAD="1", HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1")

@@ -1,0 +1,77 @@
+{
+  "base_sha": "272d1175b1919f76905861c0490a5253a25148d3",
+  "cases": [
+    {
+      "name": "t2_commits_before_t1_deferred_check",
+      "ids": {
+        "owner": "de72ed51-6fdd-466b-8a1d-a5a4d3749ee7",
+        "semester": "f7406980-cd51-436d-b62c-8570898385c5",
+        "course": "f7d72ba2-8f6d-4c61-9bdd-c65a12b6d430",
+        "m1": "50fa7b35-04b6-474a-aa60-1319a7c4bd29",
+        "m2": "6b2e0e58-9fa6-4554-b736-8d56c05d3adb",
+        "request": "5da789c6-c805-4b0f-861d-6eea5ae971e1",
+        "tombstone": "51d26d2b-642f-4b64-801d-fd5fb7d9863f"
+      },
+      "sequence": [
+        "T1 UPDATE current=M1, revision=3; uncommitted",
+        "T2 sees committed current=M2; INSERT request+tombstone M1",
+        "T2 COMMIT passed",
+        "T1 rejected"
+      ],
+      "t1": "rejected",
+      "t1_sqlstate": "23514",
+      "pointer": "M2",
+      "m1_tombstone_exists": true,
+      "invariant_broken": false
+    },
+    {
+      "name": "early_constraint_check",
+      "ids": {
+        "owner": "2659ecf6-8755-486e-afc6-f11ece4b67e0",
+        "semester": "3d56f45b-aab5-4747-a7b2-2ddbbfdf7986",
+        "course": "5e7234b4-d5e9-4fea-befc-bce90bae55ca",
+        "m1": "9c6737d9-df55-4481-8cda-685f0aede9ae",
+        "m2": "148bf8b8-8af5-485c-84cb-2b3a69d79869",
+        "request": "0dffb895-fcf1-4862-acbd-67b4b4608322",
+        "tombstone": "a21ae294-f279-49db-897d-3579803dc162"
+      },
+      "sequence": [
+        "T1 UPDATE current=M1, revision=3; uncommitted",
+        "T1 SET CONSTRAINTS check_current_material IMMEDIATE passed; still uncommitted",
+        "T2 sees committed current=M2; INSERT request+tombstone M1",
+        "T2 COMMIT passed",
+        "T1 committed"
+      ],
+      "t1": "committed",
+      "pointer": "M1",
+      "m1_tombstone_exists": true,
+      "invariant_broken": true
+    },
+    {
+      "name": "both_deferred_checks_before_other_commit",
+      "ids": {
+        "owner": "587884f2-a66c-431e-8b24-cd9d33b086dc",
+        "semester": "34cdfe78-cc03-4888-90dd-987525484354",
+        "course": "21bb5bd9-7caa-4fbe-9201-3d5fcd1e89cb",
+        "m1": "fd5a1695-4c63-43cf-af20-b4bdadcadea7",
+        "m2": "997e6e19-af20-4a29-8716-67facad9d2a6",
+        "request": "1ab3d4bb-4d6e-445c-86b3-c54fbcf1d1ba",
+        "tombstone": "9a80b171-fbd2-4b1e-9db7-a11d324dc024"
+      },
+      "sequence": [
+        "T1 UPDATE current=M1; COMMIT begins",
+        "T1 production deferred check passed; test-only last deferred gate waits before commit",
+        "T2 sees committed M2, inserts M1 tombstone; production deferred check and COMMIT pass",
+        "Release T1 test gate; T1 COMMIT passes"
+      ],
+      "pointer": "M1",
+      "m1_tombstone_exists": true,
+      "invariant_broken": true
+    }
+  ],
+  "cleanup": true,
+  "original_sql_sha256": "dd8065aa02c121e74a29207bdf15ad1a6599aacdd988e573faefb5202f67198c",
+  "pg_version": "PostgreSQL 17.11 on x86_64-windows, compiled by msvc-19.44.35228, 64-bit",
+  "database": "pr02a_review_e6dd2a76ea1542799af0caab619f53fa",
+  "runtime_login": "pr02a_review_login_e6dd2a76ea1542799af0caab619f53fa"
+}

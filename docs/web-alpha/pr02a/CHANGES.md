@@ -1,5 +1,7 @@
 # PR-02a 变更清单
 
+> 本页下文为原提交 `272d1175` 的 27 文件历史清单。2026-10-30 独立审查整改的完整增量见 [整改变更表](review-remediation/CHANGES.md)，结果见 [整改报告](review-remediation/REPORT.md)。
+
 全部为新增文件；基线 212 个跟踪文件没有修改。未创建或改动 web/frontend/。
 
 共 27 个文件：

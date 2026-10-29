@@ -64,6 +64,9 @@ semesters = sa.Table("semesters", metadata, *_base(owner=True, mutable=True),
     sa.Column("archived_at", sa.DateTime(timezone=True)),
     sa.CheckConstraint("start_date IS NULL OR end_date IS NULL OR start_date <= end_date",
                        name="date_order"),
+    sa.CheckConstraint("char_length(name) BETWEEN 1 AND 100", name="name_length"),
+    sa.CheckConstraint("academic_year IS NULL OR char_length(academic_year) <= 30",
+                       name="academic_year_length"),
 )
 
 courses = sa.Table("courses", metadata, *_base(owner=True, mutable=True),

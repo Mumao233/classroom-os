@@ -11,11 +11,14 @@ from alembic import command
 from alembic.config import Config
 import pytest
 import sqlalchemy as sa
-from sqlalchemy.engine import make_url
 
 from classroom_web.domain.data import OwnerContext
 from classroom_web.infrastructure.database import Database
 from classroom_web.infrastructure.schema import tables
+from classroom_web.test_support import (
+    UnsafeTestDatabaseTarget, SYNTHETIC_PASSWORD, synthetic_connect_args,
+    validate_test_database_target,
+)
 
 
 BACKEND = Path(__file__).resolve().parents[2]
@@ -34,27 +37,36 @@ def pg():
     supplied = os.environ.get("PR02A_TEST_ADMIN_URL")
     if not supplied:
         pytest.fail("PR02A_TEST_ADMIN_URL must identify the isolated synthetic PostgreSQL cluster")
-    url = make_url(supplied)
-    if (url.get_backend_name() != "postgresql" or url.host not in {"127.0.0.1", "localhost"}
-            or not url.port or url.port == 5432 or not (url.database or "").startswith("pr02a_")):
-        pytest.fail("Refusing non-loopback/default-port/non-synthetic PostgreSQL URL")
+    try:
+        url = validate_test_database_target(supplied)
+    except UnsafeTestDatabaseTarget as error:
+        pytest.fail(str(error))
     marker = uuid4().hex
     name, login = "pr02a_test_" + marker, "pr02a_login_" + marker
     assert re.fullmatch(r"pr02a_(?:test|login)_[0-9a-f]{32}", name)
-    control = sa.create_engine(url, isolation_level="AUTOCOMMIT", poolclass=sa.pool.NullPool)
+    control = sa.create_engine(url, isolation_level="AUTOCOMMIT", poolclass=sa.pool.NullPool,
+                               connect_args=synthetic_connect_args())
     admin_url = url.set(database=name)
     admin = None
     db = None
     try:
         with control.connect() as connection:
             connection.exec_driver_sql(f'CREATE DATABASE "{name}" TEMPLATE template0 ENCODING \'UTF8\'')
-        admin = sa.create_engine(admin_url, poolclass=sa.pool.NullPool)
+        admin = sa.create_engine(admin_url, poolclass=sa.pool.NullPool,
+                                 connect_args=synthetic_connect_args())
         cfg = migration_config(admin_url.render_as_string(hide_password=False))
-        command.upgrade(cfg, "head")
+        # Use the already validated engine for initial setup, without a second
+        # configuration/environment resolution inside Alembic.
+        with admin.connect() as connection:
+            cfg.attributes["connection"] = connection
+            try:
+                command.upgrade(cfg, "head")
+            finally:
+                cfg.attributes.pop("connection", None)
         with control.connect() as connection:
             connection.exec_driver_sql(f'CREATE ROLE "{login}" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS')
             connection.exec_driver_sql(f'GRANT classroom_web_runtime TO "{login}"')
-        runtime_url = admin_url.set(username=login, password=None)
+        runtime_url = admin_url.set(username=login, password=SYNTHETIC_PASSWORD)
         db = Database(runtime_url.render_as_string(hide_password=False))
         yield SimpleNamespace(admin=admin, db=db, admin_url=admin_url, runtime_url=runtime_url,
                               config=cfg, name=name, login=login)

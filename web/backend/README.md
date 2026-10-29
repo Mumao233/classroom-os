@@ -26,8 +26,13 @@ $env:PYTHONDONTWRITEBYTECODE = '1'
 & work/pr02a/venv/Scripts/python.exe tools/pr02a/check_protected.py
 ```
 
-The test runner refuses non-loopback hosts, port 5432, non-`pr02a_` database names
-and URL query overrides. The target must be an isolated synthetic cluster, never
+The runner and direct pytest fixture share `classroom_web.test_support` validation.
+Both require the exact `postgresql+psycopg` driver, literal `127.0.0.1`, an explicit
+non-5432 port and identifier-safe `pr02a_` database/login names. They reject every
+URL query parameter and every inherited `PG*` setting before creating an engine,
+connecting, migrating or spawning the test process. There is no DNS `localhost`
+alias, service configuration, URL option allowlist or implicit pgpass fallback.
+The target must be an isolated synthetic cluster, never
 an installed application database. Fixtures create a random `pr02a_test_<UUID>`
 database plus a restricted random login, run migrations, and drop those two exact
 objects afterwards. Missing PostgreSQL is a failure, not a skip or mock fallback.
@@ -89,9 +94,20 @@ roles have no physical DELETE grants.
 
 `migrations/versions/0001_data_foundation.sql` is the self-contained initial
 snapshot; applying it does not import current models or load contract JSON.
+Its Python/SQL files remain byte-identical to commit `272d1175`. The additive
+`0002_pr02a_review` migration fixes material revocation coordination and adds
+semester length CHECKs (name 100, academic year 30). Always upgrade to `head`.
+Existing oversized values cause a transactional failure; no value is truncated.
 `schema.py` describes the current SQLAlchemy metadata; `ddl.py` records its
 authoring SQL for review. Published snapshots must never be silently regenerated;
 future changes require a new migration revision.
+
+Material revocation locks the owner, ancestor semester and owning course before
+the deletion request. The course row uses `FOR UPDATE`, conflicting with a current
+pointer update even when its deferred check has already completed. Immutable
+material lookup takes no row lock. The repository keeps its existing exclusive
+course lock before material append; it never upgrades a material read lock to a
+course write lock. Both winner orders are tested with actual backend lock waits.
 
 Alembic accepts an explicit Connection first, then an explicit Config URL. Only
 the placeholder URL falls back to `CLASSROOM_WEB_DATABASE_URL`. There is no local
@@ -111,3 +127,4 @@ An initial foundation has no prior deployed Web schema or executable Web app to
 rollback to; later migrations must retain this baseline compatibility window.
 
 Full acceptance and change inventory: [PR-02a report](../../docs/web-alpha/pr02a/ACCEPTANCE.md).
+Independent-review fixes and current results: [remediation report](../../docs/web-alpha/pr02a/review-remediation/REPORT.md).
