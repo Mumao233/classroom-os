@@ -20,6 +20,7 @@ import sqlalchemy as sa
 from classroom_web.domain.data import Gone, InactiveOwner, NotFound, Resource, RevisionConflict
 from classroom_web.infrastructure.database import Database
 from classroom_web.infrastructure.schema import metadata, tables
+from classroom_web.infrastructure.task_schema import tables as task_tables
 
 from conftest import BACKEND, ROOT, migration_config
 
@@ -33,7 +34,9 @@ def test_only_required_tables_and_contract_columns_exist(pg):
     expected = {"users", "semesters", "courses", "course_material_versions", "class_sessions",
                 "deletion_requests", "deletion_tombstones"}
     inspector = sa.inspect(pg.admin)
-    assert set(inspector.get_table_names()) == expected | {"alembic_version"}
+    # Additive PR-02b tables are required too; every original catalog column
+    # assertion below remains unchanged and full metadata still must match.
+    assert set(inspector.get_table_names()) == expected | set(task_tables) | {"alembic_version"}
     contract = json.loads((ROOT / "docs/web-alpha/architecture/contracts/domain-model.json").read_text("utf-8"))
     for table in contract["tables"]:
         if table["name"] in expected:

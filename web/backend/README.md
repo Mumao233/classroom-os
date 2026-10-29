@@ -1,4 +1,4 @@
-# Classroom OS Web · PR-02a data foundation
+# Classroom OS Web · data foundation and persistent task engine
 
 Independent Python 3.12 / PostgreSQL 17 package. Contract package **0.1.0** remains
 unchanged at `docs/web-alpha/architecture/contracts/`. This package does not import
@@ -7,7 +7,8 @@ the local `app.py`, instantiate its Classroom, or use its settings/data director
 Implemented: seven tables, SQLAlchemy Core repositories behind pure domain ports,
 owner UoW, CAS, immutable course material versions, fixed classroom snapshots and
 atomic database revocation/tombstones. There is no HTTP server, authentication
-workflow, task worker, outbox/receipt implementation or frontend in this package.
+workflow or frontend in this package. PR-02b adds six execution/receipt/event
+tables, a restricted scheduler and a restartable simulation worker; see below.
 
 ## Environment and repeatable tests
 
@@ -128,3 +129,68 @@ rollback to; later migrations must retain this baseline compatibility window.
 
 Full acceptance and change inventory: [PR-02a report](../../docs/web-alpha/pr02a/ACCEPTANCE.md).
 Independent-review fixes and current results: [remediation report](../../docs/web-alpha/pr02a/review-remediation/REPORT.md).
+
+## PR-02b persistent execution
+
+`task_schema.py` and additive `0003_persistent_tasks` implement Task/TaskAttempt,
+OperationReceipt, ProviderResult, owner counters and transactional Outbox. The
+four prior migration files remain unchanged. Generation-plan and media-asset
+references are constrained NULL until their owning migrations supply real FKs.
+Task revision/timestamps/charge-risk and result conflict hashes are internal
+persistent metadata supporting the existing frozen contract, not HTTP extensions.
+
+Within an authenticated owner UoW, `tx.tasks.enqueue(kind, {"schema_version": 1},
+op_id=uuid4(), class_session_id=...)` atomically creates one task, a minimized
+receipt and event. Same-key mismatches fail; replay reauthorizes current ancestry.
+Only implemented ID references are accepted. The package has no execute-plan or
+charged retry endpoint; those require later authorization, generation and budget
+components. `MockProvider` is the sole CLI provider.
+
+The runtime login reads bodies only in an owner-scoped transaction. A different
+login inheriting `classroom_web_scheduler` can only execute narrow fixed queue
+functions; it cannot SELECT task input, source text, provider results or receipts.
+Its no-login definer has only column-level access to scheduling/access metadata.
+Claims use SKIP LOCKED, bounded leases, increasing fences and same-transaction
+state events. Tasks overdue ten minutes are ordered by age ahead of fresh tasks
+to prevent permanent low-priority starvation; this is a local initial tuning
+parameter, not a tested production SLA.
+
+`TaskWorker.run_once()` scans expired leases and claims persisted work. A planned
+unsent attempt can recover. The worker commits submitting intent before calling
+the mock outside a transaction. An uncertain submission becomes unknown and is
+never automatically resent, switched or refunded. Stored raw results recover by
+local validation only. A stale worker may store a late result but cannot publish;
+an explicit `tx.tasks.reconcile_result(task_id, op_id)` can validate already stored
+bytes without a new submission. Conflicting results preserve the first raw and
+first conflicting digest/time and block publication. Invalid output retains raw
+and provider success with OUTPUT_INVALID; no repair model call occurs.
+
+Cancellation completes immediately when provably unsent; sent work remains
+cancel_requested until its actual outcome is known. Expired work after owner or
+ancestor revocation terminates through a narrow metadata-only function; it never
+loads or republishes deleted content. Full erasure/usage reconciliation remain
+PR-04b/PR-11a responsibilities. If a result arrives only after revocation, this
+engine rejects its private text and conservatively retains the sent intent as
+unknown; this is not a provider usage receipt or refund implementation.
+
+`tx.events.replay(cursor, limit)` returns bounded frozen task.changed envelopes.
+Stable HMAC cursors require `Database(..., cursor_secret=<server bytes >=32>)`;
+no generated per-process secret is used. `ack(event_id)` records delivery but
+never deletes replay history. Allocation locks each owner's counter until commit;
+notifications contain only event IDs and are optional hints. Invalid/foreign/
+expired cursors require resync. Bootstrap callers must use
+`transaction(owner, isolation_level='REPEATABLE READ')` for both authorized
+projections and `tx.events.watermark()` in the same snapshot. HTTP/WS transports,
+text hydration and general synchronization are subsequent PRs.
+
+Tests use `tools/pr02b/run_tests.py --admin-url <verified synthetic URL>`; this
+reuses the unchanged strict PR-02a target guard, verifies the actual worktree-owned
+server identity and applies loopback-only Python network guards. Commands, exact
+results, limitations and rollback are recorded in the
+[PR-02b acceptance report](../../docs/web-alpha/pr02b/ACCEPTANCE.md).
+
+The standalone `python -m classroom_web.entrypoints.worker --runtime-url ...
+--scheduler-url ... --worker-id ... --once` intentionally accepts only guarded
+synthetic loopback targets and constructs MockProvider. Run it only against the
+verified isolated cluster described in provenance. It does not read application
+configuration, provider keys or the local v1.3.0 data/configuration.

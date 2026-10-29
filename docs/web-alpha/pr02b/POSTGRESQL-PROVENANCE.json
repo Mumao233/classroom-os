@@ -1,0 +1,46 @@
+{
+  "date": "2026-10-30",
+  "timezone": "Asia/Shanghai",
+  "postgresql": "17.11",
+  "package_source": "https://conda.anaconda.org/conda-forge/win-64/postgresql-17.11-h3efdd6b_1.conda",
+  "package_sha256": "0697165c1a42adcc4bb6f7eecebaa610f912a24fa42ebc6fd6bd52350262c102",
+  "fresh_package_and_dependency_sha256_verified": true,
+  "binary_reuse": "Read-only existing verified PR-02a runtime; sibling data directory never started or modified",
+  "binary_dir": "J:/class-assistant/worktrees/web-pr02a-data/work/pr02a/pg/runtime/Library/bin",
+  "dependencies": [
+    {"file": "icu-78.3-h5112557_2.conda", "sha256": "75c549b55b673e15de8785a8e5dd85bca7eb612eee0ff4dc8d7bdaa15eacbdbb"},
+    {"file": "krb5-1.22.2-h719d79b_2.conda", "sha256": "63ff03324e903eb01a715ccf357df56d66224e61952fd6615d86490ebefb3285"},
+    {"file": "libpq-17.11-h6b13b41_1.conda", "sha256": "93756768492eeceef634e93c4cf2b0a2f43bd8e6d9ce214b1fe578ef9e78caae"},
+    {"file": "libxml2-16-2.15.4-h3cfd58e_1.conda", "sha256": "819c4edd7b7bcfa9461aeccb56c0a7e9fa7c251163333e64222c142499822958"},
+    {"file": "libzlib-1.3.2-hfd05255_3.conda", "sha256": "0629c2cc0404d3bb29d6baa7b4ba62da80797015e86de050db81ea5a07050527"},
+    {"file": "lz4-c-1.10.0-h6a83c73_2.conda", "sha256": "6824e36be0f95ae516dc36dddd18f69cbad0e4e07906fcb10a5f26a8dc471903"},
+    {"file": "openssl-3.5.9-hf411b9b_0.conda", "sha256": "827e55e37cc3208f285ae435b13bd1f389d35728d3aa6974ee447c7086232cc5"},
+    {"file": "zstd-1.5.7-h534d264_7.conda", "sha256": "ca7daae4f218a11fab82cc2857f0ea518ec3f46acec60490485347a4c22c6b3e"}
+  ],
+  "dependency_source_prefix": "https://conda.anaconda.org/conda-forge/win-64/",
+  "data_directory": "J:/class-assistant/worktrees/web-pr02b-tasks/work/pr02b/pg/data",
+  "host": "127.0.0.1",
+  "port": 4981,
+  "database": "pr02a_pr02b_synthetic",
+  "bootstrap_role": "pr02a_pr02b_migrator",
+  "authentication": "Trust in isolated loopback-only synthetic cluster; not deployment authentication",
+  "initialization_command": "initdb -D <data_directory> -U pr02a_pr02b_migrator -A trust -E UTF8 --locale=C --no-instructions -c listen_addresses=127.0.0.1 -c port=4981 -c timezone=UTC -c shared_preload_libraries=",
+  "start_command": "pg_ctl start -D <data_directory> -l outputs/pr02b/postgres-server.log -w -t 30; launched via Start-Process -WindowStyle Hidden",
+  "target_verification": [
+    "Port unused and no postgres process before initialization",
+    "New postmaster.pid identified expected absolute data path and port",
+    "SQL verified current_user, current_database, data_directory, inet_server_addr, inet_server_port, listen_addresses and version",
+    "Test runner repeats URL guard and exact cluster identity validation before test child"
+  ],
+  "stop_command": "pg_ctl -D J:/class-assistant/worktrees/web-pr02b-tasks/work/pr02b/pg/data -m fast -w stop",
+  "system_changes": "No system service; no global PATH/environment; no production/user data; no model/API call",
+  "legacy_regression": {
+    "result": "PASS",
+    "parents": 525,
+    "subtests": 171,
+    "node_suites": 9,
+    "gates": 27,
+    "output": "outputs/pr02b/local-baseline",
+    "source_run": "work/pr00/runs/20261029T210625.380252Z"
+  }
+}
