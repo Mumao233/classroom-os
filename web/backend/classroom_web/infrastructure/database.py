@@ -57,7 +57,9 @@ class Database:
                       'users','semesters','courses','course_material_versions',
                       'class_sessions','deletion_requests','deletion_tombstones',
                       'tasks','task_attempts','provider_results','operation_receipts',
-                      'owner_event_counters','outbox_events')
+                      'owner_event_counters','outbox_events','invitations',
+                      'pending_registrations','identity_capacity','identity_mail_intents',
+                      'identity_audit','identity_events')
                     AND pg_has_role(current_user, c.relowner, 'USAGE')
                 ) FROM pg_roles r WHERE r.rolname=current_user
             """))
@@ -81,3 +83,25 @@ class Database:
 
     def dispose(self):
         self.engine.dispose()
+
+    @contextmanager
+    def authorized_transaction(self, principal, *, isolation_level='READ COMMITTED'):
+        """Web authorization port. PR-03b must supply verified session evidence.
+
+        Activation does not return a Principal. Worker/internal OwnerContext UoW
+        remains available; it must never be selected by an untrusted HTTP owner.
+        """
+        from ..domain.identity import AuthorizationDenied, Principal
+
+        if not isinstance(principal, Principal):
+            raise AuthorizationDenied()
+        try:
+            with self.transaction(OwnerContext(principal.user_id), isolation_level=isolation_level) as tx:
+                now = tx.connection.scalar(text('SELECT clock_timestamp()'))
+                if principal.expires_at <= now or not tx.connection.scalar(text(
+                        'SELECT classroom_web_principal_valid(:uid,:epoch,:role)'),
+                        {'uid': principal.user_id, 'epoch': principal.security_epoch, 'role': principal.role}):
+                    raise AuthorizationDenied()
+                yield tx
+        except InactiveOwner:
+            raise AuthorizationDenied() from None

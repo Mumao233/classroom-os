@@ -6,8 +6,8 @@ the local `app.py`, instantiate its Classroom, or use its settings/data director
 
 Implemented: seven tables, SQLAlchemy Core repositories behind pure domain ports,
 owner UoW, CAS, immutable course material versions, fixed classroom snapshots and
-atomic database revocation/tombstones. There is no HTTP server, authentication
-workflow or frontend in this package. PR-02b adds six execution/receipt/event
+atomic database revocation/tombstones. There is no HTTP server, cookie session
+lifecycle or frontend in this package. PR-02b adds six execution/receipt/event
 tables, a restricted scheduler and a restartable simulation worker; see below.
 
 ## Environment and repeatable tests
@@ -129,6 +129,64 @@ rollback to; later migrations must retain this baseline compatibility window.
 
 Full acceptance and change inventory: [PR-02a report](../../docs/web-alpha/pr02a/ACCEPTANCE.md).
 Independent-review fixes and current results: [remediation report](../../docs/web-alpha/pr02a/review-remediation/REPORT.md).
+
+## PR-03a identity and authorization foundation
+
+Additive `0004_identity` preserves the six published 0001–0003 migration files.
+It adds invitations, pending registrations and four small internal capacity,
+mail-intent, audit and activation-event tables. Users remain independent owners.
+The frozen OpenAPI, event schemas and domain-model files are unchanged.
+
+`IdentityService` takes a `PgIdentityRepository`, an injected
+`Argon2PasswordHasher` and an explicit administrator reauthentication window.
+Only an independently verified server `Principal` may authorize management.
+There is no Principal issuer, login endpoint, cookie, password-reset flow or
+administrator bootstrap in this package. MFA/session evidence must come from
+PR-03b; constructing a Principal from a request is forbidden.
+
+The identity connection uses a separate unprivileged login inheriting only
+`classroom_web_identity`; it cannot read private catalog/task tables. The owner
+runtime never inherits that role. All six new control-plane tables have FORCE
+RLS, no PUBLIC/runtime/scheduler access, and no physical DELETE grants.
+Management verifies active/verified Admin, epoch, TOTP evidence, expiration and
+recent reauthentication. This is an internal use-case boundary, not a completed
+HTTP endpoint with CSRF, Origin, rate-limit and idempotency middleware.
+
+Registration stores Argon2id and SHA-256 digests of high-entropy random tokens.
+Pending records have no users row, seat or learning access. Verification defaults
+to 30 minutes and invitations to seven days. Activation locks capacity, invite,
+then pending and commits user, both consumptions, capacity, audit and internal
+event together. Same-email duplicate activation rolls back through the unique
+user email constraint. No invitation or input field grants Admin.
+
+Mail intents store only a pending reference, generation and recoverable lease.
+`dispatch_mail(CapturingMailAdapter())` commits a new proof digest and lease,
+sends outside the transaction, then conditionally acknowledges that generation.
+Uncertain delivery recovers after a one-minute experimental lease and rotates
+the secret; resend invalidates all unconsumed proofs for that email. No secret
+is stored in mail intents, audit, internal activation events or generic outbox.
+Only the synthetic capture adapter is provided. Real sending is not enabled.
+
+Use `Database.authorized_transaction(principal)` for future request adapters.
+It rechecks DB state, verification, role, security epoch and expiration before
+exposing the existing owner repositories; owner is never a request parameter.
+The original `transaction(OwnerContext)` remains a trusted internal worker/test
+port. Legacy email-less shells can still support internal data foundation
+fixtures, but the Principal boundary always rejects those shells. Login users
+losing verification also fail raw SQL RLS and the internal owner lock.
+
+Capacity stages are restricted to 10/30. The admission counter starts from
+active accounts and is reconciled against the current active count under the
+global lock. It conservatively includes Admin; it does not implement seat reuse
+after disabling/deletion. These lifecycle policies remain open for review, not
+silently closed by this foundation. Argon2id m=64MiB/t=3/p=1, the 60-second
+resend interval and mail lease are experimental settings; TBD-08 is still OPEN.
+
+Run `work/pr03a/venv/Scripts/python.exe tools/pr03a/run_tests.py --admin-url
+<explicit-synthetic-url>` from the root. The runner verifies the exact new
+worktree-owned loopback cluster before running every backend test. Full test
+commands, evidence, known boundaries and rollback are in the
+[PR-03a acceptance report](../../docs/web-alpha/pr03a/ACCEPTANCE.md).
 
 ## PR-02b persistent execution
 

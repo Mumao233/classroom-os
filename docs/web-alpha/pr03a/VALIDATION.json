@@ -1,0 +1,1143 @@
+{
+  "base": "3b3881540519c27075119f99bb1dbff35d369e35",
+  "branch": "feature/web-pr03a-identity",
+  "contract_version": "0.1.0",
+  "generated_at_utc": "2026-10-30T16:13:59.689169+00:00",
+  "web": {
+    "python": "3.12.14 (main, Aug 25 2026, 14:01:42) [MSC v.1944 64 bit (AMD64)]",
+    "executable": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr03a\\venv\\Scripts\\python.exe",
+    "command": [
+      "J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr03a\\venv\\Scripts\\python.exe",
+      "-m",
+      "pytest",
+      "-q",
+      "--basetemp=J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr03a\\runs\\20261030T160712.053390Z\\tmp\\pytest",
+      "--junitxml=J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\20261030T160712.053390Z\\pytest.xml",
+      "-o",
+      "cache_dir=J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr03a\\runs\\20261030T160712.053390Z\\cache\\pytest"
+    ],
+    "exit_code": 0,
+    "seconds": 175.156,
+    "cluster_identity": {
+      "login": "pr02a_pr03a_migrator",
+      "database": "pr02a_pr03a_synthetic",
+      "data_directory": "J:/class-assistant/worktrees/web-pr03a-identity/work/pr03a/pg/data",
+      "host": "127.0.0.1",
+      "port": 55439,
+      "listen_addresses": "127.0.0.1",
+      "version": "PostgreSQL 17.11 on x86_64-windows, compiled by msvc-19.44.35228, 64-bit"
+    },
+    "junit": {
+      "tests": 358,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "network_guard_selftest": true,
+    "passed": true,
+    "minimum_previous_backend_cases": 240,
+    "isolation": "Verified worktree-owned loopback cluster; fixture creates/drops random database and restricted login",
+    "limitations": "Synthetic PostgreSQL and simulated mail/provider only; no paid model, real email, HTTP/frontend, deployment or production migration"
+  },
+  "web_evidence": "outputs/pr03a/20261030T160712.053390Z/results.json",
+  "web_by_module": {
+    "tests.integration.test_data_foundation": 40,
+    "tests.integration.test_identity": 35,
+    "tests.integration.test_identity_migrations": 3,
+    "tests.integration.test_material_revocation_race": 4,
+    "tests.integration.test_migration_remediation": 3,
+    "tests.integration.test_persistent_tasks": 35,
+    "tests.integration.test_semester_limits": 26,
+    "tests.integration.test_task_cancel_remediation": 12,
+    "tests.integration.test_task_material_remediation": 41,
+    "tests.integration.test_task_migrations": 5,
+    "tests.integration.test_task_worker": 16,
+    "tests.unit.test_identity_values": 27,
+    "tests.unit.test_pr02b_runner": 40,
+    "tests.unit.test_task_values": 16,
+    "tests.unit.test_test_database_target": 55
+  },
+  "integrated_baseline_retained": 293,
+  "identity_added": 65,
+  "first_failed_run": {
+    "python": "3.12.14 (main, Aug 25 2026, 14:01:42) [MSC v.1944 64 bit (AMD64)]",
+    "executable": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr03a\\venv\\Scripts\\python.exe",
+    "command": [
+      "J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr03a\\venv\\Scripts\\python.exe",
+      "-m",
+      "pytest",
+      "-q",
+      "--basetemp=J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr03a\\runs\\20261030T160217.258581Z\\tmp\\pytest",
+      "--junitxml=J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\20261030T160217.258581Z\\pytest.xml",
+      "-o",
+      "cache_dir=J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr03a\\runs\\20261030T160217.258581Z\\cache\\pytest"
+    ],
+    "exit_code": 1,
+    "seconds": 204.266,
+    "cluster_identity": {
+      "login": "pr02a_pr03a_migrator",
+      "database": "pr02a_pr03a_synthetic",
+      "data_directory": "J:/class-assistant/worktrees/web-pr03a-identity/work/pr03a/pg/data",
+      "host": "127.0.0.1",
+      "port": 55439,
+      "listen_addresses": "127.0.0.1",
+      "version": "PostgreSQL 17.11 on x86_64-windows, compiled by msvc-19.44.35228, 64-bit"
+    },
+    "junit": {
+      "tests": 350,
+      "failures": 6,
+      "errors": 0,
+      "skipped": 0
+    },
+    "network_guard_selftest": true,
+    "passed": false,
+    "minimum_previous_backend_cases": 240,
+    "isolation": "Verified worktree-owned loopback cluster; fixture creates/drops random database and restricted login",
+    "limitations": "Synthetic PostgreSQL and simulated mail/provider only; no paid model, real email, HTTP/frontend, deployment or production migration"
+  },
+  "legacy": {
+    "schema_version": 1,
+    "started_at": "2026-10-30T15:54:54.873512+00:00",
+    "repository": "J:\\class-assistant\\worktrees\\web-pr03a-identity",
+    "output": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr00\\pr03a-identity-baseline",
+    "python": "3.10.4 (tags/v3.10.4:9d38120, Mar 23 2022, 23:13:41) [MSC v.1929 64 bit (AMD64)]",
+    "python_executable": "J:\\class-assistant\\classroom-os\\work\\pr00\\venv\\Scripts\\python.exe",
+    "platform": "Windows-10-10.0.26300-SP0",
+    "baseline_commit": "43fa23c141e3350e90d72ed7768e3b8de7d68337",
+    "network_policy": "test children: loopback only; real subprocesses denied; HF offline",
+    "scope": "existing synthetic tests; no microphone, model inference, deployment or Web E2E",
+    "dependencies": {
+      "pytest": "9.2.0",
+      "fastapi": "0.162.0",
+      "uvicorn": "0.54.0",
+      "httpx": "0.28.1",
+      "faster-whisper": "1.2.1",
+      "Pillow": "12.3.0"
+    },
+    "pytest_junit": {
+      "tests": 696,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "parent_testcases": 525,
+      "subtests": 171
+    },
+    "finished_at": "2026-10-30T15:56:27.073885+00:00",
+    "passed": true,
+    "steps": [
+      {
+        "name": "git-head",
+        "command": [
+          "git",
+          "rev-parse",
+          "HEAD"
+        ],
+        "exit_code": 0,
+        "seconds": 0.063,
+        "log": "git-head.log"
+      },
+      {
+        "name": "git-status",
+        "command": [
+          "git",
+          "status",
+          "--short",
+          "--branch"
+        ],
+        "exit_code": 0,
+        "seconds": 0.093,
+        "log": "git-status.log"
+      },
+      {
+        "name": "node-version",
+        "command": [
+          "node",
+          "--version"
+        ],
+        "exit_code": 0,
+        "seconds": 0.063,
+        "log": "node-version.log"
+      },
+      {
+        "name": "powershell-version",
+        "command": [
+          "powershell",
+          "-NoProfile",
+          "-NonInteractive",
+          "-Command",
+          "$PSVersionTable.PSVersion.ToString()"
+        ],
+        "exit_code": 0,
+        "seconds": 0.297,
+        "log": "powershell-version.log"
+      },
+      {
+        "name": "python-guard",
+        "command": [
+          "J:\\class-assistant\\classroom-os\\work\\pr00\\venv\\Scripts\\python.exe",
+          "J:\\class-assistant\\worktrees\\web-pr03a-identity\\tools\\pr00\\selftest_guards.py"
+        ],
+        "exit_code": 0,
+        "seconds": 0.297,
+        "log": "python-guard.log"
+      },
+      {
+        "name": "node-guard",
+        "command": [
+          "node",
+          "--require",
+          "J:\\class-assistant\\worktrees\\web-pr03a-identity\\tools\\pr00\\node_guard.cjs",
+          "tools/pr00/selftest_guards.cjs"
+        ],
+        "exit_code": 0,
+        "seconds": 0.109,
+        "log": "node-guard.log"
+      },
+      {
+        "name": "junit-gate-selftest",
+        "command": [
+          "J:\\class-assistant\\classroom-os\\work\\pr00\\venv\\Scripts\\python.exe",
+          "tools/pr00/selftest_junit.py"
+        ],
+        "exit_code": 0,
+        "seconds": 0.203,
+        "log": "junit-gate-selftest.log"
+      },
+      {
+        "name": "pytest",
+        "command": [
+          "J:\\class-assistant\\classroom-os\\work\\pr00\\venv\\Scripts\\python.exe",
+          "-m",
+          "pytest",
+          "tests",
+          "-q",
+          "--basetemp=J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr00\\pr03a-identity-baseline\\tmp\\pytest",
+          "--junitxml=J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr00\\pr03a-identity-baseline\\pytest-junit.xml",
+          "-o",
+          "cache_dir=J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr00\\pr03a-identity-baseline\\cache\\pytest"
+        ],
+        "exit_code": 0,
+        "seconds": 85.313,
+        "log": "pytest.log"
+      },
+      {
+        "name": "node-audio",
+        "command": [
+          "node",
+          "--require",
+          "J:\\class-assistant\\worktrees\\web-pr03a-identity\\tools\\pr00\\node_guard.cjs",
+          "tests/audio.cjs"
+        ],
+        "exit_code": 0,
+        "seconds": 0.578,
+        "log": "node-audio.log"
+      },
+      {
+        "name": "node-ai-settings",
+        "command": [
+          "node",
+          "--require",
+          "J:\\class-assistant\\worktrees\\web-pr03a-identity\\tools\\pr00\\node_guard.cjs",
+          "tests/ai-settings.cjs"
+        ],
+        "exit_code": 0,
+        "seconds": 0.14,
+        "log": "node-ai-settings.log"
+      },
+      {
+        "name": "node-input-limits",
+        "command": [
+          "node",
+          "--require",
+          "J:\\class-assistant\\worktrees\\web-pr03a-identity\\tools\\pr00\\node_guard.cjs",
+          "tests/input-limits.cjs"
+        ],
+        "exit_code": 0,
+        "seconds": 0.141,
+        "log": "node-input-limits.log"
+      },
+      {
+        "name": "node-study-ui",
+        "command": [
+          "node",
+          "--require",
+          "J:\\class-assistant\\worktrees\\web-pr03a-identity\\tools\\pr00\\node_guard.cjs",
+          "tests/study-ui.cjs"
+        ],
+        "exit_code": 0,
+        "seconds": 0.187,
+        "log": "node-study-ui.log"
+      },
+      {
+        "name": "node-study-cache",
+        "command": [
+          "node",
+          "--require",
+          "J:\\class-assistant\\worktrees\\web-pr03a-identity\\tools\\pr00\\node_guard.cjs",
+          "tests/study-cache.cjs"
+        ],
+        "exit_code": 0,
+        "seconds": 0.141,
+        "log": "node-study-cache.log"
+      },
+      {
+        "name": "node-review-render",
+        "command": [
+          "node",
+          "--require",
+          "J:\\class-assistant\\worktrees\\web-pr03a-identity\\tools\\pr00\\node_guard.cjs",
+          "tests/review-render.cjs"
+        ],
+        "exit_code": 0,
+        "seconds": 0.141,
+        "log": "node-review-render.log"
+      },
+      {
+        "name": "node-review-ui",
+        "command": [
+          "node",
+          "--require",
+          "J:\\class-assistant\\worktrees\\web-pr03a-identity\\tools\\pr00\\node_guard.cjs",
+          "tests/review-ui.cjs"
+        ],
+        "exit_code": 0,
+        "seconds": 0.172,
+        "log": "node-review-ui.log"
+      },
+      {
+        "name": "node-review-mount",
+        "command": [
+          "node",
+          "--require",
+          "J:\\class-assistant\\worktrees\\web-pr03a-identity\\tools\\pr00\\node_guard.cjs",
+          "tests/review-mount.cjs"
+        ],
+        "exit_code": 0,
+        "seconds": 0.171,
+        "log": "node-review-mount.log"
+      },
+      {
+        "name": "node-portable-reader",
+        "command": [
+          "node",
+          "--require",
+          "J:\\class-assistant\\worktrees\\web-pr03a-identity\\tools\\pr00\\node_guard.cjs",
+          "tests/portable-reader.cjs"
+        ],
+        "exit_code": 0,
+        "seconds": 0.157,
+        "log": "node-portable-reader.log"
+      },
+      {
+        "name": "pytest-baseline-gate",
+        "exit_code": 0,
+        "detail": "At least 525 testcase nodes plus 171 subtests; zero failures/errors/skips. Count is not a substitute for test preservation."
+      },
+      {
+        "name": "python-ast",
+        "exit_code": 0,
+        "baseline_files": 44,
+        "total_files": 48,
+        "errors": []
+      },
+      {
+        "name": "js-syntax-app.js",
+        "command": [
+          "node",
+          "--check",
+          "static/app.js"
+        ],
+        "exit_code": 0,
+        "seconds": 0.11,
+        "log": "js-syntax-app.js.log"
+      },
+      {
+        "name": "js-syntax-pcm-worklet.js",
+        "command": [
+          "node",
+          "--check",
+          "static/pcm-worklet.js"
+        ],
+        "exit_code": 0,
+        "seconds": 0.093,
+        "log": "js-syntax-pcm-worklet.js.log"
+      },
+      {
+        "name": "js-syntax-study-cache.js",
+        "command": [
+          "node",
+          "--check",
+          "static/study-cache.js"
+        ],
+        "exit_code": 0,
+        "seconds": 0.11,
+        "log": "js-syntax-study-cache.js.log"
+      },
+      {
+        "name": "js-syntax-review-render.js",
+        "command": [
+          "node",
+          "--check",
+          "static/review-render.js"
+        ],
+        "exit_code": 0,
+        "seconds": 0.125,
+        "log": "js-syntax-review-render.js.log"
+      },
+      {
+        "name": "js-syntax-review.js",
+        "command": [
+          "node",
+          "--check",
+          "static/review.js"
+        ],
+        "exit_code": 0,
+        "seconds": 0.109,
+        "log": "js-syntax-review.js.log"
+      },
+      {
+        "name": "js-syntax-portable-reader.js",
+        "command": [
+          "node",
+          "--check",
+          "static/portable-reader.js"
+        ],
+        "exit_code": 0,
+        "seconds": 0.109,
+        "log": "js-syntax-portable-reader.js.log"
+      },
+      {
+        "name": "powershell-parse",
+        "command": [
+          "powershell",
+          "-NoProfile",
+          "-NonInteractive",
+          "-Command",
+          "$failed = $false; foreach ($name in @('setup.ps1','start.ps1','stop.ps1')) { $tokens = $null; $errors = $null; [void][System.Management.Automation.Language.Parser]::ParseFile((Join-Path (Get-Location) $name), [ref]$tokens, [ref]$errors); if ($errors.Count) { $failed = $true; $errors | ForEach-Object { Write-Output ($name + ': ' + $_.Message) } } else { Write-Output ($name + ': parsed') } }; if ($failed) { exit 1 }"
+        ],
+        "exit_code": 0,
+        "seconds": 2.86,
+        "log": "powershell-parse.log"
+      },
+      {
+        "name": "git-diff-check",
+        "command": [
+          "git",
+          "diff",
+          "--check"
+        ],
+        "exit_code": 0,
+        "seconds": 0.125,
+        "log": "git-diff-check.log"
+      }
+    ],
+    "node_suites": 9,
+    "gates": 27
+  },
+  "final_commands": [
+    {
+      "label": "static",
+      "command": [
+        "J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr03a\\venv\\Scripts\\python.exe",
+        "tools/pr03a/check_static.py",
+        "--contract-deps",
+        "J:/class-assistant/classroom-os/work/pr01/validation-deps"
+      ],
+      "cwd": "J:\\class-assistant\\worktrees\\web-pr03a-identity",
+      "environment_overrides": {},
+      "exit_code": 0,
+      "log": "outputs/pr03a/final-static.log",
+      "sha256": "aebf9dc3232938777a5630f248f4717d2646e6a554fbb5daac44a314fcb334b2"
+    },
+    {
+      "label": "types",
+      "command": [
+        "J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr03a\\venv\\Scripts\\python.exe",
+        "-m",
+        "mypy",
+        "--follow-imports=silent",
+        "--ignore-missing-imports",
+        "--check-untyped-defs",
+        "--cache-dir",
+        "work/pr03a/mypy-cache",
+        "web/backend/classroom_web",
+        "tools/pr03a"
+      ],
+      "cwd": "J:\\class-assistant\\worktrees\\web-pr03a-identity",
+      "environment_overrides": {
+        "PYTHONPATH": "J:/class-assistant/worktrees/web-pr02a-data/work/pr02a/remediation/type-deps"
+      },
+      "exit_code": 0,
+      "log": "outputs/pr03a/final-types.log",
+      "sha256": "0d42646ff848fddea83e113f5e72c066dc050fc901c93d17176142ab98c966e9"
+    },
+    {
+      "label": "runner-safety",
+      "command": [
+        "J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr03a\\venv\\Scripts\\python.exe",
+        "tools/pr03a/selftest_runner.py"
+      ],
+      "cwd": "J:\\class-assistant\\worktrees\\web-pr03a-identity",
+      "environment_overrides": {},
+      "exit_code": 0,
+      "log": "outputs/pr03a/final-runner-safety.log",
+      "sha256": "6a3ecb4e72e0ad825378f1d6f8887c245c9eb5523a6eaa01917927f9e4c12ab3"
+    },
+    {
+      "label": "pip-check",
+      "command": [
+        "J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr03a\\venv\\Scripts\\python.exe",
+        "-m",
+        "pip",
+        "check"
+      ],
+      "cwd": "J:\\class-assistant\\worktrees\\web-pr03a-identity",
+      "environment_overrides": {},
+      "exit_code": 0,
+      "log": "outputs/pr03a/final-pip-check.log",
+      "sha256": "672aec65a45bed50e70229c70934a7eebf0462595c459b83023027645d57cccf"
+    },
+    {
+      "label": "scope",
+      "command": [
+        "J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr03a\\venv\\Scripts\\python.exe",
+        "tools/pr03a/check_protected.py"
+      ],
+      "cwd": "J:\\class-assistant\\worktrees\\web-pr03a-identity",
+      "environment_overrides": {},
+      "exit_code": 0,
+      "log": "outputs/pr03a/final-scope.log",
+      "sha256": "f6988ea49d316cd861d3f6c412e3930b07618f3ad9c5dd5afd16c45ba8997f20"
+    },
+    {
+      "label": "diff-check",
+      "command": [
+        "git",
+        "diff",
+        "--check"
+      ],
+      "cwd": "J:\\class-assistant\\worktrees\\web-pr03a-identity",
+      "environment_overrides": {},
+      "exit_code": 0,
+      "log": "outputs/pr03a/final-diff-check.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "static": {
+    "checked_at_utc": "2026-10-30T16:13:02.595150+00:00",
+    "python": "3.12.14 (main, Aug 25 2026, 14:01:42) [MSC v.1944 64 bit (AMD64)]",
+    "checks": [
+      {
+        "name": "Python AST",
+        "passed": true,
+        "details": {
+          "python_files": 54
+        }
+      },
+      {
+        "name": "OpenAPI 3.1 and unique operationId",
+        "passed": true,
+        "details": {
+          "operations": 134,
+          "paths": 118
+        }
+      },
+      {
+        "name": "Events JSON Schema",
+        "passed": true,
+        "details": null
+      },
+      {
+        "name": "All contract local refs resolve",
+        "passed": true,
+        "details": {
+          "resolved_refs": 599
+        }
+      },
+      {
+        "name": "Frozen positive and negative examples",
+        "passed": true,
+        "details": {
+          "positive_negative_cases": 34
+        }
+      },
+      {
+        "name": "Frozen model keys and owner composite FKs",
+        "passed": true,
+        "details": {
+          "tables": 60,
+          "foreign_keys": 164
+        }
+      },
+      {
+        "name": "Incremental single migration head and offline SQL",
+        "passed": true,
+        "details": {
+          "heads": [
+            "0004_identity"
+          ],
+          "history_retained": [
+            "0001_data_foundation",
+            "0002_pr02a_review",
+            "0003_persistent_tasks"
+          ],
+          "offline_rendered": true
+        }
+      },
+      {
+        "name": "Limited source credential-pattern scan",
+        "passed": true,
+        "details": {
+          "files": 58,
+          "matches": [],
+          "scope": "Limited credential-shaped pattern scan; not a security audit"
+        }
+      }
+    ],
+    "passed": true,
+    "limitations": "Syntax, frozen contract structure and offline SQL only. Runtime concurrency/RLS use separate PostgreSQL integration gates."
+  },
+  "protected": {
+    "baseline_files": 284,
+    "protected_files_checked": 243,
+    "prior_migration_files": {
+      "web/backend/migrations/versions/0001_data_foundation.py": {
+        "baseline_git_object": "4472bacc3ab0f9360c241882bc6b9239e0b20bfa",
+        "current_git_object": "4472bacc3ab0f9360c241882bc6b9239e0b20bfa",
+        "baseline_checkout_sha256": "d7f5bf06145eb21f9cd5d8f6ec093ecb1deebfb590b2829f39ce7e05fcbedf16",
+        "current_sha256": "d7f5bf06145eb21f9cd5d8f6ec093ecb1deebfb590b2829f39ce7e05fcbedf16",
+        "raw_bytes_equal": true,
+        "git_content_equal": true
+      },
+      "web/backend/migrations/versions/0001_data_foundation.sql": {
+        "baseline_git_object": "d7c77f05c2fecfc3d7d4593a01d85c29341ebe31",
+        "current_git_object": "d7c77f05c2fecfc3d7d4593a01d85c29341ebe31",
+        "baseline_checkout_sha256": "87c475d46a647cc838c0ad9f75a6121cc4ad1c7b537fb9c7f94e568f987bbaa8",
+        "current_sha256": "87c475d46a647cc838c0ad9f75a6121cc4ad1c7b537fb9c7f94e568f987bbaa8",
+        "raw_bytes_equal": true,
+        "git_content_equal": true
+      },
+      "web/backend/migrations/versions/0002_pr02a_review.py": {
+        "baseline_git_object": "b457da7499261c71d1d3fb11c6e6bf148c8910d8",
+        "current_git_object": "b457da7499261c71d1d3fb11c6e6bf148c8910d8",
+        "baseline_checkout_sha256": "f7c04dcbb80dc691e5060847a27be9c1fbeb4bbf4011eaa589e6fb7ad8631f69",
+        "current_sha256": "f7c04dcbb80dc691e5060847a27be9c1fbeb4bbf4011eaa589e6fb7ad8631f69",
+        "raw_bytes_equal": true,
+        "git_content_equal": true
+      },
+      "web/backend/migrations/versions/0002_pr02a_review.sql": {
+        "baseline_git_object": "5e59a2b7c81a040ceb6d074a539ba176fd6378c9",
+        "current_git_object": "5e59a2b7c81a040ceb6d074a539ba176fd6378c9",
+        "baseline_checkout_sha256": "4e9b9046202f0712f474eab2594c3cb7aff177854c8bd6bc0453e08995d3cf72",
+        "current_sha256": "4e9b9046202f0712f474eab2594c3cb7aff177854c8bd6bc0453e08995d3cf72",
+        "raw_bytes_equal": true,
+        "git_content_equal": true
+      },
+      "web/backend/migrations/versions/0003_persistent_tasks.py": {
+        "baseline_git_object": "75a82323498163d0b59291c0eb5c4113ba73fd2a",
+        "current_git_object": "75a82323498163d0b59291c0eb5c4113ba73fd2a",
+        "baseline_checkout_sha256": "3af350e6860c6975473bc1d14e56b34d091dfc8900e17871b2f2f52c1fb05e92",
+        "current_sha256": "3af350e6860c6975473bc1d14e56b34d091dfc8900e17871b2f2f52c1fb05e92",
+        "raw_bytes_equal": true,
+        "git_content_equal": true
+      },
+      "web/backend/migrations/versions/0003_persistent_tasks.sql": {
+        "baseline_git_object": "960deabed6b884194877ce5d070a831cfb242cc8",
+        "current_git_object": "960deabed6b884194877ce5d070a831cfb242cc8",
+        "baseline_checkout_sha256": "d5993db7732f49203317f91a3d4832bb810884b708b3a17223479d7aca69cc51",
+        "current_sha256": "d5993db7732f49203317f91a3d4832bb810884b708b3a17223479d7aca69cc51",
+        "raw_bytes_equal": true,
+        "git_content_equal": true
+      }
+    },
+    "frozen_contract_files": {
+      "docs/web-alpha/architecture/contracts/CHANGELOG.md": {
+        "baseline_git_object": "ae4d7722b87155aee4adfd5a22844d4bcb3befdc",
+        "current_git_object": "ae4d7722b87155aee4adfd5a22844d4bcb3befdc",
+        "baseline_checkout_sha256": "657a617af59964990cc1f48298b140c82eca9f9bfe937233f6e74fef13707859",
+        "current_sha256": "657a617af59964990cc1f48298b140c82eca9f9bfe937233f6e74fef13707859",
+        "raw_bytes_equal": true,
+        "git_content_equal": true
+      },
+      "docs/web-alpha/architecture/contracts/domain-model.json": {
+        "baseline_git_object": "d18d40a8cb5fdce6871f02c416becdfafa7c6e10",
+        "current_git_object": "d18d40a8cb5fdce6871f02c416becdfafa7c6e10",
+        "baseline_checkout_sha256": "ba0a194e36eb919685e6ab49fca138e61a5c31158daf839b668546c278d8a798",
+        "current_sha256": "ba0a194e36eb919685e6ab49fca138e61a5c31158daf839b668546c278d8a798",
+        "raw_bytes_equal": true,
+        "git_content_equal": true
+      },
+      "docs/web-alpha/architecture/contracts/events.schema.json": {
+        "baseline_git_object": "4ac758be50e5576243f3a35f21533409ed23db5e",
+        "current_git_object": "4ac758be50e5576243f3a35f21533409ed23db5e",
+        "baseline_checkout_sha256": "1f04c47c261869a57afb956c1051cdd76b8c5f9e671dd7cd73cdff98ab62e256",
+        "current_sha256": "1f04c47c261869a57afb956c1051cdd76b8c5f9e671dd7cd73cdff98ab62e256",
+        "raw_bytes_equal": true,
+        "git_content_equal": true
+      },
+      "docs/web-alpha/architecture/contracts/examples.json": {
+        "baseline_git_object": "1a0ff7724b861a04944a04a34da393b536fdf3c9",
+        "current_git_object": "1a0ff7724b861a04944a04a34da393b536fdf3c9",
+        "baseline_checkout_sha256": "3250851b3377e16fae00df227877b7d672b8fbde12bb55584ed08fb858f81349",
+        "current_sha256": "3250851b3377e16fae00df227877b7d672b8fbde12bb55584ed08fb858f81349",
+        "raw_bytes_equal": true,
+        "git_content_equal": true
+      },
+      "docs/web-alpha/architecture/contracts/openapi.json": {
+        "baseline_git_object": "dec2dcfcddb5a3a22edf99e09afcca50cee0cdc5",
+        "current_git_object": "dec2dcfcddb5a3a22edf99e09afcca50cee0cdc5",
+        "baseline_checkout_sha256": "331fee959f06372602a6d55256e605a1c79a95563ea7c6887a7703bb5c5a255b",
+        "current_sha256": "331fee959f06372602a6d55256e605a1c79a95563ea7c6887a7703bb5c5a255b",
+        "raw_bytes_equal": true,
+        "git_content_equal": true
+      },
+      "docs/web-alpha/architecture/contracts/pr-dependencies.json": {
+        "baseline_git_object": "a91482b174db73760e72a9e59e22d5549e8cd2ed",
+        "current_git_object": "a91482b174db73760e72a9e59e22d5549e8cd2ed",
+        "baseline_checkout_sha256": "f2db891c2f685a5979f6c722b09c7abc7389b6f279bc7a5a0ba756a987ccc3a9",
+        "current_sha256": "f2db891c2f685a5979f6c722b09c7abc7389b6f279bc7a5a0ba756a987ccc3a9",
+        "raw_bytes_equal": true,
+        "git_content_equal": true
+      },
+      "docs/web-alpha/architecture/contracts/requirements-traceability.json": {
+        "baseline_git_object": "71d32a78c1902ce82c2cf20eb0fad2cf8a86a505",
+        "current_git_object": "71d32a78c1902ce82c2cf20eb0fad2cf8a86a505",
+        "baseline_checkout_sha256": "5763f06a5224b2e527c30b63509396963c2f1d11a244bd0ff7ab0d1d509c66e9",
+        "current_sha256": "5763f06a5224b2e527c30b63509396963c2f1d11a244bd0ff7ab0d1d509c66e9",
+        "raw_bytes_equal": true,
+        "git_content_equal": true
+      },
+      "docs/web-alpha/architecture/contracts/state-machines.json": {
+        "baseline_git_object": "963f63a713502999ad3b40ad89d144bd875f6f87",
+        "current_git_object": "963f63a713502999ad3b40ad89d144bd875f6f87",
+        "baseline_checkout_sha256": "e066dcef52d8350a25dca60d7a8807c7a1079ac5cdd89ed839c7e0b286614bf7",
+        "current_sha256": "e066dcef52d8350a25dca60d7a8807c7a1079ac5cdd89ed839c7e0b286614bf7",
+        "raw_bytes_equal": true,
+        "git_content_equal": true
+      }
+    },
+    "backend_test_retention": {
+      "web/backend/tests/integration/conftest.py": {
+        "old_test_functions": 0,
+        "current_test_functions": 0,
+        "errors": []
+      },
+      "web/backend/tests/integration/test_data_foundation.py": {
+        "old_test_functions": 39,
+        "current_test_functions": 39,
+        "errors": []
+      },
+      "web/backend/tests/integration/test_material_revocation_race.py": {
+        "old_test_functions": 3,
+        "current_test_functions": 3,
+        "errors": []
+      },
+      "web/backend/tests/integration/test_migration_remediation.py": {
+        "old_test_functions": 2,
+        "current_test_functions": 2,
+        "errors": []
+      },
+      "web/backend/tests/integration/test_persistent_tasks.py": {
+        "old_test_functions": 32,
+        "current_test_functions": 32,
+        "errors": []
+      },
+      "web/backend/tests/integration/test_semester_limits.py": {
+        "old_test_functions": 4,
+        "current_test_functions": 4,
+        "errors": []
+      },
+      "web/backend/tests/integration/test_task_cancel_remediation.py": {
+        "old_test_functions": 8,
+        "current_test_functions": 8,
+        "errors": []
+      },
+      "web/backend/tests/integration/test_task_material_remediation.py": {
+        "old_test_functions": 7,
+        "current_test_functions": 7,
+        "errors": []
+      },
+      "web/backend/tests/integration/test_task_migrations.py": {
+        "old_test_functions": 5,
+        "current_test_functions": 5,
+        "errors": []
+      },
+      "web/backend/tests/integration/test_task_worker.py": {
+        "old_test_functions": 11,
+        "current_test_functions": 11,
+        "errors": []
+      },
+      "web/backend/tests/unit/test_pr02b_runner.py": {
+        "old_test_functions": 8,
+        "current_test_functions": 8,
+        "errors": []
+      },
+      "web/backend/tests/unit/test_task_values.py": {
+        "old_test_functions": 6,
+        "current_test_functions": 6,
+        "errors": []
+      },
+      "web/backend/tests/unit/test_test_database_target.py": {
+        "old_test_functions": 5,
+        "current_test_functions": 5,
+        "errors": []
+      }
+    },
+    "mismatches": [],
+    "scope_violations": [],
+    "siblings_unchanged_since_snapshot": false,
+    "sibling_observation": "Read-only snapshots; sibling dirty state and concurrent work belong to their owning agents. Sibling drift is reported separately and never repaired or overwritten here.",
+    "passed": true
+  },
+  "fixture_cleanup": {
+    "actual_cluster_identity": {
+      "login": "pr02a_pr03a_migrator",
+      "database": "pr02a_pr03a_synthetic",
+      "data_directory": "J:/class-assistant/worktrees/web-pr03a-identity/work/pr03a/pg/data",
+      "host": "127.0.0.1",
+      "port": 55439,
+      "listen_addresses": "127.0.0.1",
+      "version": "PostgreSQL 17.11 on x86_64-windows, compiled by msvc-19.44.35228, 64-bit"
+    },
+    "remaining_synthetic_databases": [
+      "pr02a_pr03a_synthetic"
+    ],
+    "remaining_synthetic_login_roles": [
+      "pr02a_pr03a_migrator"
+    ],
+    "random_fixture_database_and_role_cleanup_verified": true,
+    "passed_backend_cases_by_file": {
+      "tests.integration.test_data_foundation": 40,
+      "tests.integration.test_identity": 35,
+      "tests.integration.test_identity_migrations": 3,
+      "tests.integration.test_material_revocation_race": 4,
+      "tests.integration.test_migration_remediation": 3,
+      "tests.integration.test_persistent_tasks": 35,
+      "tests.integration.test_semester_limits": 26,
+      "tests.integration.test_task_cancel_remediation": 12,
+      "tests.integration.test_task_material_remediation": 41,
+      "tests.integration.test_task_migrations": 5,
+      "tests.integration.test_task_worker": 16,
+      "tests.unit.test_identity_values": 27,
+      "tests.unit.test_pr02b_runner": 40,
+      "tests.unit.test_task_values": 16,
+      "tests.unit.test_test_database_target": 55
+    },
+    "backend_total": 358,
+    "cluster_left_running_for_root_review": true
+  },
+  "provenance": {
+    "port": 55439,
+    "binaries": [
+      {
+        "path": "J:\\class-assistant\\worktrees\\web-pr02a-data\\work\\pr02a\\pg\\runtime\\Library\\bin\\initdb.exe",
+        "sha256": "587415066e861200eda2dd283e4dbba6f5ddf5fab9ad898c9e8ee858f269e217"
+      },
+      {
+        "path": "J:\\class-assistant\\worktrees\\web-pr02a-data\\work\\pr02a\\pg\\runtime\\Library\\bin\\pg_ctl.exe",
+        "sha256": "2c13b3cf9b131233dd1a4cc12a6003874eff40c252ddfb71aff49503b820a634"
+      },
+      {
+        "path": "J:\\class-assistant\\worktrees\\web-pr02a-data\\work\\pr02a\\pg\\runtime\\Library\\bin\\postgres.exe",
+        "sha256": "48e25d1dc7530d91c40694efda8ada1d2de2ac423420a9be76cb6cf5c2b738c3"
+      },
+      {
+        "path": "J:\\class-assistant\\worktrees\\web-pr02a-data\\work\\pr02a\\pg\\runtime\\Library\\bin\\psql.exe",
+        "sha256": "24e6b46960371c7586aaa7a0475709b3a8b8d59ce833fa965aad05c47bcd93e7"
+      }
+    ],
+    "reused_read_only_runtime": "J:/class-assistant/worktrees/web-pr02a-data/work/pr02a/pg/runtime/Library/bin",
+    "verified_at_utc": "2026-10-30T16:01:51.9575838Z",
+    "data_directory": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr03a\\pg\\data",
+    "limitations": "Existing packaged runtime used read-only;8cached dependency archives independently rehashed against committed provenance; PostgreSQL main .conda archive is absent and was not claimed reverified, executable hashes recorded",
+    "sibling_data_directory_touched": false,
+    "synthetic_only": true,
+    "loopback": "127.0.0.1",
+    "dependencies": [
+      {
+        "actual_sha256": "75c549b55b673e15de8785a8e5dd85bca7eb612eee0ff4dc8d7bdaa15eacbdbb",
+        "matches": true,
+        "file": "icu-78.3-h5112557_2.conda",
+        "expected_sha256": "75c549b55b673e15de8785a8e5dd85bca7eb612eee0ff4dc8d7bdaa15eacbdbb",
+        "path": "J:\\class-assistant\\worktrees\\web-pr02a-data\\work\\pr02a\\pg\\packages\\icu-78.3-h5112557_2.conda"
+      },
+      {
+        "actual_sha256": "63ff03324e903eb01a715ccf357df56d66224e61952fd6615d86490ebefb3285",
+        "matches": true,
+        "file": "krb5-1.22.2-h719d79b_2.conda",
+        "expected_sha256": "63ff03324e903eb01a715ccf357df56d66224e61952fd6615d86490ebefb3285",
+        "path": "J:\\class-assistant\\worktrees\\web-pr02a-data\\work\\pr02a\\pg\\packages\\krb5-1.22.2-h719d79b_2.conda"
+      },
+      {
+        "actual_sha256": "93756768492eeceef634e93c4cf2b0a2f43bd8e6d9ce214b1fe578ef9e78caae",
+        "matches": true,
+        "file": "libpq-17.11-h6b13b41_1.conda",
+        "expected_sha256": "93756768492eeceef634e93c4cf2b0a2f43bd8e6d9ce214b1fe578ef9e78caae",
+        "path": "J:\\class-assistant\\worktrees\\web-pr02a-data\\work\\pr02a\\pg\\packages\\libpq-17.11-h6b13b41_1.conda"
+      },
+      {
+        "actual_sha256": "819c4edd7b7bcfa9461aeccb56c0a7e9fa7c251163333e64222c142499822958",
+        "matches": true,
+        "file": "libxml2-16-2.15.4-h3cfd58e_1.conda",
+        "expected_sha256": "819c4edd7b7bcfa9461aeccb56c0a7e9fa7c251163333e64222c142499822958",
+        "path": "J:\\class-assistant\\worktrees\\web-pr02a-data\\work\\pr02a\\pg\\packages\\libxml2-16-2.15.4-h3cfd58e_1.conda"
+      },
+      {
+        "actual_sha256": "0629c2cc0404d3bb29d6baa7b4ba62da80797015e86de050db81ea5a07050527",
+        "matches": true,
+        "file": "libzlib-1.3.2-hfd05255_3.conda",
+        "expected_sha256": "0629c2cc0404d3bb29d6baa7b4ba62da80797015e86de050db81ea5a07050527",
+        "path": "J:\\class-assistant\\worktrees\\web-pr02a-data\\work\\pr02a\\pg\\packages\\libzlib-1.3.2-hfd05255_3.conda"
+      },
+      {
+        "actual_sha256": "6824e36be0f95ae516dc36dddd18f69cbad0e4e07906fcb10a5f26a8dc471903",
+        "matches": true,
+        "file": "lz4-c-1.10.0-h6a83c73_2.conda",
+        "expected_sha256": "6824e36be0f95ae516dc36dddd18f69cbad0e4e07906fcb10a5f26a8dc471903",
+        "path": "J:\\class-assistant\\worktrees\\web-pr02a-data\\work\\pr02a\\pg\\packages\\lz4-c-1.10.0-h6a83c73_2.conda"
+      },
+      {
+        "actual_sha256": "827e55e37cc3208f285ae435b13bd1f389d35728d3aa6974ee447c7086232cc5",
+        "matches": true,
+        "file": "openssl-3.5.9-hf411b9b_0.conda",
+        "expected_sha256": "827e55e37cc3208f285ae435b13bd1f389d35728d3aa6974ee447c7086232cc5",
+        "path": "J:\\class-assistant\\worktrees\\web-pr02a-data\\work\\pr02a\\pg\\packages\\openssl-3.5.9-hf411b9b_0.conda"
+      },
+      {
+        "actual_sha256": "ca7daae4f218a11fab82cc2857f0ea518ec3f46acec60490485347a4c22c6b3e",
+        "matches": true,
+        "file": "zstd-1.5.7-h534d264_7.conda",
+        "expected_sha256": "ca7daae4f218a11fab82cc2857f0ea518ec3f46acec60490485347a4c22c6b3e",
+        "path": "J:\\class-assistant\\worktrees\\web-pr02a-data\\work\\pr02a\\pg\\packages\\zstd-1.5.7-h534d264_7.conda"
+      }
+    ],
+    "PostgreSQL": "17.11"
+  },
+  "source_sha256": {
+    "tools/pr03a/check_protected.py": "a1133d0c4f6c74ca7c931b57312b291e39bbb5116ec6004e25d5c2daa82bf271",
+    "tools/pr03a/check_static.py": "b97c9d3a50f21ca1db118c17036702edd78f9d6e1c566b9178856008a86ee18f",
+    "tools/pr03a/run_tests.py": "061617c03c1530ad8d3d8db25c2a241885e5ac5e32c5fb00f38c39f2b6ce2bce",
+    "tools/pr03a/selftest_runner.py": "f5ce2bcb28c3e957e569f445ebc6a32a371d0d750660b409d3fdf580a050cef5",
+    "web/backend/README.md": "1beddf560e03f1ff13bdd9da03363b64724709c0a7076804f612f10ddb13cfdc",
+    "web/backend/classroom_web/application/identity.py": "84aeeb4b053eb2f67d62bd1bfd02b1644d352153d1644d315784ba1460c31757",
+    "web/backend/classroom_web/domain/identity.py": "b5d174ec35d0f3ab3eeb3072b6ffa0243e6706c8c056f0a37185c3fe87afbb36",
+    "web/backend/classroom_web/domain/identity_ports.py": "b3c38e459f6479daa934cd765e0dc0c98e2477bc16baa4fef4c90a16095b6ef0",
+    "web/backend/classroom_web/infrastructure/database.py": "df48a3718b2c06ea303b59dc356453debfeba8f0f3e2b76b30ef937a2fe2b529",
+    "web/backend/classroom_web/infrastructure/identity_mail.py": "227ba75bb1c3636e8eaaa9e8efde1843bcbc099cca1653c48c12efe50f9d849a",
+    "web/backend/classroom_web/infrastructure/identity_passwords.py": "fd4e7a60b59806ff165a16fb1eef6c2b8ad01cc777c6ba985b462f27da7ee764",
+    "web/backend/classroom_web/infrastructure/identity_repository.py": "40506e33b8c49ffa12d2fe2e6e967991b3f865e60473b4f97c2828542cdf1098",
+    "web/backend/classroom_web/infrastructure/identity_schema.py": "a9e46715d44402ba62d0137b63786e0bc5415a13c38c1cb04dad10da0b4cc324",
+    "web/backend/migrations/versions/0004_identity.py": "88408dd198b6253cc83b60cac6ee17f66a8962fcf4b46a0b06200e557988bfb7",
+    "web/backend/migrations/versions/0004_identity.sql": "d8f4358a218d2d00999f90f85f123b3ed9e942bbaf86647019b7f03b8436e414",
+    "web/backend/pyproject.toml": "ed8eb470313dab385fe36cd1982e332baf40719576ea1365e697488de5666b73",
+    "web/backend/requirements.lock": "f194021c6894990ab5a4cb64fbbca8793f20cee4805e551a392d2b93af3565db",
+    "web/backend/tests/integration/test_data_foundation.py": "cde8f1702aa875c92d7e5c1396b48c062a58cabb8a031104fb56783570f81a1a",
+    "web/backend/tests/integration/test_identity.py": "80ec3054b472229d1104d080f240778b0512239b9c4141ca97e8e5108b1490d1",
+    "web/backend/tests/integration/test_identity_migrations.py": "d18bad1dfebd4edead96f5705c1edef6177410334adb813276561c389c1b978d",
+    "web/backend/tests/integration/test_task_migrations.py": "5c3b49c370f887ce94ca8f4ffc42782d70a4e257e11a4cc13196a1fc746bcdbf",
+    "web/backend/tests/unit/test_identity_values.py": "b270613ae2e504522be033d2f742e47aa256270d5477c7903f34c52dcffba509"
+  },
+  "evidence_sha256": {
+    "outputs/pr03a/20261030T160712.053390Z/results.json": "b274ec1e49a7e6e182b4cb3d683e832a11dcbe8faed78d6121ce485416048a39",
+    "outputs/pr03a/20261030T160712.053390Z/pytest.xml": "4b17d0757ac6ae10c741212ae13a72897698b31db13404e5f2e45d9dc6f72d64",
+    "outputs/pr03a/20261030T160712.053390Z/pytest.log": "0d1e809775e993d1202e27e9539e641b48c2b18148c7eaa87834156e16692b13",
+    "outputs/pr03a/20261030T160712.053390Z/network-guard.log": "d67e74e7d7299f4606801ca88f9dca9e1c85a12764121f79697e46324bcca024",
+    "outputs/pr03a/20261030T160217.258581Z/results.json": "3763879e62965a0cd146e1c57d0c30bce1345650594624b8b5580a3ab942e027",
+    "outputs/pr03a/20261030T160217.258581Z/pytest.log": "24c86c40525b8ce5739aab1f2f77456069c390717eb0224b9664a2643577af5d",
+    "outputs/pr03a/local-baseline/results.json": "2fb954058d0bbe4f8c773b271ddb27912ce87b9f7c9fb2c94aad758378e06719",
+    "outputs/pr03a/local-baseline/pytest-junit.xml": "8dfc3366986761f8fb8ce1fed3280692c3c37299d817e6bc13139deea1572c5a",
+    "outputs/pr03a/static-architecture.json": "2c0b475934cd8e5c59bc0c9d27be955f90d1244a5f27ff4a99efb00a651543bd",
+    "outputs/pr03a/protected-files.json": "42880f03ed2ebabc5413b79df96474c187f45170f5383e775fbeeb1286be7df8",
+    "outputs/pr03a/postgresql-provenance.json": "74ef84e6ab2e3576bae7de5ebe625933fd1f30b3cc7a870fd14076f4c0cc2ba3",
+    "outputs/pr03a/environment-freeze.txt": "82f9281671409f82228864549dc1c826411996611a7c6119840e9ddcf5554827",
+    "outputs/pr03a/fixture-cleanup.json": "3d86e45f2d37ae0e2e74a77b33eb077b1dd0de9e72e62af72ec90e2cd804f51c",
+    "outputs/pr03a/tool-command-receipts.json": "d9cffe7255be0024a17c37667d2665519c5a41fe41c85d1f20fb69035ecc1cd7",
+    "outputs/pr03a/postrun-count-gate.json": "9485d92c6d620ba157bb1c465c8b20ccc42dadc2fa416235a646334b4dff062b",
+    "outputs/pr03a/postgres-shutdown.json": "455f87bd8cdea41f7b6c165047546554760a484444647f4b368977de89a2f8f0"
+  },
+  "changed_files": [
+    "docs/web-alpha/pr03a/ACCEPTANCE.md",
+    "docs/web-alpha/pr03a/CHANGES.md",
+    "docs/web-alpha/pr03a/PLAN.md",
+    "docs/web-alpha/pr03a/VALIDATION.json",
+    "tools/pr03a/check_protected.py",
+    "tools/pr03a/check_static.py",
+    "tools/pr03a/run_tests.py",
+    "tools/pr03a/selftest_runner.py",
+    "web/backend/README.md",
+    "web/backend/classroom_web/application/identity.py",
+    "web/backend/classroom_web/domain/identity.py",
+    "web/backend/classroom_web/domain/identity_ports.py",
+    "web/backend/classroom_web/infrastructure/database.py",
+    "web/backend/classroom_web/infrastructure/identity_mail.py",
+    "web/backend/classroom_web/infrastructure/identity_passwords.py",
+    "web/backend/classroom_web/infrastructure/identity_repository.py",
+    "web/backend/classroom_web/infrastructure/identity_schema.py",
+    "web/backend/migrations/versions/0004_identity.py",
+    "web/backend/migrations/versions/0004_identity.sql",
+    "web/backend/pyproject.toml",
+    "web/backend/requirements.lock",
+    "web/backend/tests/integration/test_data_foundation.py",
+    "web/backend/tests/integration/test_identity.py",
+    "web/backend/tests/integration/test_identity_migrations.py",
+    "web/backend/tests/integration/test_task_migrations.py",
+    "web/backend/tests/unit/test_identity_values.py"
+  ],
+  "open_items": [
+    "TBD-08 and all other product/safety TBDs remain OPEN",
+    "No seat reuse policy or Admin exclusion from max_active_users approved",
+    "Internal mail and activation event projection must be reviewed before transport integration",
+    "PR02B-P3-01 and PR02B-P3-02 remain P3/OPEN"
+  ],
+  "not_implemented": [
+    "Cookie session lifecycle",
+    "MFA/TOTP/recovery codes",
+    "device/session revocation",
+    "password reset/email change",
+    "sensitive-operation reauthentication mechanism",
+    "WebSocket session authentication",
+    "HTTP CSRF/Origin/rate-limit/idempotency adapters"
+  ],
+  "limitations": "Synthetic local PostgreSQL and captured mail/mock Provider; no real email, production DB, paid API, real browser, remote CI, push, merge, tag, release or deployment. Await independent Astra review.",
+  "final_tool_receipts": {
+    "recorded_at_utc": "2026-10-30T16:12:30.840345+00:00",
+    "checks": [
+      {
+        "name": "runner-adversarial",
+        "command": [
+          "J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr03a\\venv\\Scripts\\python.exe",
+          "tools/pr03a/selftest_runner.py"
+        ],
+        "cwd": "J:\\class-assistant\\worktrees\\web-pr03a-identity",
+        "exit_code": 0,
+        "seconds": 0.593,
+        "log": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\runner-adversarial.log"
+      },
+      {
+        "name": "static-architecture",
+        "command": [
+          "J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr03a\\venv\\Scripts\\python.exe",
+          "tools/pr03a/check_static.py",
+          "--contract-deps",
+          "J:/class-assistant/classroom-os/work/pr01/validation-deps"
+        ],
+        "cwd": "J:\\class-assistant\\worktrees\\web-pr03a-identity",
+        "exit_code": 0,
+        "seconds": 2.907,
+        "log": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\static-architecture.log"
+      },
+      {
+        "name": "mypy",
+        "command": [
+          "J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr03a\\venv\\Scripts\\python.exe",
+          "-m",
+          "mypy",
+          "--follow-imports=silent",
+          "--ignore-missing-imports",
+          "--check-untyped-defs",
+          "--cache-dir",
+          "work/pr03a/mypy-cache",
+          "web/backend/classroom_web",
+          "tools/pr03a"
+        ],
+        "cwd": "J:\\class-assistant\\worktrees\\web-pr03a-identity",
+        "exit_code": 0,
+        "seconds": 1.578,
+        "log": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\mypy.log"
+      },
+      {
+        "name": "pip-check",
+        "command": [
+          "J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr03a\\venv\\Scripts\\python.exe",
+          "-m",
+          "pip",
+          "check"
+        ],
+        "cwd": "J:\\class-assistant\\worktrees\\web-pr03a-identity",
+        "exit_code": 0,
+        "seconds": 0.734,
+        "log": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\pip-check.log"
+      },
+      {
+        "name": "git-diff-check",
+        "command": [
+          "git",
+          "diff",
+          "--check"
+        ],
+        "cwd": "J:\\class-assistant\\worktrees\\web-pr03a-identity",
+        "exit_code": 0,
+        "seconds": 0.11,
+        "log": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\git-diff-check.log"
+      },
+      {
+        "name": "git-staged-diff-check",
+        "command": [
+          "git",
+          "diff",
+          "--cached",
+          "--check"
+        ],
+        "cwd": "J:\\class-assistant\\worktrees\\web-pr03a-identity",
+        "exit_code": 0,
+        "seconds": 0.078,
+        "log": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\git-staged-diff-check.log"
+      }
+    ],
+    "passed": true,
+    "postrun_count_gate": {
+      "checked_at_utc": "2026-10-30T16:12:24.833498+00:00",
+      "original_full_run_report": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\20261030T160712.053390Z\\results.json",
+      "original_runner_minimum_unchanged_in_raw_report": 240,
+      "current_runner_minimum": 293,
+      "actual_original_junit": {
+        "tests": 358,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "passed": true,
+      "source_only_change_after_full_run": "Runner minimum strengthened from240 to293 reflecting approved integrated baseline; pytest argv and application/test code unchanged. Raw test run history retained."
+    }
+  },
+  "strengthened_runner_gate_after_full_run": {
+    "checked_at_utc": "2026-10-30T16:12:24.833498+00:00",
+    "original_full_run_report": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\20261030T160712.053390Z\\results.json",
+    "original_runner_minimum_unchanged_in_raw_report": 240,
+    "current_runner_minimum": 293,
+    "actual_original_junit": {
+      "tests": 358,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "passed": true,
+    "source_only_change_after_full_run": "Runner minimum strengthened from240 to293 reflecting approved integrated baseline; pytest argv and application/test code unchanged. Raw test run history retained."
+  },
+  "synthetic_cluster_shutdown": {
+    "checked_at_utc": "2026-10-30T16:12:53.050934+00:00",
+    "verified_identity_before_shutdown": {
+      "login": "pr02a_pr03a_migrator",
+      "database": "pr02a_pr03a_synthetic",
+      "data_directory": "J:/class-assistant/worktrees/web-pr03a-identity/work/pr03a/pg/data",
+      "host": "127.0.0.1",
+      "port": 55439,
+      "listen_addresses": "127.0.0.1",
+      "version": "PostgreSQL 17.11 on x86_64-windows, compiled by msvc-19.44.35228, 64-bit"
+    },
+    "command": [
+      "J:/class-assistant/worktrees/web-pr02a-data/work/pr02a/pg/runtime/Library/bin/pg_ctl.exe",
+      "-D",
+      "J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr03a\\pg\\data",
+      "-m",
+      "fast",
+      "-w",
+      "stop"
+    ],
+    "exit_code": 0,
+    "loopback_port_closed": true,
+    "synthetic_data_and_logs_preserved": true,
+    "other_clusters_not_operated": true,
+    "passed": true
+  }
+}

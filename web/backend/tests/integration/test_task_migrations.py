@@ -190,7 +190,7 @@ def test_failed_later_migration_rolls_back_task_data_ddl_and_version(previous_sc
             "    op.execute('SELECT 1/0')\n"
             "def downgrade():\n    raise RuntimeError('synthetic failure only')\n", encoding="utf-8")
         with pytest.raises(sa.exc.DBAPIError) as caught:
-            upgrade(database, "head", scratch)
+            upgrade(database, "ffff_task_failure", scratch)
         assert caught.value.orig.sqlstate == "22012"
         assert version(database) == CURRENT
         assert snapshot(database, catalog_tables | task_tables) == before
