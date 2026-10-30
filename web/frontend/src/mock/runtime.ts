@@ -18,7 +18,9 @@ type DurableUpload = { classSessionId: string; captureEpochId: string; chunkId: 
 type UploadHistoryEntry = { classSessionId: string; captureEpochId: string; chunkId: string; seq: number; frameReceived: boolean; status: 'pending' | 'durable'; receiptId: string | null; eventId: string | null; canAccept: boolean };
 type HistoricalUpload = { entry: UploadHistoryEntry; port: MockUploadPort; canAccept: boolean };
 type LocalRecordSync = 'none' | 'pending' | 'reconciled';
-type State = { currentClassroomId: string; tasks: Record<string, Task>; leaseValid: boolean; active: boolean; account: MockAccount | null; epoch: number; scenario: string; flows: Flows; accountResponse: unknown | null; captureScope: CaptureScope | null; eventProjection: Projection; localWriteResult: LocalWriteResult; mockLocalRecord: string | null; localRecordSync: LocalRecordSync; durableUploads: DurableUpload[]; uploadHistory: UploadHistoryEntry[] };
+type LocalRecord = { recordId: string; captureEpochId: string | null; vaultKey: string; sync: 'pending' | 'reconciled' };
+type LocalWriteAttempt = { attemptId: string; captureEpochId: string | null; result: 'stored' | 'write_failed' | 'locked' | 'quota'; recordId: string | null };
+type State = { currentClassroomId: string; tasks: Record<string, Task>; leaseValid: boolean; active: boolean; account: MockAccount | null; epoch: number; scenario: string; flows: Flows; accountResponse: unknown | null; captureScope: CaptureScope | null; eventProjection: Projection; localWriteResult: LocalWriteResult; mockLocalRecord: string | null; localRecordSync: LocalRecordSync; vaultLocked: boolean; localWriteAttempt: LocalWriteAttempt | null; localRecordHistory: LocalRecord[]; durableUploads: DurableUpload[]; uploadHistory: UploadHistoryEntry[] };
 const emptyFlows = (): Flows => ({ capture: 'idle', upload: 'pending', asr: 'idle', ai: 'idle', sync: 'synced' });
 const emptyProjection = (): Projection => ({ portCaptureState: 'idle', uploadPending: true, partial: null, finalText: null, finalRevision: 0, frameReceived: false, chunkDurable: false, audioDeleted: false, classroomDeleted: false, leaseLost: false, mayHaveCharged: false, delivered: 0 });
 // Fixed synthetic lease: resource identifiers are never inferred from the current route.
@@ -42,7 +44,7 @@ export function createMockRuntime(options: { createVault?: () => MemoryVault } =
   let vaultLocked = false;
   let beforeVaultLock: { result: LocalWriteResult; sync: Sync } | null = null;
   const localRecordKey = 'synthetic-local-draft';
-  let state: State = { currentClassroomId: mockCaptureScope().classSessionId, tasks: {}, leaseValid: true, active: false, account: 'A', epoch: 0, scenario: '02', flows: emptyFlows(), accountResponse: null, captureScope: mockCaptureScope(), eventProjection: emptyProjection(), localWriteResult: 'none', mockLocalRecord: null, localRecordSync: 'none', durableUploads: [], uploadHistory: [] };
+  let state: State = { currentClassroomId: mockCaptureScope().classSessionId, tasks: {}, leaseValid: true, active: false, account: 'A', epoch: 0, scenario: '02', flows: emptyFlows(), accountResponse: null, captureScope: mockCaptureScope(), eventProjection: emptyProjection(), localWriteResult: 'none', mockLocalRecord: null, localRecordSync: 'none', vaultLocked: false, localWriteAttempt: null, localRecordHistory: [], durableUploads: [], uploadHistory: [] };
   const listeners = new Set<() => void>();
   let events = new MockEventClient();
   let stopEvents = () => {};
@@ -90,7 +92,7 @@ export function createMockRuntime(options: { createVault?: () => MemoryVault } =
     if (account) { vault.unlock(); vaultLocked = false; }
     const scope = account ? freshScope(mockCaptureScope().classSessionId) : null;
     if (scope) registerUpload(scope);
-    update({ ...state, account, epoch: nextEpoch, currentClassroomId: mockCaptureScope().classSessionId, tasks: {}, leaseValid: Boolean(scope), active: false, scenario: '02', accountResponse: null, captureScope: scope, flows: emptyFlows(), localWriteResult: 'none', mockLocalRecord: null, localRecordSync: 'none', durableUploads: [], uploadHistory: [], eventProjection: { ...emptyProjection(), uploadPending: Boolean(account) } });
+    update({ ...state, account, epoch: nextEpoch, currentClassroomId: mockCaptureScope().classSessionId, tasks: {}, leaseValid: Boolean(scope), active: false, scenario: '02', accountResponse: null, captureScope: scope, flows: emptyFlows(), localWriteResult: 'none', mockLocalRecord: null, localRecordSync: 'none', vaultLocked, localWriteAttempt: null, localRecordHistory: [], durableUploads: [], uploadHistory: [], eventProjection: { ...emptyProjection(), uploadPending: Boolean(account) } });
     if (account) connectEvents();
   };
   const handleEvent = (event: ClassroomOSWebV1EventEnvelope, eventEpoch: number) => {
@@ -246,7 +248,7 @@ export function createMockRuntime(options: { createVault?: () => MemoryVault } =
         upload: scenario === '04' ? 'failed' : 'pending',
         asr: recording ? 'streaming' : 'idle',
         ai: projected.ai,
-        sync: ['locked', 'quota', 'write_failed'].includes(state.localWriteResult) ? 'failed' : state.localRecordSync === 'pending' ? 'local_only' : state.localRecordSync === 'reconciled' ? 'synced' : scenario === '05' ? 'failed' : 'synced',
+        sync: state.localWriteAttempt && state.localWriteAttempt.result !== 'stored' ? 'failed' : state.localRecordSync === 'pending' ? 'local_only' : state.localRecordSync === 'reconciled' ? 'synced' : scenario === '05' ? 'failed' : 'synced',
       } });
       connectEvents();
       // This synthetic durable fixture uses the same receipt path as user-triggered events.
@@ -261,15 +263,31 @@ export function createMockRuntime(options: { createVault?: () => MemoryVault } =
     loginAccount: (account: MockAccount) => clearScope(account),
     simulateLocalWrite: (success: boolean) => {
       if (!state.account) return false;
-      const value = JSON.stringify({ account: state.account, classroomId: state.currentClassroomId, captureEpochId: state.captureScope?.captureEpochId ?? null, kind: 'synthetic-only' });
-      const result = vault.write(localRecordKey, value, !success);
+      const captureEpochId = state.captureScope?.captureEpochId ?? null;
+      const attemptId = crypto.randomUUID();
+      const recordId = crypto.randomUUID();
+      const vaultKey = `${localRecordKey}:${recordId}`;
+      const value = JSON.stringify({ recordId, account: state.account, classroomId: state.currentClassroomId, captureEpochId, kind: 'synthetic-only' });
+      const result = vault.write(vaultKey, value, !success, [localRecordKey]);
       if (result === 'locked') beforeVaultLock = null;
-      update({ ...state, localWriteResult: result, localRecordSync: result === 'stored' ? 'pending' : state.localRecordSync, mockLocalRecord: vault.read(localRecordKey) ?? null, flows: { ...state.flows, sync: result === 'stored' ? 'local_only' : 'failed' } });
+      const attempt: LocalWriteAttempt = { attemptId, captureEpochId, result, recordId: result === 'stored' ? recordId : null };
+      const localRecordHistory: LocalRecord[] = result === 'stored' ? [...state.localRecordHistory, { recordId, captureEpochId, vaultKey, sync: 'pending' }] : state.localRecordHistory;
+      update({ ...state, localWriteAttempt: attempt, localRecordHistory, localWriteResult: result, localRecordSync: result === 'stored' ? 'pending' : state.localRecordSync, mockLocalRecord: vault.read(localRecordKey) ?? null, flows: { ...state.flows, sync: result === 'stored' ? 'local_only' : 'failed' } });
       return result === 'stored';
     },
-    reconcileLocalWrite: () => { if (!state.account || state.flows.sync !== 'local_only' || !vault.read(localRecordKey)) return false; update({ ...state, localWriteResult: 'reconciled', localRecordSync: 'reconciled', flows: { ...state.flows, sync: 'synced' } }); return true; },
-    lockMockVault: () => { if (!state.account || vaultLocked) return; beforeVaultLock = { result: state.localWriteResult, sync: state.flows.sync }; vault.lock(); vaultLocked = true; update({ ...state, localWriteResult: 'locked', mockLocalRecord: null }); },
-    unlockMockVault: () => { if (!state.account || !vaultLocked) return; vault.unlock(); vaultLocked = false; const previous = beforeVaultLock; beforeVaultLock = null; update({ ...state, localWriteResult: previous?.result ?? 'none', mockLocalRecord: vault.read(localRecordKey) ?? null, flows: { ...state.flows, sync: previous?.sync ?? state.flows.sync } }); },
+    reconcileLocalWrite: (recordId = state.localWriteAttempt?.recordId) => {
+      if (!state.account || !recordId || vaultLocked) return false;
+      const record = state.localRecordHistory.find(item => item.recordId === recordId);
+      if (!record || !vault.read(record.vaultKey)) return false;
+      if (record.sync === 'reconciled') return true; // Duplicate or late receipt is idempotent.
+      const history = state.localRecordHistory.map(item => item.recordId === recordId ? { ...item, sync: 'reconciled' as const } : item);
+      const isCurrent = state.localWriteAttempt?.result === 'stored' && state.localWriteAttempt.recordId === recordId;
+      const isLatestSaved = state.localRecordHistory.at(-1)?.recordId === recordId;
+      update({ ...state, localRecordHistory: history, ...(isLatestSaved ? { localRecordSync: 'reconciled' as const } : {}), ...(isCurrent ? { localWriteResult: 'reconciled' as const, flows: { ...state.flows, sync: 'synced' as const } } : {}) });
+      return true;
+    },
+    lockMockVault: () => { if (!state.account || vaultLocked) return; beforeVaultLock = { result: state.localWriteResult, sync: state.flows.sync }; vault.lock(); vaultLocked = true; update({ ...state, vaultLocked, localWriteResult: 'locked', mockLocalRecord: null }); },
+    unlockMockVault: () => { if (!state.account || !vaultLocked) return; vault.unlock(); vaultLocked = false; const previous = beforeVaultLock; beforeVaultLock = null; update({ ...state, vaultLocked, localWriteResult: previous?.result ?? state.localWriteResult, mockLocalRecord: vault.read(localRecordKey) ?? null, flows: { ...state.flows, sync: previous?.sync ?? state.flows.sync } }); },
     getEpoch: auth.getEpoch,
     isCurrent: auth.isCurrent,
     acceptAccountResponse: (epoch: number, value: unknown) => {

@@ -1,5 +1,56 @@
 # PR-09a 第二轮整改与复审记录
 
+## 第五轮定点整改（2026-10-30～31）
+
+从 `feature/web-pr09a-aurora` 的 `35a6bffbe83b76e99395f14c277888902a72e0df` 继续，保留此前全部提交。第四轮独立复审已关闭历史 pending 分片问题，本轮只修复旧记录已核对时掩盖新写入失败的 P2；本地结果等待 Astra 第五轮独立复审。
+
+### 状态和记录身份
+
+修复前，旧记录的 `reconciled` 状态可在新 epoch 写入因 Vault 锁定失败、解锁及切场景之后，被错误投影为当前已同步。现在 `src/mock/runtime.ts` 为每次写入尝试分配 `attemptId`、采集 epoch 和结果；每个成功记录另有 `recordId`、epoch、版本键及独立核对状态。最新失败优先于旧记录核对状态；只有成功重试生成的新记录先进入 `local_only`，且对应记录收到模拟核对后才显示 `synced`。重复或迟到的旧记录核对不改变新记录或最新失败的投影。
+
+`src/mock/ports.ts` 的内存 Vault 原子写入版本记录与当前别名，失败、锁定或配额不足不留下半写入。旧版本保留，账号切换/撤权锁定并清空旧实例。`src/app/MockWorkbench.tsx` 在模拟区展示记录历史，并区分当前锁定与上次写入因锁定被拒绝。它们均为合成内存行为，不是加密持久化或真实云端核对。
+
+### A–H 状态转换矩阵
+
+以下由 `tests/unit.test.ts` 中 `fifth review: attempt and saved-record identity matrix` 验证 Runtime 的页面同步投影、实际 MemoryVault 版本内容/身份及旧记录保留；B 另由 `tests/fifth-review.browser.spec.ts` 中 `a failed new epoch cannot inherit an old reconciled Vault record after unlock and scene changes` 在真实 Chrome 连续操作验证页面投影、旧/新 epoch 与记录历史。每项均通过。
+
+| 项 | 测试与期望 |
+|---|---|
+| A | 旧记录 pending → 新写入失败 → 解锁、切场景：旧内容不变，最新尝试和同步投影保持失败。 |
+| B | 旧记录 reconciled → 新写入失败 → 解锁、切场景：旧记录保持已核对，最新尝试仍失败；Chrome 验证实际页面不显示已同步。 |
+| C | 重复解锁：保持相同失败尝试、记录和失败投影。 |
+| D | 新采集开始：不替换失败尝试或把旧 epoch 的已核对记录当成当前成功。 |
+| E | 失败后成功重试：生成新 attempt/record ID，实际新版本存在、旧版本保留，新记录为待核对及 `local_only`。 |
+| F | 核对对应新记录后才进入 `synced`，旧记录仍保留。 |
+| G | 旧记录迟到或重复核对不改变新 pending 记录；另测旧 pending 的真实迟到核对不掩盖新失败。 |
+| H | 失败后切账号或撤权：清理尝试及历史；保留旧 Vault 引用并重新解锁，确认两个版本及当前别名均已清空。 |
+
+另测配额、写入失败和锁定时版本键及当前别名的原子性。旧的 52 项契约、41 项单元及 35 项浏览器测试均保留，包括旧 pending 分片迟到回执、租约和事件去重等回归；未修改其断言。
+
+### 隔离验证及证据
+
+Windows，Node v24.19.0、pnpm 10.34.9、Vitest 4.1.12、Chrome 156.0.8078.48。`work/pr09a/fifth-review-check/web/frontend` 从批准基线独立检出，`corepack pnpm install --frozen-lockfile --offline --store-dir <项目 store>` 退出 0；实际被测文件与正式工作树逐项 SHA-256 一致。依赖和临时目录位于项目 `work/pr09a/`。
+
+| 实际命令 | 结果 |
+|---|---|
+| `corepack pnpm typecheck` | 退出 0 |
+| `corepack pnpm lint` | 退出 0 |
+| `corepack pnpm test:contract` | 退出 0，52/52 |
+| `corepack pnpm test:unit` | 退出 0，51/51 |
+| `corepack pnpm build` | 退出 0，生产构建的已知 Mock 入口标记检查通过 |
+| `corepack pnpm test:ui` | 退出 0，36/36，包含生产预览和 Chrome 场景 B |
+| 冻结契约对批准基线 Git diff | 退出 0，无变更 |
+
+同一基线复现测试修复前退出 1（错误 `synced`），修复后退出 0、1/1 通过；源码与 `baseline.log`、`fixed.log` 保存在 `outputs/pr09a/fifth-review/repro/`。Chrome 基线失败与修复后通过日志在 `outputs/pr09a/fifth-review/ui/`；完整门禁日志、`results.txt` 和源码哈希检查在 `outputs/pr09a/fifth-review/`。这些证据与隔离依赖被 Git 忽略，不包含在提交内。生产 Mock 标记检查与预览测试不是全面安全审计。
+
+### 变更、剩余边界与回退
+
+本轮提交文件：`src/mock/runtime.ts`、`src/mock/ports.ts`、`src/app/MockWorkbench.tsx`、`tests/unit.test.ts`、新增 `tests/fifth-review.browser.spec.ts`、`PR09A-ACCEPTANCE.md` 和本报告。未改导航样式、冻结契约、后端或其他工作树。跨课堂脚本复用领域实体 ID 的 P3 仍为 **OPEN**，最迟在 PR-10a 接入真实课堂事件前处理；第四轮记录保留其具体场景。真实 IndexedDB、加密 Vault、云端核对、认证、音频、ASR 和收费服务未实现或测试；原生文字缩放、真实设备和跨浏览器检查仍是后续验收边界。
+
+回退时核对本轮完整 SHA 与后续依赖，使用 `git revert <本轮修复提交完整 SHA>` 创建反向提交并审阅冲突；不 reset、clean 或覆盖历史证据。本轮不 Push、Merge、Tag、Release、部署或开始后续 PR。
+
+---
+
 ## 第四轮针对性整改（2026-10-30）
 
 从 `feature/web-pr09a-aurora` 的 `edce43ecb6792e0d85dd6a91fbb0ea5431f297c0` 继续；此前检查点与历史均保留。以下结果限本地合成数据与内存 Mock，等待 Astra 第四轮独立复审。

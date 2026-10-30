@@ -560,6 +560,114 @@ describe('pending history and vault unlock idempotency', () => {
   });
 });
 
+describe('fifth review: attempt and saved-record identity matrix', () => {
+  function setup(oldSynced: boolean) {
+    const vaults: MemoryVault[] = [];
+    const runtime = createMockRuntime({ createVault: () => { const vault = new MemoryVault(4096); vaults.push(vault); return vault; } });
+    runtime.chooseScenario('05');
+    expect(runtime.simulateLocalWrite(true)).toBe(true);
+    const old = runtime.getState().localRecordHistory[0];
+    const oldData = vaults[0].read(old.vaultKey)!;
+    expect(JSON.parse(oldData)).toMatchObject({ recordId: old.recordId, captureEpochId: old.captureEpochId, account: 'A' });
+    if (oldSynced) expect(runtime.reconcileLocalWrite()).toBe(true);
+    runtime.stop(); expect(runtime.start()).toBe(true);
+    expect(runtime.getState().captureScope!.captureEpochId).not.toBe(old.captureEpochId);
+    runtime.lockMockVault(); expect(runtime.simulateLocalWrite(true)).toBe(false);
+    const attempt = runtime.getState().localWriteAttempt!;
+    expect(attempt).toMatchObject({ result: 'locked', recordId: null, captureEpochId: runtime.getState().captureScope!.captureEpochId });
+    expect(runtime.getState().flows.sync).toBe('failed');
+    runtime.unlockMockVault();
+    return { runtime, vaults, old, oldData, attempt };
+  }
+  it.each([['A', false], ['B', true]] as const)('%s: old pending or reconciled record survives new failure, unlock and scenario change', (_case, oldSynced) => {
+    const { runtime, vaults, old, oldData, attempt } = setup(oldSynced);
+    runtime.chooseScenario('02');
+    expect(vaults[0].read(old.vaultKey)).toBe(oldData);
+    expect(vaults[0].read('synthetic-local-draft')).toBe(oldData);
+    expect(runtime.getState()).toMatchObject({ mockLocalRecord: oldData, localWriteAttempt: attempt, localRecordSync: oldSynced ? 'reconciled' : 'pending', localRecordHistory: [{ ...old, sync: oldSynced ? 'reconciled' : 'pending' }], flows: { sync: 'failed' } });
+  });
+  it('C: repeated unlock cannot clear the latest failed attempt over a reconciled record', () => {
+    const { runtime, vaults, old, oldData, attempt } = setup(true);
+    const snapshot = runtime.getState();
+    runtime.unlockMockVault(); runtime.unlockMockVault();
+    expect(runtime.getState()).toBe(snapshot);
+    expect(runtime.getState()).toMatchObject({ vaultLocked: false, localWriteResult: 'locked', localWriteAttempt: attempt, flows: { sync: 'failed' } });
+    expect(vaults[0].read(old.vaultKey)).toBe(oldData);
+  });
+  it('D: starting another capture does not replace failed-attempt identity or mark old record synced as current', () => {
+    const { runtime, vaults, old, oldData, attempt } = setup(true);
+    runtime.chooseScenario('02'); expect(runtime.start()).toBe(true);
+    expect(runtime.getState().captureScope!.captureEpochId).not.toBe(attempt.captureEpochId);
+    expect(runtime.getState()).toMatchObject({ localWriteAttempt: attempt, localRecordSync: 'reconciled', flows: { capture: 'recording', sync: 'failed' } });
+    expect(vaults[0].read(old.vaultKey)).toBe(oldData);
+  });
+  it('E and F: a successful new write becomes pending until that exact record is reconciled', () => {
+    const { runtime, vaults, old, oldData, attempt } = setup(true);
+    expect(runtime.simulateLocalWrite(true)).toBe(true);
+    const current = runtime.getState().localRecordHistory.at(-1)!;
+    const currentAttempt = runtime.getState().localWriteAttempt!;
+    expect(current.recordId).not.toBe(old.recordId);
+    expect(currentAttempt.attemptId).not.toBe(attempt.attemptId);
+    expect(currentAttempt).toMatchObject({ result: 'stored', recordId: current.recordId, captureEpochId: attempt.captureEpochId });
+    expect(JSON.parse(vaults[0].read(current.vaultKey)!)).toMatchObject({ recordId: current.recordId, captureEpochId: attempt.captureEpochId });
+    expect(vaults[0].read(old.vaultKey)).toBe(oldData);
+    expect(runtime.getState()).toMatchObject({ localRecordSync: 'pending', flows: { sync: 'local_only' } });
+    expect(runtime.reconcileLocalWrite(current.recordId)).toBe(true);
+    expect(runtime.getState()).toMatchObject({ localRecordSync: 'reconciled', localRecordHistory: [{ ...old, sync: 'reconciled' }, { ...current, sync: 'reconciled' }], flows: { sync: 'synced' } });
+    expect(vaults[0].read(old.vaultKey)).toBe(oldData);
+  });
+  it('G: a duplicate or late receipt for the old record cannot reconcile a newer pending record', () => {
+    const { runtime, vaults, old, oldData } = setup(true);
+    expect(runtime.simulateLocalWrite(true)).toBe(true);
+    const current = runtime.getState().localRecordHistory.at(-1)!;
+    const before = runtime.getState();
+    expect(runtime.reconcileLocalWrite(old.recordId)).toBe(true);
+    expect(runtime.reconcileLocalWrite(old.recordId)).toBe(true);
+    expect(runtime.getState()).toBe(before);
+    expect(runtime.getState()).toMatchObject({ localWriteAttempt: { recordId: current.recordId }, localRecordSync: 'pending', flows: { sync: 'local_only' } });
+    expect(vaults[0].read(old.vaultKey)).toBe(oldData);
+    expect(JSON.parse(vaults[0].read(current.vaultKey)!).recordId).toBe(current.recordId);
+  });
+  it('a genuinely late receipt for an older pending record cannot mask the latest failed attempt', () => {
+    const { runtime, vaults, old, oldData, attempt } = setup(false);
+    expect(runtime.reconcileLocalWrite(old.recordId)).toBe(true);
+    expect(runtime.getState()).toMatchObject({ localWriteAttempt: attempt, localRecordSync: 'reconciled', localRecordHistory: [{ ...old, sync: 'reconciled' }], flows: { sync: 'failed' } });
+    const afterReceipt = runtime.getState();
+    expect(runtime.reconcileLocalWrite(old.recordId)).toBe(true);
+    expect(runtime.getState()).toBe(afterReceipt);
+    expect(vaults[0].read(old.vaultKey)).toBe(oldData);
+  });
+  it.each(['switch', 'revoke'] as const)('H: %s locks and clears all old-account versions and failed attempts', action => {
+    const { runtime, vaults, old, attempt } = setup(true);
+    expect(runtime.getState().localWriteAttempt).toEqual(attempt);
+    expect(runtime.simulateLocalWrite(true)).toBe(true);
+    const second = runtime.getState().localRecordHistory.at(-1)!;
+    expect(second.recordId).not.toBe(old.recordId);
+    expect(vaults[0].read(old.vaultKey)).toBeTruthy();
+    expect(vaults[0].read(second.vaultKey)).toBeTruthy();
+    runtime.lockMockVault(); expect(runtime.simulateLocalWrite(true)).toBe(false);
+    expect(runtime.getState().localRecordHistory).toHaveLength(2);
+    if (action === 'switch') runtime.switchAccount(); else runtime.revokeAccount();
+    expect(runtime.getState()).toMatchObject({ account: action === 'switch' ? 'B' : null, localWriteAttempt: null, localRecordHistory: [], localRecordSync: 'none', mockLocalRecord: null });
+    expect(vaults[0].read(old.vaultKey)).toBeUndefined();
+    vaults[0].unlock();
+    expect(vaults[0].read(old.vaultKey)).toBeUndefined();
+    expect(vaults[0].read(second.vaultKey)).toBeUndefined();
+    expect(vaults[0].read('synthetic-local-draft')).toBeUndefined();
+    expect(runtime.reconcileLocalWrite(old.recordId)).toBe(false);
+  });
+  it('keeps version and current alias atomic when quota or write failure rejects a new version', () => {
+    const vault = new MemoryVault(48); vault.unlock();
+    expect(vault.write('v1', 'old', false, ['current'])).toBe('stored');
+    expect(vault.write('v2', 'x'.repeat(40), false, ['current'])).toBe('quota');
+    expect(vault.read('v1')).toBe('old'); expect(vault.read('current')).toBe('old'); expect(vault.read('v2')).toBeUndefined();
+    expect(vault.write('v2', 'new', true, ['current'])).toBe('write_failed');
+    expect(vault.read('current')).toBe('old'); expect(vault.read('v2')).toBeUndefined();
+    vault.lock(); expect(vault.write('v2', 'new', false, ['current'])).toBe('locked');
+    vault.unlock(); expect(vault.read('v1')).toBe('old'); expect(vault.read('current')).toBe('old'); expect(vault.read('v2')).toBeUndefined();
+  });
+});
+
 describe('deterministic in-memory ports', () => {
   it('only advances simulated time during recording and never invokes a microphone', () => {
     const capture = new MockCapturePort();

@@ -41,10 +41,12 @@ export class MemoryVault {
   constructor(private readonly quotaBytes = 1024) {}
   unlock() { this.locked = false; }
   lock() { this.locked = true; }
-  write(key: string, value: string, fail = false): 'stored' | 'locked' | 'quota' | 'write_failed' {
+  write(key: string, value: string, fail = false, aliases: string[] = []): 'stored' | 'locked' | 'quota' | 'write_failed' {
     if (this.locked) return 'locked';
     if (fail) return 'write_failed';
     const next = new Map(this.records); next.set(key, value);
+    // Version and current-record aliases commit atomically, including quota failures.
+    for (const alias of aliases) next.set(alias, value);
     const bytes = [...next].reduce((n, [k, v]) => n + new TextEncoder().encode(k + v).length, 0);
     if (bytes > this.quotaBytes) return 'quota';
     this.records = next;
