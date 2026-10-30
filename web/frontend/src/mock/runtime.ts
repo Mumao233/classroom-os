@@ -1,7 +1,7 @@
 import { useState, useSyncExternalStore } from 'react';
 import type { ClassroomOSWebV1EventEnvelope } from '../generated/events';
 import { eventScripts, type EventScriptName } from './event-scripts';
-import { MockCapturePort, MockEventClient, MockUploadPort } from './ports';
+import { MemoryVault, MockCapturePort, MockEventClient, MockUploadPort } from './ports';
 
 type Capture = 'idle' | 'recording' | 'paused' | 'local_only' | 'failed' | 'ended';
 type Upload = 'pending' | 'uploading' | 'durable' | 'failed';
@@ -13,7 +13,9 @@ export type MockAccount = 'A' | 'B';
 type Projection = { portCaptureState: Capture; uploadPending: boolean; partial: string | null; finalText: string | null; finalRevision: number; frameReceived: boolean; chunkDurable: boolean; audioDeleted: boolean; classroomDeleted: boolean; leaseLost: boolean; mayHaveCharged: boolean; delivered: number };
 type CaptureScope = { classSessionId: string; captureEpochId: string; fenceToken: number; chunkId: string };
 type Task = { classroomId: string | null; revision: number; state: Ai; mayHaveCharged: boolean; order: number };
-type State = { currentClassroomId: string; tasks: Record<string, Task>; leaseValid: boolean; active: boolean; account: MockAccount | null; epoch: number; scenario: string; flows: Flows; accountResponse: unknown | null; captureScope: CaptureScope | null; eventProjection: Projection };
+type LocalWriteResult = 'none' | 'stored' | 'write_failed' | 'locked' | 'quota' | 'reconciled';
+type DurableUpload = { classSessionId: string; captureEpochId: string; chunkId: string; seq: number; receiptId: string };
+type State = { currentClassroomId: string; tasks: Record<string, Task>; leaseValid: boolean; active: boolean; account: MockAccount | null; epoch: number; scenario: string; flows: Flows; accountResponse: unknown | null; captureScope: CaptureScope | null; eventProjection: Projection; localWriteResult: LocalWriteResult; mockLocalRecord: string | null; durableUploads: DurableUpload[] };
 const emptyFlows = (): Flows => ({ capture: 'idle', upload: 'pending', asr: 'idle', ai: 'idle', sync: 'synced' });
 const emptyProjection = (): Projection => ({ portCaptureState: 'idle', uploadPending: true, partial: null, finalText: null, finalRevision: 0, frameReceived: false, chunkDurable: false, audioDeleted: false, classroomDeleted: false, leaseLost: false, mayHaveCharged: false, delivered: 0 });
 // Fixed synthetic lease: resource identifiers are never inferred from the current route.
@@ -29,13 +31,21 @@ export function createAuthEpoch() {
   return { getEpoch: () => epoch, invalidate: () => ++epoch, isCurrent: (value: number) => value === epoch };
 }
 
-export function createMockRuntime() {
+export function createMockRuntime(options: { createVault?: () => MemoryVault } = {}) {
   const auth = createAuthEpoch();
-  let state: State = { currentClassroomId: mockCaptureScope().classSessionId, tasks: {}, leaseValid: true, active: false, account: 'A', epoch: 0, scenario: '02', flows: emptyFlows(), accountResponse: null, captureScope: mockCaptureScope(), eventProjection: emptyProjection() };
+  const createVault = options.createVault ?? (() => new MemoryVault());
+  let vault = createVault();
+  vault.unlock();
+  let beforeVaultLock: { result: LocalWriteResult; sync: Sync } | null = null;
+  const localRecordKey = 'synthetic-local-draft';
+  let state: State = { currentClassroomId: mockCaptureScope().classSessionId, tasks: {}, leaseValid: true, active: false, account: 'A', epoch: 0, scenario: '02', flows: emptyFlows(), accountResponse: null, captureScope: mockCaptureScope(), eventProjection: emptyProjection(), localWriteResult: 'none', mockLocalRecord: null, durableUploads: [] };
   const listeners = new Set<() => void>();
   let events = new MockEventClient();
   let stopEvents = () => {};
   let durableIds = new Set<string>();
+  // One identity per logical scripted event and resource lifecycle. Replays reuse it;
+  // a new epoch generates a different identity without weakening event deduplication.
+  let scriptEventIds = new Map<string, string>();
   let finalSegments = new Map<string, { classroomId: string; sequence: number; revision: number; text: string }>();
   let tasks = new Map<string, Task>();
   let taskOrder = 0;
@@ -47,7 +57,6 @@ export function createMockRuntime() {
   let deletedClassrooms = new Set<string>();
   let deletedAudioIds = new Set<string>();
   const update = (next: State) => { state = next; listeners.forEach(listener => listener()); };
-  const setFlow = <K extends keyof Flows>(flow: K, value: Flows[K]) => update({ ...state, flows: { ...state.flows, [flow]: value } });
   const taskProjection = (classroomId: string, source = tasks) => {
     const matching = [...source.values()].filter(task => task.classroomId === classroomId);
     // Preserve an unresolved unknown as the primary state, even if a later task succeeds.
@@ -64,9 +73,11 @@ export function createMockRuntime() {
   const clearScope = (account: MockAccount | null) => {
     // Invalidate first: synchronous teardown must win over any already queued callbacks.
     const nextEpoch = auth.invalidate();
-    stopCapture('ended'); stopEvents(); events.clear(); durableIds = new Set(); finalSegments = new Map(); partialSegments = new Map(); tasks = new Map(); taskOrder = 0; deletedClassrooms = new Set(); deletedAudioIds = new Set(); resetPorts();
+    stopCapture('ended'); stopEvents(); events.clear(); durableIds = new Set(); scriptEventIds = new Map(); finalSegments = new Map(); partialSegments = new Map(); tasks = new Map(); taskOrder = 0; deletedClassrooms = new Set(); deletedAudioIds = new Set(); resetPorts();
+    vault.lock(); vault.clear(); vault = createVault(); beforeVaultLock = null;
+    if (account) vault.unlock();
     const scope = account ? freshScope(mockCaptureScope().classSessionId) : null;
-    update({ ...state, account, epoch: nextEpoch, currentClassroomId: mockCaptureScope().classSessionId, tasks: {}, leaseValid: Boolean(scope), active: false, scenario: '02', accountResponse: null, captureScope: scope, flows: emptyFlows(), eventProjection: { ...emptyProjection(), uploadPending: Boolean(account) } });
+    update({ ...state, account, epoch: nextEpoch, currentClassroomId: mockCaptureScope().classSessionId, tasks: {}, leaseValid: Boolean(scope), active: false, scenario: '02', accountResponse: null, captureScope: scope, flows: emptyFlows(), localWriteResult: 'none', mockLocalRecord: null, durableUploads: [], eventProjection: { ...emptyProjection(), uploadPending: Boolean(account) } });
     if (account) connectEvents();
   };
   const handleEvent = (event: ClassroomOSWebV1EventEnvelope, eventEpoch: number) => {
@@ -86,6 +97,7 @@ export function createMockRuntime() {
     const projection = { ...state.eventProjection, delivered: state.eventProjection.delivered + 1 };
     let flows = state.flows;
     let active = state.active;
+    let durableUploads = state.durableUploads;
     switch (event.type) {
       case 'transcript.partial': {
         const key = segmentKey(event.data.stream_id, event.data.segment_id);
@@ -112,7 +124,7 @@ export function createMockRuntime() {
         if (!deletedAudioIds.has(event.data.chunk_id) && upload.frameReceived(event.data.frame_seq)) { projection.frameReceived = true; projection.uploadPending = upload.pending(event.data.frame_seq); }
         break;
       case 'audio.chunk_durable':
-        if (!deletedAudioIds.has(event.data.chunk_id) && !deletedClassrooms.has(event.data.class_session_id) && upload.pending(event.data.seq)) { upload.durable(event.data.seq); projection.uploadPending = upload.pending(event.data.seq); projection.chunkDurable = true; flows = { ...flows, upload: 'durable' }; }
+        if (!deletedAudioIds.has(event.data.chunk_id) && !deletedClassrooms.has(event.data.class_session_id) && upload.pending(event.data.seq)) { upload.durable(event.data.seq); projection.uploadPending = upload.pending(event.data.seq); projection.chunkDurable = true; flows = { ...flows, upload: 'durable' }; durableUploads = [...durableUploads, { classSessionId: event.data.class_session_id, captureEpochId: event.data.capture_epoch_id, chunkId: event.data.chunk_id, seq: event.data.seq, receiptId: event.data.receipt_id }]; }
         break;
       case 'task.changed': {
         const old = tasks.get(event.data.task_id);
@@ -142,23 +154,31 @@ export function createMockRuntime() {
     }
     const invalidated = event.type === 'capture.lease_lost' || (event.type === 'object.deleted' && event.data.object_type === 'class_session' && scope?.classSessionId === event.data.object_id);
     projection.portCaptureState = capture.state;
-    update({ ...state, active, flows, leaseValid: invalidated ? false : state.leaseValid, tasks: Object.fromEntries(tasks), eventProjection: projection });
+    update({ ...state, active, flows, durableUploads, leaseValid: invalidated ? false : state.leaseValid, tasks: Object.fromEntries(tasks), eventProjection: projection });
   };
   function connectEvents() {
     events = new MockEventClient();
     const scopeEpoch = state.epoch;
     stopEvents = events.subscribe(event => handleEvent(event, scopeEpoch));
   }
+  const scriptedId = (key: string) => {
+    let id = scriptEventIds.get(key);
+    if (!id) { id = crypto.randomUUID(); scriptEventIds.set(key, id); }
+    return id;
+  };
   const bindScriptEvent = (event: ClassroomOSWebV1EventEnvelope): ClassroomOSWebV1EventEnvelope => {
     const scope = state.captureScope;
     if (!scope) return event;
-    if (event.type === 'capture.lease_lost') return { ...event, data: { ...event.data, class_session_id: scope.classSessionId, capture_epoch_id: scope.captureEpochId, fence_token: scope.fenceToken } };
-    if (event.type === 'audio.chunk_durable') return { ...event, data: { ...event.data, class_session_id: scope.classSessionId, capture_epoch_id: scope.captureEpochId, chunk_id: scope.chunkId } };
+    if (event.type === 'capture.lease_lost') return { ...event, event_id: scriptedId(`${event.type}:${event.event_id}:${scope.captureEpochId}:${scope.fenceToken}`), data: { ...event.data, class_session_id: scope.classSessionId, capture_epoch_id: scope.captureEpochId, fence_token: scope.fenceToken } };
+    if (event.type === 'audio.chunk_durable') return { ...event, event_id: scriptedId(`${event.type}:${event.event_id}:${scope.captureEpochId}:${scope.chunkId}`), data: { ...event.data, class_session_id: scope.classSessionId, capture_epoch_id: scope.captureEpochId, chunk_id: scope.chunkId, receipt_id: scriptedId(`receipt:${event.data.receipt_id}:${scope.captureEpochId}:${scope.chunkId}`) } };
     if (event.type === 'capture.frame_received') return { ...event, data: { ...event.data, chunk_id: scope.chunkId } };
-    if (event.type === 'object.deleted') return { ...event, data: { ...event.data, object_id: event.data.object_type === 'audio' ? scope.chunkId : event.data.object_type === 'class_session' ? scope.classSessionId : event.data.object_id } };
+    if (event.type === 'object.deleted') {
+      const objectId = event.data.object_type === 'audio' ? scope.chunkId : event.data.object_type === 'class_session' ? scope.classSessionId : event.data.object_id;
+      return { ...event, event_id: scriptedId(`${event.type}:${event.event_id}:${event.data.object_type}:${objectId}`), data: { ...event.data, object_id: objectId, deletion_id: scriptedId(`deletion:${event.data.deletion_id}:${event.data.object_type}:${objectId}`) } };
+    }
     if (event.type === 'transcript.partial') return { ...event, data: { ...event.data, class_session_id: state.currentClassroomId } };
-    if (event.type === 'transcript.final') return { ...event, data: { ...event.data, class_session_id: state.currentClassroomId } };
-    if (event.type === 'task.changed') return { ...event, data: { ...event.data, class_session_id: state.currentClassroomId } };
+    if (event.type === 'transcript.final') return { ...event, event_id: scriptedId(`${event.type}:${event.event_id}:${state.currentClassroomId}:${event.data.stream_id}:${event.data.segment_id}:${event.data.revision}`), data: { ...event.data, class_session_id: state.currentClassroomId } };
+    if (event.type === 'task.changed') return { ...event, event_id: scriptedId(`${event.type}:${event.event_id}:${state.currentClassroomId}:${event.data.task_id}:${event.data.revision}`), data: { ...event.data, class_session_id: state.currentClassroomId } };
     return event;
   };
   connectEvents();
@@ -167,9 +187,13 @@ export function createMockRuntime() {
     subscribe: (listener: () => void) => { listeners.add(listener); return () => listeners.delete(listener); },
     start: () => {
       if (!state.account || state.active || !state.leaseValid || !state.captureScope || state.captureScope.classSessionId !== state.currentClassroomId || deletedClassrooms.has(state.captureScope.classSessionId)) return false;
-      if (capture.state === 'ended') capture = new MockCapturePort();
+      if (capture.state === 'ended') {
+        const scope = freshScope(state.currentClassroomId);
+        resetPorts();
+        update({ ...state, captureScope: scope, flows: { ...state.flows, upload: 'pending' }, eventProjection: { ...state.eventProjection, frameReceived: false, chunkDurable: false, uploadPending: true, audioDeleted: false, leaseLost: false, portCaptureState: 'idle' } });
+      }
       if (!capture.command('recording')) return false;
-      update({ ...state, active: true, flows: { ...state.flows, capture: 'recording', upload: 'pending', asr: 'idle', sync: 'synced' }, eventProjection: { ...state.eventProjection, portCaptureState: capture.state } });
+      update({ ...state, active: true, flows: { ...state.flows, capture: 'recording', upload: 'pending', asr: 'idle' }, eventProjection: { ...state.eventProjection, portCaptureState: capture.state } });
       return true;
     },
     stop: () => { stopCapture('ended'); update({ ...state, active: false, flows: { ...state.flows, capture: 'ended' }, eventProjection: { ...state.eventProjection, portCaptureState: capture.state } }); },
@@ -191,16 +215,17 @@ export function createMockRuntime() {
       const scope = freshScope(mockCaptureScope().classSessionId);
       const recording = ['03', '04', '05'].includes(scenario);
       if (recording) capture.command('recording');
-      if (scenario === '03') upload.durable(1);
       const projected = taskProjection(scope.classSessionId);
-      update({ ...state, scenario, currentClassroomId: scope.classSessionId, captureScope: scope, leaseValid: true, tasks: Object.fromEntries(tasks), eventProjection: { ...emptyProjection(), mayHaveCharged: projected.risk, portCaptureState: capture.state, chunkDurable: scenario === '03', uploadPending: upload.pending(1) }, active: recording, flows: {
+      update({ ...state, scenario, currentClassroomId: scope.classSessionId, captureScope: scope, leaseValid: true, tasks: Object.fromEntries(tasks), eventProjection: { ...emptyProjection(), mayHaveCharged: projected.risk, portCaptureState: capture.state, uploadPending: upload.pending(1) }, active: recording, flows: {
         capture: recording ? 'recording' : 'idle',
-        upload: scenario === '04' ? 'failed' : scenario === '03' ? 'durable' : 'pending',
+        upload: scenario === '04' ? 'failed' : 'pending',
         asr: recording ? 'streaming' : 'idle',
         ai: projected.ai,
-        sync: scenario === '05' ? 'failed' : 'synced',
+        sync: state.localWriteResult === 'stored' ? 'local_only' : state.localWriteResult === 'reconciled' ? 'synced' : ['locked', 'quota', 'write_failed'].includes(state.localWriteResult) || scenario === '05' ? 'failed' : 'synced',
       } });
       connectEvents();
+      // This synthetic durable fixture uses the same receipt path as user-triggered events.
+      if (scenario === '03') events.emit(bindScriptEvent(eventScripts.upload[1]));
       if (scenario === '06' && ![...tasks.values()].some(task => task.classroomId === scope.classSessionId && task.state === 'unknown' && task.mayHaveCharged)) {
         const event = eventScripts.taskUnknown[0];
         events.emit({ ...event, event_id: crypto.randomUUID(), data: { ...event.data, task_id: crypto.randomUUID(), class_session_id: scope.classSessionId } });
@@ -209,8 +234,17 @@ export function createMockRuntime() {
     switchAccount: () => clearScope(state.account === 'A' ? 'B' : 'A'),
     revokeAccount: () => clearScope(null),
     loginAccount: (account: MockAccount) => clearScope(account),
-    simulateLocalWrite: (success: boolean) => { if (!state.account) return false; setFlow('sync', success ? 'local_only' : 'failed'); return true; },
-    reconcileLocalWrite: () => { if (!state.account || state.flows.sync !== 'local_only') return false; setFlow('sync', 'synced'); return true; },
+    simulateLocalWrite: (success: boolean) => {
+      if (!state.account) return false;
+      const value = JSON.stringify({ account: state.account, classroomId: state.currentClassroomId, captureEpochId: state.captureScope?.captureEpochId ?? null, kind: 'synthetic-only' });
+      const result = vault.write(localRecordKey, value, !success);
+      if (result === 'locked') beforeVaultLock = null;
+      update({ ...state, localWriteResult: result, mockLocalRecord: vault.read(localRecordKey) ?? null, flows: { ...state.flows, sync: result === 'stored' ? 'local_only' : 'failed' } });
+      return result === 'stored';
+    },
+    reconcileLocalWrite: () => { if (!state.account || state.flows.sync !== 'local_only' || !vault.read(localRecordKey)) return false; update({ ...state, localWriteResult: 'reconciled', flows: { ...state.flows, sync: 'synced' } }); return true; },
+    lockMockVault: () => { if (!state.account) return; if (state.localWriteResult !== 'locked') beforeVaultLock = { result: state.localWriteResult, sync: state.flows.sync }; vault.lock(); update({ ...state, localWriteResult: 'locked', mockLocalRecord: null }); },
+    unlockMockVault: () => { if (!state.account) return; vault.unlock(); const previous = beforeVaultLock; beforeVaultLock = null; update({ ...state, localWriteResult: previous?.result ?? 'none', mockLocalRecord: vault.read(localRecordKey) ?? null, flows: { ...state.flows, sync: previous?.sync ?? state.flows.sync } }); },
     getEpoch: auth.getEpoch,
     isCurrent: auth.isCurrent,
     acceptAccountResponse: (epoch: number, value: unknown) => {

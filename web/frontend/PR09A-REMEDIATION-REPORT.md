@@ -1,5 +1,45 @@
 # PR-09a 第二轮整改与复审记录
 
+## 第三轮针对性整改（2026-10-30）
+
+在 `feature/web-pr09a-aurora` 从 `60b0eaf8f8da978b541f9480b2fcaf486a4fad37` 继续，保留全部历史。以下为本地合成模拟结果，等待 Astra 第三轮独立复审；本轮未重新设计导航，也不宣布上一轮两项部分关闭问题已关闭。
+
+| 问题 | 修复前 | 修复后及代码位置 |
+|---|---|---|
+| P2-01：续租去重 | 模板事件沿用相同 `event_id`，第二轮 durable 与 lease loss 被第一次投递的去重记录吞掉。 | `src/mock/runtime.ts` 的 `scriptedId` 和 `bindScriptEvent` 为逻辑模板与采集 epoch/fence/chunk 组合缓存稳定事件身份；同一事件重复投递复用 ID，新生命周期获得新 ID，durable `receipt_id` 也按资源稳定绑定。去重和旧作用域检查保留。 |
+| P2-02：Vault 接线 | `simulateLocalWrite` 直接改同步状态，不调用 Vault；页面自己的局部状态可错误显示成功。 | Runtime 实际调用 `MemoryVault.write`，依据 `stored`、`locked`、`quota`、`write_failed` 投影结果；页面 `MockWorkbench.tsx` 展示 Runtime 返回的状态和合成记录。切号或撤销会锁定并清空旧实例。停止重启及锁定解锁不会把未核对记录伪称已同步。仅为内存替身。 |
+| P2-03：新采集继承旧确认 | 停止后新建 CapturePort，但旧 UploadPort 和 durable 投影仍在，出现 pending 与已确认并存。 | `start` 为新轮次建立新的 epoch、fence、chunk 与 Capture/Upload 端口，清除当前 ACK 投影；`durableUploads` 保留同账号旧轮合成持久回执。错作用域旧事件不能改变新轮。场景 03 的持久示例也经同一事件及端口路径。 |
+| P3：稳定选中截图 | 原 selected 截图可能处于动画中间帧。 | Chrome 正常动态下点击“课堂”，等待 600ms 后每隔 120ms 测量四次，确认无运行中动画、`aria-current=page`、浮层和入口坐标一致后截图。390×844 两主题截图及局部放大图在 `outputs/pr09a/third-review/visual/`；原截图保留。 |
+
+新增单元测试位于 `tests/unit.test.ts`：`replays stable logical ids across two lease lifecycles without accepting old receipts or losses`、`starts a fresh upload lifecycle after stop`（首轮 pending/durable 两种情况）、`uses the real MemoryVault result and locks and clears old account data on switch and revocation`、`does not mark a saved local record synced by restarting capture or locking and unlocking`、`records scenario durable receipts through the same upload event path`。测试保留旧 Vault 引用，在锁定后重新解锁以验证内容确已清空，而非仅不可读取。
+
+新增 `tests/lifecycle.browser.spec.ts` 三个用例：`two capture lifecycles show only their own upload acknowledgement`、`both renewed lease lifecycles accept their own durable and lease-loss events`、`mock Vault results shown on the page track writes, locking, failure and account switch`；覆盖两轮采集/租约、五流投影、真实合成记录、失败、锁定、切号及撤销后重新登录。原测试未删除、断言未降低。
+
+### 本轮隔离验证
+
+Windows，Node v24.19.0、pnpm 10.34.9、Vitest 4.1.12、Chrome 156.0.8078.48。目录 `work/pr09a/third-review-check/web/frontend` 从整改起点独立检出，执行 `corepack pnpm install --frozen-lockfile --offline --store-dir <项目 store>` 退出 0；被测修改文件与正式工作树逐项哈希核对。依赖与临时文件使用项目 `work/pr09a/`，未更动原有依赖目录。
+
+| 实际命令 | 结果 |
+|---|---|
+| `corepack pnpm typecheck` | 退出 0 |
+| `corepack pnpm lint` | 退出 0；最终浏览器测试补强后复跑退出 0 |
+| `corepack pnpm test:contract` | 退出 0，52/52 |
+| `corepack pnpm test:unit` | 退出 0，36/36 |
+| `corepack pnpm build` | 退出 0，已知 Mock 入口标记检查通过 |
+| `corepack pnpm test:ui` | 最终退出 0，32/32 |
+
+同一组独立复现测试在原始 `60b0eaf` 上三项均失败（第二轮 durable、未调用 Vault、重启继承确认），修复后相同测试 3/3 通过；失败及通过日志分别是 `outputs/pr09a/third-review/baseline-repro.log`、`baseline-repro-after.log`，测试源保留在同目录。浏览器基线复现失败、修复后通过日志保存在 `outputs/pr09a/third-review/ui-agent/`。最终完整日志位于 `outputs/pr09a/third-review/`；截图、日志和隔离依赖被 Git 忽略，不包含在提交内。
+
+### 截图、变更清单和剩余限制
+
+稳定选中截图为 `visual/react-390-day-selected-stable.png` 和 `visual/react-390-night-selected-stable.png`；对应放大的导航截图及 `stable-selection-measurements.json` 同目录。两主题导航均为 x=16、y=752、358×78；选中层与当前入口均为 x=195、y=758、86.5×66；四次采样一致。截图环境为桌面 Chrome 的 390px 视口，不代表真实 iPhone 的 Safe Area 或物理折射。
+
+本轮提交文件：`src/mock/runtime.ts`、`src/app/MockWorkbench.tsx`、`tests/unit.test.ts`、新增 `tests/lifecycle.browser.spec.ts`、`PR09A-ACCEPTANCE.md`、本报告。未修改冻结契约、其他工作树、后端或 Windows 本地版。Mock 内存历史和 Vault 并非真实持久化、加密、认证、录音或服务端授权；原生文字缩放、真实设备/读屏器和跨浏览器等已有缺口仍待验证。无 PostgreSQL、真实服务或收费调用。
+
+若需安全撤销，在确认本轮修复提交 SHA 后执行 `git revert <SHA>`，审阅后续依赖和冲突，保留此前提交及证据；不执行 reset、clean 或强制覆盖。不 Push、Merge、Tag、Release、部署或开始后续 PR。
+
+---
+
 2026-10-30，中国时间。工作树 `J:\class-assistant\worktrees\web-pr09a-aurora`，分支 `feature/web-pr09a-aurora`；整改起点 `b134db9e1eee54c18fd3147accc39932a91e3186`，保留检查点 `0e1c818c4e1a583de8c3a378b3bc00d58c4b1bde` 和 PR-01 基线 `1c3ef02eaba060d9ca9bc173e5bf1b8ab906ee5f`。本报告的通过均限定于本地合成数据，等待 Astra 独立复审；不是生产安全或真实服务验收。
 
 ## 问题、修复与新增测试

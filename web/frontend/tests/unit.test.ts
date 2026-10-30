@@ -299,6 +299,142 @@ describe('revocation, isolated tasks and segment projection', () => {
   });
 });
 
+describe('independent capture and vault lifecycles', () => {
+  it('replays stable logical ids across two lease lifecycles without accepting old receipts or losses', () => {
+    const runtime = createMockRuntime();
+    const observed: ClassroomOSWebV1EventEnvelope[] = [];
+    runtime.getEventClient().subscribe(event => observed.push(event));
+    expect(runtime.start()).toBe(true);
+    const firstScope = runtime.getState().captureScope!;
+    runtime.runEventScript('upload');
+    const firstReceipt = observed.find(event => event.type === 'audio.chunk_durable');
+    expect(firstReceipt?.type).toBe('audio.chunk_durable');
+    expect(runtime.getState()).toMatchObject({ flows: { upload: 'durable' }, eventProjection: { chunkDurable: true, uploadPending: false } });
+    const delivered = runtime.getState().eventProjection.delivered;
+    runtime.getEventClient().emit(firstReceipt!);
+    expect(runtime.getState().eventProjection.delivered).toBe(delivered);
+    expect(runtime.getState().durableUploads).toHaveLength(1);
+    runtime.runEventScript('leaseLoss');
+    const firstLoss = observed.find(event => event.type === 'capture.lease_lost')!;
+    expect(runtime.getState()).toMatchObject({ active: false, leaseValid: false, flows: { capture: 'failed' } });
+    expect(runtime.acquireMockLease()).toBe(true);
+    const secondScope = runtime.getState().captureScope!;
+    expect(secondScope.captureEpochId).not.toBe(firstScope.captureEpochId);
+    expect(secondScope.chunkId).not.toBe(firstScope.chunkId);
+    expect(secondScope.fenceToken).toBeGreaterThan(firstScope.fenceToken);
+    expect(runtime.start()).toBe(true);
+    runtime.getEventClient().emit(firstReceipt!);
+    runtime.getEventClient().emit(firstLoss);
+    expect(runtime.getState()).toMatchObject({ active: true, leaseValid: true, flows: { capture: 'recording', upload: 'pending' }, eventProjection: { chunkDurable: false, uploadPending: true } });
+    runtime.runEventScript('upload');
+    const receipts = observed.filter(event => event.type === 'audio.chunk_durable');
+    const secondReceipt = receipts.at(-1)!;
+    expect(secondReceipt.event_id).not.toBe(firstReceipt!.event_id);
+    expect(secondReceipt.data.receipt_id).not.toBe(firstReceipt!.data.receipt_id);
+    expect(secondReceipt.data.chunk_id).toBe(secondScope.chunkId);
+    expect(secondReceipt.data.capture_epoch_id).toBe(secondScope.captureEpochId);
+    expect(runtime.getState()).toMatchObject({ flows: { upload: 'durable' }, eventProjection: { chunkDurable: true, uploadPending: false } });
+    expect(runtime.getState().durableUploads).toHaveLength(2);
+    const afterReceipt = runtime.getState().eventProjection.delivered;
+    runtime.runEventScript('upload');
+    const replay = observed.filter(event => event.type === 'audio.chunk_durable').at(-1)!;
+    expect(replay.event_id).toBe(secondReceipt.event_id);
+    expect(replay.data.receipt_id).toBe(secondReceipt.data.receipt_id);
+    // The frame is ephemeral; the repeated durable event itself is discarded.
+    expect(runtime.getState().eventProjection.delivered).toBe(afterReceipt + 1);
+    expect(runtime.getState().durableUploads).toHaveLength(2);
+    runtime.runEventScript('leaseLoss');
+    const losses = observed.filter(event => event.type === 'capture.lease_lost');
+    expect(losses.at(-1)!.event_id).not.toBe(firstLoss.event_id);
+    expect(runtime.getState()).toMatchObject({ active: false, leaseValid: false, flows: { capture: 'failed' } });
+  });
+  it.each([false, true])('starts a fresh upload lifecycle after stop (first durable=%s)', durable => {
+    const runtime = createMockRuntime();
+    const observed: ClassroomOSWebV1EventEnvelope[] = [];
+    runtime.getEventClient().subscribe(event => observed.push(event));
+    expect(runtime.start()).toBe(true);
+    const firstScope = runtime.getState().captureScope!;
+    expect(runtime.getState()).toMatchObject({ flows: { capture: 'recording', upload: 'pending' }, eventProjection: { chunkDurable: false, uploadPending: true } });
+    if (durable) runtime.runEventScript('upload');
+    const firstReceipt = observed.find(event => event.type === 'audio.chunk_durable');
+    const firstFrame = observed.find(event => event.type === 'capture.frame_received') ?? { ...eventScripts.upload[0], data: { ...eventScripts.upload[0].data, chunk_id: firstScope.chunkId } };
+    runtime.stop();
+    expect(runtime.start()).toBe(true);
+    const secondScope = runtime.getState().captureScope!;
+    expect(secondScope.captureEpochId).not.toBe(firstScope.captureEpochId);
+    expect(secondScope.chunkId).not.toBe(firstScope.chunkId);
+    expect(secondScope.fenceToken).toBeGreaterThan(firstScope.fenceToken);
+    runtime.getEventClient().emit(firstFrame);
+    if (firstReceipt) runtime.getEventClient().emit(firstReceipt);
+    expect(runtime.getState()).toMatchObject({ active: true, flows: { capture: 'recording', upload: 'pending' }, eventProjection: { frameReceived: false, chunkDurable: false, uploadPending: true } });
+    expect(runtime.getState().durableUploads).toHaveLength(durable ? 1 : 0);
+    runtime.runEventScript('upload');
+    expect(runtime.getState()).toMatchObject({ flows: { capture: 'recording', upload: 'durable' }, eventProjection: { frameReceived: true, chunkDurable: true, uploadPending: false } });
+    expect(runtime.getState().durableUploads).toHaveLength(durable ? 2 : 1);
+    if (durable) expect(runtime.getState().durableUploads[0].chunkId).toBe(firstScope.chunkId);
+    runtime.stop();
+    expect(runtime.getState().flows.capture).toBe('ended');
+  });
+  it('uses the real MemoryVault result and locks and clears old account data on switch and revocation', () => {
+    const vaults: MemoryVault[] = [];
+    const runtime = createMockRuntime({ createVault: () => { const vault = new MemoryVault(); vaults.push(vault); return vault; } });
+    const key = 'synthetic-local-draft';
+    const oldA = vaults[0];
+    expect(runtime.simulateLocalWrite(true)).toBe(true);
+    expect(oldA.read(key)).toBe(runtime.getState().mockLocalRecord);
+    expect(JSON.parse(oldA.read(key)!).account).toBe('A');
+    expect(runtime.getState()).toMatchObject({ localWriteResult: 'stored', flows: { sync: 'local_only' } });
+    expect(runtime.simulateLocalWrite(false)).toBe(false);
+    expect(runtime.getState()).toMatchObject({ localWriteResult: 'write_failed', flows: { sync: 'failed' } });
+    expect(JSON.parse(oldA.read(key)!).account).toBe('A');
+    runtime.lockMockVault();
+    expect(runtime.simulateLocalWrite(true)).toBe(false);
+    expect(runtime.getState()).toMatchObject({ localWriteResult: 'locked', mockLocalRecord: null, flows: { sync: 'failed' } });
+    runtime.unlockMockVault();
+    runtime.switchAccount();
+    const vaultB = vaults.at(-1)!;
+    expect(runtime.getState()).toMatchObject({ account: 'B', mockLocalRecord: null, localWriteResult: 'none' });
+    expect(vaultB.read(key)).toBeUndefined();
+    expect(oldA.read(key)).toBeUndefined(); // locked
+    oldA.unlock();
+    expect(oldA.read(key)).toBeUndefined(); // actually cleared, not merely hidden by locking
+    expect(runtime.simulateLocalWrite(true)).toBe(true);
+    expect(JSON.parse(vaultB.read(key)!).account).toBe('B');
+    runtime.revokeAccount();
+    expect(vaultB.read(key)).toBeUndefined(); // locked
+    vaultB.unlock();
+    expect(vaultB.read(key)).toBeUndefined(); // cleared on revocation
+    expect(runtime.getState()).toMatchObject({ account: null, mockLocalRecord: null, localWriteResult: 'none' });
+  });
+  it('does not mark a saved local record synced by restarting capture or locking and unlocking', () => {
+    const runtime = createMockRuntime();
+    expect(runtime.start()).toBe(true);
+    expect(runtime.simulateLocalWrite(true)).toBe(true);
+    const stored = runtime.getState().mockLocalRecord;
+    runtime.stop();
+    expect(runtime.start()).toBe(true);
+    expect(runtime.getState()).toMatchObject({ localWriteResult: 'stored', mockLocalRecord: stored, flows: { capture: 'recording', sync: 'local_only' } });
+    runtime.lockMockVault();
+    expect(runtime.getState()).toMatchObject({ localWriteResult: 'locked', mockLocalRecord: null, flows: { sync: 'local_only' } });
+    runtime.unlockMockVault();
+    expect(runtime.getState()).toMatchObject({ localWriteResult: 'stored', mockLocalRecord: stored, flows: { sync: 'local_only' } });
+    expect(runtime.reconcileLocalWrite()).toBe(true);
+    runtime.lockMockVault(); runtime.unlockMockVault();
+    expect(runtime.getState()).toMatchObject({ localWriteResult: 'reconciled', mockLocalRecord: stored, flows: { sync: 'synced' } });
+  });
+  it('records scenario durable receipts through the same upload event path', () => {
+    const runtime = createMockRuntime();
+    runtime.chooseScenario('03');
+    const scope = runtime.getState().captureScope!;
+    expect(runtime.getState()).toMatchObject({ flows: { upload: 'durable' }, eventProjection: { chunkDurable: true, uploadPending: false } });
+    expect(runtime.getState().durableUploads).toHaveLength(1);
+    expect(runtime.getState().durableUploads[0]).toMatchObject({ chunkId: scope.chunkId, captureEpochId: scope.captureEpochId });
+    runtime.stop(); expect(runtime.start()).toBe(true);
+    expect(runtime.getState()).toMatchObject({ flows: { upload: 'pending' }, eventProjection: { chunkDurable: false, uploadPending: true } });
+    expect(runtime.getState().durableUploads[0].chunkId).toBe(scope.chunkId);
+  });
+});
+
 describe('deterministic in-memory ports', () => {
   it('only advances simulated time during recording and never invokes a microphone', () => {
     const capture = new MockCapturePort();
