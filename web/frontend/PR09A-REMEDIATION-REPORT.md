@@ -1,5 +1,41 @@
 # PR-09a 第二轮整改与复审记录
 
+## 第四轮针对性整改（2026-10-30）
+
+从 `feature/web-pr09a-aurora` 的 `edce43ecb6792e0d85dd6a91fbb0ea5431f297c0` 继续；此前检查点与历史均保留。以下结果限本地合成数据与内存 Mock，等待 Astra 第四轮独立复审。
+
+| 问题 | 修复前 | 本轮修复与证据 |
+|---|---|---|
+| P2-01：重复解锁 | 保存后对已解锁 Vault 再解锁，再切场景和开始采集，记录仍在却显示 `none/synced`。 | `src/mock/runtime.ts` 分别保存锁状态和 `localRecordSync`；重复解锁无状态变更，场景切换保留记录与待核对状态，只有显式模拟核对成功才标记已同步。切号、撤销仍锁定并清理旧实例。`tests/unit.test.ts` 的 `keeps an unverified actual vault record and sync projection through repeated unlocks, scenarios and capture`、`never marks the old record synced when an attempted write is rejected by a locked vault` 和 `tests/fourth-review.browser.spec.ts` 的 `repeated unlock and scene changes preserve the saved record and pending reconciliation` 检查实际 Vault 内容及页面状态。 |
+| P2-02：旧轮 pending 丢失 | 第一轮 frame ACK 后停止、启动第二轮时，旧 UploadPort 被替换，迟到 durable ACK 无法补入第一轮。 | Runtime 按课堂、epoch、chunk 和序号保留各轮内存分片与端口；frame ACK 仅表示收到帧，durable ACK 更新匹配轮次历史，只有当前轮回执改变当前上传投影。旧轮重复回执保持幂等；撤权、租约失效及账号切换的受保护作用域不能接收回执。开发模拟区展示历史与有效迟到回执操作。`tests/unit.test.ts` 的 `accepts interleaved old durable receipts in three independent epochs without altering the active chunk`、`retains pending history across scenario changes but rejects old receipts after revocation or account change`、`refuses late receipts for lease-lost or classroom-revoked scopes, including after scene reset` 和 `tests/fourth-review.browser.spec.ts` 的 `late durable updates its historical chunk while the new capture remains pending`、`a revoked lease does not offer an invalid historical receipt action` 覆盖同序号三轮交错、去重、撤权与页面投影。 |
+
+**P3 技术债，未修复：**`src/mock/event-scripts.ts` 固定转写的 `stream_id`、`segment_id` 及任务 `task_id`；`bindScriptEvent` 切换课堂时只替换 `class_session_id`，但转写 Map 以 stream/segment 为键，任务 Map 以 task ID 为键。同一账号对不同课堂重放脚本时，B 课堂转写可能被 A 课堂的 final/revision 拦截，B 的任务事件可能因已有 A 课堂的同 ID 任务而被忽略。建议最晚在 PR-10a 接入真实课堂事件前修复模拟实体身份并增加跨课堂回归。本轮未改动这项 P3，也未声称关闭。
+
+### 隔离测试与截图
+
+Windows，Node v24.19.0、pnpm 10.34.9、Vitest 4.1.12、Chrome 156.0.8078.48。最终环境 `work/pr09a/fourth-review-check/web/frontend` 从起点独立检出，执行 `corepack pnpm install --frozen-lockfile --offline --store-dir <项目 store>` 退出 0；测试源码与正式工作树逐项哈希核对。未更动原有依赖目录。
+
+| 实际命令 | 结果 |
+|---|---|
+| `corepack pnpm typecheck` | 退出 0 |
+| `corepack pnpm lint` | 退出 0 |
+| `corepack pnpm test:contract` | 退出 0，52/52 |
+| `corepack pnpm test:unit` | 退出 0，41/41 |
+| `corepack pnpm build` | 退出 0，已知 Mock 入口标记检查通过 |
+| `corepack pnpm test:ui` | 退出 0，35/35 |
+
+同一组两项独立复现测试在原始 `edce43e` 上 2/2 失败、退出 1，修复后 2/2 通过、退出 0；原始源码、`baseline.log`、`fixed.log` 和环境说明保存在 `outputs/pr09a/fourth-review/repro/`。页面基线失败与修复后日志保存在 `outputs/pr09a/fourth-review/ui-check/`。最终检查日志及截图位于工作树忽略的 `outputs/pr09a/fourth-review/`，不包含在提交中；原有测试未删除、断言未降低。
+
+新的 390×844 Day/Night 稳定选中截图及放大导航图位于 `visual/`。Chrome 正常动态下点击“课堂”、等待 600ms，再以 120ms 间隔采样四次，动画数为 0，`aria-current=page`，选中层和入口均为 x=195、y=758、86.5×66；测量保存在 `stable-selection-measurements.json`。桌面 Chrome 移动视口并非真实 iPhone 或物理折射验证。
+
+### 变更与边界
+
+本轮提交文件：`src/mock/runtime.ts`、`src/app/MockWorkbench.tsx`、`tests/unit.test.ts`、新增 `tests/fourth-review.browser.spec.ts`、`PR09A-ACCEPTANCE.md` 和本报告。未修改冻结契约、后端、其他工作树或 Windows 本地版；未改变已批准导航的样式。内存记录不是 IndexedDB、真实音频持久化、加密 Vault 或云端恢复；真实认证、ASR、AI、收费服务、设备及服务器授权均未验证。已有原生文字缩放及跨浏览器限制仍在。
+
+回退时先核对本轮提交 SHA 与后续依赖，使用 `git revert <本轮修复提交完整 SHA>` 创建反向提交并审阅冲突，不用 reset、clean、强制覆盖或删除历史证据。本轮不 Push、Merge、Tag、Release、部署或开始后续 PR。
+
+---
+
 ## 第三轮针对性整改（2026-10-30）
 
 在 `feature/web-pr09a-aurora` 从 `60b0eaf8f8da978b541f9480b2fcaf486a4fad37` 继续，保留全部历史。以下为本地合成模拟结果，等待 Astra 第三轮独立复审；本轮未重新设计导航，也不宣布上一轮两项部分关闭问题已关闭。

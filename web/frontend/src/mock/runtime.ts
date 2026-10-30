@@ -15,7 +15,10 @@ type CaptureScope = { classSessionId: string; captureEpochId: string; fenceToken
 type Task = { classroomId: string | null; revision: number; state: Ai; mayHaveCharged: boolean; order: number };
 type LocalWriteResult = 'none' | 'stored' | 'write_failed' | 'locked' | 'quota' | 'reconciled';
 type DurableUpload = { classSessionId: string; captureEpochId: string; chunkId: string; seq: number; receiptId: string };
-type State = { currentClassroomId: string; tasks: Record<string, Task>; leaseValid: boolean; active: boolean; account: MockAccount | null; epoch: number; scenario: string; flows: Flows; accountResponse: unknown | null; captureScope: CaptureScope | null; eventProjection: Projection; localWriteResult: LocalWriteResult; mockLocalRecord: string | null; durableUploads: DurableUpload[] };
+type UploadHistoryEntry = { classSessionId: string; captureEpochId: string; chunkId: string; seq: number; frameReceived: boolean; status: 'pending' | 'durable'; receiptId: string | null; eventId: string | null; canAccept: boolean };
+type HistoricalUpload = { entry: UploadHistoryEntry; port: MockUploadPort; canAccept: boolean };
+type LocalRecordSync = 'none' | 'pending' | 'reconciled';
+type State = { currentClassroomId: string; tasks: Record<string, Task>; leaseValid: boolean; active: boolean; account: MockAccount | null; epoch: number; scenario: string; flows: Flows; accountResponse: unknown | null; captureScope: CaptureScope | null; eventProjection: Projection; localWriteResult: LocalWriteResult; mockLocalRecord: string | null; localRecordSync: LocalRecordSync; durableUploads: DurableUpload[]; uploadHistory: UploadHistoryEntry[] };
 const emptyFlows = (): Flows => ({ capture: 'idle', upload: 'pending', asr: 'idle', ai: 'idle', sync: 'synced' });
 const emptyProjection = (): Projection => ({ portCaptureState: 'idle', uploadPending: true, partial: null, finalText: null, finalRevision: 0, frameReceived: false, chunkDurable: false, audioDeleted: false, classroomDeleted: false, leaseLost: false, mayHaveCharged: false, delivered: 0 });
 // Fixed synthetic lease: resource identifiers are never inferred from the current route.
@@ -36,13 +39,16 @@ export function createMockRuntime(options: { createVault?: () => MemoryVault } =
   const createVault = options.createVault ?? (() => new MemoryVault());
   let vault = createVault();
   vault.unlock();
+  let vaultLocked = false;
   let beforeVaultLock: { result: LocalWriteResult; sync: Sync } | null = null;
   const localRecordKey = 'synthetic-local-draft';
-  let state: State = { currentClassroomId: mockCaptureScope().classSessionId, tasks: {}, leaseValid: true, active: false, account: 'A', epoch: 0, scenario: '02', flows: emptyFlows(), accountResponse: null, captureScope: mockCaptureScope(), eventProjection: emptyProjection(), localWriteResult: 'none', mockLocalRecord: null, durableUploads: [] };
+  let state: State = { currentClassroomId: mockCaptureScope().classSessionId, tasks: {}, leaseValid: true, active: false, account: 'A', epoch: 0, scenario: '02', flows: emptyFlows(), accountResponse: null, captureScope: mockCaptureScope(), eventProjection: emptyProjection(), localWriteResult: 'none', mockLocalRecord: null, localRecordSync: 'none', durableUploads: [], uploadHistory: [] };
   const listeners = new Set<() => void>();
   let events = new MockEventClient();
   let stopEvents = () => {};
   let durableIds = new Set<string>();
+  // Persist receipt deduplication across scenario resets within an account.
+  let processedUploadEventIds = new Set<string>();
   // One identity per logical scripted event and resource lifecycle. Replays reuse it;
   // a new epoch generates a different identity without weakening event deduplication.
   let scriptEventIds = new Map<string, string>();
@@ -53,10 +59,16 @@ export function createMockRuntime(options: { createVault?: () => MemoryVault } =
   let capture = new MockCapturePort();
   let upload = new MockUploadPort();
   upload.stage(1); // The deterministic fixture begins with one staged synthetic chunk.
+  let uploadRecords = new Map<string, HistoricalUpload>();
+  const registerUpload = (scope: CaptureScope) => {
+    uploadRecords.set(scope.chunkId, { entry: { classSessionId: scope.classSessionId, captureEpochId: scope.captureEpochId, chunkId: scope.chunkId, seq: 1, frameReceived: false, status: 'pending', receiptId: null, eventId: null, canAccept: true }, port: upload, canAccept: true });
+  };
+  registerUpload(state.captureScope!);
+  state = { ...state, uploadHistory: [...uploadRecords.values()].map(record => ({ ...record.entry })) };
   let leaseGeneration = 1;
   let deletedClassrooms = new Set<string>();
   let deletedAudioIds = new Set<string>();
-  const update = (next: State) => { state = next; listeners.forEach(listener => listener()); };
+  const update = (next: State) => { state = { ...next, uploadHistory: [...uploadRecords.values()].map(record => ({ ...record.entry, canAccept: record.canAccept })) }; listeners.forEach(listener => listener()); };
   const taskProjection = (classroomId: string, source = tasks) => {
     const matching = [...source.values()].filter(task => task.classroomId === classroomId);
     // Preserve an unresolved unknown as the primary state, even if a later task succeeds.
@@ -73,23 +85,28 @@ export function createMockRuntime(options: { createVault?: () => MemoryVault } =
   const clearScope = (account: MockAccount | null) => {
     // Invalidate first: synchronous teardown must win over any already queued callbacks.
     const nextEpoch = auth.invalidate();
-    stopCapture('ended'); stopEvents(); events.clear(); durableIds = new Set(); scriptEventIds = new Map(); finalSegments = new Map(); partialSegments = new Map(); tasks = new Map(); taskOrder = 0; deletedClassrooms = new Set(); deletedAudioIds = new Set(); resetPorts();
-    vault.lock(); vault.clear(); vault = createVault(); beforeVaultLock = null;
-    if (account) vault.unlock();
+    stopCapture('ended'); stopEvents(); events.clear(); durableIds = new Set(); processedUploadEventIds = new Set(); scriptEventIds = new Map(); finalSegments = new Map(); partialSegments = new Map(); tasks = new Map(); taskOrder = 0; deletedClassrooms = new Set(); deletedAudioIds = new Set(); resetPorts();
+    vault.lock(); vault.clear(); vault = createVault(); beforeVaultLock = null; vaultLocked = true; uploadRecords = new Map();
+    if (account) { vault.unlock(); vaultLocked = false; }
     const scope = account ? freshScope(mockCaptureScope().classSessionId) : null;
-    update({ ...state, account, epoch: nextEpoch, currentClassroomId: mockCaptureScope().classSessionId, tasks: {}, leaseValid: Boolean(scope), active: false, scenario: '02', accountResponse: null, captureScope: scope, flows: emptyFlows(), localWriteResult: 'none', mockLocalRecord: null, durableUploads: [], eventProjection: { ...emptyProjection(), uploadPending: Boolean(account) } });
+    if (scope) registerUpload(scope);
+    update({ ...state, account, epoch: nextEpoch, currentClassroomId: mockCaptureScope().classSessionId, tasks: {}, leaseValid: Boolean(scope), active: false, scenario: '02', accountResponse: null, captureScope: scope, flows: emptyFlows(), localWriteResult: 'none', mockLocalRecord: null, localRecordSync: 'none', durableUploads: [], uploadHistory: [], eventProjection: { ...emptyProjection(), uploadPending: Boolean(account) } });
     if (account) connectEvents();
   };
   const handleEvent = (event: ClassroomOSWebV1EventEnvelope, eventEpoch: number) => {
     if (!auth.isCurrent(eventEpoch) || !state.account) return;
     if (event.type === 'error' && event.data.code === 'AUTH_REVOKED') { clearScope(null); return; }
     const scope = state.captureScope;
-    if ((event.type === 'capture.lease_lost' || event.type === 'audio.chunk_durable' || event.type === 'capture.frame_received') && !state.leaseValid) return;
-    if (event.type === 'capture.lease_lost' && (!scope || event.data.class_session_id !== scope.classSessionId || event.data.capture_epoch_id !== scope.captureEpochId || event.data.fence_token !== scope.fenceToken)) return;
-    // The durable receipt schema has no fence token; it carries classroom, epoch and chunk identity.
-    if (event.type === 'audio.chunk_durable' && (!scope || event.data.class_session_id !== scope.classSessionId || event.data.capture_epoch_id !== scope.captureEpochId || event.data.chunk_id !== scope.chunkId)) return;
-    // A frame ACK only includes chunk_id; it must match the bound synthetic chunk.
-    if (event.type === 'capture.frame_received' && (!scope || event.data.chunk_id !== scope.chunkId)) return;
+    if (event.type === 'capture.lease_lost' && (!state.leaseValid || !scope || event.data.class_session_id !== scope.classSessionId || event.data.capture_epoch_id !== scope.captureEpochId || event.data.fence_token !== scope.fenceToken)) return;
+    // Frame ACK identifies the chunk, while durable also binds classroom, epoch and sequence.
+    // Keep each earlier port for legitimate late receipts, but never accept revoked resources.
+    const record = event.type === 'audio.chunk_durable' || event.type === 'capture.frame_received' ? uploadRecords.get(event.data.chunk_id) : undefined;
+    if (event.type === 'capture.frame_received' && (!record || !record.canAccept || event.data.frame_seq !== record.entry.seq || deletedAudioIds.has(record.entry.chunkId) || deletedClassrooms.has(record.entry.classSessionId))) return;
+    if (event.type === 'audio.chunk_durable' && (!record || !record.canAccept || event.data.class_session_id !== record.entry.classSessionId || event.data.capture_epoch_id !== record.entry.captureEpochId || event.data.seq !== record.entry.seq || deletedAudioIds.has(record.entry.chunkId) || deletedClassrooms.has(record.entry.classSessionId))) return;
+    if (event.type === 'audio.chunk_durable') {
+      if (processedUploadEventIds.has(event.event_id) || record?.entry.status === 'durable') return;
+      processedUploadEventIds.add(event.event_id);
+    }
     if ('event_id' in event) {
       if (durableIds.has(event.event_id)) return;
       durableIds.add(event.event_id);
@@ -121,10 +138,18 @@ export function createMockRuntime(options: { createVault?: () => MemoryVault } =
         break;
       }
       case 'capture.frame_received':
-        if (!deletedAudioIds.has(event.data.chunk_id) && upload.frameReceived(event.data.frame_seq)) { projection.frameReceived = true; projection.uploadPending = upload.pending(event.data.frame_seq); }
+        if (record && record.port.frameReceived(event.data.frame_seq)) {
+          record.entry = { ...record.entry, frameReceived: true };
+          if (scope?.chunkId === event.data.chunk_id) { projection.frameReceived = true; projection.uploadPending = record.port.pending(event.data.frame_seq); }
+        }
         break;
       case 'audio.chunk_durable':
-        if (!deletedAudioIds.has(event.data.chunk_id) && !deletedClassrooms.has(event.data.class_session_id) && upload.pending(event.data.seq)) { upload.durable(event.data.seq); projection.uploadPending = upload.pending(event.data.seq); projection.chunkDurable = true; flows = { ...flows, upload: 'durable' }; durableUploads = [...durableUploads, { classSessionId: event.data.class_session_id, captureEpochId: event.data.capture_epoch_id, chunkId: event.data.chunk_id, seq: event.data.seq, receiptId: event.data.receipt_id }]; }
+        if (record && record.port.pending(event.data.seq)) {
+          record.port.durable(event.data.seq);
+          record.entry = { ...record.entry, status: 'durable', receiptId: event.data.receipt_id, eventId: event.event_id };
+          durableUploads = [...durableUploads, { classSessionId: event.data.class_session_id, captureEpochId: event.data.capture_epoch_id, chunkId: event.data.chunk_id, seq: event.data.seq, receiptId: event.data.receipt_id }];
+          if (scope?.chunkId === event.data.chunk_id) { projection.uploadPending = false; projection.chunkDurable = true; flows = { ...flows, upload: 'durable' }; }
+        }
         break;
       case 'task.changed': {
         const old = tasks.get(event.data.task_id);
@@ -138,10 +163,11 @@ export function createMockRuntime(options: { createVault?: () => MemoryVault } =
         break;
       }
       case 'object.deleted':
-        if (event.data.object_type === 'audio') { deletedAudioIds.add(event.data.object_id); if (scope?.chunkId === event.data.object_id) projection.audioDeleted = true; }
+        if (event.data.object_type === 'audio') { deletedAudioIds.add(event.data.object_id); const revoked = uploadRecords.get(event.data.object_id); if (revoked) revoked.canAccept = false; if (scope?.chunkId === event.data.object_id) projection.audioDeleted = true; }
         if (event.data.object_type === 'class_session') {
           if (state.currentClassroomId === event.data.object_id) projection.classroomDeleted = true;
           deletedClassrooms.add(event.data.object_id);
+          for (const item of uploadRecords.values()) if (item.entry.classSessionId === event.data.object_id) item.canAccept = false;
           if (scope?.classSessionId === event.data.object_id) { stopCapture('failed'); active = false; flows = { ...flows, capture: 'failed' }; }
           for (const [key, item] of partialSegments) if (item.classroomId === event.data.object_id) partialSegments.delete(key);
           for (const [key, item] of finalSegments) if (item.classroomId === event.data.object_id) finalSegments.delete(key);
@@ -150,7 +176,7 @@ export function createMockRuntime(options: { createVault?: () => MemoryVault } =
           projection.partial = partialText(state.currentClassroomId);
         }
         break;
-      case 'capture.lease_lost': projection.leaseLost = true; stopCapture('failed'); active = false; flows = { ...flows, capture: 'failed' }; break;
+      case 'capture.lease_lost': { const revoked = scope && uploadRecords.get(scope.chunkId); if (revoked) revoked.canAccept = false; projection.leaseLost = true; stopCapture('failed'); active = false; flows = { ...flows, capture: 'failed' }; break; }
     }
     const invalidated = event.type === 'capture.lease_lost' || (event.type === 'object.deleted' && event.data.object_type === 'class_session' && scope?.classSessionId === event.data.object_id);
     projection.portCaptureState = capture.state;
@@ -166,8 +192,7 @@ export function createMockRuntime(options: { createVault?: () => MemoryVault } =
     if (!id) { id = crypto.randomUUID(); scriptEventIds.set(key, id); }
     return id;
   };
-  const bindScriptEvent = (event: ClassroomOSWebV1EventEnvelope): ClassroomOSWebV1EventEnvelope => {
-    const scope = state.captureScope;
+  const bindScriptEvent = (event: ClassroomOSWebV1EventEnvelope, scope = state.captureScope): ClassroomOSWebV1EventEnvelope => {
     if (!scope) return event;
     if (event.type === 'capture.lease_lost') return { ...event, event_id: scriptedId(`${event.type}:${event.event_id}:${scope.captureEpochId}:${scope.fenceToken}`), data: { ...event.data, class_session_id: scope.classSessionId, capture_epoch_id: scope.captureEpochId, fence_token: scope.fenceToken } };
     if (event.type === 'audio.chunk_durable') return { ...event, event_id: scriptedId(`${event.type}:${event.event_id}:${scope.captureEpochId}:${scope.chunkId}`), data: { ...event.data, class_session_id: scope.classSessionId, capture_epoch_id: scope.captureEpochId, chunk_id: scope.chunkId, receipt_id: scriptedId(`receipt:${event.data.receipt_id}:${scope.captureEpochId}:${scope.chunkId}`) } };
@@ -189,7 +214,7 @@ export function createMockRuntime(options: { createVault?: () => MemoryVault } =
       if (!state.account || state.active || !state.leaseValid || !state.captureScope || state.captureScope.classSessionId !== state.currentClassroomId || deletedClassrooms.has(state.captureScope.classSessionId)) return false;
       if (capture.state === 'ended') {
         const scope = freshScope(state.currentClassroomId);
-        resetPorts();
+        resetPorts(); registerUpload(scope);
         update({ ...state, captureScope: scope, flows: { ...state.flows, upload: 'pending' }, eventProjection: { ...state.eventProjection, frameReceived: false, chunkDurable: false, uploadPending: true, audioDeleted: false, leaseLost: false, portCaptureState: 'idle' } });
       }
       if (!capture.command('recording')) return false;
@@ -199,7 +224,7 @@ export function createMockRuntime(options: { createVault?: () => MemoryVault } =
     stop: () => { stopCapture('ended'); update({ ...state, active: false, flows: { ...state.flows, capture: 'ended' }, eventProjection: { ...state.eventProjection, portCaptureState: capture.state } }); },
     acquireMockLease: (classroomId = state.currentClassroomId) => {
       if (!state.account || state.active || deletedClassrooms.has(classroomId)) return false;
-      const scope = freshScope(classroomId); resetPorts();
+      const scope = freshScope(classroomId); resetPorts(); registerUpload(scope);
       update({ ...state, captureScope: scope, currentClassroomId: classroomId, leaseValid: true, flows: { ...state.flows, capture: 'idle', upload: 'pending', ai: taskProjection(classroomId).ai }, eventProjection: { ...state.eventProjection, leaseLost: false, portCaptureState: 'idle', finalRevision: Math.max(0, ...[...finalSegments.values()].filter(item => item.classroomId === classroomId).map(item => item.revision)), frameReceived: false, chunkDurable: false, uploadPending: true, audioDeleted: false, classroomDeleted: false, partial: partialText(classroomId), finalText: [...finalSegments.values()].filter(item => item.classroomId === classroomId).sort((a, b) => a.sequence - b.sequence).map(item => item.text).join(' / ') || null } });
       return true;
     },
@@ -212,7 +237,7 @@ export function createMockRuntime(options: { createVault?: () => MemoryVault } =
     chooseScenario: (scenario: string) => {
       if (!state.account) return;
       stopCapture('ended'); stopEvents(); events.clear(); durableIds.clear(); finalSegments.clear(); partialSegments.clear(); deletedClassrooms.clear(); deletedAudioIds.clear(); resetPorts();
-      const scope = freshScope(mockCaptureScope().classSessionId);
+      const scope = freshScope(mockCaptureScope().classSessionId); registerUpload(scope);
       const recording = ['03', '04', '05'].includes(scenario);
       if (recording) capture.command('recording');
       const projected = taskProjection(scope.classSessionId);
@@ -221,7 +246,7 @@ export function createMockRuntime(options: { createVault?: () => MemoryVault } =
         upload: scenario === '04' ? 'failed' : 'pending',
         asr: recording ? 'streaming' : 'idle',
         ai: projected.ai,
-        sync: state.localWriteResult === 'stored' ? 'local_only' : state.localWriteResult === 'reconciled' ? 'synced' : ['locked', 'quota', 'write_failed'].includes(state.localWriteResult) || scenario === '05' ? 'failed' : 'synced',
+        sync: ['locked', 'quota', 'write_failed'].includes(state.localWriteResult) ? 'failed' : state.localRecordSync === 'pending' ? 'local_only' : state.localRecordSync === 'reconciled' ? 'synced' : scenario === '05' ? 'failed' : 'synced',
       } });
       connectEvents();
       // This synthetic durable fixture uses the same receipt path as user-triggered events.
@@ -239,12 +264,12 @@ export function createMockRuntime(options: { createVault?: () => MemoryVault } =
       const value = JSON.stringify({ account: state.account, classroomId: state.currentClassroomId, captureEpochId: state.captureScope?.captureEpochId ?? null, kind: 'synthetic-only' });
       const result = vault.write(localRecordKey, value, !success);
       if (result === 'locked') beforeVaultLock = null;
-      update({ ...state, localWriteResult: result, mockLocalRecord: vault.read(localRecordKey) ?? null, flows: { ...state.flows, sync: result === 'stored' ? 'local_only' : 'failed' } });
+      update({ ...state, localWriteResult: result, localRecordSync: result === 'stored' ? 'pending' : state.localRecordSync, mockLocalRecord: vault.read(localRecordKey) ?? null, flows: { ...state.flows, sync: result === 'stored' ? 'local_only' : 'failed' } });
       return result === 'stored';
     },
-    reconcileLocalWrite: () => { if (!state.account || state.flows.sync !== 'local_only' || !vault.read(localRecordKey)) return false; update({ ...state, localWriteResult: 'reconciled', flows: { ...state.flows, sync: 'synced' } }); return true; },
-    lockMockVault: () => { if (!state.account) return; if (state.localWriteResult !== 'locked') beforeVaultLock = { result: state.localWriteResult, sync: state.flows.sync }; vault.lock(); update({ ...state, localWriteResult: 'locked', mockLocalRecord: null }); },
-    unlockMockVault: () => { if (!state.account) return; vault.unlock(); const previous = beforeVaultLock; beforeVaultLock = null; update({ ...state, localWriteResult: previous?.result ?? 'none', mockLocalRecord: vault.read(localRecordKey) ?? null, flows: { ...state.flows, sync: previous?.sync ?? state.flows.sync } }); },
+    reconcileLocalWrite: () => { if (!state.account || state.flows.sync !== 'local_only' || !vault.read(localRecordKey)) return false; update({ ...state, localWriteResult: 'reconciled', localRecordSync: 'reconciled', flows: { ...state.flows, sync: 'synced' } }); return true; },
+    lockMockVault: () => { if (!state.account || vaultLocked) return; beforeVaultLock = { result: state.localWriteResult, sync: state.flows.sync }; vault.lock(); vaultLocked = true; update({ ...state, localWriteResult: 'locked', mockLocalRecord: null }); },
+    unlockMockVault: () => { if (!state.account || !vaultLocked) return; vault.unlock(); vaultLocked = false; const previous = beforeVaultLock; beforeVaultLock = null; update({ ...state, localWriteResult: previous?.result ?? 'none', mockLocalRecord: vault.read(localRecordKey) ?? null, flows: { ...state.flows, sync: previous?.sync ?? state.flows.sync } }); },
     getEpoch: auth.getEpoch,
     isCurrent: auth.isCurrent,
     acceptAccountResponse: (epoch: number, value: unknown) => {
@@ -263,6 +288,14 @@ export function createMockRuntime(options: { createVault?: () => MemoryVault } =
       const event = eventScripts[name][index];
       if (!state.account || !event) return false;
       events.emit(bindScriptEvent(event));
+      return true;
+    },
+    runHistoricalDurable: (chunkId: string) => {
+      const record = uploadRecords.get(chunkId);
+      if (!state.account || !record || !record.canAccept || record.entry.status !== 'pending' || deletedAudioIds.has(chunkId) || deletedClassrooms.has(record.entry.classSessionId)) return false;
+      const event = eventScripts.upload[1];
+      const scope: CaptureScope = { classSessionId: record.entry.classSessionId, captureEpochId: record.entry.captureEpochId, chunkId, fenceToken: 0 };
+      events.emit(bindScriptEvent(event, scope));
       return true;
     },
     getEventClient: () => events,

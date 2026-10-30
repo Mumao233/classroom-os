@@ -435,6 +435,131 @@ describe('independent capture and vault lifecycles', () => {
   });
 });
 
+describe('pending history and vault unlock idempotency', () => {
+  it('keeps an unverified actual vault record and sync projection through repeated unlocks, scenarios and capture', () => {
+    const vaults: MemoryVault[] = [];
+    const runtime = createMockRuntime({ createVault: () => { const vault = new MemoryVault(); vaults.push(vault); return vault; } });
+    const key = 'synthetic-local-draft';
+    const emptyState = runtime.getState();
+    runtime.unlockMockVault();
+    expect(runtime.getState()).toBe(emptyState);
+    runtime.chooseScenario('05');
+    expect(runtime.simulateLocalWrite(true)).toBe(true);
+    const saved = vaults[0].read(key)!;
+    runtime.unlockMockVault(); runtime.unlockMockVault();
+    expect(vaults[0].read(key)).toBe(saved);
+    expect(runtime.getState()).toMatchObject({ mockLocalRecord: saved, localWriteResult: 'stored', localRecordSync: 'pending', flows: { sync: 'local_only' } });
+    runtime.chooseScenario('02');
+    expect(runtime.start()).toBe(true);
+    expect(vaults[0].read(key)).toBe(saved);
+    expect(runtime.getState()).toMatchObject({ mockLocalRecord: saved, localRecordSync: 'pending', flows: { sync: 'local_only' } });
+    runtime.lockMockVault(); runtime.lockMockVault(); runtime.unlockMockVault(); runtime.unlockMockVault();
+    expect(vaults[0].read(key)).toBe(saved);
+    expect(runtime.getState()).toMatchObject({ mockLocalRecord: saved, localRecordSync: 'pending', flows: { sync: 'local_only' } });
+    expect(runtime.reconcileLocalWrite()).toBe(true);
+    runtime.unlockMockVault(); runtime.chooseScenario('02');
+    expect(runtime.getState()).toMatchObject({ localRecordSync: 'reconciled', flows: { sync: 'synced' } });
+    runtime.switchAccount();
+    expect(runtime.getState()).toMatchObject({ account: 'B', mockLocalRecord: null, localRecordSync: 'none' });
+    expect(vaults[0].read(key)).toBeUndefined();
+    vaults[0].unlock(); expect(vaults[0].read(key)).toBeUndefined();
+  });
+  it('never marks the old record synced when an attempted write is rejected by a locked vault', () => {
+    const runtime = createMockRuntime();
+    runtime.chooseScenario('05'); expect(runtime.simulateLocalWrite(true)).toBe(true);
+    const saved = runtime.getState().mockLocalRecord;
+    runtime.lockMockVault(); expect(runtime.simulateLocalWrite(true)).toBe(false);
+    runtime.unlockMockVault(); runtime.unlockMockVault();
+    expect(runtime.getState()).toMatchObject({ mockLocalRecord: saved, localRecordSync: 'pending' });
+    runtime.chooseScenario('02'); runtime.start();
+    expect(runtime.getState().flows.sync).not.toBe('synced');
+    expect(runtime.getState().mockLocalRecord).toBe(saved);
+  });
+  it('accepts interleaved old durable receipts in three independent epochs without altering the active chunk', () => {
+    const runtime = createMockRuntime();
+    expect(runtime.getState().uploadHistory).toEqual([expect.objectContaining({ chunkId: runtime.getState().captureScope!.chunkId, status: 'pending', seq: 1, canAccept: true })]);
+    const scopes = [];
+    for (let round = 0; round < 3; round++) {
+      expect(runtime.start()).toBe(true);
+      scopes.push(runtime.getState().captureScope!);
+      runtime.runEventStep('upload', 0);
+      expect(runtime.getState().uploadHistory.find(item => item.chunkId === scopes[round].chunkId)).toMatchObject({ seq: 1, frameReceived: true, status: 'pending' });
+      if (round < 2) runtime.stop();
+    }
+    expect(new Set(scopes.map(scope => scope.captureEpochId)).size).toBe(3);
+    expect(new Set(scopes.map(scope => scope.chunkId)).size).toBe(3);
+    const receipt = (index: number) => ({ ...eventScripts.upload[1], event_id: crypto.randomUUID(), data: { ...eventScripts.upload[1].data, class_session_id: scopes[index].classSessionId, capture_epoch_id: scopes[index].captureEpochId, chunk_id: scopes[index].chunkId, receipt_id: crypto.randomUUID() } });
+    const first = receipt(0), second = receipt(1), third = receipt(2);
+    const client = runtime.getEventClient();
+    client.emit({ ...first, event_id: crypto.randomUUID(), data: { ...first.data, capture_epoch_id: crypto.randomUUID() } });
+    client.emit({ ...first, event_id: crypto.randomUUID(), data: { ...first.data, seq: 2 } });
+    expect(runtime.getState().durableUploads).toHaveLength(0);
+    client.emit(first); client.emit(first);
+    expect(runtime.getState().uploadHistory.find(item => item.chunkId === scopes[0].chunkId)).toMatchObject({ status: 'durable', receiptId: first.data.receipt_id, eventId: first.event_id });
+    expect(runtime.getState()).toMatchObject({ flows: { upload: 'pending' }, eventProjection: { chunkDurable: false, uploadPending: true } });
+    expect(runtime.getState().durableUploads).toHaveLength(1);
+    client.emit(second); client.emit(second);
+    expect(runtime.getState().uploadHistory.find(item => item.chunkId === scopes[1].chunkId)?.status).toBe('durable');
+    expect(runtime.getState().uploadHistory.find(item => item.chunkId === scopes[2].chunkId)?.status).toBe('pending');
+    expect(runtime.getState().durableUploads).toHaveLength(2);
+    client.emit(third); client.emit(third);
+    expect(runtime.getState()).toMatchObject({ flows: { upload: 'durable' }, eventProjection: { chunkDurable: true, uploadPending: false } });
+    expect(runtime.getState().durableUploads).toHaveLength(3);
+    expect(runtime.getState().uploadHistory.filter(item => item.status === 'durable')).toHaveLength(3);
+  });
+  it('retains pending history across scenario changes but rejects old receipts after revocation or account change', () => {
+    const runtime = createMockRuntime();
+    runtime.start();
+    const first = runtime.getState().captureScope!;
+    runtime.runEventStep('upload', 0);
+    runtime.stop(); runtime.chooseScenario('02');
+    expect(runtime.getState().uploadHistory.find(item => item.chunkId === first.chunkId)).toMatchObject({ status: 'pending', frameReceived: true });
+    let received: ClassroomOSWebV1EventEnvelope | undefined;
+    runtime.getEventClient().subscribe(event => { if (event.type === 'audio.chunk_durable') received = event; });
+    expect(runtime.runHistoricalDurable(first.chunkId)).toBe(true);
+    expect(runtime.getState().uploadHistory.find(item => item.chunkId === first.chunkId)?.status).toBe('durable');
+    expect(runtime.getState().flows.upload).toBe('pending');
+    expect(runtime.runHistoricalDurable(first.chunkId)).toBe(false);
+    expect(received?.type).toBe('audio.chunk_durable');
+    runtime.chooseScenario('02');
+    const beforeReplay = runtime.getState().eventProjection.delivered;
+    runtime.getEventClient().emit(received!);
+    expect(runtime.getState().eventProjection.delivered).toBe(beforeReplay);
+    expect(runtime.getState().durableUploads).toHaveLength(1);
+    runtime.start(); const second = runtime.getState().captureScope!; runtime.stop(); runtime.start();
+    const deletion = eventScripts.deletion[0];
+    runtime.getEventClient().emit({ ...deletion, event_id: crypto.randomUUID(), data: { ...deletion.data, object_id: second.chunkId } });
+    expect(runtime.runHistoricalDurable(second.chunkId)).toBe(false);
+    expect(runtime.getState().uploadHistory.find(item => item.chunkId === second.chunkId)).toMatchObject({ status: 'pending', canAccept: false });
+    runtime.chooseScenario('02');
+    expect(runtime.runHistoricalDurable(second.chunkId)).toBe(false);
+    runtime.switchAccount();
+    expect(runtime.getState().uploadHistory.some(item => item.chunkId === first.chunkId || item.chunkId === second.chunkId)).toBe(false);
+    expect(runtime.runHistoricalDurable(second.chunkId)).toBe(false);
+    const receipt = eventScripts.upload[1];
+    runtime.getEventClient().emit({ ...receipt, event_id: crypto.randomUUID(), data: { ...receipt.data, class_session_id: second.classSessionId, capture_epoch_id: second.captureEpochId, chunk_id: second.chunkId } });
+    expect(runtime.getState().durableUploads).toHaveLength(0);
+    runtime.revokeAccount();
+    expect(runtime.getState().uploadHistory).toEqual([]);
+  });
+  it('refuses late receipts for lease-lost or classroom-revoked scopes, including after scene reset', () => {
+    const runtime = createMockRuntime();
+    runtime.start(); const lost = runtime.getState().captureScope!;
+    runtime.runEventScript('leaseLoss');
+    expect(runtime.getState().uploadHistory.find(item => item.chunkId === lost.chunkId)?.canAccept).toBe(false);
+    expect(runtime.acquireMockLease()).toBe(true); runtime.start();
+    expect(runtime.runHistoricalDurable(lost.chunkId)).toBe(false);
+    const revoked = runtime.getState().captureScope!;
+    runtime.runEventScript('classroomDeletion');
+    expect(runtime.getState().uploadHistory.find(item => item.chunkId === revoked.chunkId)?.canAccept).toBe(false);
+    runtime.chooseScenario('02');
+    expect(runtime.runHistoricalDurable(revoked.chunkId)).toBe(false);
+    const event = eventScripts.upload[1];
+    runtime.getEventClient().emit({ ...event, event_id: crypto.randomUUID(), data: { ...event.data, class_session_id: revoked.classSessionId, capture_epoch_id: revoked.captureEpochId, chunk_id: revoked.chunkId } });
+    expect(runtime.getState().durableUploads).toHaveLength(0);
+  });
+});
+
 describe('deterministic in-memory ports', () => {
   it('only advances simulated time during recording and never invokes a microphone', () => {
     const capture = new MockCapturePort();
