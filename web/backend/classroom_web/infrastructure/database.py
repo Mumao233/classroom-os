@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Connection, make_url
+from sqlalchemy.exc import DBAPIError
 
 from ..domain.data import InactiveOwner, OwnerContext
 from ..domain.ports import CatalogRepository, TombstoneRepository
@@ -73,7 +74,15 @@ class Database:
                                {"owner": str(context.owner_id)})
             if not connection.scalar(text("SELECT classroom_web_owner_active()")):
                 raise InactiveOwner("principal is missing or inactive")
-            connection.execute(text("SELECT classroom_web_lock_owner()"))
+            try:
+                connection.execute(text("SELECT classroom_web_lock_owner()"))
+            except DBAPIError as error:
+                # A user can become unavailable while FOR SHARE waits behind
+                # an identity update. Treat that exact lock-boundary rejection
+                # like owner_active=False so recovery reaches the same fallback.
+                if getattr(error.orig, 'sqlstate', None) == '42501':
+                    raise InactiveOwner("principal became unavailable while locking") from None
+                raise
             catalog = PgCatalogRepository(connection, context.owner_id)
             events = PgEventRepository(connection, context.owner_id, self.cursor_secret)
             receipts = PgReceiptRepository(connection, context.owner_id)

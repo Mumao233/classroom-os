@@ -24,3 +24,7 @@ class Scheduler(Protocol):
 class SimulationProvider(Protocol):
     simulation_only: bool
     def submit(self, task: Task, attempt: Attempt) -> str: ...
+
+
+class LocalResultReconciler(Protocol):
+    def run_once(self, batch_size: int = 100) -> int: ...

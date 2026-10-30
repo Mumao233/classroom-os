@@ -188,6 +188,31 @@ worktree-owned loopback cluster before running every backend test. Full test
 commands, evidence, known boundaries and rollback are in the
 [PR-03a acceptance report](../../docs/web-alpha/pr03a/ACCEPTANCE.md).
 
+### PR-03a recovery remediation
+
+`0005_identity_recovery` adds the shared boolean eligibility check used by
+owner RLS and expired-task fallback. The 0004 row-lock predicate is retained
+for correct rechecking after a user update. Missing verification or password
+material now cancels provably unsent work or quarantines sent work as unknown,
+atomically clearing its lease and recording the existing minimal task event.
+All eight 0001–0004 migration files remain unchanged.
+
+The separately approved `PgLocalResultReconciler` finishes already persisted
+results for unavailable owners through fixed status-only SQL functions. The
+synthetic worker CLI injects this port; `recover_expired()` by itself retains
+the existing quarantine stage. `TaskWorker(..., reconciler=...)` runs the local
+phase after expiry recovery. It never submits a Provider request, returns raw
+output, authenticates an unavailable owner or changes Scheduler table grants.
+Ordinary owner transactions remain denied. The functions preserve immutable
+raw and receipts, validate bounded JSON locally, and keep possible-charge risk
+even after successful output validation. No actual reservation/usage ledger or
+refund is implemented. Conflicting results stay quarantined for explicit review.
+
+Both expiry and local processing use bounded batches of at most 100 with stable
+ordering; successfully processed rows leave their candidate set. Full remediation
+evidence, reviewed-source provenance, validation limits and rollback are in the
+[remediation report](../../docs/web-alpha/pr03a/remediation/REPORT.md).
+
 ## PR-02b persistent execution
 
 `task_schema.py` and additive `0003_persistent_tasks` implement Task/TaskAttempt,

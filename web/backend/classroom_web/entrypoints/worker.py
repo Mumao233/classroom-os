@@ -4,6 +4,7 @@ import time
 
 from ..application.task_worker import MockProvider, TaskWorker
 from ..infrastructure.database import Database
+from ..infrastructure.local_reconciler import PgLocalResultReconciler
 from ..infrastructure.task_scheduler import PgTaskScheduler
 from ..test_support import validate_test_database_target
 
@@ -21,7 +22,8 @@ def main():
         parser.error('runtime and scheduler must use the same isolated synthetic database')
     database = Database(runtime.render_as_string(hide_password=False))
     queue = PgTaskScheduler(scheduler.render_as_string(hide_password=False))
-    worker = TaskWorker(database, queue, MockProvider(), worker_id=args.worker_id)
+    worker = TaskWorker(database, queue, MockProvider(), worker_id=args.worker_id,
+                        reconciler=PgLocalResultReconciler(database))
     try:
         while True:
             worked = worker.run_once()

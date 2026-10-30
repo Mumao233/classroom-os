@@ -1,34 +1,28 @@
-# PR-03a 变更文件清单
+# PR-03a 第二轮整改变更清单
 
-批准父提交：`3b3881540519c27075119f99bb1dbff35d369e35`。
-
-本清单共 26 个文件；不含忽略的 work/outputs 合成环境与日志。
+比较基线：`088984fbd7c9f36f4250c9af340d6a73a0c57960`；本次共 20 个文件。忽略目录中的数据库、日志、临时脚本、缓存不提交。
 
 - `docs/web-alpha/pr03a/ACCEPTANCE.md`
 - `docs/web-alpha/pr03a/CHANGES.md`
-- `docs/web-alpha/pr03a/PLAN.md`
 - `docs/web-alpha/pr03a/VALIDATION.json`
-- `tools/pr03a/check_protected.py`
-- `tools/pr03a/check_static.py`
-- `tools/pr03a/run_tests.py`
-- `tools/pr03a/selftest_runner.py`
+- `docs/web-alpha/pr03a/remediation/REPORT.md`
+- `docs/web-alpha/pr03a/remediation/RESULT-RECONCILIATION-PROPOSAL.md`
+- `tools/pr03a/remediation/check_protected.py`
+- `tools/pr03a/remediation/check_static.py`
+- `tools/pr03a/remediation/run_tests.py`
+- `tools/pr03a/remediation/selftest_runner.py`
 - `web/backend/README.md`
-- `web/backend/classroom_web/application/identity.py`
-- `web/backend/classroom_web/domain/identity.py`
-- `web/backend/classroom_web/domain/identity_ports.py`
+- `web/backend/classroom_web/application/task_worker.py`
+- `web/backend/classroom_web/domain/task_ports.py`
+- `web/backend/classroom_web/entrypoints/worker.py`
 - `web/backend/classroom_web/infrastructure/database.py`
-- `web/backend/classroom_web/infrastructure/identity_mail.py`
-- `web/backend/classroom_web/infrastructure/identity_passwords.py`
-- `web/backend/classroom_web/infrastructure/identity_repository.py`
-- `web/backend/classroom_web/infrastructure/identity_schema.py`
-- `web/backend/migrations/versions/0004_identity.py`
-- `web/backend/migrations/versions/0004_identity.sql`
-- `web/backend/pyproject.toml`
-- `web/backend/requirements.lock`
-- `web/backend/tests/integration/test_data_foundation.py`
-- `web/backend/tests/integration/test_identity.py`
-- `web/backend/tests/integration/test_identity_migrations.py`
-- `web/backend/tests/integration/test_task_migrations.py`
-- `web/backend/tests/unit/test_identity_values.py`
+- `web/backend/classroom_web/infrastructure/local_reconciler.py`
+- `web/backend/migrations/versions/0005_identity_recovery.py`
+- `web/backend/migrations/versions/0005_identity_recovery.sql`
+- `web/backend/tests/integration/test_identity_recovery.py`
+- `web/backend/tests/integration/test_identity_recovery_migrations.py`
+- `web/backend/tests/integration/test_pr03a_review_regressions.py`
 
-旧文件仅涉及 backend README、可信资源授权入口、Web 独立密码依赖，以及两处为增量表/迁移链保留原断言的测试适配；其他均为本包新增。冻结契约、本地版、原 Windows/Node 测试、六个既有迁移及两项 OPEN 技术债文件保持不变。
+身份规则只做原安全谓词复用；Worker/数据库 UoW/CLI/新 Reconciler 属于本次 P2 必需的跨 PR-02b 兼容适配。原 0001–0004、冻结契约、全部已批准测试模块、本地 v1.3.0、PR-09a 及原 PR-02b 工作树未改。
+
+原始开发的 26 文件清单保留在父提交和 `outputs/pr03a/remediation/before-documents/CHANGES.md`。

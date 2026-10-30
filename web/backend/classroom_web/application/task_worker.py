@@ -6,7 +6,7 @@ budget/authorization gate before it can reach any charged submission boundary.
 from dataclasses import dataclass
 
 from ..domain.data import Gone, InactiveOwner, NotFound, OwnerContext, RevisionConflict
-from ..domain.task_ports import Scheduler, SimulationProvider
+from ..domain.task_ports import LocalResultReconciler, Scheduler, SimulationProvider
 from ..domain.tasks import ResultConflict, StaleFence, UnsafeRetry
 
 
@@ -23,11 +23,13 @@ class MockProvider:
 
 class TaskWorker:
     def __init__(self, database, scheduler: Scheduler, provider: SimulationProvider,
-                 *, worker_id: str, lease_seconds=30):
+                 *, worker_id: str, lease_seconds=30,
+                 reconciler: LocalResultReconciler | None = None):
         if provider.simulation_only is not True:
             raise ValueError('PR-02b worker permits simulated providers only')
         self.database, self.scheduler, self.provider = database, scheduler, provider
         self.worker_id, self.lease_seconds = worker_id, lease_seconds
+        self.reconciler = reconciler
 
     def recover_expired(self):
         recovered = []
@@ -38,6 +40,9 @@ class TaskWorker:
             except (Gone, InactiveOwner):
                 # Narrow metadata-only transition for revoked owners/lineages.
                 # It cannot read inputs/results or submit anything externally.
+                # SQL uses the same identity predicate as the denied owner UoW.
+                # A false result can mean another worker won or access changed;
+                # it is never authorization to load a body or submit a request.
                 self.scheduler.recover_revoked(claim.id, claim.lease_token)
                 continue
             except (StaleFence, NotFound, RevisionConflict):
@@ -46,9 +51,10 @@ class TaskWorker:
 
     def run_once(self):
         self.recover_expired()
+        reconciled = self.reconciler.run_once() if self.reconciler is not None else 0
         claims = self.scheduler.claim(self.worker_id, self.lease_seconds, 1)
         if not claims:
-            return False
+            return bool(reconciled)
         claim = claims[0]
         owner = OwnerContext(claim.owner_id)
         try:
