@@ -12,7 +12,7 @@ describe('runtime used by the preview shell', () => {
     const runtime = createMockRuntime();
     runtime.chooseScenario('04');
     expect(runtime.getState().flows).toMatchObject({ capture: 'recording', upload: 'failed', asr: 'streaming' });
-    runtime.setFlow('upload', 'durable');
+    runtime.runEventScript('upload');
     expect(runtime.getState().flows.capture).toBe('recording');
     expect(runtime.getState().flows.asr).toBe('streaming');
   });
@@ -74,6 +74,8 @@ describe('runtime used by the preview shell', () => {
   });
   it('treats frame ACK separately from durable receipt and unknown charge as non-retryable', () => {
     const runtime = createMockRuntime();
+    runtime.getEventClient().emit({ ...eventScripts.upload[0], data: { ...eventScripts.upload[0].data, frame_seq: 99 } });
+    expect(runtime.getState().eventProjection.frameReceived).toBe(false);
     runtime.getEventClient().emit(eventScripts.upload[0]);
     expect(runtime.getState()).toMatchObject({ flows: { upload: 'pending' }, eventProjection: { frameReceived: true, chunkDurable: false } });
     runtime.getEventClient().emit(eventScripts.upload[1]);
@@ -153,6 +155,9 @@ describe('runtime used by the preview shell', () => {
     // Tombstones belong to the old account scope, not the next account's simulation.
     runtime.switchAccount();
     runtime.getEventClient().emit(receipt);
+    expect(runtime.getState()).toMatchObject({ account: 'B', flows: { upload: 'pending' }, eventProjection: { audioDeleted: false, chunkDurable: false } });
+    const scope = runtime.getState().captureScope!;
+    runtime.getEventClient().emit({ ...receipt, data: { ...receipt.data, class_session_id: scope.classSessionId, capture_epoch_id: scope.captureEpochId, chunk_id: scope.chunkId } });
     expect(runtime.getState()).toMatchObject({ account: 'B', flows: { upload: 'durable' }, eventProjection: { audioDeleted: false, chunkDurable: true } });
   });
   it('does not replace a newer unknown task result with an older succeeded event', () => {
@@ -162,6 +167,135 @@ describe('runtime used by the preview shell', () => {
     runtime.getEventClient().emit({ ...task, event_id: 'cccccccc-cccc-4ccc-8ccc-ccccccccccc3', data: { ...task.data, revision: 1, state: 'succeeded', may_have_charged: false } });
     expect(runtime.getState()).toMatchObject({ flows: { ai: 'unknown' }, eventProjection: { mayHaveCharged: true } });
     expect(runtime.requestAiRetry()).toBe(false);
+  });
+});
+
+describe('revocation, isolated tasks and segment projection', () => {
+  it('stops immediately on classroom revocation and rejects restart in that classroom', () => {
+    const runtime = createMockRuntime();
+    expect(runtime.start()).toBe(true);
+    runtime.runEventScript('classroomDeletion');
+    expect(runtime.getState()).toMatchObject({ active: false, leaseValid: false, flows: { capture: 'failed' }, eventProjection: { portCaptureState: 'failed' } });
+    expect(runtime.start()).toBe(false);
+    expect(runtime.acquireMockLease()).toBe(false);
+    runtime.getEventClient().emit(eventScripts.upload[1]);
+    expect(runtime.getState()).toMatchObject({ active: false, flows: { capture: 'failed', upload: 'pending' } });
+  });
+  it('requires a new lease after loss; old lease events cannot stop the new capture', () => {
+    const runtime = createMockRuntime();
+    expect(runtime.start()).toBe(true);
+    const oldScope = runtime.getState().captureScope!;
+    runtime.runEventScript('upload');
+    expect(runtime.getState().eventProjection).toMatchObject({ frameReceived: true, chunkDurable: true, uploadPending: false });
+    runtime.runEventScript('leaseLoss');
+    expect(runtime.start()).toBe(false);
+    expect(runtime.getState()).toMatchObject({ active: false, leaseValid: false, flows: { capture: 'failed' } });
+    expect(runtime.acquireMockLease()).toBe(true);
+    const newScope = runtime.getState().captureScope!;
+    expect(runtime.getState()).toMatchObject({ flows: { upload: 'pending' }, eventProjection: { frameReceived: false, chunkDurable: false, uploadPending: true } });
+    expect(newScope.captureEpochId).not.toBe(oldScope.captureEpochId);
+    expect(newScope.fenceToken).toBeGreaterThan(oldScope.fenceToken);
+    expect(runtime.start()).toBe(true);
+    const loss = eventScripts.leaseLoss[0];
+    runtime.getEventClient().emit({ ...loss, event_id: crypto.randomUUID(), data: { ...loss.data, capture_epoch_id: oldScope.captureEpochId, fence_token: oldScope.fenceToken } });
+    expect(runtime.getState()).toMatchObject({ active: true, leaseValid: true, flows: { capture: 'recording' } });
+  });
+  it('never starts a lease bound to a different classroom and projects scripted upload consistently', () => {
+    const runtime = createMockRuntime();
+    runtime.chooseScenario('03');
+    expect(runtime.getState()).toMatchObject({ flows: { upload: 'durable' }, eventProjection: { chunkDurable: true, uploadPending: false } });
+    runtime.stop();
+    runtime.switchClassroom(crypto.randomUUID());
+    expect(runtime.start()).toBe(false);
+    expect(runtime.getState().active).toBe(false);
+    expect(runtime.acquireMockLease()).toBe(true);
+    expect(runtime.start()).toBe(true);
+  });
+  it('scene reset disconnects old listeners and resets tombstones, event deduplication and ports', () => {
+    const runtime = createMockRuntime();
+    const old = runtime.getEventClient();
+    runtime.start(); runtime.runEventScript('classroomDeletion');
+    runtime.chooseScenario('02');
+    expect(old.listenerCount()).toBe(0);
+    old.emit(eventScripts.classroomDeletion[0]);
+    expect(runtime.start()).toBe(true);
+    runtime.runEventScript('classroomDeletion');
+    expect(runtime.getState()).toMatchObject({ active: false, leaseValid: false, eventProjection: { classroomDeleted: true } });
+  });
+  it('isolates tasks by classroom and retains unknown cost risk until that task is reconciled', () => {
+    const runtime = createMockRuntime();
+    const original = eventScripts.taskUnknown[0];
+    const otherClass = crypto.randomUUID();
+    const t1 = original.data.task_id;
+    const t2 = crypto.randomUUID();
+    const emit = (taskId: string, classroomId: string, revision: number, result: 'unknown' | 'succeeded' | 'failed' | 'running', risk: boolean) => runtime.getEventClient().emit({ ...original, event_id: crypto.randomUUID(), data: { ...original.data, task_id: taskId, class_session_id: classroomId, revision, state: result, may_have_charged: risk } });
+    emit(t1, original.data.class_session_id, 1, 'unknown', true);
+    emit(t2, otherClass, 1, 'succeeded', false);
+    expect(runtime.getState()).toMatchObject({ flows: { ai: 'unknown' }, eventProjection: { mayHaveCharged: true } });
+    runtime.switchClassroom(otherClass);
+    expect(runtime.getState()).toMatchObject({ flows: { ai: 'succeeded' }, eventProjection: { mayHaveCharged: true } });
+    emit(t1, original.data.class_session_id, 2, 'running', false);
+    expect(runtime.getState()).toMatchObject({ flows: { ai: 'succeeded' }, eventProjection: { mayHaveCharged: true } });
+    expect(runtime.getState().tasks[t1].mayHaveCharged).toBe(true);
+    emit(t1, original.data.class_session_id, 3, 'failed', false);
+    expect(runtime.getState().eventProjection.mayHaveCharged).toBe(false);
+    runtime.switchClassroom(original.data.class_session_id);
+    emit(t2, otherClass, 2, 'running', false);
+    expect(runtime.getState()).toMatchObject({ flows: { ai: 'failed' }, tasks: { [t1]: { state: 'failed' }, [t2]: { state: 'running' } } });
+    runtime.switchClassroom(otherClass);
+    expect(runtime.getState().flows.ai).toBe('running');
+  });
+  it('binds scripted audio revocation to the newly acquired chunk', () => {
+    const runtime = createMockRuntime();
+    runtime.runEventScript('leaseLoss');
+    expect(runtime.acquireMockLease()).toBe(true);
+    runtime.runEventScript('deletion');
+    runtime.runEventScript('upload');
+    expect(runtime.getState().eventProjection).toMatchObject({ audioDeleted: true, frameReceived: false, chunkDurable: false });
+  });
+  it('other classroom and audio tombstones do not change current classroom projection', () => {
+    const runtime = createMockRuntime();
+    runtime.runEventScript('transcript');
+    const other = crypto.randomUUID();
+    const deleted = eventScripts.classroomDeletion[0];
+    runtime.getEventClient().emit({ ...deleted, event_id: crypto.randomUUID(), data: { ...deleted.data, object_id: other } });
+    const audio = eventScripts.deletion[0];
+    runtime.getEventClient().emit({ ...audio, event_id: crypto.randomUUID(), data: { ...audio.data, object_id: crypto.randomUUID() } });
+    expect(runtime.getState().eventProjection).toMatchObject({ finalText: '合成的正式片段', finalRevision: 2, classroomDeleted: false, audioDeleted: false });
+    runtime.switchClassroom(other);
+    expect(runtime.getState().eventProjection).toMatchObject({ finalText: null, finalRevision: 0, classroomDeleted: true });
+    expect(runtime.acquireMockLease()).toBe(false);
+  });
+  it('preserves unknown charge risk across scene changes until that task is reconciled', () => {
+    const runtime = createMockRuntime();
+    runtime.chooseScenario('06');
+    const [taskId] = Object.keys(runtime.getState().tasks);
+    expect(runtime.getState()).toMatchObject({ flows: { ai: 'unknown' }, eventProjection: { mayHaveCharged: true } });
+    runtime.chooseScenario('04');
+    expect(runtime.getState()).toMatchObject({ flows: { ai: 'unknown' }, eventProjection: { mayHaveCharged: true } });
+    runtime.chooseScenario('06');
+    expect(Object.keys(runtime.getState().tasks)).toEqual([taskId]);
+    const event = eventScripts.taskUnknown[0];
+    runtime.getEventClient().emit({ ...event, event_id: crypto.randomUUID(), data: { ...event.data, task_id: taskId, revision: 2, state: 'running', may_have_charged: false } });
+    expect(runtime.getState().eventProjection.mayHaveCharged).toBe(true);
+    runtime.getEventClient().emit({ ...event, event_id: crypto.randomUUID(), data: { ...event.data, task_id: taskId, revision: 3, state: 'succeeded', may_have_charged: false } });
+    expect(runtime.getState().eventProjection.mayHaveCharged).toBe(false);
+    runtime.chooseScenario('06');
+    const tasks = runtime.getState().tasks;
+    expect(Object.keys(tasks)).toHaveLength(2);
+    expect(tasks[taskId].state).toBe('succeeded');
+    expect(runtime.getState()).toMatchObject({ flows: { ai: 'unknown' }, eventProjection: { mayHaveCharged: true } });
+  });
+  it('a final only clears the partial of the same stream and segment', () => {
+    const runtime = createMockRuntime();
+    const partial = eventScripts.transcript[0];
+    const final = eventScripts.transcript[1];
+    const segmentB = crypto.randomUUID();
+    runtime.getEventClient().emit({ ...partial, data: { ...partial.data, segment_id: segmentB, sequence: 6, text: 'B still partial' } });
+    runtime.getEventClient().emit(final);
+    expect(runtime.getState().eventProjection).toMatchObject({ partial: 'B still partial', finalText: '合成的正式片段' });
+    runtime.getEventClient().emit({ ...final, event_id: crypto.randomUUID(), data: { ...final.data, segment_id: segmentB, sequence: 6, text: 'B final' } });
+    expect(runtime.getState().eventProjection).toMatchObject({ partial: null, finalText: '合成的正式片段 / B final' });
   });
 });
 

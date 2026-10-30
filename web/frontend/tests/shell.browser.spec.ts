@@ -35,7 +35,7 @@ test('capture remains visible during navigation and theme change', async ({ page
   await expect(bar).toHaveCount(0);
 });
 
-test('320px and 200% text have no document horizontal overflow', async ({ page }) => {
+test('320px and 200% root font size have no document horizontal overflow', async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 720 });
   await page.goto('http://127.0.0.1:19309/');
   await page.addStyleTag({ content: 'html { font-size: 200% !important; }' });
@@ -193,7 +193,7 @@ test('MOCK-03/07/08/09/10/12 expose their synthetic controls', async ({ page }) 
   await expect(page.getByRole('heading', { name: '基础组件与状态' })).toBeVisible();
 });
 
-test('long formula scrolls locally and long course name remains available at 320px and 200% text', async ({ page }) => {
+test('long formula scrolls locally and long course name remains available at 320px and 200% root font size', async ({ page }) => {
   await page.setViewportSize({ width: 320, height: 720 });
   await page.goto('http://127.0.0.1:19309/__dev/catalog');
   await page.addStyleTag({ content: 'html { font-size: 200% !important; }' });

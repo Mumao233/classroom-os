@@ -1,0 +1,2 @@
+# Generated TypeScript must match the generator's LF output on every platform.
+src/generated/*.ts text eol=lf
