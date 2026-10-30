@@ -1,0 +1,585 @@
+{
+  "original_commit": "406bb9c6d943e4b30eef62e0397bfed1103e96e6",
+  "pr02a_base": "a76558ac64a95ae28874eaecabb71c5a4381a7ad",
+  "branch": "feature/web-pr02b-tasks",
+  "contract_version": "0.1.0",
+  "independent_review": {
+    "path": "outputs/pr02b/independent-review-20261030-151053/REPORT.md",
+    "sha256": "3ff751550a38873f6748fbb8db97e3a63755ba1ca1f6f81cd71e272e2cee430d",
+    "verdict": "REQUEST CHANGES",
+    "findings": [
+      "R1 P1 frozen material authorization/TOCTOU",
+      "R2 P2 cancelled recovered durable result"
+    ],
+    "re_review": "pending, not implied by local validation"
+  },
+  "pre_fix_probes": {
+    "commit": "406bb9c6d943e4b30eef62e0397bfed1103e96e6",
+    "cluster": {
+      "login": "pr02a_pr02b_migrator",
+      "database": "pr02a_pr02b_synthetic",
+      "data_directory": "J:/class-assistant/worktrees/web-pr02b-tasks/work/pr02b/pg/data",
+      "host": "127.0.0.1",
+      "port": 4981,
+      "listen_addresses": "127.0.0.1",
+      "version": "PostgreSQL 17.11 on x86_64-windows, compiled by msvc-19.44.35228, 64-bit"
+    },
+    "cases": [
+      {
+        "name": "cancel_after_durable_result_recovery",
+        "defect_reproduced": true,
+        "recovered_state": "queued",
+        "cancel_state": "cancelled",
+        "reconcile_state": "cancelled",
+        "attempt_state": "submitting",
+        "provider_outcome": "succeeded",
+        "raw_validation": "pending",
+        "subsequent_claims": 0,
+        "last_event": {
+          "state": "cancelled",
+          "task_id": "70396dcb-6d43-4406-80d4-7d1be219f8ee",
+          "revision": 5,
+          "error_code": null,
+          "class_session_id": null,
+          "may_have_charged": true
+        }
+      },
+      {
+        "name": "moved_classroom_revoked_frozen_material_omitted_input",
+        "defect_reproduced": true,
+        "material_read_denied": true,
+        "mock_provider_calls_after_revocation": 1,
+        "task_state": "succeeded",
+        "task_input_ref": {
+          "schema_version": 1
+        }
+      },
+      {
+        "name": "explicit_material_revocation_between_check_and_intent_commit",
+        "defect_reproduced": true,
+        "revoked_before_intent_commit": true,
+        "attempt_state": "submitting",
+        "mock_provider_calls": 1
+      }
+    ],
+    "disposable_database": "pr02a_test_0a3ee5f0f5f84301ba492e2faa90eb14",
+    "fixture_cleanup_completed": true
+  },
+  "backend": {
+    "python": "3.12.14 (main, Aug 25 2026, 14:01:42) [MSC v.1944 64 bit (AMD64)]",
+    "executable": "J:\\class-assistant\\worktrees\\web-pr02a-data\\work\\pr02a\\venv\\Scripts\\python.exe",
+    "command": [
+      "J:\\class-assistant\\worktrees\\web-pr02a-data\\work\\pr02a\\venv\\Scripts\\python.exe",
+      "-m",
+      "pytest",
+      "-q",
+      "--basetemp=J:\\class-assistant\\worktrees\\web-pr02b-tasks\\work\\pr02b\\runs\\20261030T075612.863345Z\\tmp\\pytest",
+      "--junitxml=J:\\class-assistant\\worktrees\\web-pr02b-tasks\\outputs\\pr02b\\20261030T075612.863345Z\\pytest.xml",
+      "-o",
+      "cache_dir=J:\\class-assistant\\worktrees\\web-pr02b-tasks\\work\\pr02b\\runs\\20261030T075612.863345Z\\cache\\pytest"
+    ],
+    "exit_code": 0,
+    "seconds": 94.625,
+    "cluster_identity": {
+      "login": "pr02a_pr02b_migrator",
+      "database": "pr02a_pr02b_synthetic",
+      "data_directory": "J:/class-assistant/worktrees/web-pr02b-tasks/work/pr02b/pg/data",
+      "host": "127.0.0.1",
+      "port": 4981,
+      "listen_addresses": "127.0.0.1",
+      "version": "PostgreSQL 17.11 on x86_64-windows, compiled by msvc-19.44.35228, 64-bit"
+    },
+    "junit": {
+      "tests": 293,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "network_guard_selftest": true,
+    "passed": true,
+    "isolation": "Verified worktree-owned loopback cluster; fixture creates/drops random database and restricted login",
+    "limitations": "Synthetic PostgreSQL and simulated provider only; no paid model, HTTP/frontend, deployment or production migration"
+  },
+  "backend_evidence": "outputs/pr02b/20261030T075612.863345Z/results.json",
+  "retained_original_cases": 240,
+  "retained_original_case_ids_verified": true,
+  "retained_pr02a_cases": 128,
+  "new_cases": [
+    [
+      "tests.integration.test_task_cancel_remediation",
+      "test_cancel_locks_first_reclaim_skips_then_local_result_finishes"
+    ],
+    [
+      "tests.integration.test_task_cancel_remediation",
+      "test_cancel_proven_unsent_finishes_any_planned_attempt[never-claimed]"
+    ],
+    [
+      "tests.integration.test_task_cancel_remediation",
+      "test_cancel_proven_unsent_finishes_any_planned_attempt[planned-recovered]"
+    ],
+    [
+      "tests.integration.test_task_cancel_remediation",
+      "test_cancel_recovered_raw_keeps_local_completion_path[invalid-reconcile]"
+    ],
+    [
+      "tests.integration.test_task_cancel_remediation",
+      "test_cancel_recovered_raw_keeps_local_completion_path[invalid-worker]"
+    ],
+    [
+      "tests.integration.test_task_cancel_remediation",
+      "test_cancel_recovered_raw_keeps_local_completion_path[valid-reconcile]"
+    ],
+    [
+      "tests.integration.test_task_cancel_remediation",
+      "test_cancel_recovered_raw_keeps_local_completion_path[valid-worker]"
+    ],
+    [
+      "tests.integration.test_task_cancel_remediation",
+      "test_cancel_sent_unknown_preserves_uncertainty_and_does_not_send_again"
+    ],
+    [
+      "tests.integration.test_task_cancel_remediation",
+      "test_cancellation_considers_older_submitted_attempt_not_only_latest_planned"
+    ],
+    [
+      "tests.integration.test_task_cancel_remediation",
+      "test_older_saved_raw_is_completed_instead_of_sending_newer_planned_attempt"
+    ],
+    [
+      "tests.integration.test_task_cancel_remediation",
+      "test_reclaim_locks_first_cancel_waits_then_local_result_finishes"
+    ],
+    [
+      "tests.integration.test_task_cancel_remediation",
+      "test_reconcile_repairs_preexisting_cancelled_task_with_pending_raw"
+    ],
+    [
+      "tests.integration.test_task_material_remediation",
+      "test_all_task_paths_reauthorize_the_server_frozen_material[get-explicit]"
+    ],
+    [
+      "tests.integration.test_task_material_remediation",
+      "test_all_task_paths_reauthorize_the_server_frozen_material[get-omitted]"
+    ],
+    [
+      "tests.integration.test_task_material_remediation",
+      "test_all_task_paths_reauthorize_the_server_frozen_material[prepare-explicit]"
+    ],
+    [
+      "tests.integration.test_task_material_remediation",
+      "test_all_task_paths_reauthorize_the_server_frozen_material[prepare-omitted]"
+    ],
+    [
+      "tests.integration.test_task_material_remediation",
+      "test_all_task_paths_reauthorize_the_server_frozen_material[publish-explicit]"
+    ],
+    [
+      "tests.integration.test_task_material_remediation",
+      "test_all_task_paths_reauthorize_the_server_frozen_material[publish-omitted]"
+    ],
+    [
+      "tests.integration.test_task_material_remediation",
+      "test_all_task_paths_reauthorize_the_server_frozen_material[receipt-explicit]"
+    ],
+    [
+      "tests.integration.test_task_material_remediation",
+      "test_all_task_paths_reauthorize_the_server_frozen_material[receipt-omitted]"
+    ],
+    [
+      "tests.integration.test_task_material_remediation",
+      "test_all_task_paths_reauthorize_the_server_frozen_material[reconcile-explicit]"
+    ],
+    [
+      "tests.integration.test_task_material_remediation",
+      "test_all_task_paths_reauthorize_the_server_frozen_material[reconcile-omitted]"
+    ],
+    [
+      "tests.integration.test_task_material_remediation",
+      "test_all_task_paths_reauthorize_the_server_frozen_material[store-explicit]"
+    ],
+    [
+      "tests.integration.test_task_material_remediation",
+      "test_all_task_paths_reauthorize_the_server_frozen_material[store-omitted]"
+    ],
+    [
+      "tests.integration.test_task_material_remediation",
+      "test_all_task_paths_reauthorize_the_server_frozen_material[submit-explicit]"
+    ],
+    [
+      "tests.integration.test_task_material_remediation",
+      "test_all_task_paths_reauthorize_the_server_frozen_material[submit-omitted]"
+    ],
+    [
+      "tests.integration.test_task_material_remediation",
+      "test_classroom_transfer_does_not_authorize_cross_owner_material"
+    ],
+    [
+      "tests.integration.test_task_material_remediation",
+      "test_explicit_material_cannot_replace_the_frozen_server_reference"
+    ],
+    [
+      "tests.integration.test_task_material_remediation",
+      "test_material_revocation_and_worker_submission_serialize_both_actor_orders[course-explicit-revocation]"
+    ],
+    [
+      "tests.integration.test_task_material_remediation",
+      "test_material_revocation_and_worker_submission_serialize_both_actor_orders[course-explicit-submission]"
+    ],
+    [
+      "tests.integration.test_task_material_remediation",
+      "test_material_revocation_and_worker_submission_serialize_both_actor_orders[course-omitted-revocation]"
+    ],
+    [
+      "tests.integration.test_task_material_remediation",
+      "test_material_revocation_and_worker_submission_serialize_both_actor_orders[course-omitted-submission]"
+    ],
+    [
+      "tests.integration.test_task_material_remediation",
+      "test_material_revocation_and_worker_submission_serialize_both_actor_orders[material-explicit-revocation]"
+    ],
+    [
+      "tests.integration.test_task_material_remediation",
+      "test_material_revocation_and_worker_submission_serialize_both_actor_orders[material-explicit-submission]"
+    ],
+    [
+      "tests.integration.test_task_material_remediation",
+      "test_material_revocation_and_worker_submission_serialize_both_actor_orders[material-omitted-revocation]"
+    ],
+    [
+      "tests.integration.test_task_material_remediation",
+      "test_material_revocation_and_worker_submission_serialize_both_actor_orders[material-omitted-submission]"
+    ],
+    [
+      "tests.integration.test_task_material_remediation",
+      "test_material_revocation_and_worker_submission_serialize_both_actor_orders[semester-explicit-revocation]"
+    ],
+    [
+      "tests.integration.test_task_material_remediation",
+      "test_material_revocation_and_worker_submission_serialize_both_actor_orders[semester-explicit-submission]"
+    ],
+    [
+      "tests.integration.test_task_material_remediation",
+      "test_material_revocation_and_worker_submission_serialize_both_actor_orders[semester-omitted-revocation]"
+    ],
+    [
+      "tests.integration.test_task_material_remediation",
+      "test_material_revocation_and_worker_submission_serialize_both_actor_orders[semester-omitted-submission]"
+    ],
+    [
+      "tests.integration.test_task_material_remediation",
+      "test_queued_task_rechecks_original_material_before_actual_worker_send[course-explicit]"
+    ],
+    [
+      "tests.integration.test_task_material_remediation",
+      "test_queued_task_rechecks_original_material_before_actual_worker_send[course-omitted]"
+    ],
+    [
+      "tests.integration.test_task_material_remediation",
+      "test_queued_task_rechecks_original_material_before_actual_worker_send[material-explicit]"
+    ],
+    [
+      "tests.integration.test_task_material_remediation",
+      "test_queued_task_rechecks_original_material_before_actual_worker_send[material-omitted]"
+    ],
+    [
+      "tests.integration.test_task_material_remediation",
+      "test_queued_task_rechecks_original_material_before_actual_worker_send[semester-explicit]"
+    ],
+    [
+      "tests.integration.test_task_material_remediation",
+      "test_queued_task_rechecks_original_material_before_actual_worker_send[semester-omitted]"
+    ],
+    [
+      "tests.integration.test_task_material_remediation",
+      "test_recovery_retries_source_discovery_conflict_without_calling_provider"
+    ],
+    [
+      "tests.integration.test_task_material_remediation",
+      "test_revoked_frozen_source_blocks_enqueue_even_after_classroom_move[course-explicit]"
+    ],
+    [
+      "tests.integration.test_task_material_remediation",
+      "test_revoked_frozen_source_blocks_enqueue_even_after_classroom_move[course-omitted]"
+    ],
+    [
+      "tests.integration.test_task_material_remediation",
+      "test_revoked_frozen_source_blocks_enqueue_even_after_classroom_move[material-explicit]"
+    ],
+    [
+      "tests.integration.test_task_material_remediation",
+      "test_revoked_frozen_source_blocks_enqueue_even_after_classroom_move[material-omitted]"
+    ],
+    [
+      "tests.integration.test_task_material_remediation",
+      "test_revoked_frozen_source_blocks_enqueue_even_after_classroom_move[semester-explicit]"
+    ],
+    [
+      "tests.integration.test_task_material_remediation",
+      "test_revoked_frozen_source_blocks_enqueue_even_after_classroom_move[semester-omitted]"
+    ]
+  ],
+  "by_module": {
+    "tests.integration.test_data_foundation": 40,
+    "tests.integration.test_material_revocation_race": 4,
+    "tests.integration.test_migration_remediation": 3,
+    "tests.integration.test_persistent_tasks": 35,
+    "tests.integration.test_semester_limits": 26,
+    "tests.integration.test_task_cancel_remediation": 12,
+    "tests.integration.test_task_material_remediation": 41,
+    "tests.integration.test_task_migrations": 5,
+    "tests.integration.test_task_worker": 16,
+    "tests.unit.test_pr02b_runner": 40,
+    "tests.unit.test_task_values": 16,
+    "tests.unit.test_test_database_target": 55
+  },
+  "r1_added": 41,
+  "r2_added": 12,
+  "legacy": {
+    "parents": 525,
+    "subtests": 171,
+    "node_suites": 9,
+    "gates": 27,
+    "all_exit_zero": true,
+    "evidence": "outputs/pr02b/remediation/local-baseline-final/results.json"
+  },
+  "static": {
+    "ast_files": 41,
+    "mypy": "Success: no issues found in 23 source files",
+    "pip_check": "No broken requirements found.",
+    "alembic_heads": "0003_persistent_tasks (head)",
+    "offline_sql": "outputs/pr02b/remediation/alembic-head.sql"
+  },
+  "protected": {
+    "stage": "after",
+    "base": "a76558ac64a95ae28874eaecabb71c5a4381a7ad",
+    "original_pr02b": "406bb9c6d943e4b30eef62e0397bfed1103e96e6",
+    "protected_files": 231,
+    "protected_changed": [],
+    "scope_violations": [],
+    "critical_files": {
+      "docs/web-alpha/architecture/contracts/CHANGELOG.md": {
+        "revision": "a76558ac64a95ae28874eaecabb71c5a4381a7ad",
+        "expected_checkout_sha256": "657a617af59964990cc1f48298b140c82eca9f9bfe937233f6e74fef13707859",
+        "original_physical_sha256": "657a617af59964990cc1f48298b140c82eca9f9bfe937233f6e74fef13707859",
+        "current_sha256": "657a617af59964990cc1f48298b140c82eca9f9bfe937233f6e74fef13707859",
+        "git_object_matches": true,
+        "matches": true
+      },
+      "docs/web-alpha/architecture/contracts/domain-model.json": {
+        "revision": "a76558ac64a95ae28874eaecabb71c5a4381a7ad",
+        "expected_checkout_sha256": "ba0a194e36eb919685e6ab49fca138e61a5c31158daf839b668546c278d8a798",
+        "original_physical_sha256": "ba0a194e36eb919685e6ab49fca138e61a5c31158daf839b668546c278d8a798",
+        "current_sha256": "ba0a194e36eb919685e6ab49fca138e61a5c31158daf839b668546c278d8a798",
+        "git_object_matches": true,
+        "matches": true
+      },
+      "docs/web-alpha/architecture/contracts/events.schema.json": {
+        "revision": "a76558ac64a95ae28874eaecabb71c5a4381a7ad",
+        "expected_checkout_sha256": "1f04c47c261869a57afb956c1051cdd76b8c5f9e671dd7cd73cdff98ab62e256",
+        "original_physical_sha256": "1f04c47c261869a57afb956c1051cdd76b8c5f9e671dd7cd73cdff98ab62e256",
+        "current_sha256": "1f04c47c261869a57afb956c1051cdd76b8c5f9e671dd7cd73cdff98ab62e256",
+        "git_object_matches": true,
+        "matches": true
+      },
+      "docs/web-alpha/architecture/contracts/examples.json": {
+        "revision": "a76558ac64a95ae28874eaecabb71c5a4381a7ad",
+        "expected_checkout_sha256": "3250851b3377e16fae00df227877b7d672b8fbde12bb55584ed08fb858f81349",
+        "original_physical_sha256": "3250851b3377e16fae00df227877b7d672b8fbde12bb55584ed08fb858f81349",
+        "current_sha256": "3250851b3377e16fae00df227877b7d672b8fbde12bb55584ed08fb858f81349",
+        "git_object_matches": true,
+        "matches": true
+      },
+      "docs/web-alpha/architecture/contracts/openapi.json": {
+        "revision": "a76558ac64a95ae28874eaecabb71c5a4381a7ad",
+        "expected_checkout_sha256": "331fee959f06372602a6d55256e605a1c79a95563ea7c6887a7703bb5c5a255b",
+        "original_physical_sha256": "331fee959f06372602a6d55256e605a1c79a95563ea7c6887a7703bb5c5a255b",
+        "current_sha256": "331fee959f06372602a6d55256e605a1c79a95563ea7c6887a7703bb5c5a255b",
+        "git_object_matches": true,
+        "matches": true
+      },
+      "docs/web-alpha/architecture/contracts/pr-dependencies.json": {
+        "revision": "a76558ac64a95ae28874eaecabb71c5a4381a7ad",
+        "expected_checkout_sha256": "f2db891c2f685a5979f6c722b09c7abc7389b6f279bc7a5a0ba756a987ccc3a9",
+        "original_physical_sha256": "f2db891c2f685a5979f6c722b09c7abc7389b6f279bc7a5a0ba756a987ccc3a9",
+        "current_sha256": "f2db891c2f685a5979f6c722b09c7abc7389b6f279bc7a5a0ba756a987ccc3a9",
+        "git_object_matches": true,
+        "matches": true
+      },
+      "docs/web-alpha/architecture/contracts/requirements-traceability.json": {
+        "revision": "a76558ac64a95ae28874eaecabb71c5a4381a7ad",
+        "expected_checkout_sha256": "5763f06a5224b2e527c30b63509396963c2f1d11a244bd0ff7ab0d1d509c66e9",
+        "original_physical_sha256": "5763f06a5224b2e527c30b63509396963c2f1d11a244bd0ff7ab0d1d509c66e9",
+        "current_sha256": "5763f06a5224b2e527c30b63509396963c2f1d11a244bd0ff7ab0d1d509c66e9",
+        "git_object_matches": true,
+        "matches": true
+      },
+      "docs/web-alpha/architecture/contracts/state-machines.json": {
+        "revision": "a76558ac64a95ae28874eaecabb71c5a4381a7ad",
+        "expected_checkout_sha256": "e066dcef52d8350a25dca60d7a8807c7a1079ac5cdd89ed839c7e0b286614bf7",
+        "original_physical_sha256": "e066dcef52d8350a25dca60d7a8807c7a1079ac5cdd89ed839c7e0b286614bf7",
+        "current_sha256": "e066dcef52d8350a25dca60d7a8807c7a1079ac5cdd89ed839c7e0b286614bf7",
+        "git_object_matches": true,
+        "matches": true
+      },
+      "web/backend/migrations/versions/0001_data_foundation.py": {
+        "revision": "406bb9c6d943e4b30eef62e0397bfed1103e96e6",
+        "expected_checkout_sha256": "d7f5bf06145eb21f9cd5d8f6ec093ecb1deebfb590b2829f39ce7e05fcbedf16",
+        "original_physical_sha256": "d7f5bf06145eb21f9cd5d8f6ec093ecb1deebfb590b2829f39ce7e05fcbedf16",
+        "current_sha256": "d7f5bf06145eb21f9cd5d8f6ec093ecb1deebfb590b2829f39ce7e05fcbedf16",
+        "git_object_matches": true,
+        "matches": true
+      },
+      "web/backend/migrations/versions/0001_data_foundation.sql": {
+        "revision": "406bb9c6d943e4b30eef62e0397bfed1103e96e6",
+        "expected_checkout_sha256": "87c475d46a647cc838c0ad9f75a6121cc4ad1c7b537fb9c7f94e568f987bbaa8",
+        "original_physical_sha256": "87c475d46a647cc838c0ad9f75a6121cc4ad1c7b537fb9c7f94e568f987bbaa8",
+        "current_sha256": "87c475d46a647cc838c0ad9f75a6121cc4ad1c7b537fb9c7f94e568f987bbaa8",
+        "git_object_matches": true,
+        "matches": true
+      },
+      "web/backend/migrations/versions/0002_pr02a_review.py": {
+        "revision": "406bb9c6d943e4b30eef62e0397bfed1103e96e6",
+        "expected_checkout_sha256": "f7c04dcbb80dc691e5060847a27be9c1fbeb4bbf4011eaa589e6fb7ad8631f69",
+        "original_physical_sha256": "f7c04dcbb80dc691e5060847a27be9c1fbeb4bbf4011eaa589e6fb7ad8631f69",
+        "current_sha256": "f7c04dcbb80dc691e5060847a27be9c1fbeb4bbf4011eaa589e6fb7ad8631f69",
+        "git_object_matches": true,
+        "matches": true
+      },
+      "web/backend/migrations/versions/0002_pr02a_review.sql": {
+        "revision": "406bb9c6d943e4b30eef62e0397bfed1103e96e6",
+        "expected_checkout_sha256": "4e9b9046202f0712f474eab2594c3cb7aff177854c8bd6bc0453e08995d3cf72",
+        "original_physical_sha256": "4e9b9046202f0712f474eab2594c3cb7aff177854c8bd6bc0453e08995d3cf72",
+        "current_sha256": "4e9b9046202f0712f474eab2594c3cb7aff177854c8bd6bc0453e08995d3cf72",
+        "git_object_matches": true,
+        "matches": true
+      },
+      "web/backend/migrations/versions/0003_persistent_tasks.py": {
+        "revision": "406bb9c6d943e4b30eef62e0397bfed1103e96e6",
+        "expected_checkout_sha256": "3af350e6860c6975473bc1d14e56b34d091dfc8900e17871b2f2f52c1fb05e92",
+        "original_physical_sha256": "3af350e6860c6975473bc1d14e56b34d091dfc8900e17871b2f2f52c1fb05e92",
+        "current_sha256": "3af350e6860c6975473bc1d14e56b34d091dfc8900e17871b2f2f52c1fb05e92",
+        "git_object_matches": true,
+        "matches": true
+      },
+      "web/backend/migrations/versions/0003_persistent_tasks.sql": {
+        "revision": "406bb9c6d943e4b30eef62e0397bfed1103e96e6",
+        "expected_checkout_sha256": "d5993db7732f49203317f91a3d4832bb810884b708b3a17223479d7aca69cc51",
+        "original_physical_sha256": "2b6a502a5b07e02b146ed532bc99df6142403ad0161daa337331c951ef587598",
+        "current_sha256": "2b6a502a5b07e02b146ed532bc99df6142403ad0161daa337331c951ef587598",
+        "git_object_matches": true,
+        "matches": true
+      }
+    },
+    "siblings": [
+      {
+        "root": "J:\\class-assistant\\worktrees\\web-pr09a-aurora",
+        "head": "60b0eaf8f8da978b541f9480b2fcaf486a4fad37",
+        "status": "",
+        "frontend_sha256": {
+          "web/frontend/.gitattributes": "e1ddbab3a031cc31759f24cca99cbff635a5061cd19020ac2d64fde2444defde",
+          "web/frontend/.gitignore": "929838624eeae287a52a315ef4c2e3f9a9d2a3029b42742b040419b015c2d01a",
+          "web/frontend/.npmrc": "3621acec02ad20e654debb0295747ce30910c1bd8426c7084e669f5a3a4ab5c3",
+          "web/frontend/PR09A-ACCEPTANCE.md": "40f4f66d3faa29598d2161a89c46857432a93917c2d93e09f079ef069c9af33b",
+          "web/frontend/PR09A-REMEDIATION-REPORT.md": "1731bd6d36c554eb3080c66ad936f1720dd53947470f0046f58b3458a46f51a8",
+          "web/frontend/README.md": "c63dca03d884b84f8bb25271d34806482441ac8473b2b9974d0b932ca57d9428",
+          "web/frontend/eslint.config.js": "a8b76e9905068b892a46a249b4bb2d7ab56b7344e9631ae56352c82f4a44d286",
+          "web/frontend/index.html": "f630f1216f004cd2c0ee7c0ad95d29a1f1f768dc3db54bab88c4642b1387586d",
+          "web/frontend/package.json": "fbae132d0d88f1545a096a447efad4328995d2477710ec7d5c719dfab515468e",
+          "web/frontend/pnpm-lock.yaml": "072eb98654de5f237465ff3c715f907b4a0e12505f67b9a1e79da785bb93ec40",
+          "web/frontend/public/mockServiceWorker.js": "26171599d94d5445297303f3a1f1cedec26835ea3d0057dcfa92ec520cb35cca",
+          "web/frontend/scripts/gen-contracts.mjs": "42fc3f154a4fd465c19a6ca3ac377801a77b5130c2587325ffdbb378c9229190",
+          "web/frontend/scripts/verify-build.mjs": "238c45dbf99f9cf8615fb37a1bed6c58253ef05336cb158914fc93008f536907",
+          "web/frontend/src/api/client.ts": "93a7939996847f44d5b2ebd19253e7af617cf3e97d03b4f7a5e7b7f22272ab6d",
+          "web/frontend/src/app/App.tsx": "734c044a6c577ce207c6eaf157aa3ff3d4ac25ba7b622e21b487a3f6db22e759",
+          "web/frontend/src/app/MockWorkbench.tsx": "987f0ff490150d56d91256c27b8c825dae0704e5ebcf0065c5ef44ac173d2cec",
+          "web/frontend/src/app/Shell.module.css": "d681e1f1ddc0d66db355b457fcda0e8ea4686a1a08c885b0869e021aaa459688",
+          "web/frontend/src/generated/events.ts": "a1c4fccaae7d262a8e9330318f5565ea6939397d3b906bec66abe09b016e5623",
+          "web/frontend/src/generated/openapi.ts": "68eda7930adb05fac3c5dda7748b91bf54db2b2e29e51744895c9f9821d204ff",
+          "web/frontend/src/main.tsx": "c0915c8488d26d2b58c844fabd1c82c88fe97985d42237701bdda7b3eb89a6fb",
+          "web/frontend/src/mock/event-scripts.ts": "8f4591331331bfdf85e7ec0a92bd1a32f51904175da4f64f82ba0c2fcc3172a6",
+          "web/frontend/src/mock/fixtures.ts": "8e0b5398232c2c64a2c06bc91ef8421d403da33747d282540759395c93e89332",
+          "web/frontend/src/mock/ports.ts": "5f86267bc3aa42f57266382f4fb042f8a5b910161631f633219a007f1618d554",
+          "web/frontend/src/mock/runtime.ts": "5b73051139b043b2033462b5ede0d9273178d4463f08d9aef25a60731cd0c547",
+          "web/frontend/src/mock/start.ts": "d49a63ea37875044d7b2045aa43e43142391cc22ab36f5d903b28aad2e64ed61",
+          "web/frontend/src/pages/Dashboard.tsx": "641349766649e3c4e06fb8d2089d416957c7078204759882bfd5a7c75cf3ad21",
+          "web/frontend/src/pages/Placeholder.tsx": "41e7a5b6080c6ce2adf9b6f7d4c92b3d345fc4f034a511d903882760eb2e1076",
+          "web/frontend/src/styles/global.css": "2455d008ff7ec77a0b4dd64b6bb11bd0e213bede54d433b0972ae4c66cb643af",
+          "web/frontend/src/ui/Aurora.module.css": "8deb331f47a5e961d3c9ee6ab1be991cb01440cbd73f3832254f36d77f452051",
+          "web/frontend/src/ui/index.tsx": "0d717e4ab8c5a97eadc59cb2291301b08c6f828c6cbafbe7f5289e42d91f4f1f",
+          "web/frontend/tests/api.test.ts": "740ebd74d17cee1e6105051a902d67c328a6455553e00b259b0fbcfb94484b94",
+          "web/frontend/tests/contract.test.ts": "9e42f75cb7baa05c456683935b6f9cd6462aa6f8cde9d3c8d4d80ed94b40d02e",
+          "web/frontend/tests/playwright.config.ts": "6f3c40f693020fd2407d2ac3a6c567c06d332fb387812982b1c845729bd21150",
+          "web/frontend/tests/ports.browser.spec.ts": "10990f04055ea5f30c38a90e7e5b25251e78f3079aa4b214ce7c6342ed7cbe6f",
+          "web/frontend/tests/revocation.browser.spec.ts": "4560288e0e461e00fcd309b2da1f32230f658848cf845b42cdbcd270b0630065",
+          "web/frontend/tests/shell.browser.spec.ts": "6ef20532e6b9dc2d63e8c47c4b25c1eda022615ee31affb8316e66891e3d5747",
+          "web/frontend/tests/text-scaling.browser.spec.ts": "cf1e71864d54d06c0cc2f23b586173a714986af34156d32f468e36460d9bf010",
+          "web/frontend/tests/unit.test.ts": "20df4198137a8cf992874bacbd958e6c7acabbcf21143080ea93807a614fba06",
+          "web/frontend/tests/vitest.config.ts": "4029908e5ea746a0495c3e727fdc904e53d49693f7ce2f2138d9817ab9d36c96",
+          "web/frontend/tsconfig.json": "cf5680647e0c9c930a3d902ec36d27b08127e3d667568a939b08ee31c23513e7",
+          "web/frontend/vite.config.ts": "7ad0e9362e6871b0f4dcfc0d7d843e7467b4d3118a16fe1690f5afdcecc9d3dc"
+        }
+      },
+      {
+        "root": "J:\\class-assistant\\classroom-os\\.claude\\worktrees\\web-alpha-aurora-design-28bac7",
+        "head": "43fa23c141e3350e90d72ed7768e3b8de7d68337",
+        "status": "?? .claude/\n",
+        "frontend_sha256": {}
+      }
+    ],
+    "siblings_unchanged": true,
+    "note": "Current sibling HEAD/status/content captured at remediation start; original tracked checker hardcoded obsolete Aurora HEAD and fails on new frontend files; no sibling mutation performed",
+    "passed": true
+  },
+  "validated_sources_sha256": {
+    "web/backend/classroom_web/__init__.py": "1fbc2de79614199bdfe3c08a685a3364bd960f206da31688c64f75284dc221e6",
+    "web/backend/classroom_web/application/__init__.py": "d28e85da4929d31d12cb77619ac59b9e466761bf0972dd356add288b10a2fe92",
+    "web/backend/classroom_web/application/task_worker.py": "7f93b33b60fa8cb4505a17a94b9ad4d9d7447b5c1ee8b0a191696616ad14cf8e",
+    "web/backend/classroom_web/domain/__init__.py": "84bc88db7e5cc50948973b073042ad7f6845c046ee9d1f07f3cc172b59fc0695",
+    "web/backend/classroom_web/domain/data.py": "68b7548f41a37caf9bcc4c523c59c37b14846380b1b2984f4bb749801ccc907c",
+    "web/backend/classroom_web/domain/policies.py": "e58aa5dc149a07e2bd6fb963b5eaeb842dea7d01e975eccfba0eab03989b4501",
+    "web/backend/classroom_web/domain/ports.py": "970145d49a3791f4f9a7460d8b0704a25c73cc0be00b6106e26c4aa170f439d2",
+    "web/backend/classroom_web/domain/task_ports.py": "39b8c6aead15bbe5e823e2262a566edf432acf79dfe01c0f4c17835c96ae6a35",
+    "web/backend/classroom_web/domain/tasks.py": "16d33474342919a42a1ff694d4184ec7e13c92438e21a735543aca909816d549",
+    "web/backend/classroom_web/entrypoints/__init__.py": "6d72ab7b464b8d504d88dde0cda182c445578de275257f1368458384607aedf3",
+    "web/backend/classroom_web/entrypoints/worker.py": "cd84949be8a0f60ebdd9f0d28d529aaa182302201af02f23d635c2ef58593cc1",
+    "web/backend/classroom_web/infrastructure/__init__.py": "b22dfa7dc72b71a69022e1ac11ade4535cda28123401813833103fe27308fa27",
+    "web/backend/classroom_web/infrastructure/database.py": "c6f5d35211804fb42d89ecaeb3132c88d129b114cc12df6a87eab298393d893c",
+    "web/backend/classroom_web/infrastructure/ddl.py": "06124382066888325a82a687626a76d59fc4bc7f779256ddd927ee89d9fb6c3e",
+    "web/backend/classroom_web/infrastructure/repositories.py": "451fc199baea3f06cfcc554c975fc71747189b102a740cd46afde56b0b67bff7",
+    "web/backend/classroom_web/infrastructure/schema.py": "aca8051e0abe218d683b2f52109f3ae038b0c9e9e827101f248e7cd6b805e7b4",
+    "web/backend/classroom_web/infrastructure/task_events.py": "7ef98e907a6ee3a41f0e2394d9749d8820ec9da9b356655edb242611db5f8572",
+    "web/backend/classroom_web/infrastructure/task_repository.py": "7b9cf9afef207c3f7bdc41a28b86b4b29927670021b31b42457cd8b09916f3ae",
+    "web/backend/classroom_web/infrastructure/task_scheduler.py": "1970b4f3246d1abedf84b3da461b5fd4162ac3454968b9153e5c7eb9468bb241",
+    "web/backend/classroom_web/infrastructure/task_schema.py": "1af8683ff16882944960eaed7d73dc83f9283fa94a1801777b33e59df90902dc",
+    "web/backend/classroom_web/infrastructure/task_sources.py": "cdc389d4b6a14ab51c4c3d5e28d78dfaad79ed86f14aad6e2424caef4a838b3d",
+    "web/backend/classroom_web/test_support.py": "04eb4a800d05281d8fcf138599785089b6ea65d5286699e4c2d2812b2a79330a",
+    "web/backend/migrations/env.py": "43e605128548a4078e8a37c58c4a7cd60a3e61b6f5a01e16e69f78880b4bbca8",
+    "web/backend/migrations/versions/0001_data_foundation.py": "d7f5bf06145eb21f9cd5d8f6ec093ecb1deebfb590b2829f39ce7e05fcbedf16",
+    "web/backend/migrations/versions/0002_pr02a_review.py": "f7c04dcbb80dc691e5060847a27be9c1fbeb4bbf4011eaa589e6fb7ad8631f69",
+    "web/backend/migrations/versions/0003_persistent_tasks.py": "3af350e6860c6975473bc1d14e56b34d091dfc8900e17871b2f2f52c1fb05e92",
+    "web/backend/tests/integration/conftest.py": "8351aa9a2cbd64510e52bc67e56f3373181f8b2a0f1553900211b5ca4aae3b45",
+    "web/backend/tests/integration/test_data_foundation.py": "e8eaa4394789f6430f6beeec3b4322159d0af3a14b3fade35365ab1fa0c64d1c",
+    "web/backend/tests/integration/test_material_revocation_race.py": "8489a800d1bcf7520c9780f557f3686f83a2464cff25db3bb1b14d298ea521cf",
+    "web/backend/tests/integration/test_migration_remediation.py": "a985c0cbf977e499f4f3c604e51c0217acbe3ba429a14eaa3257d97fe62240e4",
+    "web/backend/tests/integration/test_persistent_tasks.py": "ac6ebadb298409ab5756594f6d79dcf3a994b94259575b09dd011899a791ee78",
+    "web/backend/tests/integration/test_semester_limits.py": "ded2713a5cd93ebefda667a8ff6793659486e553027322310816edfad6aaace2",
+    "web/backend/tests/integration/test_task_cancel_remediation.py": "c16d20aa3a1a982536a20a2c2d87fa140a1b49674492b7b9e974ca105de3176f",
+    "web/backend/tests/integration/test_task_material_remediation.py": "eebda662c2c5cc6a35af4bab1979c0ce5ecadb9bac273e534f2c6241a81f349d",
+    "web/backend/tests/integration/test_task_migrations.py": "d6961a96eeb09cccd1109b5b8fb6de168b8ee288cc13cfb530d8f0af63b6c85c",
+    "web/backend/tests/integration/test_task_worker.py": "87ba248535a33d48fcfa3a36ee3104cb12dc608dc0a74dd008829530ce6ce103",
+    "web/backend/tests/unit/test_pr02b_runner.py": "b55a6d90dc2f46f0e8fb111fa9549b33afb24fe392b62afaf7ff60d00f520a8e",
+    "web/backend/tests/unit/test_task_values.py": "ef01d6f5de55e6bd7cce001b6cf8c09ab43a96b8fe28ee56a1b5519f86065425",
+    "web/backend/tests/unit/test_test_database_target.py": "7cbddc042b33f1aab7663001f159537a1e67cea8acd525d0067447ec13769327",
+    "tools/pr02b/check_protected.py": "17089c5ba68f3bdac55f17ed0f086377a724fbfa76f2d84bdee4b647b97eeee4",
+    "tools/pr02b/run_tests.py": "4712074b0c6384bec4e2ee218d68a00be59af81855399ddab095046caf2f40d4",
+    "web/backend/migrations/versions/0001_data_foundation.sql": "87c475d46a647cc838c0ad9f75a6121cc4ad1c7b537fb9c7f94e568f987bbaa8",
+    "web/backend/migrations/versions/0002_pr02a_review.sql": "4e9b9046202f0712f474eab2594c3cb7aff177854c8bd6bc0453e08995d3cf72",
+    "web/backend/migrations/versions/0003_persistent_tasks.sql": "2b6a502a5b07e02b146ed532bc99df6142403ad0161daa337331c951ef587598"
+  },
+  "limits": [
+    "synthetic PostgreSQL and local MockProvider only",
+    "no actual fees/hold/usage ledger",
+    "no HTTP/WS/browser/provider/production/remote-CI validation",
+    "no independent re-review approval"
+  ]
+}

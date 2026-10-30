@@ -1,0 +1,12 @@
+# PR-02b R1/R2 remediation plan
+
+Base: `406bb9c6d943e4b30eef62e0397bfed1103e96e6`; preserve it and all existing migration/contract bytes. Independent review: `outputs/pr02b/independent-review-20261030-151053/REPORT.md`, REQUEST CHANGES, P1 R1 + P2 R2.
+
+- Reproduce all three independent probes against unchanged source in the verified worktree-owned synthetic PG cluster; preserve original and new evidence separately.
+- R1: one server-side task source authorizer resolves the classroom's immutable material pointer unconditionally, validates original course/semester and current ancestry, treats optional input IDs as equality assertions. Lock owner (UoW), all semesters sorted by UUID, all courses sorted by UUID, classroom, task, attempts/results, owner event counter. Re-read ancestry after row locking and fail closed if it changed. Never lock immutable material rows. Hold source locks through submitting-intent COMMIT, the authorization linearization point for one external submission; no lock spans Provider I/O.
+- R2: lock all attempts and inspect submitted_at, state, Provider request/outcome, durable raw references and task charge-risk. Provably unsent work cancels all unused plans. Sent/unknown remains cancel_requested while live or unknown when unleased; no resend/refund. Stored results retain a queued local-processing path and cancellation timestamp, or finish via explicit local reconcile. Repair previously stranded cancelled+pending-raw state without altering raw/receipts. Keep old fences invalid and terminate unused plans.
+- Add real PG regression tests for omitted/explicit source IDs, original course/semester/material revocation, all entrypoints, both actual lock-winner orders and exact MockProvider counts; test cancel/claim competition, all three cancellation states, historical attempts and repeated operations.
+- Run all existing 240 backend cases plus new cases, PR-02a gates, legacy 525 Python parents/171 subtests/nine Node suites. Retain failures, no assertion removal/skips or real providers.
+- Preserve protected files, exact original commits and review artifacts. Create one additive local fix commit with report, machine evidence, risks and rollback; no push/merge/deploy/next PR. Stop for independent re-review.
+
+No schema change is needed: existing immutable classroom material and attempts/results contain the authoritative facts. The old 0001/0002/0003 migrations remain untouched. A/B in the independent reproduction are courses within one owner; cross-owner moves remain forbidden.

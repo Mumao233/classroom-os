@@ -5,7 +5,7 @@ budget/authorization gate before it can reach any charged submission boundary.
 """
 from dataclasses import dataclass
 
-from ..domain.data import Gone, InactiveOwner, NotFound, OwnerContext
+from ..domain.data import Gone, InactiveOwner, NotFound, OwnerContext, RevisionConflict
 from ..domain.task_ports import Scheduler, SimulationProvider
 from ..domain.tasks import ResultConflict, StaleFence, UnsafeRetry
 
@@ -40,7 +40,7 @@ class TaskWorker:
                 # It cannot read inputs/results or submit anything externally.
                 self.scheduler.recover_revoked(claim.id, claim.lease_token)
                 continue
-            except (StaleFence, NotFound):
+            except (StaleFence, NotFound, RevisionConflict):
                 continue
         return recovered
 
@@ -72,7 +72,7 @@ class TaskWorker:
                     return True
             with self.database.transaction(owner) as tx:
                 tx.tasks.publish_result(claim.id, attempt.id, claim.lease_token, self.worker_id)
-        except (StaleFence, Gone, NotFound, InactiveOwner, UnsafeRetry, ResultConflict):
+        except (StaleFence, Gone, NotFound, InactiveOwner, UnsafeRetry, ResultConflict, RevisionConflict):
             # If raw result committed before losing the fence, recovery validates
             # it locally. If it did not commit, the intent conservatively expires
             # to unknown. Neither case calls submit again.

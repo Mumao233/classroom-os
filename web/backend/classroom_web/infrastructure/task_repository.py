@@ -3,21 +3,24 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import replace
 from uuid import UUID, uuid4
 
 import sqlalchemy as sa
 
-from ..domain.data import Gone, NotFound, Resource
+from ..domain.data import Gone, NotFound
 from ..domain.tasks import (Attempt, IdempotencyMismatch, KINDS, ProviderResult,
                             ResultConflict, StaleFence, Task, UnsafeRetry,
                             fingerprint, input_reference, validate_json_output)
 from .task_schema import tables
+from .task_sources import PgTaskSources
 
 
 class PgTaskRepository:
     def __init__(self, connection, owner_id, catalog, events, receipts):
         self.connection, self.owner_id, self.catalog = connection, owner_id, catalog
         self.events, self.receipts = events, receipts
+        self.sources = PgTaskSources(connection, owner_id)
 
     def _query(self, name, identity):
         t = tables[name]
@@ -31,11 +34,7 @@ class PgTaskRepository:
         if self.connection.scalar(sa.text("SELECT classroom_web_tombstoned('account', :owner)"),
                                    {'owner': self.owner_id}):
             raise Gone('account revoked')
-        if row['class_session_id']:
-            # Ancestors lock before task. Deletion uses these same resource locks.
-            self.catalog._load(Resource.CLASS_SESSION, row['class_session_id'], share=lock)
-        if row['input_ref'].get('course_material_version_id'):
-            self.catalog.get_material(UUID(row['input_ref']['course_material_version_id']))
+        self.sources.authorize(row['class_session_id'], row['input_ref'])
         if lock:
             original_class = row['class_session_id']
             row = self.connection.execute(self._query('tasks', identity).with_for_update()).mappings().one()
@@ -54,6 +53,59 @@ class PgTaskRepository:
             q = q.with_for_update()
         row = self.connection.execute(q).mappings().one_or_none()
         return Attempt(**row) if row else None
+
+    def _history(self, task_id):
+        """Task lock precedes all attempts, in stable attempt-number order."""
+        t = tables['task_attempts']
+        return [Attempt(**row) for row in self.connection.execute(sa.select(t).where(
+            t.c.owner_id == self.owner_id, t.c.task_id == task_id
+        ).order_by(t.c.attempt_number).with_for_update()).mappings()]
+
+    def _saved_result(self, history):
+        if not history:
+            return None, None
+        t = tables['provider_results']
+        results = {row['attempt_id']: row for row in self.connection.execute(sa.select(t).where(
+            t.c.owner_id == self.owner_id, t.c.attempt_id.in_([attempt.id for attempt in history])
+        ).order_by(t.c.id).with_for_update()).mappings()}
+        for attempt in reversed(history):
+            result = results.get(attempt.id)
+            if result is not None:
+                # Normal store_result commits this pointer atomically. Also
+                # recognize durable result evidence in legacy/incomplete rows.
+                if attempt.raw_output_ref is None:
+                    self.connection.execute(tables['task_attempts'].update().where(
+                        tables['task_attempts'].c.owner_id == self.owner_id,
+                        tables['task_attempts'].c.id == attempt.id
+                    ).values(raw_output_ref=result['id'], provider_outcome='succeeded'))
+                    attempt = replace(attempt, raw_output_ref=result['id'], provider_outcome='succeeded')
+                    history[:] = [attempt if item.id == attempt.id else item for item in history]
+                return attempt, result
+        return None, None
+
+    @staticmethod
+    def _submitted(attempt):
+        return bool(attempt.submitted_at or attempt.provider_request_id or attempt.raw_output_ref
+            or attempt.provider_outcome in ('succeeded', 'failed', 'unknown')
+            or attempt.state not in ('planned', 'cancelled'))
+
+    def _cancel_unsent(self, history):
+        for attempt in history:
+            if not self._submitted(attempt) and attempt.state != 'cancelled':
+                self.connection.execute(tables['task_attempts'].update().where(
+                    tables['task_attempts'].c.owner_id == self.owner_id,
+                    tables['task_attempts'].c.id == attempt.id
+                ).values(state='cancelled', finished_at=sa.func.clock_timestamp()))
+
+    def _unknown_submissions(self, history):
+        for attempt in history:
+            if self._submitted(attempt) and not attempt.raw_output_ref and attempt.state not in ('succeeded', 'failed'):
+                self.connection.execute(tables['task_attempts'].update().where(
+                    tables['task_attempts'].c.owner_id == self.owner_id,
+                    tables['task_attempts'].c.id == attempt.id
+                ).values(state='unknown', provider_outcome=(attempt.provider_outcome
+                    if attempt.provider_outcome == 'succeeded' else 'unknown'),
+                    error_code='PROVIDER_RESULT_UNKNOWN'))
 
     def _fenced(self, identity, token, worker):
         task = self._load(identity, lock=True)
@@ -87,19 +139,7 @@ class PgTaskRepository:
         if old:
             # Authorize the current lineage before returning even a minimized receipt.
             return self.get(old['resource_id'])
-        if class_session_id:
-            self.catalog._load(Resource.CLASS_SESSION, class_session_id, share=True)
-        if 'class_session_id' in reference:
-            if reference['class_session_id'] != str(class_session_id):
-                raise ValueError('input class must match task class')
-        if 'course_material_version_id' in reference:
-            if class_session_id is None:
-                raise ValueError('material reference requires an explicit classroom')
-            material = self.catalog.get_material(UUID(reference['course_material_version_id']))
-            if class_session_id:
-                classroom = self.catalog.get_class_session(class_session_id)
-                if material.id != classroom.course_material_version_id:
-                    raise ValueError('material must match frozen classroom material')
+        self.sources.authorize(class_session_id, reference)
         if parent_task_id:
             parent = self._load(parent_task_id)
             if parent.class_session_id != class_session_id:
@@ -125,13 +165,20 @@ class PgTaskRepository:
 
     def prepare_attempt(self, task_id, lease_token, worker):
         task = self._fenced(task_id, lease_token, worker)
-        attempt = self._attempt(task_id, lock=True)
-        if attempt:
-            if attempt.raw_output_ref or (attempt.state == 'planned' and attempt.submitted_at is None):
-                return attempt
+        history = self._history(task_id)
+        saved, result = self._saved_result(history)
+        if saved:
+            if result['conflict_sha256'] is not None:
+                raise ResultConflict('PROVIDER_RESULT_CONFLICT')
+            return saved
+        if task.may_have_charged or any(self._submitted(item) for item in history):
             raise UnsafeRetry('existing attempt may have charged; no automatic resend')
-        if task.state != 'running':
+        if task.state != 'running' or task.cancel_requested_at is not None:
             raise UnsafeRetry('task cancellation prevents new submissions')
+        if history:
+            if history[-1].state == 'planned':
+                return history[-1]
+            raise UnsafeRetry('attempt is no longer dispatchable')
         row = self.connection.execute(tables['task_attempts'].insert().values(
             id=uuid4(), owner_id=self.owner_id, task_id=task_id, attempt_number=1,
             state='planned', provider='mock', model='synthetic', price_revision='synthetic-no-charge',
@@ -140,8 +187,11 @@ class PgTaskRepository:
 
     def mark_submitting(self, task_id, attempt_id, lease_token, worker):
         task = self._fenced(task_id, lease_token, worker)
-        attempt = self._attempt(task_id, lock=True)
+        history = self._history(task_id)
+        attempt = history[-1] if history else None
         if (task.state != 'running' or attempt is None or attempt.id != attempt_id
+                or task.cancel_requested_at is not None or task.may_have_charged
+                or any(self._submitted(item) for item in history)
                 or attempt.state != 'planned' or attempt.submitted_at is not None
                 or attempt.raw_output_ref is not None):
             raise UnsafeRetry('only a never-submitted planned attempt can acquire send intent')
@@ -152,7 +202,7 @@ class PgTaskRepository:
 
     def store_result(self, task_id, attempt_id, raw_output):
         task = self._load(task_id, lock=True)
-        attempt = self._attempt(task_id, lock=True)
+        attempt = next((item for item in self._history(task_id) if item.id == attempt_id), None)
         if attempt is None or attempt.id != attempt_id or attempt.submitted_at is None:
             raise UnsafeRetry('result requires the existing submitted attempt')
         if not isinstance(raw_output, str) or len(raw_output) > 200000:
@@ -185,7 +235,8 @@ class PgTaskRepository:
 
     def publish_result(self, task_id, attempt_id, lease_token, worker, validator=validate_json_output):
         task = self._fenced(task_id, lease_token, worker)
-        attempt = self._attempt(task_id, lock=True)
+        history = self._history(task_id)
+        attempt = next((item for item in history if item.id == attempt_id), None)
         if attempt is None or attempt.id != attempt_id or attempt.raw_output_ref is None:
             raise ValueError('no durable result to validate')
         return self._finish_result(task, attempt, validator)
@@ -215,7 +266,8 @@ class PgTaskRepository:
                  error_code=None if valid else 'OUTPUT_INVALID', finished_at=sa.func.clock_timestamp()))
         return self._write(task, state='succeeded' if valid else 'failed',
             error_code=None if valid else 'OUTPUT_INVALID', completed_at=sa.func.clock_timestamp(),
-            leased_by=None, lease_expires_at=None, lease_token=task.lease_token + 1)
+            leased_by=None, lease_expires_at=None, lease_token=task.lease_token + 1,
+            may_have_charged=True)
 
     def reconcile_result(self, task_id, op_id, validator=validate_json_output):
         """Explicitly reconcile only already stored bytes; new_submission=false.
@@ -226,16 +278,18 @@ class PgTaskRepository:
         digest = fingerprint({'task_id': str(task_id), 'new_submission': False})
         old = self.receipts.lock_and_get('reconcileTask', op_id, digest)
         task = self._load(task_id, lock=True)
-        if old:
-            return task
-        if task.state == 'unknown':
-            attempt = self._attempt(task_id, lock=True)
-            if attempt and attempt.raw_output_ref:
-                result = self.connection.execute(self._query('provider_results', attempt.raw_output_ref)
-                                                  .with_for_update()).mappings().one()
-                if result['conflict_sha256'] is None:
-                    task = self._finish_result(task, attempt, validator)
-        self.receipts.store_task('reconcileTask', op_id, digest, task, response_status=200)
+        # Repair legacy cancelled+pending-raw too; a minimized old receipt is
+        # not permission to leave durable local work stranded permanently.
+        live = task.lease_expires_at is not None and task.lease_expires_at > self.connection.scalar(
+            sa.select(sa.func.clock_timestamp()))
+        if task.state in ('unknown', 'queued', 'cancelled', 'cancel_requested') and not live:
+            history = self._history(task_id)
+            attempt, result = self._saved_result(history)
+            if attempt and result['conflict_sha256'] is None:
+                self._cancel_unsent(history)
+                task = self._finish_result(task, attempt, validator)
+        if not old:
+            self.receipts.store_task('reconcileTask', op_id, digest, task, response_status=200)
         return task
 
     def mark_unknown(self, task_id, attempt_id, lease_token, worker):
@@ -258,46 +312,61 @@ class PgTaskRepository:
         now = self.connection.scalar(sa.select(sa.func.clock_timestamp()))
         if task.lease_expires_at is None or task.lease_expires_at > now:
             raise StaleFence('lease is still live')
-        attempt = self._attempt(task_id, lock=True)
-        if attempt and attempt.submitted_at and not attempt.raw_output_ref:
-            self.connection.execute(tables['task_attempts'].update().where(
-                tables['task_attempts'].c.id == attempt.id, tables['task_attempts'].c.owner_id == self.owner_id
-            ).values(state='unknown', provider_outcome='unknown', error_code='PROVIDER_RESULT_UNKNOWN'))
+        history = self._history(task_id)
+        saved, result = self._saved_result(history)
+        submitted = task.may_have_charged or any(self._submitted(item) for item in history)
+        if saved and result['conflict_sha256'] is not None:
+            state, error = 'unknown', 'PROVIDER_RESULT_CONFLICT'
+        elif not saved and submitted:
+            self._unknown_submissions(history)
+            self._cancel_unsent(history)
             state, error = 'unknown', 'PROVIDER_RESULT_UNKNOWN'
-        elif task.state == 'cancel_requested' and not (attempt and attempt.raw_output_ref):
-            if attempt:
-                self.connection.execute(tables['task_attempts'].update().where(
-                    tables['task_attempts'].c.id == attempt.id,
-                    tables['task_attempts'].c.owner_id == self.owner_id
-                ).values(state='cancelled', finished_at=sa.func.clock_timestamp()))
+        elif task.cancel_requested_at is not None and not saved:
+            self._cancel_unsent(history)
             state, error = 'cancelled', None
         else:
+            if task.cancel_requested_at is not None:
+                self._cancel_unsent(history)
             state, error = 'queued', None
         return self._write(task, state=state, error_code=error, lease_token=task.lease_token + 1,
             leased_by=None, lease_expires_at=None,
-            completed_at=sa.func.clock_timestamp() if state == 'cancelled' else None)
+            completed_at=sa.func.clock_timestamp() if state == 'cancelled' else None,
+            may_have_charged=bool(submitted or saved))
 
     def cancel(self, task_id, op_id):
         request_hash = fingerprint({'task_id': str(task_id)})
         old = self.receipts.lock_and_get('cancelTask', op_id, request_hash)
         task = self._load(task_id, lock=True)
-        if old:
+        history = self._history(task.id)
+        saved, result = self._saved_result(history)
+        repair = task.state == 'cancelled' and saved is not None
+        if old and not repair:
             return task
-        if task.state == 'queued':
-            task = self._write(task, state='cancelled', cancel_requested_at=sa.func.clock_timestamp(),
-                completed_at=sa.func.clock_timestamp(), leased_by=None, lease_expires_at=None)
-        elif task.state == 'running':
-            attempt = self._attempt(task.id, lock=True)
-            if attempt is None or attempt.submitted_at is None:
-                if attempt:
-                    self.connection.execute(tables['task_attempts'].update().where(
-                        tables['task_attempts'].c.id == attempt.id,
-                        tables['task_attempts'].c.owner_id == self.owner_id
-                    ).values(state='cancelled', finished_at=sa.func.clock_timestamp()))
-                task = self._write(task, state='cancelled', cancel_requested_at=sa.func.clock_timestamp(),
-                    completed_at=sa.func.clock_timestamp(), lease_token=task.lease_token + 1,
-                    leased_by=None, lease_expires_at=None)
+        if task.state not in ('succeeded', 'failed') and (task.state != 'cancelled' or repair):
+            self._cancel_unsent(history)
+            submitted = task.may_have_charged or any(self._submitted(item) for item in history)
+            now = self.connection.scalar(sa.select(sa.func.clock_timestamp()))
+            live = task.lease_expires_at is not None and task.lease_expires_at > now
+            error: str | None
+            if saved and result['conflict_sha256'] is not None:
+                state, error = 'unknown', 'PROVIDER_RESULT_CONFLICT'
+            elif saved:
+                state = ('cancel_requested' if live else
+                         'unknown' if task.state == 'unknown' else 'queued')
+                error = task.error_code if state == 'unknown' else None
+            elif submitted:
+                state = 'cancel_requested' if live and task.state != 'unknown' else 'unknown'
+                error = None if state == 'cancel_requested' else 'PROVIDER_RESULT_UNKNOWN'
+                if not live:
+                    self._unknown_submissions(history)
             else:
-                task = self._write(task, state='cancel_requested', cancel_requested_at=sa.func.clock_timestamp())
-        self.receipts.store_task('cancelTask', op_id, request_hash, task, response_status=200)
+                state, error = 'cancelled', None
+            values = dict(state=state, error_code=error, may_have_charged=bool(submitted or saved),
+                cancel_requested_at=task.cancel_requested_at or now,
+                completed_at=now if state == 'cancelled' else None)
+            if not live or state in ('cancelled', 'unknown'):
+                values.update(leased_by=None, lease_expires_at=None, lease_token=task.lease_token + 1)
+            task = self._write(task, **values)
+        if not old:
+            self.receipts.store_task('cancelTask', op_id, request_hash, task, response_status=200)
         return task

@@ -132,6 +132,9 @@ def test_cancel_immediately_after_claim_prevents_provider_send(task_db, schedule
     task = enqueue(task_db, owners.a)
 
     class CancellingScheduler:
+        def recover_revoked(self, task_id, lease_token):
+            return scheduler.recover_revoked(task_id, lease_token)
+
         def expired(self):
             return scheduler.expired()
 

@@ -194,3 +194,11 @@ The standalone `python -m classroom_web.entrypoints.worker --runtime-url ...
 synthetic loopback targets and constructs MockProvider. Run it only against the
 verified isolated cluster described in provenance. It does not read application
 configuration, provider keys or the local v1.3.0 data/configuration.
+
+PR-02b independent review R1/R2 corrections unconditionally authorize the
+classroom's frozen material and both current/original ancestry under one sorted
+source lock order through send-intent COMMIT. Cancellation inspects all attempts
+and saved results; queued local validation remains runnable after cancellation.
+Previously stranded cancelled tasks with saved raw can finish by explicit local
+reconciliation without a provider call. See the
+[remediation/re-review report](../../docs/web-alpha/pr02b/remediation/REPORT.md).
