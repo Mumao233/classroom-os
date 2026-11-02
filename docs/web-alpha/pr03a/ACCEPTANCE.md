@@ -1,10 +1,18 @@
-# PR-03a 第三轮开发者验收
+# PR-03a 当前验收与支持范围
 
-日期2026-11-02。R1/R2/R3已实施并完成本轮本地验证；整体仍REQUEST CHANGES，三项正式关闭等待Astra对新精确SHA独立代码复审，不自动整合。
+日期：2026-11-02。第三轮独立审查对象为 `fa041e4c687be3d4b125f1d74024e7417ad19102`。Astra 已关闭原 R1/P1、R2/P1、R3/P2，其中 R2 的关闭仅限已验证的可信 bootstrap 迁移路径；原审查结论仍为 REQUEST CHANGES，阻塞项为保护门禁的干净 LF 检出误拒绝（P2-01）。本次仅整改该工具、定向回归与支持范围说明，不改变业务、SQL、角色、RLS、恢复逻辑、历史迁移或冻结契约。开发者不得自行关闭 P2-01；新精确 SHA 仍须独立复审和另行整合授权。
 
-- 完整后端：464 passed / 0 failed,error,skip / exit0；原423当前逐项执行，新增41。
-- 冻结后七原探针7/7；新安全并发26/26；新迁移8/8。
-- 本轮Windows525主+171子、九套Node、27门禁；类型41文件、静态8项、依赖/对抗/保护均通过。
-- 新head `0006_local_reconciler_security`；0001–0005不变。非super所测provisioning不能独立收口，迁移安全拒绝；已批准bootstrap路径升级通过。
+## 0006 支持边界
 
-详见[第三轮报告](remediation/third-round/REPORT.md)、[实际命令和结果](VALIDATION.json)、[文件清单](CHANGES.md)。原第二轮验收/验证文档逐字节存于 outputs/pr03a/third-round/before-documents；原报告与独立失败材料不覆盖。真实邮件/Cookie/MFA/Provider费用/生产恢复/远端CI仍未验证，P3/TBD保持OPEN。
+- `0006_local_reconciler_security` 当前仅支持已验证的**可信 bootstrap** 迁移路径。非超级用户升级尚未成功，已验证的是安全拒绝与完整回滚。
+- 不承诺托管平台或非超级用户 provisioning 已受支持。若未来选用不提供上述 bootstrap 能力的平台，须先完成独立 provisioning/权限撤销方案及真实成功测试。
+- [P3-01 OPEN：部署支持范围跟踪](remediation/checkout/P3-01-DEPLOYMENT-SUPPORT.md) 记录责任人、截止节点和关闭条件，最迟在确定部署数据库和迁移身份前处理。本说明不构成正式数据库迁移授权。
+- 原设计与第三轮新增探针 **8 passed、1 failed、退出 1** 的原始证据保持不变。失败用例按旧设计的非超级用户成功预期断言；它证明该替代路径尚未交付，不能改写为全绿或由安全回滚冒充成功。
+
+## 本轮与历史验证的区分
+
+本轮按授权执行保护工具的隔离检出定向验证及历史、迁移、契约一致性检查，结果和命令以[本轮验证清单](remediation/checkout/VALIDATION.json)为准；原 [VALIDATION.json](VALIDATION.json) 保留为 `fa041e4…` 的历史记录，不机械重跑完整后端、Windows 或 Node 套件，也不把下列历史结果当作新提交的重新执行结果。
+
+`fa041e4c687be3d4b125f1d74024e7417ad19102` 对应的历史完整结果：后端 464 项（含原 423 项）、七原探针、新安全并发 26 项与新迁移 8 项通过；Windows 525 主测试＋171 子测试、九套 Node、旧门禁合计 27 步通过。第三轮 Reviewer 在该精确 SHA 独立重跑了上述完整回归；其保护命令在干净 LF 检出退出 1，不能被其余绿色结果覆盖。
+
+历史实现与验证说明见[第三轮开发报告](remediation/third-round/REPORT.md)；当前文件清单见[CHANGES.md](CHANGES.md)。原审查副本和所有失败证据只读保留，索引见 P3-01 登记。真实邮件、Cookie/MFA/恢复码/多设备、真实 Provider 与费用结算、生产恢复及远端 CI 仍未验证；既有 P3/TBD 继续 OPEN。

@@ -1,22 +1,14 @@
-# PR-03a 第三轮变更清单
+# PR-03a P2-01 最小整改变更清单
 
-基线 `cb5f73c288fe013763e1e3ee9ebc3eb94a44a6b0`；共 18 文件。仅本工作树新增0006、测试/工具适配与整改文档；Python业务源码、0001–0005、冻结契约和既有测试不改。
+基线：`fa041e4c687be3d4b125f1d74024e7417ad19102`。共8文件。只改保护工具、追加定向测试和当前文档；不修改SQL、角色、RLS、恢复逻辑、历史迁移或契约。
 
 - `docs/web-alpha/pr03a/ACCEPTANCE.md`
 - `docs/web-alpha/pr03a/CHANGES.md`
-- `docs/web-alpha/pr03a/VALIDATION.json`
-- `docs/web-alpha/pr03a/remediation/third-round/PERMISSIONS-PROPOSAL.md`
-- `docs/web-alpha/pr03a/remediation/third-round/R2-DESIGN-REVIEW.md`
-- `docs/web-alpha/pr03a/remediation/third-round/REPORT.md`
+- `docs/web-alpha/pr03a/remediation/checkout/P3-01-DEPLOYMENT-SUPPORT.md`
+- `docs/web-alpha/pr03a/remediation/checkout/REPORT.md`
+- `docs/web-alpha/pr03a/remediation/checkout/VALIDATION.json`
 - `tools/pr03a/remediation/check_protected.py`
-- `tools/pr03a/remediation/check_static.py`
-- `tools/pr03a/remediation/run_tests.py`
-- `tools/pr03a/third_round/pr03a_probe_evidence.py`
-- `tools/pr03a/third_round/run_legacy.py`
-- `tools/pr03a/third_round/run_tests.py`
-- `web/backend/migrations/versions/0006_local_reconciler_functions.sql`
-- `web/backend/migrations/versions/0006_local_reconciler_security.py`
-- `web/backend/migrations/versions/0006_local_reconciler_security.sql`
-- `web/backend/tests/integration/test_local_reconciler_migrations.py`
-- `web/backend/tests/integration/test_local_reconciler_third_round.py`
-- `web/backend/tests/integration/test_pr03a_second_review_regressions.py`
+- `tools/pr03a/remediation/test_protected_checkout.py`
+- `web/backend/README.md`
+
+原18文件的第三轮清单保留在fa041e4提交；本轮保留原根VALIDATION.json及第三轮设计/报告/失败证据。实际新验证见remediation/checkout/VALIDATION.json；bootstrap-only与P3-01见当前验收和后端运维入口。

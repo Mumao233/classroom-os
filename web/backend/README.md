@@ -213,6 +213,36 @@ ordering; successfully processed rows leave their candidate set. Full remediatio
 evidence, reviewed-source provenance, validation limits and rollback are in the
 [remediation report](../../docs/web-alpha/pr03a/remediation/REPORT.md).
 
+### 0006 migration support boundary
+
+`0006_local_reconciler_security` currently supports only the verified trusted
+bootstrap migration path. Successful upgrades were tested with the original
+bootstrap identity and another explicitly provisioned bootstrap identity; this
+does not require application/runtime logins to receive bootstrap privileges.
+Non-superuser upgrade has not succeeded. The verified behavior for that path is
+safe refusal and complete rollback, including when the tested non-superuser had
+explicit old-object management and temporary ADMIN/SET provisioning.
+
+Do not treat hosted database platforms or non-superuser provisioning as supported.
+Before selecting a platform without this bootstrap capability, obtain an
+independently reviewed provisioning/revocation design and prove a real successful
+upgrade with no residual authority. Do not add elevation endpoints, leave role
+membership behind, loosen RLS or suppress migration errors to achieve success.
+This support statement does not authorize a production database migration.
+
+The third independent review closed the original R1/R2/R3 findings at commit
+`fa041e4c687be3d4b125f1d74024e7417ad19102`, with R2 limited to the bootstrap path.
+Its additional probes remain **8 passed / 1 failed / exit 1**: the failure asserts
+the earlier optional non-superuser success expectation and is retained as evidence
+of the unsupported path, alongside its full rollback evidence. The original
+design, probe source and failed logs are not rewritten as a green result.
+Track platform/identity selection in
+[P3-01 OPEN: deployment support](../../docs/web-alpha/pr03a/remediation/checkout/P3-01-DEPLOYMENT-SUPPORT.md)
+and read the [current acceptance](../../docs/web-alpha/pr03a/ACCEPTANCE.md) before
+planning deployment. This focused checkout-protection remediation does not rerun
+the historical backend 464, Windows 525+171 or nine Node suites; those historical
+results belong to `fa041e4c687be3d4b125f1d74024e7417ad19102`.
+
 ## PR-02b persistent execution
 
 `task_schema.py` and additive `0003_persistent_tasks` implement Task/TaskAttempt,

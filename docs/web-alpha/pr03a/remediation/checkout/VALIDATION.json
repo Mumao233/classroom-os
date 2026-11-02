@@ -1,0 +1,1127 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-02",
+  "base": "fa041e4c687be3d4b125f1d74024e7417ad19102",
+  "status": "Developer targeted checks passed; P2-01 remains subject to Astra exact-SHA independent review",
+  "changes": [
+    "docs/web-alpha/pr03a/ACCEPTANCE.md",
+    "docs/web-alpha/pr03a/CHANGES.md",
+    "docs/web-alpha/pr03a/remediation/checkout/P3-01-DEPLOYMENT-SUPPORT.md",
+    "docs/web-alpha/pr03a/remediation/checkout/REPORT.md",
+    "docs/web-alpha/pr03a/remediation/checkout/VALIDATION.json",
+    "tools/pr03a/remediation/check_protected.py",
+    "tools/pr03a/remediation/test_protected_checkout.py",
+    "web/backend/README.md"
+  ],
+  "guard_rule": "Git blob equality AND (canonical checkout bytes equality OR exact historical CRLF digest equality)",
+  "known_historical_file": "tools/pr03a/remediation/selftest_runner.py",
+  "canonical_lf_sha256": "1632787cd443a8408e766d13cd9955326cabafa850bf0f61de808d493addf686",
+  "exact_historical_crlf_sha256": "c5a321b794c5cbbe9c548641c08e137bab45f24193f2a1302c5e718b4a366c44",
+  "targeted_tests": {
+    "test_count": 6,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "harness": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\checkout-remediation\\harness\\20261102T143155.583359Z\\results.json",
+    "commands": [
+      {
+        "label": "before-and-valid-checkouts",
+        "command": [
+          "J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr03a\\venv\\Scripts\\python.exe",
+          "-B",
+          "tools/pr03a/remediation/test_protected_checkout.py",
+          "ProtectedCheckoutTests.test_00_original_reviewed_clean_lf_reproduces_rejection",
+          "ProtectedCheckoutTests.test_01_clean_lf_with_autocrlf_true_passes",
+          "ProtectedCheckoutTests.test_02_exact_historical_crlf_with_same_git_blob_passes"
+        ],
+        "cwd": "J:\\class-assistant\\worktrees\\web-pr03a-identity",
+        "exit_code": 0,
+        "seconds": 306.313,
+        "log": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\checkout-remediation\\harness\\20261102T143155.583359Z\\before-and-valid-checkouts.log",
+        "evidence": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\checkout-remediation\\20261102T143158.001936Z",
+        "test_count": 3
+      },
+      {
+        "label": "three-rejection-cases",
+        "command": [
+          "J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr03a\\venv\\Scripts\\python.exe",
+          "-B",
+          "tools/pr03a/remediation/test_protected_checkout.py",
+          "ProtectedCheckoutTests.test_03_actual_code_change_is_rejected_and_located",
+          "ProtectedCheckoutTests.test_04_same_blob_mixed_eol_is_rejected",
+          "ProtectedCheckoutTests.test_05_other_protected_tool_does_not_gain_crlf_exception"
+        ],
+        "cwd": "J:\\class-assistant\\worktrees\\web-pr03a-identity",
+        "exit_code": 0,
+        "seconds": 306.234,
+        "log": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\checkout-remediation\\harness\\20261102T143155.583359Z\\three-rejection-cases.log",
+        "evidence": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\checkout-remediation\\20261102T143157.999197Z",
+        "test_count": 3
+      }
+    ],
+    "all_test_processes_passed": true,
+    "test_source_sha256": "fee4ee71d40a4cf28c456c17a1fa407cca9b7bef8b14c5e4e04de40b3389b646",
+    "guard_source_sha256": "6736c38fc444029cb2eefd0b4bf5130fa7077d407c6d37267839d84fac14614f",
+    "python": "3.12.14 (main, Aug 25 2026, 14:01:42) [MSC v.1944 64 bit (AMD64)]",
+    "executable": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr03a\\venv\\Scripts\\python.exe",
+    "expected_cases": 6,
+    "expected_before_guard_exit": 1,
+    "expected_after_guard_exits": [
+      0,
+      0,
+      1,
+      1,
+      1
+    ],
+    "scenarios": [
+      {
+        "scenario": "before: original exact fa041e4 clean LF",
+        "exit_code": 1,
+        "initial_clean_checkout": {
+          "path": "tools/pr03a/remediation/selftest_runner.py",
+          "head": "fa041e4c687be3d4b125f1d74024e7417ad19102",
+          "status_porcelain_v2": "",
+          "core_autocrlf": "true",
+          "ls_files_eol": "i/lf    w/lf    attr/text eol=lf      \ttools/pr03a/remediation/selftest_runner.py",
+          "expected_git_blob": "12409d46c2677505f5434090bc0564861d2c1b0d",
+          "current_git_blob": "12409d46c2677505f5434090bc0564861d2c1b0d",
+          "canonical_checkout_sha256": "1632787cd443a8408e766d13cd9955326cabafa850bf0f61de808d493addf686",
+          "raw_sha256": "1632787cd443a8408e766d13cd9955326cabafa850bf0f61de808d493addf686",
+          "lf_count": 76,
+          "crlf_count": 0,
+          "bare_cr_count": 0
+        },
+        "before": {
+          "path": "tools/pr03a/remediation/selftest_runner.py",
+          "head": "fa041e4c687be3d4b125f1d74024e7417ad19102",
+          "status_porcelain_v2": "",
+          "core_autocrlf": "true",
+          "ls_files_eol": "i/lf    w/lf    attr/text eol=lf      \ttools/pr03a/remediation/selftest_runner.py",
+          "expected_git_blob": "12409d46c2677505f5434090bc0564861d2c1b0d",
+          "current_git_blob": "12409d46c2677505f5434090bc0564861d2c1b0d",
+          "canonical_checkout_sha256": "1632787cd443a8408e766d13cd9955326cabafa850bf0f61de808d493addf686",
+          "raw_sha256": "1632787cd443a8408e766d13cd9955326cabafa850bf0f61de808d493addf686",
+          "lf_count": 76,
+          "crlf_count": 0,
+          "bare_cr_count": 0
+        },
+        "after": {
+          "path": "tools/pr03a/remediation/selftest_runner.py",
+          "head": "fa041e4c687be3d4b125f1d74024e7417ad19102",
+          "status_porcelain_v2": "",
+          "core_autocrlf": "true",
+          "ls_files_eol": "i/lf    w/lf    attr/text eol=lf      \ttools/pr03a/remediation/selftest_runner.py",
+          "expected_git_blob": "12409d46c2677505f5434090bc0564861d2c1b0d",
+          "current_git_blob": "12409d46c2677505f5434090bc0564861d2c1b0d",
+          "canonical_checkout_sha256": "1632787cd443a8408e766d13cd9955326cabafa850bf0f61de808d493addf686",
+          "raw_sha256": "1632787cd443a8408e766d13cd9955326cabafa850bf0f61de808d493addf686",
+          "lf_count": 76,
+          "crlf_count": 0,
+          "bare_cr_count": 0
+        },
+        "report": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\checkout-remediation\\20261102T143158.001936Z\\test_00_original_reviewed_clean_lf_reproduces_rejection\\protected-files.json",
+        "passed_field": false,
+        "checked_guard_sha256": "9b998ebef9b2cd4e796238a25f277cc7e73736cc824c60b9849aa1c8d1817b07"
+      },
+      {
+        "scenario": "after: canonical LF with core.autocrlf=true",
+        "exit_code": 0,
+        "initial_clean_checkout": {
+          "path": "tools/pr03a/remediation/selftest_runner.py",
+          "head": "fa041e4c687be3d4b125f1d74024e7417ad19102",
+          "status_porcelain_v2": "",
+          "core_autocrlf": "true",
+          "ls_files_eol": "i/lf    w/lf    attr/text eol=lf      \ttools/pr03a/remediation/selftest_runner.py",
+          "expected_git_blob": "12409d46c2677505f5434090bc0564861d2c1b0d",
+          "current_git_blob": "12409d46c2677505f5434090bc0564861d2c1b0d",
+          "canonical_checkout_sha256": "1632787cd443a8408e766d13cd9955326cabafa850bf0f61de808d493addf686",
+          "raw_sha256": "1632787cd443a8408e766d13cd9955326cabafa850bf0f61de808d493addf686",
+          "lf_count": 76,
+          "crlf_count": 0,
+          "bare_cr_count": 0
+        },
+        "before": {
+          "path": "tools/pr03a/remediation/selftest_runner.py",
+          "head": "fa041e4c687be3d4b125f1d74024e7417ad19102",
+          "status_porcelain_v2": "1 .M N... 100644 100644 100644 398d31b6681607ccfda19261ce0434aa79f49ce8 398d31b6681607ccfda19261ce0434aa79f49ce8 tools/pr03a/remediation/check_protected.py\n",
+          "core_autocrlf": "true",
+          "ls_files_eol": "i/lf    w/lf    attr/text eol=lf      \ttools/pr03a/remediation/selftest_runner.py",
+          "expected_git_blob": "12409d46c2677505f5434090bc0564861d2c1b0d",
+          "current_git_blob": "12409d46c2677505f5434090bc0564861d2c1b0d",
+          "canonical_checkout_sha256": "1632787cd443a8408e766d13cd9955326cabafa850bf0f61de808d493addf686",
+          "raw_sha256": "1632787cd443a8408e766d13cd9955326cabafa850bf0f61de808d493addf686",
+          "lf_count": 76,
+          "crlf_count": 0,
+          "bare_cr_count": 0
+        },
+        "after": {
+          "path": "tools/pr03a/remediation/selftest_runner.py",
+          "head": "fa041e4c687be3d4b125f1d74024e7417ad19102",
+          "status_porcelain_v2": "1 .M N... 100644 100644 100644 398d31b6681607ccfda19261ce0434aa79f49ce8 398d31b6681607ccfda19261ce0434aa79f49ce8 tools/pr03a/remediation/check_protected.py\n",
+          "core_autocrlf": "true",
+          "ls_files_eol": "i/lf    w/lf    attr/text eol=lf      \ttools/pr03a/remediation/selftest_runner.py",
+          "expected_git_blob": "12409d46c2677505f5434090bc0564861d2c1b0d",
+          "current_git_blob": "12409d46c2677505f5434090bc0564861d2c1b0d",
+          "canonical_checkout_sha256": "1632787cd443a8408e766d13cd9955326cabafa850bf0f61de808d493addf686",
+          "raw_sha256": "1632787cd443a8408e766d13cd9955326cabafa850bf0f61de808d493addf686",
+          "lf_count": 76,
+          "crlf_count": 0,
+          "bare_cr_count": 0
+        },
+        "report": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\checkout-remediation\\20261102T143158.001936Z\\test_01_clean_lf_with_autocrlf_true_passes\\protected-files.json",
+        "passed_field": true,
+        "checked_guard_sha256": "6736c38fc444029cb2eefd0b4bf5130fa7077d407c6d37267839d84fac14614f"
+      },
+      {
+        "scenario": "after: exact archived historical CRLF",
+        "exit_code": 0,
+        "initial_clean_checkout": {
+          "path": "tools/pr03a/remediation/selftest_runner.py",
+          "head": "fa041e4c687be3d4b125f1d74024e7417ad19102",
+          "status_porcelain_v2": "",
+          "core_autocrlf": "true",
+          "ls_files_eol": "i/lf    w/lf    attr/text eol=lf      \ttools/pr03a/remediation/selftest_runner.py",
+          "expected_git_blob": "12409d46c2677505f5434090bc0564861d2c1b0d",
+          "current_git_blob": "12409d46c2677505f5434090bc0564861d2c1b0d",
+          "canonical_checkout_sha256": "1632787cd443a8408e766d13cd9955326cabafa850bf0f61de808d493addf686",
+          "raw_sha256": "1632787cd443a8408e766d13cd9955326cabafa850bf0f61de808d493addf686",
+          "lf_count": 76,
+          "crlf_count": 0,
+          "bare_cr_count": 0
+        },
+        "before": {
+          "path": "tools/pr03a/remediation/selftest_runner.py",
+          "head": "fa041e4c687be3d4b125f1d74024e7417ad19102",
+          "status_porcelain_v2": "1 .M N... 100644 100644 100644 398d31b6681607ccfda19261ce0434aa79f49ce8 398d31b6681607ccfda19261ce0434aa79f49ce8 tools/pr03a/remediation/check_protected.py\n1 .M N... 100644 100644 100644 12409d46c2677505f5434090bc0564861d2c1b0d 12409d46c2677505f5434090bc0564861d2c1b0d tools/pr03a/remediation/selftest_runner.py\n",
+          "core_autocrlf": "true",
+          "ls_files_eol": "i/lf    w/crlf  attr/text eol=lf      \ttools/pr03a/remediation/selftest_runner.py",
+          "expected_git_blob": "12409d46c2677505f5434090bc0564861d2c1b0d",
+          "current_git_blob": "12409d46c2677505f5434090bc0564861d2c1b0d",
+          "canonical_checkout_sha256": "1632787cd443a8408e766d13cd9955326cabafa850bf0f61de808d493addf686",
+          "raw_sha256": "c5a321b794c5cbbe9c548641c08e137bab45f24193f2a1302c5e718b4a366c44",
+          "lf_count": 76,
+          "crlf_count": 76,
+          "bare_cr_count": 0
+        },
+        "after": {
+          "path": "tools/pr03a/remediation/selftest_runner.py",
+          "head": "fa041e4c687be3d4b125f1d74024e7417ad19102",
+          "status_porcelain_v2": "1 .M N... 100644 100644 100644 398d31b6681607ccfda19261ce0434aa79f49ce8 398d31b6681607ccfda19261ce0434aa79f49ce8 tools/pr03a/remediation/check_protected.py\n1 .M N... 100644 100644 100644 12409d46c2677505f5434090bc0564861d2c1b0d 12409d46c2677505f5434090bc0564861d2c1b0d tools/pr03a/remediation/selftest_runner.py\n",
+          "core_autocrlf": "true",
+          "ls_files_eol": "i/lf    w/crlf  attr/text eol=lf      \ttools/pr03a/remediation/selftest_runner.py",
+          "expected_git_blob": "12409d46c2677505f5434090bc0564861d2c1b0d",
+          "current_git_blob": "12409d46c2677505f5434090bc0564861d2c1b0d",
+          "canonical_checkout_sha256": "1632787cd443a8408e766d13cd9955326cabafa850bf0f61de808d493addf686",
+          "raw_sha256": "c5a321b794c5cbbe9c548641c08e137bab45f24193f2a1302c5e718b4a366c44",
+          "lf_count": 76,
+          "crlf_count": 76,
+          "bare_cr_count": 0
+        },
+        "report": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\checkout-remediation\\20261102T143158.001936Z\\test_02_exact_historical_crlf_with_same_git_blob_passes\\protected-files.json",
+        "passed_field": true,
+        "checked_guard_sha256": "6736c38fc444029cb2eefd0b4bf5130fa7077d407c6d37267839d84fac14614f"
+      },
+      {
+        "scenario": "after: real protected Python code mutation",
+        "exit_code": 1,
+        "initial_clean_checkout": {
+          "path": "tools/pr03a/remediation/selftest_runner.py",
+          "head": "fa041e4c687be3d4b125f1d74024e7417ad19102",
+          "status_porcelain_v2": "",
+          "core_autocrlf": "true",
+          "ls_files_eol": "i/lf    w/lf    attr/text eol=lf      \ttools/pr03a/remediation/selftest_runner.py",
+          "expected_git_blob": "12409d46c2677505f5434090bc0564861d2c1b0d",
+          "current_git_blob": "12409d46c2677505f5434090bc0564861d2c1b0d",
+          "canonical_checkout_sha256": "1632787cd443a8408e766d13cd9955326cabafa850bf0f61de808d493addf686",
+          "raw_sha256": "1632787cd443a8408e766d13cd9955326cabafa850bf0f61de808d493addf686",
+          "lf_count": 76,
+          "crlf_count": 0,
+          "bare_cr_count": 0
+        },
+        "before": {
+          "path": "tools/pr03a/remediation/selftest_runner.py",
+          "head": "fa041e4c687be3d4b125f1d74024e7417ad19102",
+          "status_porcelain_v2": "1 .M N... 100644 100644 100644 398d31b6681607ccfda19261ce0434aa79f49ce8 398d31b6681607ccfda19261ce0434aa79f49ce8 tools/pr03a/remediation/check_protected.py\n1 .M N... 100644 100644 100644 12409d46c2677505f5434090bc0564861d2c1b0d 12409d46c2677505f5434090bc0564861d2c1b0d tools/pr03a/remediation/selftest_runner.py\n",
+          "core_autocrlf": "true",
+          "ls_files_eol": "i/lf    w/crlf  attr/text eol=lf      \ttools/pr03a/remediation/selftest_runner.py",
+          "expected_git_blob": "12409d46c2677505f5434090bc0564861d2c1b0d",
+          "current_git_blob": "5b7c7fc85f1dab674fbc21d9e55c514071f835e8",
+          "canonical_checkout_sha256": "1632787cd443a8408e766d13cd9955326cabafa850bf0f61de808d493addf686",
+          "raw_sha256": "d15cfe3980c3b28811160e012b59a49dc064a49ba00a8b094a17a4d6c7244fc9",
+          "lf_count": 76,
+          "crlf_count": 76,
+          "bare_cr_count": 0
+        },
+        "after": {
+          "path": "tools/pr03a/remediation/selftest_runner.py",
+          "head": "fa041e4c687be3d4b125f1d74024e7417ad19102",
+          "status_porcelain_v2": "1 .M N... 100644 100644 100644 398d31b6681607ccfda19261ce0434aa79f49ce8 398d31b6681607ccfda19261ce0434aa79f49ce8 tools/pr03a/remediation/check_protected.py\n1 .M N... 100644 100644 100644 12409d46c2677505f5434090bc0564861d2c1b0d 12409d46c2677505f5434090bc0564861d2c1b0d tools/pr03a/remediation/selftest_runner.py\n",
+          "core_autocrlf": "true",
+          "ls_files_eol": "i/lf    w/crlf  attr/text eol=lf      \ttools/pr03a/remediation/selftest_runner.py",
+          "expected_git_blob": "12409d46c2677505f5434090bc0564861d2c1b0d",
+          "current_git_blob": "5b7c7fc85f1dab674fbc21d9e55c514071f835e8",
+          "canonical_checkout_sha256": "1632787cd443a8408e766d13cd9955326cabafa850bf0f61de808d493addf686",
+          "raw_sha256": "d15cfe3980c3b28811160e012b59a49dc064a49ba00a8b094a17a4d6c7244fc9",
+          "lf_count": 76,
+          "crlf_count": 76,
+          "bare_cr_count": 0
+        },
+        "report": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\checkout-remediation\\20261102T143157.999197Z\\test_03_actual_code_change_is_rejected_and_located\\protected-files.json",
+        "passed_field": false,
+        "checked_guard_sha256": "6736c38fc444029cb2eefd0b4bf5130fa7077d407c6d37267839d84fac14614f"
+      },
+      {
+        "scenario": "after: same Git blob but unapproved mixed EOL",
+        "exit_code": 1,
+        "initial_clean_checkout": {
+          "path": "tools/pr03a/remediation/selftest_runner.py",
+          "head": "fa041e4c687be3d4b125f1d74024e7417ad19102",
+          "status_porcelain_v2": "",
+          "core_autocrlf": "true",
+          "ls_files_eol": "i/lf    w/lf    attr/text eol=lf      \ttools/pr03a/remediation/selftest_runner.py",
+          "expected_git_blob": "12409d46c2677505f5434090bc0564861d2c1b0d",
+          "current_git_blob": "12409d46c2677505f5434090bc0564861d2c1b0d",
+          "canonical_checkout_sha256": "1632787cd443a8408e766d13cd9955326cabafa850bf0f61de808d493addf686",
+          "raw_sha256": "1632787cd443a8408e766d13cd9955326cabafa850bf0f61de808d493addf686",
+          "lf_count": 76,
+          "crlf_count": 0,
+          "bare_cr_count": 0
+        },
+        "before": {
+          "path": "tools/pr03a/remediation/selftest_runner.py",
+          "head": "fa041e4c687be3d4b125f1d74024e7417ad19102",
+          "status_porcelain_v2": "1 .M N... 100644 100644 100644 398d31b6681607ccfda19261ce0434aa79f49ce8 398d31b6681607ccfda19261ce0434aa79f49ce8 tools/pr03a/remediation/check_protected.py\n1 .M N... 100644 100644 100644 12409d46c2677505f5434090bc0564861d2c1b0d 12409d46c2677505f5434090bc0564861d2c1b0d tools/pr03a/remediation/selftest_runner.py\n",
+          "core_autocrlf": "true",
+          "ls_files_eol": "i/lf    w/mixed attr/text eol=lf      \ttools/pr03a/remediation/selftest_runner.py",
+          "expected_git_blob": "12409d46c2677505f5434090bc0564861d2c1b0d",
+          "current_git_blob": "12409d46c2677505f5434090bc0564861d2c1b0d",
+          "canonical_checkout_sha256": "1632787cd443a8408e766d13cd9955326cabafa850bf0f61de808d493addf686",
+          "raw_sha256": "ad88ed3dc1b923320952b690f5f02f626d87bf7308f89252481f6f016be0b1af",
+          "lf_count": 76,
+          "crlf_count": 1,
+          "bare_cr_count": 0
+        },
+        "after": {
+          "path": "tools/pr03a/remediation/selftest_runner.py",
+          "head": "fa041e4c687be3d4b125f1d74024e7417ad19102",
+          "status_porcelain_v2": "1 .M N... 100644 100644 100644 398d31b6681607ccfda19261ce0434aa79f49ce8 398d31b6681607ccfda19261ce0434aa79f49ce8 tools/pr03a/remediation/check_protected.py\n1 .M N... 100644 100644 100644 12409d46c2677505f5434090bc0564861d2c1b0d 12409d46c2677505f5434090bc0564861d2c1b0d tools/pr03a/remediation/selftest_runner.py\n",
+          "core_autocrlf": "true",
+          "ls_files_eol": "i/lf    w/mixed attr/text eol=lf      \ttools/pr03a/remediation/selftest_runner.py",
+          "expected_git_blob": "12409d46c2677505f5434090bc0564861d2c1b0d",
+          "current_git_blob": "12409d46c2677505f5434090bc0564861d2c1b0d",
+          "canonical_checkout_sha256": "1632787cd443a8408e766d13cd9955326cabafa850bf0f61de808d493addf686",
+          "raw_sha256": "ad88ed3dc1b923320952b690f5f02f626d87bf7308f89252481f6f016be0b1af",
+          "lf_count": 76,
+          "crlf_count": 1,
+          "bare_cr_count": 0
+        },
+        "report": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\checkout-remediation\\20261102T143157.999197Z\\test_04_same_blob_mixed_eol_is_rejected\\protected-files.json",
+        "passed_field": false,
+        "checked_guard_sha256": "6736c38fc444029cb2eefd0b4bf5130fa7077d407c6d37267839d84fac14614f"
+      },
+      {
+        "scenario": "after: no CRLF compatibility for another protected tool",
+        "exit_code": 1,
+        "initial_clean_checkout": {
+          "path": "tools/pr03a/remediation/selftest_runner.py",
+          "head": "fa041e4c687be3d4b125f1d74024e7417ad19102",
+          "status_porcelain_v2": "",
+          "core_autocrlf": "true",
+          "ls_files_eol": "i/lf    w/lf    attr/text eol=lf      \ttools/pr03a/remediation/selftest_runner.py",
+          "expected_git_blob": "12409d46c2677505f5434090bc0564861d2c1b0d",
+          "current_git_blob": "12409d46c2677505f5434090bc0564861d2c1b0d",
+          "canonical_checkout_sha256": "1632787cd443a8408e766d13cd9955326cabafa850bf0f61de808d493addf686",
+          "raw_sha256": "1632787cd443a8408e766d13cd9955326cabafa850bf0f61de808d493addf686",
+          "lf_count": 76,
+          "crlf_count": 0,
+          "bare_cr_count": 0
+        },
+        "before": {
+          "path": "tools/pr03a/selftest_runner.py",
+          "head": "fa041e4c687be3d4b125f1d74024e7417ad19102",
+          "status_porcelain_v2": "1 .M N... 100644 100644 100644 398d31b6681607ccfda19261ce0434aa79f49ce8 398d31b6681607ccfda19261ce0434aa79f49ce8 tools/pr03a/remediation/check_protected.py\n1 .M N... 100644 100644 100644 c1370f4e7a5978135f079affaf9cc298339222d0 c1370f4e7a5978135f079affaf9cc298339222d0 tools/pr03a/selftest_runner.py\n",
+          "core_autocrlf": "true",
+          "ls_files_eol": "i/lf    w/crlf  attr/text eol=lf      \ttools/pr03a/selftest_runner.py",
+          "expected_git_blob": "c1370f4e7a5978135f079affaf9cc298339222d0",
+          "current_git_blob": "c1370f4e7a5978135f079affaf9cc298339222d0",
+          "canonical_checkout_sha256": "f5ce2bcb28c3e957e569f445ebc6a32a371d0d750660b409d3fdf580a050cef5",
+          "raw_sha256": "d2b95d7a1089abea5c9ba6c34632c4375a4ba1797d4d10089c7473104e7db67a",
+          "lf_count": 76,
+          "crlf_count": 76,
+          "bare_cr_count": 0
+        },
+        "after": {
+          "path": "tools/pr03a/selftest_runner.py",
+          "head": "fa041e4c687be3d4b125f1d74024e7417ad19102",
+          "status_porcelain_v2": "1 .M N... 100644 100644 100644 398d31b6681607ccfda19261ce0434aa79f49ce8 398d31b6681607ccfda19261ce0434aa79f49ce8 tools/pr03a/remediation/check_protected.py\n1 .M N... 100644 100644 100644 c1370f4e7a5978135f079affaf9cc298339222d0 c1370f4e7a5978135f079affaf9cc298339222d0 tools/pr03a/selftest_runner.py\n",
+          "core_autocrlf": "true",
+          "ls_files_eol": "i/lf    w/crlf  attr/text eol=lf      \ttools/pr03a/selftest_runner.py",
+          "expected_git_blob": "c1370f4e7a5978135f079affaf9cc298339222d0",
+          "current_git_blob": "c1370f4e7a5978135f079affaf9cc298339222d0",
+          "canonical_checkout_sha256": "f5ce2bcb28c3e957e569f445ebc6a32a371d0d750660b409d3fdf580a050cef5",
+          "raw_sha256": "d2b95d7a1089abea5c9ba6c34632c4375a4ba1797d4d10089c7473104e7db67a",
+          "lf_count": 76,
+          "crlf_count": 76,
+          "bare_cr_count": 0
+        },
+        "report": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\checkout-remediation\\20261102T143157.999197Z\\test_05_other_protected_tool_does_not_gain_crlf_exception\\protected-files.json",
+        "passed_field": false,
+        "checked_guard_sha256": "6736c38fc444029cb2eefd0b4bf5130fa7077d407c6d37267839d84fac14614f"
+      }
+    ]
+  },
+  "candidate_checkout_precision": "Each case starts as clean exact fa checkout with core.autocrlf=true. After cases overlay only the authorized guard patch; they are not falsely described as fully clean Git state during execution.",
+  "formal_worktree_protection": {
+    "command": [
+      "J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr03a\\venv\\Scripts\\python.exe",
+      "-B",
+      "tools/pr03a/remediation/check_protected.py"
+    ],
+    "cwd": "J:\\class-assistant\\worktrees\\web-pr03a-identity",
+    "exit_code": 0,
+    "seconds": 67.015,
+    "summary": {
+      "reviewed_pr03a_base": "cb5f73c288fe013763e1e3ee9ebc3eb94a44a6b0",
+      "minimum_preserved_backend_cases": 423,
+      "original_tool_bytes_unchanged": true,
+      "base_guard_passed": true,
+      "tool_preservation_failures": {},
+      "mismatches": [],
+      "passed": true,
+      "evidence": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\checkout-remediation\\protection\\20261102T143627.429985Z\\protected-files.json"
+    },
+    "source_sha256_before": "6736c38fc444029cb2eefd0b4bf5130fa7077d407c6d37267839d84fac14614f",
+    "source_sha256_after": "6736c38fc444029cb2eefd0b4bf5130fa7077d407c6d37267839d84fac14614f"
+  },
+  "current_type_and_immutable_checks": {
+    "base": "fa041e4c687be3d4b125f1d74024e7417ad19102",
+    "python": "3.12.14 (main, Aug 25 2026, 14:01:42) [MSC v.1944 64 bit (AMD64)]",
+    "git": "git version 2.56.0.windows.3",
+    "immutable_groups": {
+      "migration_history": {
+        "web/backend/migrations/versions/0001_data_foundation.py": {
+          "baseline_git_object": "4472bacc3ab0f9360c241882bc6b9239e0b20bfa",
+          "current_git_object": "4472bacc3ab0f9360c241882bc6b9239e0b20bfa",
+          "current_raw_sha256": "d7f5bf06145eb21f9cd5d8f6ec093ecb1deebfb590b2829f39ce7e05fcbedf16",
+          "historical_raw_sha256": "d7f5bf06145eb21f9cd5d8f6ec093ecb1deebfb590b2829f39ce7e05fcbedf16"
+        },
+        "web/backend/migrations/versions/0001_data_foundation.sql": {
+          "baseline_git_object": "d7c77f05c2fecfc3d7d4593a01d85c29341ebe31",
+          "current_git_object": "d7c77f05c2fecfc3d7d4593a01d85c29341ebe31",
+          "current_raw_sha256": "87c475d46a647cc838c0ad9f75a6121cc4ad1c7b537fb9c7f94e568f987bbaa8",
+          "historical_raw_sha256": "87c475d46a647cc838c0ad9f75a6121cc4ad1c7b537fb9c7f94e568f987bbaa8"
+        },
+        "web/backend/migrations/versions/0002_pr02a_review.py": {
+          "baseline_git_object": "b457da7499261c71d1d3fb11c6e6bf148c8910d8",
+          "current_git_object": "b457da7499261c71d1d3fb11c6e6bf148c8910d8",
+          "current_raw_sha256": "f7c04dcbb80dc691e5060847a27be9c1fbeb4bbf4011eaa589e6fb7ad8631f69",
+          "historical_raw_sha256": "f7c04dcbb80dc691e5060847a27be9c1fbeb4bbf4011eaa589e6fb7ad8631f69"
+        },
+        "web/backend/migrations/versions/0002_pr02a_review.sql": {
+          "baseline_git_object": "5e59a2b7c81a040ceb6d074a539ba176fd6378c9",
+          "current_git_object": "5e59a2b7c81a040ceb6d074a539ba176fd6378c9",
+          "current_raw_sha256": "4e9b9046202f0712f474eab2594c3cb7aff177854c8bd6bc0453e08995d3cf72",
+          "historical_raw_sha256": "4e9b9046202f0712f474eab2594c3cb7aff177854c8bd6bc0453e08995d3cf72"
+        },
+        "web/backend/migrations/versions/0003_persistent_tasks.py": {
+          "baseline_git_object": "75a82323498163d0b59291c0eb5c4113ba73fd2a",
+          "current_git_object": "75a82323498163d0b59291c0eb5c4113ba73fd2a",
+          "current_raw_sha256": "3af350e6860c6975473bc1d14e56b34d091dfc8900e17871b2f2f52c1fb05e92",
+          "historical_raw_sha256": "3af350e6860c6975473bc1d14e56b34d091dfc8900e17871b2f2f52c1fb05e92"
+        },
+        "web/backend/migrations/versions/0003_persistent_tasks.sql": {
+          "baseline_git_object": "960deabed6b884194877ce5d070a831cfb242cc8",
+          "current_git_object": "960deabed6b884194877ce5d070a831cfb242cc8",
+          "current_raw_sha256": "d5993db7732f49203317f91a3d4832bb810884b708b3a17223479d7aca69cc51",
+          "historical_raw_sha256": "d5993db7732f49203317f91a3d4832bb810884b708b3a17223479d7aca69cc51"
+        },
+        "web/backend/migrations/versions/0004_identity.py": {
+          "baseline_git_object": "efded097d16bc307ef9f32a7ee6220863353c974",
+          "current_git_object": "efded097d16bc307ef9f32a7ee6220863353c974",
+          "current_raw_sha256": "88408dd198b6253cc83b60cac6ee17f66a8962fcf4b46a0b06200e557988bfb7",
+          "historical_raw_sha256": "88408dd198b6253cc83b60cac6ee17f66a8962fcf4b46a0b06200e557988bfb7"
+        },
+        "web/backend/migrations/versions/0004_identity.sql": {
+          "baseline_git_object": "7f44162f924d563cc95459068aa51bd34d146bb7",
+          "current_git_object": "7f44162f924d563cc95459068aa51bd34d146bb7",
+          "current_raw_sha256": "d8f4358a218d2d00999f90f85f123b3ed9e942bbaf86647019b7f03b8436e414",
+          "historical_raw_sha256": "d8f4358a218d2d00999f90f85f123b3ed9e942bbaf86647019b7f03b8436e414"
+        },
+        "web/backend/migrations/versions/0005_identity_recovery.py": {
+          "baseline_git_object": "42b03f1f01a20d47429ed0e41e32ca943259026b",
+          "current_git_object": "42b03f1f01a20d47429ed0e41e32ca943259026b",
+          "current_raw_sha256": "f56a068abf916b9e8ecf4cca02f75479599fa2ea223ee5f814a9ba894157fa26",
+          "historical_raw_sha256": "f56a068abf916b9e8ecf4cca02f75479599fa2ea223ee5f814a9ba894157fa26"
+        },
+        "web/backend/migrations/versions/0005_identity_recovery.sql": {
+          "baseline_git_object": "ddecf3f94d5f67c86a8d625fd7878cee3760b826",
+          "current_git_object": "ddecf3f94d5f67c86a8d625fd7878cee3760b826",
+          "current_raw_sha256": "ecadca6ccf993a18dda52895156534051f21073df057eeda664ac80187ee2e12",
+          "historical_raw_sha256": "ecadca6ccf993a18dda52895156534051f21073df057eeda664ac80187ee2e12"
+        },
+        "web/backend/migrations/versions/0006_local_reconciler_functions.sql": {
+          "baseline_git_object": "bbb2a8340d3c58a23918db1fbf2dca0f54d7307c",
+          "current_git_object": "bbb2a8340d3c58a23918db1fbf2dca0f54d7307c",
+          "current_raw_sha256": "50085d88ec66cca86ef07cd107738cf13fdfcbe328d32b4b5a55e3185b53ebe2",
+          "historical_raw_sha256": "50085d88ec66cca86ef07cd107738cf13fdfcbe328d32b4b5a55e3185b53ebe2"
+        },
+        "web/backend/migrations/versions/0006_local_reconciler_security.py": {
+          "baseline_git_object": "87053f13e539e72da46d68c98a3c4125c0641987",
+          "current_git_object": "87053f13e539e72da46d68c98a3c4125c0641987",
+          "current_raw_sha256": "ef648852aa3bebc80b0a0bd701314dbe2d2d35b8d6b441f4e65d6087178939af",
+          "historical_raw_sha256": "ef648852aa3bebc80b0a0bd701314dbe2d2d35b8d6b441f4e65d6087178939af"
+        },
+        "web/backend/migrations/versions/0006_local_reconciler_security.sql": {
+          "baseline_git_object": "58fe4847bdd63c3f4ef80efc91e555c4ddb4c54e",
+          "current_git_object": "58fe4847bdd63c3f4ef80efc91e555c4ddb4c54e",
+          "current_raw_sha256": "c87ad8fb31fca1032bcbf03c72c1163afd88e928451919c386940b5853dece0b",
+          "historical_raw_sha256": "c87ad8fb31fca1032bcbf03c72c1163afd88e928451919c386940b5853dece0b"
+        }
+      },
+      "frozen_contracts": {
+        "docs/web-alpha/architecture/contracts/CHANGELOG.md": {
+          "baseline_git_object": "ae4d7722b87155aee4adfd5a22844d4bcb3befdc",
+          "current_git_object": "ae4d7722b87155aee4adfd5a22844d4bcb3befdc",
+          "current_raw_sha256": "657a617af59964990cc1f48298b140c82eca9f9bfe937233f6e74fef13707859",
+          "historical_raw_sha256": null
+        },
+        "docs/web-alpha/architecture/contracts/domain-model.json": {
+          "baseline_git_object": "d18d40a8cb5fdce6871f02c416becdfafa7c6e10",
+          "current_git_object": "d18d40a8cb5fdce6871f02c416becdfafa7c6e10",
+          "current_raw_sha256": "ba0a194e36eb919685e6ab49fca138e61a5c31158daf839b668546c278d8a798",
+          "historical_raw_sha256": null
+        },
+        "docs/web-alpha/architecture/contracts/events.schema.json": {
+          "baseline_git_object": "4ac758be50e5576243f3a35f21533409ed23db5e",
+          "current_git_object": "4ac758be50e5576243f3a35f21533409ed23db5e",
+          "current_raw_sha256": "1f04c47c261869a57afb956c1051cdd76b8c5f9e671dd7cd73cdff98ab62e256",
+          "historical_raw_sha256": null
+        },
+        "docs/web-alpha/architecture/contracts/examples.json": {
+          "baseline_git_object": "1a0ff7724b861a04944a04a34da393b536fdf3c9",
+          "current_git_object": "1a0ff7724b861a04944a04a34da393b536fdf3c9",
+          "current_raw_sha256": "3250851b3377e16fae00df227877b7d672b8fbde12bb55584ed08fb858f81349",
+          "historical_raw_sha256": null
+        },
+        "docs/web-alpha/architecture/contracts/openapi.json": {
+          "baseline_git_object": "dec2dcfcddb5a3a22edf99e09afcca50cee0cdc5",
+          "current_git_object": "dec2dcfcddb5a3a22edf99e09afcca50cee0cdc5",
+          "current_raw_sha256": "331fee959f06372602a6d55256e605a1c79a95563ea7c6887a7703bb5c5a255b",
+          "historical_raw_sha256": null
+        },
+        "docs/web-alpha/architecture/contracts/pr-dependencies.json": {
+          "baseline_git_object": "a91482b174db73760e72a9e59e22d5549e8cd2ed",
+          "current_git_object": "a91482b174db73760e72a9e59e22d5549e8cd2ed",
+          "current_raw_sha256": "f2db891c2f685a5979f6c722b09c7abc7389b6f279bc7a5a0ba756a987ccc3a9",
+          "historical_raw_sha256": null
+        },
+        "docs/web-alpha/architecture/contracts/requirements-traceability.json": {
+          "baseline_git_object": "71d32a78c1902ce82c2cf20eb0fad2cf8a86a505",
+          "current_git_object": "71d32a78c1902ce82c2cf20eb0fad2cf8a86a505",
+          "current_raw_sha256": "5763f06a5224b2e527c30b63509396963c2f1d11a244bd0ff7ab0d1d509c66e9",
+          "historical_raw_sha256": null
+        },
+        "docs/web-alpha/architecture/contracts/state-machines.json": {
+          "baseline_git_object": "963f63a713502999ad3b40ad89d144bd875f6f87",
+          "current_git_object": "963f63a713502999ad3b40ad89d144bd875f6f87",
+          "current_raw_sha256": "e066dcef52d8350a25dca60d7a8807c7a1079ac5cdd89ed839c7e0b286614bf7",
+          "historical_raw_sha256": null
+        }
+      },
+      "backend_business_and_tests": {
+        "web/backend/classroom_web/__init__.py": {
+          "baseline_git_object": "623ff996bf51c78a044cd9fd10e046c3a1a7cf6a",
+          "current_git_object": "623ff996bf51c78a044cd9fd10e046c3a1a7cf6a",
+          "current_raw_sha256": "1fbc2de79614199bdfe3c08a685a3364bd960f206da31688c64f75284dc221e6",
+          "historical_raw_sha256": "1fbc2de79614199bdfe3c08a685a3364bd960f206da31688c64f75284dc221e6"
+        },
+        "web/backend/classroom_web/application/__init__.py": {
+          "baseline_git_object": "b2c636e99cb810816c5157e070f5cf68da0d0ef5",
+          "current_git_object": "b2c636e99cb810816c5157e070f5cf68da0d0ef5",
+          "current_raw_sha256": "d28e85da4929d31d12cb77619ac59b9e466761bf0972dd356add288b10a2fe92",
+          "historical_raw_sha256": "d28e85da4929d31d12cb77619ac59b9e466761bf0972dd356add288b10a2fe92"
+        },
+        "web/backend/classroom_web/application/identity.py": {
+          "baseline_git_object": "35d958bd364a865200271378e84efa07edce24fa",
+          "current_git_object": "35d958bd364a865200271378e84efa07edce24fa",
+          "current_raw_sha256": "84aeeb4b053eb2f67d62bd1bfd02b1644d352153d1644d315784ba1460c31757",
+          "historical_raw_sha256": "84aeeb4b053eb2f67d62bd1bfd02b1644d352153d1644d315784ba1460c31757"
+        },
+        "web/backend/classroom_web/application/task_worker.py": {
+          "baseline_git_object": "63ce7207227cec9e065fc58557062c7a10958513",
+          "current_git_object": "63ce7207227cec9e065fc58557062c7a10958513",
+          "current_raw_sha256": "57271089c7c71510606a5d9f1a57138e860f6475c65989483774663ce87f58af",
+          "historical_raw_sha256": "57271089c7c71510606a5d9f1a57138e860f6475c65989483774663ce87f58af"
+        },
+        "web/backend/classroom_web/domain/__init__.py": {
+          "baseline_git_object": "76a82f426241ead7d9aafe93ef78accc04bd6f16",
+          "current_git_object": "76a82f426241ead7d9aafe93ef78accc04bd6f16",
+          "current_raw_sha256": "84bc88db7e5cc50948973b073042ad7f6845c046ee9d1f07f3cc172b59fc0695",
+          "historical_raw_sha256": "84bc88db7e5cc50948973b073042ad7f6845c046ee9d1f07f3cc172b59fc0695"
+        },
+        "web/backend/classroom_web/domain/data.py": {
+          "baseline_git_object": "d11758731e3ae6278b48a7e708d21af36740d071",
+          "current_git_object": "d11758731e3ae6278b48a7e708d21af36740d071",
+          "current_raw_sha256": "68b7548f41a37caf9bcc4c523c59c37b14846380b1b2984f4bb749801ccc907c",
+          "historical_raw_sha256": "68b7548f41a37caf9bcc4c523c59c37b14846380b1b2984f4bb749801ccc907c"
+        },
+        "web/backend/classroom_web/domain/identity.py": {
+          "baseline_git_object": "136818e691cc8295f075a05d006955649e1cae08",
+          "current_git_object": "136818e691cc8295f075a05d006955649e1cae08",
+          "current_raw_sha256": "b5d174ec35d0f3ab3eeb3072b6ffa0243e6706c8c056f0a37185c3fe87afbb36",
+          "historical_raw_sha256": "b5d174ec35d0f3ab3eeb3072b6ffa0243e6706c8c056f0a37185c3fe87afbb36"
+        },
+        "web/backend/classroom_web/domain/identity_ports.py": {
+          "baseline_git_object": "359c2775a6c232573e64e918f1e8e03af98334f5",
+          "current_git_object": "359c2775a6c232573e64e918f1e8e03af98334f5",
+          "current_raw_sha256": "b3c38e459f6479daa934cd765e0dc0c98e2477bc16baa4fef4c90a16095b6ef0",
+          "historical_raw_sha256": "b3c38e459f6479daa934cd765e0dc0c98e2477bc16baa4fef4c90a16095b6ef0"
+        },
+        "web/backend/classroom_web/domain/policies.py": {
+          "baseline_git_object": "0d2af34e1f61d408eb04111fdc5f48f7f6a6b05e",
+          "current_git_object": "0d2af34e1f61d408eb04111fdc5f48f7f6a6b05e",
+          "current_raw_sha256": "e58aa5dc149a07e2bd6fb963b5eaeb842dea7d01e975eccfba0eab03989b4501",
+          "historical_raw_sha256": "e58aa5dc149a07e2bd6fb963b5eaeb842dea7d01e975eccfba0eab03989b4501"
+        },
+        "web/backend/classroom_web/domain/ports.py": {
+          "baseline_git_object": "02464c1d2a19694ff5286cba8b50f50ef84c7f13",
+          "current_git_object": "02464c1d2a19694ff5286cba8b50f50ef84c7f13",
+          "current_raw_sha256": "970145d49a3791f4f9a7460d8b0704a25c73cc0be00b6106e26c4aa170f439d2",
+          "historical_raw_sha256": "970145d49a3791f4f9a7460d8b0704a25c73cc0be00b6106e26c4aa170f439d2"
+        },
+        "web/backend/classroom_web/domain/task_ports.py": {
+          "baseline_git_object": "9c2592c5fbc5727fb4d092d87f580bb780df9e1f",
+          "current_git_object": "9c2592c5fbc5727fb4d092d87f580bb780df9e1f",
+          "current_raw_sha256": "6f50041945c84329e1d1c4efaee7ad6be5f644386a2d295893cf076749d14c71",
+          "historical_raw_sha256": "6f50041945c84329e1d1c4efaee7ad6be5f644386a2d295893cf076749d14c71"
+        },
+        "web/backend/classroom_web/domain/tasks.py": {
+          "baseline_git_object": "33be2c5969018e25512c3e8ee6132688ba1b8489",
+          "current_git_object": "33be2c5969018e25512c3e8ee6132688ba1b8489",
+          "current_raw_sha256": "16d33474342919a42a1ff694d4184ec7e13c92438e21a735543aca909816d549",
+          "historical_raw_sha256": "16d33474342919a42a1ff694d4184ec7e13c92438e21a735543aca909816d549"
+        },
+        "web/backend/classroom_web/entrypoints/__init__.py": {
+          "baseline_git_object": "8a7f02b9ccdcfe2e7653ac6e104611651699011b",
+          "current_git_object": "8a7f02b9ccdcfe2e7653ac6e104611651699011b",
+          "current_raw_sha256": "6d72ab7b464b8d504d88dde0cda182c445578de275257f1368458384607aedf3",
+          "historical_raw_sha256": "6d72ab7b464b8d504d88dde0cda182c445578de275257f1368458384607aedf3"
+        },
+        "web/backend/classroom_web/entrypoints/worker.py": {
+          "baseline_git_object": "bb7e73529c885794f98a2d99a630c0c5b1faf185",
+          "current_git_object": "bb7e73529c885794f98a2d99a630c0c5b1faf185",
+          "current_raw_sha256": "86c6d91a8699b88afc773c28f665d6f3ee06e7a7d40165c6081de29855e468df",
+          "historical_raw_sha256": "86c6d91a8699b88afc773c28f665d6f3ee06e7a7d40165c6081de29855e468df"
+        },
+        "web/backend/classroom_web/infrastructure/__init__.py": {
+          "baseline_git_object": "4de930efd8849396bea2e7ee027bffac85e126ac",
+          "current_git_object": "4de930efd8849396bea2e7ee027bffac85e126ac",
+          "current_raw_sha256": "b22dfa7dc72b71a69022e1ac11ade4535cda28123401813833103fe27308fa27",
+          "historical_raw_sha256": "b22dfa7dc72b71a69022e1ac11ade4535cda28123401813833103fe27308fa27"
+        },
+        "web/backend/classroom_web/infrastructure/database.py": {
+          "baseline_git_object": "e29c34442fdc886576f98895933b2c50447bc0d3",
+          "current_git_object": "e29c34442fdc886576f98895933b2c50447bc0d3",
+          "current_raw_sha256": "e074fbdcb9b5b0dffe69437724d744b8bbcaff48c9bd868451912f78d9143cb5",
+          "historical_raw_sha256": "e074fbdcb9b5b0dffe69437724d744b8bbcaff48c9bd868451912f78d9143cb5"
+        },
+        "web/backend/classroom_web/infrastructure/ddl.py": {
+          "baseline_git_object": "76a07e0150cbe8fe2622f300dffa69cd9e49aabf",
+          "current_git_object": "76a07e0150cbe8fe2622f300dffa69cd9e49aabf",
+          "current_raw_sha256": "06124382066888325a82a687626a76d59fc4bc7f779256ddd927ee89d9fb6c3e",
+          "historical_raw_sha256": "06124382066888325a82a687626a76d59fc4bc7f779256ddd927ee89d9fb6c3e"
+        },
+        "web/backend/classroom_web/infrastructure/identity_mail.py": {
+          "baseline_git_object": "50912a58e2edda9d90536bdc5df66a5aebde765c",
+          "current_git_object": "50912a58e2edda9d90536bdc5df66a5aebde765c",
+          "current_raw_sha256": "227ba75bb1c3636e8eaaa9e8efde1843bcbc099cca1653c48c12efe50f9d849a",
+          "historical_raw_sha256": "227ba75bb1c3636e8eaaa9e8efde1843bcbc099cca1653c48c12efe50f9d849a"
+        },
+        "web/backend/classroom_web/infrastructure/identity_passwords.py": {
+          "baseline_git_object": "4f9742f914dc4f84c59901b87b2096da73e6aa09",
+          "current_git_object": "4f9742f914dc4f84c59901b87b2096da73e6aa09",
+          "current_raw_sha256": "fd4e7a60b59806ff165a16fb1eef6c2b8ad01cc777c6ba985b462f27da7ee764",
+          "historical_raw_sha256": "fd4e7a60b59806ff165a16fb1eef6c2b8ad01cc777c6ba985b462f27da7ee764"
+        },
+        "web/backend/classroom_web/infrastructure/identity_repository.py": {
+          "baseline_git_object": "52c3a781fbbadb71f876637749abc71667de6ec5",
+          "current_git_object": "52c3a781fbbadb71f876637749abc71667de6ec5",
+          "current_raw_sha256": "40506e33b8c49ffa12d2fe2e6e967991b3f865e60473b4f97c2828542cdf1098",
+          "historical_raw_sha256": "40506e33b8c49ffa12d2fe2e6e967991b3f865e60473b4f97c2828542cdf1098"
+        },
+        "web/backend/classroom_web/infrastructure/identity_schema.py": {
+          "baseline_git_object": "d42853291473def459df6e94df79634fcebcca35",
+          "current_git_object": "d42853291473def459df6e94df79634fcebcca35",
+          "current_raw_sha256": "a9e46715d44402ba62d0137b63786e0bc5415a13c38c1cb04dad10da0b4cc324",
+          "historical_raw_sha256": "a9e46715d44402ba62d0137b63786e0bc5415a13c38c1cb04dad10da0b4cc324"
+        },
+        "web/backend/classroom_web/infrastructure/local_reconciler.py": {
+          "baseline_git_object": "c753bcc82744b1d0b07bc2e891277e3a2d0931f8",
+          "current_git_object": "c753bcc82744b1d0b07bc2e891277e3a2d0931f8",
+          "current_raw_sha256": "b5c87fb08354445346f8fdbcd677aec63d771cd13410f8a89ea3d866c7969547",
+          "historical_raw_sha256": "b5c87fb08354445346f8fdbcd677aec63d771cd13410f8a89ea3d866c7969547"
+        },
+        "web/backend/classroom_web/infrastructure/repositories.py": {
+          "baseline_git_object": "07aa594cae8f28ead81ef2023fb8700f965f2f49",
+          "current_git_object": "07aa594cae8f28ead81ef2023fb8700f965f2f49",
+          "current_raw_sha256": "451fc199baea3f06cfcc554c975fc71747189b102a740cd46afde56b0b67bff7",
+          "historical_raw_sha256": "451fc199baea3f06cfcc554c975fc71747189b102a740cd46afde56b0b67bff7"
+        },
+        "web/backend/classroom_web/infrastructure/schema.py": {
+          "baseline_git_object": "5110394c33c257f577e1d592f38811cd5abf992b",
+          "current_git_object": "5110394c33c257f577e1d592f38811cd5abf992b",
+          "current_raw_sha256": "aca8051e0abe218d683b2f52109f3ae038b0c9e9e827101f248e7cd6b805e7b4",
+          "historical_raw_sha256": "aca8051e0abe218d683b2f52109f3ae038b0c9e9e827101f248e7cd6b805e7b4"
+        },
+        "web/backend/classroom_web/infrastructure/task_events.py": {
+          "baseline_git_object": "d2f84876b125163cd85137c7cf03da46fb3522d4",
+          "current_git_object": "d2f84876b125163cd85137c7cf03da46fb3522d4",
+          "current_raw_sha256": "7ef98e907a6ee3a41f0e2394d9749d8820ec9da9b356655edb242611db5f8572",
+          "historical_raw_sha256": "7ef98e907a6ee3a41f0e2394d9749d8820ec9da9b356655edb242611db5f8572"
+        },
+        "web/backend/classroom_web/infrastructure/task_repository.py": {
+          "baseline_git_object": "4d9dbff1a48923a1271684718248c0c7f4d98c8e",
+          "current_git_object": "4d9dbff1a48923a1271684718248c0c7f4d98c8e",
+          "current_raw_sha256": "7b9cf9afef207c3f7bdc41a28b86b4b29927670021b31b42457cd8b09916f3ae",
+          "historical_raw_sha256": "7b9cf9afef207c3f7bdc41a28b86b4b29927670021b31b42457cd8b09916f3ae"
+        },
+        "web/backend/classroom_web/infrastructure/task_scheduler.py": {
+          "baseline_git_object": "2566b97ae4bf978e1a9e56859ca6e6ac89f90666",
+          "current_git_object": "2566b97ae4bf978e1a9e56859ca6e6ac89f90666",
+          "current_raw_sha256": "1970b4f3246d1abedf84b3da461b5fd4162ac3454968b9153e5c7eb9468bb241",
+          "historical_raw_sha256": "1970b4f3246d1abedf84b3da461b5fd4162ac3454968b9153e5c7eb9468bb241"
+        },
+        "web/backend/classroom_web/infrastructure/task_schema.py": {
+          "baseline_git_object": "fc78ebfccaf8a7055bf66221b0d3c3cd47963a60",
+          "current_git_object": "fc78ebfccaf8a7055bf66221b0d3c3cd47963a60",
+          "current_raw_sha256": "1af8683ff16882944960eaed7d73dc83f9283fa94a1801777b33e59df90902dc",
+          "historical_raw_sha256": "1af8683ff16882944960eaed7d73dc83f9283fa94a1801777b33e59df90902dc"
+        },
+        "web/backend/classroom_web/infrastructure/task_sources.py": {
+          "baseline_git_object": "b8bf86f75304ac6277e69e2fd9f00df3f285007a",
+          "current_git_object": "b8bf86f75304ac6277e69e2fd9f00df3f285007a",
+          "current_raw_sha256": "cdc389d4b6a14ab51c4c3d5e28d78dfaad79ed86f14aad6e2424caef4a838b3d",
+          "historical_raw_sha256": "cdc389d4b6a14ab51c4c3d5e28d78dfaad79ed86f14aad6e2424caef4a838b3d"
+        },
+        "web/backend/classroom_web/test_support.py": {
+          "baseline_git_object": "d1088523ecc27edcc50780197882d8989c34c2e3",
+          "current_git_object": "d1088523ecc27edcc50780197882d8989c34c2e3",
+          "current_raw_sha256": "04eb4a800d05281d8fcf138599785089b6ea65d5286699e4c2d2812b2a79330a",
+          "historical_raw_sha256": "04eb4a800d05281d8fcf138599785089b6ea65d5286699e4c2d2812b2a79330a"
+        },
+        "web/backend/tests/integration/conftest.py": {
+          "baseline_git_object": "fecd21ba653adbccd8c7d088ba58efbc58a14131",
+          "current_git_object": "fecd21ba653adbccd8c7d088ba58efbc58a14131",
+          "current_raw_sha256": "8351aa9a2cbd64510e52bc67e56f3373181f8b2a0f1553900211b5ca4aae3b45",
+          "historical_raw_sha256": "8351aa9a2cbd64510e52bc67e56f3373181f8b2a0f1553900211b5ca4aae3b45"
+        },
+        "web/backend/tests/integration/test_data_foundation.py": {
+          "baseline_git_object": "5e68524b8d20051ccc0b667b11b8ab8b1a701689",
+          "current_git_object": "5e68524b8d20051ccc0b667b11b8ab8b1a701689",
+          "current_raw_sha256": "cde8f1702aa875c92d7e5c1396b48c062a58cabb8a031104fb56783570f81a1a",
+          "historical_raw_sha256": "cde8f1702aa875c92d7e5c1396b48c062a58cabb8a031104fb56783570f81a1a"
+        },
+        "web/backend/tests/integration/test_identity.py": {
+          "baseline_git_object": "639d1218f9721da8bf0b65b25dbdbbdb5afffc13",
+          "current_git_object": "639d1218f9721da8bf0b65b25dbdbbdb5afffc13",
+          "current_raw_sha256": "80ec3054b472229d1104d080f240778b0512239b9c4141ca97e8e5108b1490d1",
+          "historical_raw_sha256": "80ec3054b472229d1104d080f240778b0512239b9c4141ca97e8e5108b1490d1"
+        },
+        "web/backend/tests/integration/test_identity_migrations.py": {
+          "baseline_git_object": "d57fc5da4022ad7b09cacbcf9e2f0debbaceb2d6",
+          "current_git_object": "d57fc5da4022ad7b09cacbcf9e2f0debbaceb2d6",
+          "current_raw_sha256": "d18bad1dfebd4edead96f5705c1edef6177410334adb813276561c389c1b978d",
+          "historical_raw_sha256": "d18bad1dfebd4edead96f5705c1edef6177410334adb813276561c389c1b978d"
+        },
+        "web/backend/tests/integration/test_identity_recovery.py": {
+          "baseline_git_object": "aa6f6812599238a9843bd19b695ee620fb06cba3",
+          "current_git_object": "aa6f6812599238a9843bd19b695ee620fb06cba3",
+          "current_raw_sha256": "dccb5a0e22019366b8c0d5669e1ff301bb40da5548a722304f2c70553933f8fa",
+          "historical_raw_sha256": "dccb5a0e22019366b8c0d5669e1ff301bb40da5548a722304f2c70553933f8fa"
+        },
+        "web/backend/tests/integration/test_identity_recovery_migrations.py": {
+          "baseline_git_object": "9c65d8fe2b3837f1e54448c8c472ef55fac65aea",
+          "current_git_object": "9c65d8fe2b3837f1e54448c8c472ef55fac65aea",
+          "current_raw_sha256": "de7483716ecaf51a31ee17dea720570a918de67535215dbd101e14778d02a73c",
+          "historical_raw_sha256": "de7483716ecaf51a31ee17dea720570a918de67535215dbd101e14778d02a73c"
+        },
+        "web/backend/tests/integration/test_local_reconciler_migrations.py": {
+          "baseline_git_object": "0b10f44029d21e5d63139eb9a0a29ed56ff97fb5",
+          "current_git_object": "0b10f44029d21e5d63139eb9a0a29ed56ff97fb5",
+          "current_raw_sha256": "a57ad699db2cb0a9ef270bd6a58f04f3c4e4b7d762ecacd86be03adaf90f3f93",
+          "historical_raw_sha256": "a57ad699db2cb0a9ef270bd6a58f04f3c4e4b7d762ecacd86be03adaf90f3f93"
+        },
+        "web/backend/tests/integration/test_local_reconciler_third_round.py": {
+          "baseline_git_object": "69240750839faf5c1fdaf7d96b04e8481595deed",
+          "current_git_object": "69240750839faf5c1fdaf7d96b04e8481595deed",
+          "current_raw_sha256": "8e0a6d2f3e3d783ac3866374609a1057fc68a6ea7dcb57bf0bdeabe390d18cd8",
+          "historical_raw_sha256": "8e0a6d2f3e3d783ac3866374609a1057fc68a6ea7dcb57bf0bdeabe390d18cd8"
+        },
+        "web/backend/tests/integration/test_material_revocation_race.py": {
+          "baseline_git_object": "dce66f376c3196f5b6cefe2672d2f587bf99df5e",
+          "current_git_object": "dce66f376c3196f5b6cefe2672d2f587bf99df5e",
+          "current_raw_sha256": "8489a800d1bcf7520c9780f557f3686f83a2464cff25db3bb1b14d298ea521cf",
+          "historical_raw_sha256": "8489a800d1bcf7520c9780f557f3686f83a2464cff25db3bb1b14d298ea521cf"
+        },
+        "web/backend/tests/integration/test_migration_remediation.py": {
+          "baseline_git_object": "000c2487a1eca5d9c9faf979b32957b16ff74e27",
+          "current_git_object": "000c2487a1eca5d9c9faf979b32957b16ff74e27",
+          "current_raw_sha256": "a985c0cbf977e499f4f3c604e51c0217acbe3ba429a14eaa3257d97fe62240e4",
+          "historical_raw_sha256": "a985c0cbf977e499f4f3c604e51c0217acbe3ba429a14eaa3257d97fe62240e4"
+        },
+        "web/backend/tests/integration/test_persistent_tasks.py": {
+          "baseline_git_object": "6742d85955662775799f4ac1425916c8cbe217ec",
+          "current_git_object": "6742d85955662775799f4ac1425916c8cbe217ec",
+          "current_raw_sha256": "ac6ebadb298409ab5756594f6d79dcf3a994b94259575b09dd011899a791ee78",
+          "historical_raw_sha256": "ac6ebadb298409ab5756594f6d79dcf3a994b94259575b09dd011899a791ee78"
+        },
+        "web/backend/tests/integration/test_pr03a_review_regressions.py": {
+          "baseline_git_object": "77c4e984e2a46dafc4b151b3a0b29d2f5064eb21",
+          "current_git_object": "77c4e984e2a46dafc4b151b3a0b29d2f5064eb21",
+          "current_raw_sha256": "afc80d0435c4a36f263298d62dfa69430ac0f9aa3f22404696534401776a9b26",
+          "historical_raw_sha256": "afc80d0435c4a36f263298d62dfa69430ac0f9aa3f22404696534401776a9b26"
+        },
+        "web/backend/tests/integration/test_pr03a_second_review_regressions.py": {
+          "baseline_git_object": "2c856ad2b8f4ad85afd5c3dd72bea02a43622239",
+          "current_git_object": "2c856ad2b8f4ad85afd5c3dd72bea02a43622239",
+          "current_raw_sha256": "23ab5c06bc29ff2de469e3ae71b6fe9a736a025a980c53e953f5965491e77cfd",
+          "historical_raw_sha256": "23ab5c06bc29ff2de469e3ae71b6fe9a736a025a980c53e953f5965491e77cfd"
+        },
+        "web/backend/tests/integration/test_semester_limits.py": {
+          "baseline_git_object": "6aa3873afeeb08e2be174c5e4b4c7afc7d75151c",
+          "current_git_object": "6aa3873afeeb08e2be174c5e4b4c7afc7d75151c",
+          "current_raw_sha256": "ded2713a5cd93ebefda667a8ff6793659486e553027322310816edfad6aaace2",
+          "historical_raw_sha256": "ded2713a5cd93ebefda667a8ff6793659486e553027322310816edfad6aaace2"
+        },
+        "web/backend/tests/integration/test_task_cancel_remediation.py": {
+          "baseline_git_object": "32c1c13df57963a64db467301ee98d73fc39b25e",
+          "current_git_object": "32c1c13df57963a64db467301ee98d73fc39b25e",
+          "current_raw_sha256": "c16d20aa3a1a982536a20a2c2d87fa140a1b49674492b7b9e974ca105de3176f",
+          "historical_raw_sha256": "c16d20aa3a1a982536a20a2c2d87fa140a1b49674492b7b9e974ca105de3176f"
+        },
+        "web/backend/tests/integration/test_task_material_remediation.py": {
+          "baseline_git_object": "37473379f7c2b841d43963b2220583d3a40fffc3",
+          "current_git_object": "37473379f7c2b841d43963b2220583d3a40fffc3",
+          "current_raw_sha256": "eebda662c2c5cc6a35af4bab1979c0ce5ecadb9bac273e534f2c6241a81f349d",
+          "historical_raw_sha256": "eebda662c2c5cc6a35af4bab1979c0ce5ecadb9bac273e534f2c6241a81f349d"
+        },
+        "web/backend/tests/integration/test_task_migrations.py": {
+          "baseline_git_object": "c23c5362df51b770da8f31c16f67dc21fd1c5fe4",
+          "current_git_object": "c23c5362df51b770da8f31c16f67dc21fd1c5fe4",
+          "current_raw_sha256": "5c3b49c370f887ce94ca8f4ffc42782d70a4e257e11a4cc13196a1fc746bcdbf",
+          "historical_raw_sha256": "5c3b49c370f887ce94ca8f4ffc42782d70a4e257e11a4cc13196a1fc746bcdbf"
+        },
+        "web/backend/tests/integration/test_task_worker.py": {
+          "baseline_git_object": "f209e117fcfcb609abc0aa223190c94ee0c43f2c",
+          "current_git_object": "f209e117fcfcb609abc0aa223190c94ee0c43f2c",
+          "current_raw_sha256": "87ba248535a33d48fcfa3a36ee3104cb12dc608dc0a74dd008829530ce6ce103",
+          "historical_raw_sha256": "87ba248535a33d48fcfa3a36ee3104cb12dc608dc0a74dd008829530ce6ce103"
+        },
+        "web/backend/tests/unit/test_identity_values.py": {
+          "baseline_git_object": "e1e619a5b08b6f013880f266f4c6b06a9441fad6",
+          "current_git_object": "e1e619a5b08b6f013880f266f4c6b06a9441fad6",
+          "current_raw_sha256": "b270613ae2e504522be033d2f742e47aa256270d5477c7903f34c52dcffba509",
+          "historical_raw_sha256": "b270613ae2e504522be033d2f742e47aa256270d5477c7903f34c52dcffba509"
+        },
+        "web/backend/tests/unit/test_pr02b_runner.py": {
+          "baseline_git_object": "3339ab3d20aaca603174541730217a01b6bfba4a",
+          "current_git_object": "3339ab3d20aaca603174541730217a01b6bfba4a",
+          "current_raw_sha256": "b55a6d90dc2f46f0e8fb111fa9549b33afb24fe392b62afaf7ff60d00f520a8e",
+          "historical_raw_sha256": "b55a6d90dc2f46f0e8fb111fa9549b33afb24fe392b62afaf7ff60d00f520a8e"
+        },
+        "web/backend/tests/unit/test_task_values.py": {
+          "baseline_git_object": "5c22b9d63139c8c84ad14358ef3d031aef802e4c",
+          "current_git_object": "5c22b9d63139c8c84ad14358ef3d031aef802e4c",
+          "current_raw_sha256": "ef01d6f5de55e6bd7cce001b6cf8c09ab43a96b8fe28ee56a1b5519f86065425",
+          "historical_raw_sha256": "ef01d6f5de55e6bd7cce001b6cf8c09ab43a96b8fe28ee56a1b5519f86065425"
+        },
+        "web/backend/tests/unit/test_test_database_target.py": {
+          "baseline_git_object": "34e285658007796623ea05b1c271a7de2f80ec72",
+          "current_git_object": "34e285658007796623ea05b1c271a7de2f80ec72",
+          "current_raw_sha256": "7cbddc042b33f1aab7663001f159537a1e67cea8acd525d0067447ec13769327",
+          "historical_raw_sha256": "7cbddc042b33f1aab7663001f159537a1e67cea8acd525d0067447ec13769327"
+        }
+      },
+      "historical_files": {
+        ".gitattributes": {
+          "baseline_git_object": "c69dfdd3e9959776f03f347481823c8029a7e701",
+          "current_git_object": "c69dfdd3e9959776f03f347481823c8029a7e701",
+          "current_raw_sha256": "664ddd4f966a49bcf3807949802b427e64ffaf069b9654d0042bf62d07aec7be",
+          "historical_raw_sha256": null
+        },
+        "docs/web-alpha/pr03a/VALIDATION.json": {
+          "baseline_git_object": "8fb0d829917cdd90e998f7b5fd720caa86f390c9",
+          "current_git_object": "8fb0d829917cdd90e998f7b5fd720caa86f390c9",
+          "current_raw_sha256": "20da26807d6dc504b96e852818b4503003e55e30ba299fda52db079dfbae6e52",
+          "historical_raw_sha256": null
+        },
+        "tools/pr03a/remediation/selftest_runner.py": {
+          "baseline_git_object": "12409d46c2677505f5434090bc0564861d2c1b0d",
+          "current_git_object": "12409d46c2677505f5434090bc0564861d2c1b0d",
+          "current_raw_sha256": "c5a321b794c5cbbe9c548641c08e137bab45f24193f2a1302c5e718b4a366c44",
+          "historical_raw_sha256": "c5a321b794c5cbbe9c548641c08e137bab45f24193f2a1302c5e718b4a366c44"
+        }
+      }
+    },
+    "historical_evidence": [
+      {
+        "source": "J:\\class-assistant\\reviews\\pr03a-third-20261102\\outputs\\reviewer\\REVIEW.md",
+        "copy": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\checkout-remediation\\checks\\20261102T143132.354548Z\\historical-00-REVIEW.md",
+        "sha256": "fcfa1304da2fe60309c817282018eb7507ce36792b3f89afadefb8d865fac88c"
+      },
+      {
+        "source": "J:\\class-assistant\\reviews\\pr03a-third-20261102\\outputs\\reviewer\\gates\\protection.log",
+        "copy": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\checkout-remediation\\checks\\20261102T143132.354548Z\\historical-01-protection.log",
+        "sha256": "1f18419ebb0f5ab11f471f97e5234f03ebb6ad401f31950688fc5455a5f3e8b5"
+      },
+      {
+        "source": "J:\\class-assistant\\reviews\\pr03a-third-20261102\\outputs\\pr03a\\third-round\\protection\\20261102T131727.081691Z\\protected-files.json",
+        "copy": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\checkout-remediation\\checks\\20261102T143132.354548Z\\historical-02-protected-files.json",
+        "sha256": "d0140f03ec6431e4e800d4fb0c28ff2e315837648c73193c7fbfc303c0ee57a7"
+      },
+      {
+        "source": "J:\\class-assistant\\reviews\\pr03a-third-20261102\\web\\backend\\tests\\integration\\test_reviewer_third.py",
+        "copy": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\checkout-remediation\\checks\\20261102T143132.354548Z\\historical-03-test_reviewer_third.py",
+        "sha256": "70ec9deb3797e454b535763d35235312c7c3ec89eb29fcefd34cb3cb797d59cf"
+      },
+      {
+        "source": "J:\\class-assistant\\reviews\\pr03a-third-20261102\\outputs\\pr03a\\third-round\\targeted\\20261102T132248.709401Z\\pytest.log",
+        "copy": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\checkout-remediation\\checks\\20261102T143132.354548Z\\historical-04-pytest.log",
+        "sha256": "433e4602ec2eb8213ef2f6a78dd17e8f46b93a9f74c81f68b84a5daa9863941b"
+      },
+      {
+        "source": "J:\\class-assistant\\reviews\\pr03a-third-20261102\\outputs\\pr03a\\third-round\\targeted\\20261102T132248.709401Z\\pytest.xml",
+        "copy": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\checkout-remediation\\checks\\20261102T143132.354548Z\\historical-05-pytest.xml",
+        "sha256": "313e2ae87dd04a86d33d5b0898eb21785d71881932e42ab69e92ab6897a7df8b"
+      },
+      {
+        "source": "J:\\class-assistant\\reviews\\pr03a-third-20261102\\outputs\\pr03a\\third-round\\targeted\\20261102T132248.709401Z\\results.json",
+        "copy": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\checkout-remediation\\checks\\20261102T143132.354548Z\\historical-06-results.json",
+        "sha256": "205764ede346adfad0ba44bb3e5fc081d0d769bedfea9f268bd64403789acbf3"
+      },
+      {
+        "source": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\docs\\web-alpha\\pr03a\\remediation\\third-round\\PERMISSIONS-PROPOSAL.md",
+        "copy": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\checkout-remediation\\checks\\20261102T143132.354548Z\\historical-07-PERMISSIONS-PROPOSAL.md",
+        "sha256": "ccf431bcbc8b6362adb2d23efe90343870d8d85ab93a19ebcb354b57dca975b9"
+      },
+      {
+        "source": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\docs\\web-alpha\\pr03a\\remediation\\third-round\\R2-DESIGN-REVIEW.md",
+        "copy": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\checkout-remediation\\checks\\20261102T143132.354548Z\\historical-08-R2-DESIGN-REVIEW.md",
+        "sha256": "50f2a9fd783bb319d2f112b484a937ed7eb24a0213f3dbd43b44ab2fca71bb77"
+      },
+      {
+        "source": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\docs\\web-alpha\\pr03a\\VALIDATION.json",
+        "copy": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\checkout-remediation\\checks\\20261102T143132.354548Z\\historical-09-VALIDATION.json",
+        "sha256": "20da26807d6dc504b96e852818b4503003e55e30ba299fda52db079dfbae6e52"
+      }
+    ],
+    "commands": [
+      {
+        "name": "mypy",
+        "command": [
+          "J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr03a\\venv\\Scripts\\python.exe",
+          "-B",
+          "-m",
+          "mypy",
+          "--explicit-package-bases",
+          "--follow-imports=silent",
+          "--ignore-missing-imports",
+          "--check-untyped-defs",
+          "--cache-dir",
+          "J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr03a\\checkout-remediation\\checks\\20261102T143132.354548Z\\mypy",
+          "tools/pr03a/remediation/check_protected.py",
+          "tools/pr03a/remediation/test_protected_checkout.py"
+        ],
+        "cwd": "J:\\class-assistant\\worktrees\\web-pr03a-identity",
+        "exit_code": 0,
+        "log": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\checkout-remediation\\checks\\20261102T143132.354548Z\\mypy.log",
+        "seconds": 82.125,
+        "pythonpath": "J:/class-assistant/worktrees/web-pr02a-data/work/pr02a/remediation/type-deps"
+      },
+      {
+        "name": "git-diff-check",
+        "command": [
+          "git",
+          "diff",
+          "--check"
+        ],
+        "cwd": "J:\\class-assistant\\worktrees\\web-pr03a-identity",
+        "exit_code": 0,
+        "log": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\checkout-remediation\\checks\\20261102T143132.354548Z\\git-diff-check.log",
+        "seconds": 0.125,
+        "pythonpath": null
+      }
+    ],
+    "passed": true,
+    "not_run": [
+      "PostgreSQL",
+      "464 backend tests",
+      "Windows 525 parent + 171 subtests",
+      "nine Node suites"
+    ],
+    "scope": "Only protection tool/tests/docs; historical evidence retained byte-for-byte"
+  },
+  "static_contract_and_offline_migration_checks": {
+    "report": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\checkout-remediation\\static\\20261102T143415.848538Z\\static-architecture.json",
+    "checked_at_utc": "2026-11-02T14:34:19.165441+00:00",
+    "python": "3.12.14 (main, Aug 25 2026, 14:01:42) [MSC v.1944 64 bit (AMD64)]",
+    "checks": [
+      {
+        "name": "Python AST",
+        "passed": true,
+        "details": {
+          "python_files": 71
+        }
+      },
+      {
+        "name": "OpenAPI 3.1 and unique operationId",
+        "passed": true,
+        "details": {
+          "operations": 134,
+          "paths": 118
+        }
+      },
+      {
+        "name": "Events JSON Schema",
+        "passed": true,
+        "details": null
+      },
+      {
+        "name": "All contract local refs resolve",
+        "passed": true,
+        "details": {
+          "resolved_refs": 599
+        }
+      },
+      {
+        "name": "Frozen positive and negative examples",
+        "passed": true,
+        "details": {
+          "positive_negative_cases": 34
+        }
+      },
+      {
+        "name": "Frozen model keys and owner composite FKs",
+        "passed": true,
+        "details": {
+          "tables": 60,
+          "foreign_keys": 164
+        }
+      },
+      {
+        "name": "Incremental single migration head and offline SQL",
+        "passed": true,
+        "details": {
+          "heads": [
+            "0006_local_reconciler_security"
+          ],
+          "history_retained": [
+            "0001_data_foundation",
+            "0002_pr02a_review",
+            "0003_persistent_tasks",
+            "0004_identity",
+            "0005_identity_recovery"
+          ],
+          "offline_rendered": true
+        }
+      },
+      {
+        "name": "Limited source credential-pattern scan",
+        "passed": true,
+        "details": {
+          "files": 78,
+          "matches": [],
+          "scope": "Limited credential-shaped pattern scan; not a security audit"
+        }
+      }
+    ],
+    "passed": true,
+    "limitations": "Syntax, frozen contract structure and offline SQL only. Runtime concurrency/RLS use separate PostgreSQL integration gates.",
+    "invocation": {
+      "command": [
+        "J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr03a\\venv\\Scripts\\python.exe",
+        "-B",
+        "work/pr03a/checkout-remediation/run_static.py"
+      ],
+      "actual_module": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\tools\\pr03a\\remediation\\check_static.py",
+      "module_arguments": [
+        "J:\\class-assistant\\worktrees\\web-pr03a-identity\\tools\\pr03a\\remediation\\check_static.py",
+        "--contract-deps",
+        "J:/class-assistant/classroom-os/work/pr01/validation-deps"
+      ],
+      "only_override": "Output location uses a unique current-round directory",
+      "exit_code": 0,
+      "cwd": "J:\\class-assistant\\worktrees\\web-pr03a-identity",
+      "no_database_connection": true
+    }
+  },
+  "earlier_harness_failures": {
+    "scope": "Test orchestration failures, not the required P2 reproduction result",
+    "attempts": [
+      {
+        "evidence": "outputs/pr03a/checkout-remediation/20261102T142541.572769Z",
+        "command": [
+          "work/pr03a/venv/Scripts/python.exe",
+          "-B",
+          "tools/pr03a/remediation/test_protected_checkout.py",
+          "ProtectedCheckoutTests.test_00_original_reviewed_clean_lf_reproduces_rejection"
+        ],
+        "exit_code": 1,
+        "tests": 1,
+        "failures": 1,
+        "cause": "Descriptive clone path exceeded ordinary Windows Git MAX_PATH; git show failed before protection report creation"
+      },
+      {
+        "evidence": "outputs/pr03a/checkout-remediation/20261102T142738.290368Z",
+        "command": [
+          "work/pr03a/venv/Scripts/python.exe",
+          "-B",
+          "tools/pr03a/remediation/test_protected_checkout.py",
+          "ProtectedCheckoutTests.test_01_clean_lf_with_autocrlf_true_passes",
+          "ProtectedCheckoutTests.test_02_exact_historical_crlf_with_same_git_blob_passes"
+        ],
+        "exit_code": 1,
+        "tests": 2,
+        "failures": 2,
+        "cause": "The already-loaded test process still used long descriptive clone directory names"
+      }
+    ],
+    "correction": "Use case-00 through case-05 short clone subdirectories; retain full descriptive names only for evidence directories. No production protection logic, Git attributes or assertions weakened.",
+    "prior_logs_preserved": true
+  },
+  "reviewed_runtime_findings": {
+    "R1": "CLOSED by Astra at fa041e4",
+    "R2": "CLOSED by Astra for tested trusted bootstrap path only",
+    "R3": "CLOSED by Astra at fa041e4"
+  },
+  "P3-01": {
+    "status": "OPEN",
+    "register": "P3-01-DEPLOYMENT-SUPPORT.md",
+    "deadline": "Before determining deployment database and migration identity"
+  },
+  "historical_only": {
+    "commit": "fa041e4c687be3d4b125f1d74024e7417ad19102",
+    "backend_passed": 464,
+    "windows_parent_passed": 525,
+    "windows_subtests_passed": 171,
+    "node_suites_passed": 9,
+    "reviewer_new_probe": {
+      "passed": 8,
+      "failed": 1,
+      "exit_code": 1
+    },
+    "rerun_in_this_round": false,
+    "historical_root_validation_unchanged": true
+  },
+  "not_run": [
+    "PostgreSQL",
+    "464 backend tests",
+    "Windows 525 parent + 171 subtests",
+    "nine Node suites",
+    "Remote CI",
+    "Deployment",
+    "Production migration"
+  ],
+  "postcommit_exact_clean_checkout_receipt": "outputs/pr03a/checkout-remediation/COMMIT_RECEIPT.json",
+  "no_integration_authorization": true
+}
