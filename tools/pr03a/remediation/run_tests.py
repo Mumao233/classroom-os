@@ -13,7 +13,11 @@ import time
 import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[3]
-MINIMUM_PREVIOUS_BACKEND_CASES = 358
+MINIMUM_PREVIOUS_BACKEND_CASES = 423
+EVIDENCE_CATEGORY = "third-round/runs"
+PYTEST_PLUGINS: tuple[str, ...] = ("pr03a_probe_evidence",)
+PYTEST_TARGETS: tuple[str, ...] = ()
+SUITE = "full"
 sys.path.insert(0, str(ROOT / "web/backend"))
 
 import sqlalchemy as sa
@@ -45,12 +49,13 @@ sys.addaudithook(_audit)
 
 
 def source_manifest():
-    """Record only executable backend/test/migration sources, excluding docs."""
+    """Record executable backend, test, migration and PR-03a tool sources."""
     backend = ROOT / "web/backend"
     paths = sorted(set((backend / "classroom_web").rglob("*.py"))
                    | set((backend / "tests").rglob("*.py"))
                    | set((backend / "migrations").rglob("*.py"))
-                   | set((backend / "migrations").rglob("*.sql")))
+                   | set((backend / "migrations").rglob("*.sql"))
+                   | set((ROOT / "tools/pr03a").rglob("*.py")))
     return {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest() for path in paths}
 
 
@@ -89,8 +94,8 @@ def main():
     except UnsafeTestDatabaseTarget as error:
         parser.error(str(error))
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
-    work = ROOT / "work/pr03a/remediation/runs" / stamp
-    output = ROOT / "outputs/pr03a/remediation/runs" / stamp
+    work = ROOT / "work/pr03a" / EVIDENCE_CATEGORY / stamp
+    output = ROOT / "outputs/pr03a" / EVIDENCE_CATEGORY / stamp
     for folder in (work / "tmp", work / "cache", work / "guard", output):
         folder.mkdir(parents=True, exist_ok=False)
     (work / "guard/sitecustomize.py").write_text(NETWORK_GUARD, encoding="utf-8")
@@ -102,7 +107,8 @@ def main():
     env.update(PR02A_TEST_ADMIN_URL=url.render_as_string(hide_password=False),
                TEMP=str(work / "tmp"), TMP=str(work / "tmp"), TMPDIR=str(work / "tmp"),
                PYTHONDONTWRITEBYTECODE="1", PYTHONNOUSERSITE="1", PYTHONUTF8="1",
-               PYTHONPATH=os.pathsep.join((str(work / "guard"), str(ROOT / "web/backend"))),
+               PYTHONPATH=os.pathsep.join((str(work / "guard"), str(ROOT / "web/backend"),
+                                          str(ROOT / "tools/pr03a/third_round"))),
                PYTEST_DISABLE_PLUGIN_AUTOLOAD="1", HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1",
                HF_HOME=str(work / "cache/hf"), XDG_CACHE_HOME=str(work / "cache"),
                PIP_CACHE_DIR=str(work / "cache/pip"))
@@ -112,7 +118,13 @@ def main():
     (output / "network-guard.log").write_text(probe.stdout + probe.stderr, encoding="utf-8")
     if not guard_passed:
         raise RuntimeError("PR-03a loopback network guard self-test failed")
-    command = [sys.executable, "-m", "pytest", "-q", "--basetemp=" + str(work / "tmp/pytest"),
+    env["PR03A_THIRD_ROUND_EVIDENCE"] = str(output / "probe-evidence")
+    (output / "probe-evidence").mkdir()
+    command = [sys.executable, "-m", "pytest", "-q"]
+    for plugin in PYTEST_PLUGINS:
+        command.extend(("-p", plugin))
+    command.extend(PYTEST_TARGETS)
+    command += ["--basetemp=" + str(work / "tmp/pytest"),
                "--junitxml=" + str(output / "pytest.xml"), "-o", "cache_dir=" + str(work / "cache/pytest")]
     source_before = source_manifest()
     began = time.monotonic()
@@ -130,9 +142,11 @@ def main():
             counts[key] for key in ("failures", "errors", "skipped"))
     except (OSError, ET.ParseError, ValueError):
         junit_ok = False
-    report = {"python": sys.version, "executable": sys.executable, "command": command,
+    report = {"python": sys.version, "executable": sys.executable, "command": command, "suite": SUITE,
               "exit_code": result.returncode, "seconds": round(time.monotonic() - began, 3),
               "cluster_identity": identity, "junit": counts,
+              "postgres_log": env.get("PR03A_THIRD_ROUND_PG_LOG"),
+              "probe_evidence": env["PR03A_THIRD_ROUND_EVIDENCE"],
               "network_guard_selftest": guard_passed,
               "passed": result.returncode == 0 and junit_ok and source_before == source_after,
               "executable_source_sha256_before": source_before,

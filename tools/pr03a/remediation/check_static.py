@@ -17,7 +17,7 @@ from alembic.script import ScriptDirectory
 ROOT = Path(__file__).resolve().parents[3]
 BACKEND = ROOT / "web/backend"
 ARCH = ROOT / "docs/web-alpha/architecture"
-OUT = ROOT / "outputs/pr03a/remediation/static" / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+OUT = ROOT / "outputs/pr03a/third-round/static" / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
 
 
 def main():
@@ -128,13 +128,14 @@ def main():
         assert script.get_revision("0003_persistent_tasks").down_revision == "0002_pr02a_review"
         assert script.get_revision("0002_pr02a_review").down_revision == "0001_data_foundation"
         assert script.get_revision("0004_identity").down_revision == "0003_persistent_tasks"
-        assert heads == ["0005_identity_recovery"]
-        assert script.get_revision(heads[0]).down_revision == "0004_identity"
+        assert script.get_revision("0005_identity_recovery").down_revision == "0004_identity"
+        assert heads == ["0006_local_reconciler_security"]
+        assert script.get_revision(heads[0]).down_revision == "0005_identity_recovery"
         command.upgrade(config, "head", sql=True)
         rendered = buffer.getvalue()
         assert "COMMIT;" in rendered and "FORCE ROW LEVEL SECURITY" in rendered
         (OUT / "migration-offline-head.sql").write_text(rendered, encoding="utf-8")
-        return {"heads": heads, "history_retained": ["0001_data_foundation", "0002_pr02a_review", "0003_persistent_tasks", "0004_identity"],
+        return {"heads": heads, "history_retained": ["0001_data_foundation", "0002_pr02a_review", "0003_persistent_tasks", "0004_identity", "0005_identity_recovery"],
                 "offline_rendered": True}
     run("Incremental single migration head and offline SQL", migrations)
 

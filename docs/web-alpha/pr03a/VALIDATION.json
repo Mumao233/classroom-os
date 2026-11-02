@@ -1,11 +1,11 @@
 {
-  "base": "088984fbd7c9f36f4250c9af340d6a73a0c57960",
-  "branch": "feature/web-pr03a-identity",
-  "original_pr03a_parent": "3b3881540519c27075119f99bb1dbff35d369e35",
-  "contract_version": "0.1.0",
-  "migration_head": "0005_identity_recovery",
-  "generated_at_utc": "2026-10-30T17:37:08.917402+00:00",
-  "web": {
+  "schema_version": 3,
+  "date": "2026-11-02",
+  "base_commit": "cb5f73c288fe013763e1e3ee9ebc3eb94a44a6b0",
+  "developer_status": "Implemented and locally validated; awaiting Astra exact-SHA code review",
+  "independent_status": "REQUEST CHANGES; APPROVE DESIGN applies only to R2 design",
+  "migration_head": "0006_local_reconciler_security",
+  "backend": {
     "python": "3.12.14 (main, Aug 25 2026, 14:01:42) [MSC v.1944 64 bit (AMD64)]",
     "executable": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr03a\\venv\\Scripts\\python.exe",
     "command": [
@@ -13,13 +13,16 @@
       "-m",
       "pytest",
       "-q",
-      "--basetemp=J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr03a\\remediation\\runs\\20261030T172928.118399Z\\tmp\\pytest",
-      "--junitxml=J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\remediation\\runs\\20261030T172928.118399Z\\pytest.xml",
+      "-p",
+      "pr03a_probe_evidence",
+      "--basetemp=J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr03a\\third-round\\full\\20261102T124856.901159Z\\tmp\\pytest",
+      "--junitxml=J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\third-round\\full\\20261102T124856.901159Z\\pytest.xml",
       "-o",
-      "cache_dir=J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr03a\\remediation\\runs\\20261030T172928.118399Z\\cache\\pytest"
+      "cache_dir=J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr03a\\third-round\\full\\20261102T124856.901159Z\\cache\\pytest"
     ],
+    "suite": "full",
     "exit_code": 0,
-    "seconds": 282.407,
+    "seconds": 339.594,
     "cluster_identity": {
       "login": "pr02a_pr03a_migrator",
       "database": "pr02a_pr03a_synthetic",
@@ -30,14 +33,27 @@
       "version": "PostgreSQL 17.11 on x86_64-windows, compiled by msvc-19.44.35228, 64-bit"
     },
     "junit": {
-      "tests": 423,
+      "tests": 464,
       "failures": 0,
       "errors": 0,
       "skipped": 0
     },
+    "postgres_log": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\third-round\\implementation-cluster-20261102T122852.560033Z\\postgres.log",
+    "probe_evidence": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\third-round\\full\\20261102T124856.901159Z\\probe-evidence",
     "network_guard_selftest": true,
     "passed": true,
     "executable_source_sha256_before": {
+      "tools\\pr03a\\check_protected.py": "a1133d0c4f6c74ca7c931b57312b291e39bbb5116ec6004e25d5c2daa82bf271",
+      "tools\\pr03a\\check_static.py": "b97c9d3a50f21ca1db118c17036702edd78f9d6e1c566b9178856008a86ee18f",
+      "tools\\pr03a\\remediation\\check_protected.py": "9b998ebef9b2cd4e796238a25f277cc7e73736cc824c60b9849aa1c8d1817b07",
+      "tools\\pr03a\\remediation\\check_static.py": "205f1affb2efe68ed7365f4145e577443107b55e61129bede09c4ce1b7ba4566",
+      "tools\\pr03a\\remediation\\run_tests.py": "7356eabe4f22c3fa45913841824856c28e1e1baedcdd0a42fccf239a10a7db92",
+      "tools\\pr03a\\remediation\\selftest_runner.py": "c5a321b794c5cbbe9c548641c08e137bab45f24193f2a1302c5e718b4a366c44",
+      "tools\\pr03a\\run_tests.py": "061617c03c1530ad8d3d8db25c2a241885e5ac5e32c5fb00f38c39f2b6ce2bce",
+      "tools\\pr03a\\selftest_runner.py": "f5ce2bcb28c3e957e569f445ebc6a32a371d0d750660b409d3fdf580a050cef5",
+      "tools\\pr03a\\third_round\\pr03a_probe_evidence.py": "37ee6d5ee61408b0f48c142e3abd4a1635fd77c5705e150d80d6c03e860f718d",
+      "tools\\pr03a\\third_round\\run_legacy.py": "aa488240ae24fa99e7a75885e389ca97ebd2ea6671de460ca1294e0041c65b91",
+      "tools\\pr03a\\third_round\\run_tests.py": "f6e09817cbb79cc624a2e9ceaf3e4bd2662699a4a010c48529b610079c397b00",
       "web\\backend\\classroom_web\\__init__.py": "1fbc2de79614199bdfe3c08a685a3364bd960f206da31688c64f75284dc221e6",
       "web\\backend\\classroom_web\\application\\__init__.py": "d28e85da4929d31d12cb77619ac59b9e466761bf0972dd356add288b10a2fe92",
       "web\\backend\\classroom_web\\application\\identity.py": "84aeeb4b053eb2f67d62bd1bfd02b1644d352153d1644d315784ba1460c31757",
@@ -79,16 +95,22 @@
       "web\\backend\\migrations\\versions\\0004_identity.sql": "d8f4358a218d2d00999f90f85f123b3ed9e942bbaf86647019b7f03b8436e414",
       "web\\backend\\migrations\\versions\\0005_identity_recovery.py": "f56a068abf916b9e8ecf4cca02f75479599fa2ea223ee5f814a9ba894157fa26",
       "web\\backend\\migrations\\versions\\0005_identity_recovery.sql": "ecadca6ccf993a18dda52895156534051f21073df057eeda664ac80187ee2e12",
+      "web\\backend\\migrations\\versions\\0006_local_reconciler_functions.sql": "50085d88ec66cca86ef07cd107738cf13fdfcbe328d32b4b5a55e3185b53ebe2",
+      "web\\backend\\migrations\\versions\\0006_local_reconciler_security.py": "ef648852aa3bebc80b0a0bd701314dbe2d2d35b8d6b441f4e65d6087178939af",
+      "web\\backend\\migrations\\versions\\0006_local_reconciler_security.sql": "c87ad8fb31fca1032bcbf03c72c1163afd88e928451919c386940b5853dece0b",
       "web\\backend\\tests\\integration\\conftest.py": "8351aa9a2cbd64510e52bc67e56f3373181f8b2a0f1553900211b5ca4aae3b45",
       "web\\backend\\tests\\integration\\test_data_foundation.py": "cde8f1702aa875c92d7e5c1396b48c062a58cabb8a031104fb56783570f81a1a",
       "web\\backend\\tests\\integration\\test_identity.py": "80ec3054b472229d1104d080f240778b0512239b9c4141ca97e8e5108b1490d1",
       "web\\backend\\tests\\integration\\test_identity_migrations.py": "d18bad1dfebd4edead96f5705c1edef6177410334adb813276561c389c1b978d",
       "web\\backend\\tests\\integration\\test_identity_recovery.py": "dccb5a0e22019366b8c0d5669e1ff301bb40da5548a722304f2c70553933f8fa",
       "web\\backend\\tests\\integration\\test_identity_recovery_migrations.py": "de7483716ecaf51a31ee17dea720570a918de67535215dbd101e14778d02a73c",
+      "web\\backend\\tests\\integration\\test_local_reconciler_migrations.py": "a57ad699db2cb0a9ef270bd6a58f04f3c4e4b7d762ecacd86be03adaf90f3f93",
+      "web\\backend\\tests\\integration\\test_local_reconciler_third_round.py": "8e0a6d2f3e3d783ac3866374609a1057fc68a6ea7dcb57bf0bdeabe390d18cd8",
       "web\\backend\\tests\\integration\\test_material_revocation_race.py": "8489a800d1bcf7520c9780f557f3686f83a2464cff25db3bb1b14d298ea521cf",
       "web\\backend\\tests\\integration\\test_migration_remediation.py": "a985c0cbf977e499f4f3c604e51c0217acbe3ba429a14eaa3257d97fe62240e4",
       "web\\backend\\tests\\integration\\test_persistent_tasks.py": "ac6ebadb298409ab5756594f6d79dcf3a994b94259575b09dd011899a791ee78",
       "web\\backend\\tests\\integration\\test_pr03a_review_regressions.py": "afc80d0435c4a36f263298d62dfa69430ac0f9aa3f22404696534401776a9b26",
+      "web\\backend\\tests\\integration\\test_pr03a_second_review_regressions.py": "23ab5c06bc29ff2de469e3ae71b6fe9a736a025a980c53e953f5965491e77cfd",
       "web\\backend\\tests\\integration\\test_semester_limits.py": "ded2713a5cd93ebefda667a8ff6793659486e553027322310816edfad6aaace2",
       "web\\backend\\tests\\integration\\test_task_cancel_remediation.py": "c16d20aa3a1a982536a20a2c2d87fa140a1b49674492b7b9e974ca105de3176f",
       "web\\backend\\tests\\integration\\test_task_material_remediation.py": "eebda662c2c5cc6a35af4bab1979c0ce5ecadb9bac273e534f2c6241a81f349d",
@@ -100,6 +122,17 @@
       "web\\backend\\tests\\unit\\test_test_database_target.py": "7cbddc042b33f1aab7663001f159537a1e67cea8acd525d0067447ec13769327"
     },
     "executable_source_sha256_after": {
+      "tools\\pr03a\\check_protected.py": "a1133d0c4f6c74ca7c931b57312b291e39bbb5116ec6004e25d5c2daa82bf271",
+      "tools\\pr03a\\check_static.py": "b97c9d3a50f21ca1db118c17036702edd78f9d6e1c566b9178856008a86ee18f",
+      "tools\\pr03a\\remediation\\check_protected.py": "9b998ebef9b2cd4e796238a25f277cc7e73736cc824c60b9849aa1c8d1817b07",
+      "tools\\pr03a\\remediation\\check_static.py": "205f1affb2efe68ed7365f4145e577443107b55e61129bede09c4ce1b7ba4566",
+      "tools\\pr03a\\remediation\\run_tests.py": "7356eabe4f22c3fa45913841824856c28e1e1baedcdd0a42fccf239a10a7db92",
+      "tools\\pr03a\\remediation\\selftest_runner.py": "c5a321b794c5cbbe9c548641c08e137bab45f24193f2a1302c5e718b4a366c44",
+      "tools\\pr03a\\run_tests.py": "061617c03c1530ad8d3d8db25c2a241885e5ac5e32c5fb00f38c39f2b6ce2bce",
+      "tools\\pr03a\\selftest_runner.py": "f5ce2bcb28c3e957e569f445ebc6a32a371d0d750660b409d3fdf580a050cef5",
+      "tools\\pr03a\\third_round\\pr03a_probe_evidence.py": "37ee6d5ee61408b0f48c142e3abd4a1635fd77c5705e150d80d6c03e860f718d",
+      "tools\\pr03a\\third_round\\run_legacy.py": "aa488240ae24fa99e7a75885e389ca97ebd2ea6671de460ca1294e0041c65b91",
+      "tools\\pr03a\\third_round\\run_tests.py": "f6e09817cbb79cc624a2e9ceaf3e4bd2662699a4a010c48529b610079c397b00",
       "web\\backend\\classroom_web\\__init__.py": "1fbc2de79614199bdfe3c08a685a3364bd960f206da31688c64f75284dc221e6",
       "web\\backend\\classroom_web\\application\\__init__.py": "d28e85da4929d31d12cb77619ac59b9e466761bf0972dd356add288b10a2fe92",
       "web\\backend\\classroom_web\\application\\identity.py": "84aeeb4b053eb2f67d62bd1bfd02b1644d352153d1644d315784ba1460c31757",
@@ -141,16 +174,22 @@
       "web\\backend\\migrations\\versions\\0004_identity.sql": "d8f4358a218d2d00999f90f85f123b3ed9e942bbaf86647019b7f03b8436e414",
       "web\\backend\\migrations\\versions\\0005_identity_recovery.py": "f56a068abf916b9e8ecf4cca02f75479599fa2ea223ee5f814a9ba894157fa26",
       "web\\backend\\migrations\\versions\\0005_identity_recovery.sql": "ecadca6ccf993a18dda52895156534051f21073df057eeda664ac80187ee2e12",
+      "web\\backend\\migrations\\versions\\0006_local_reconciler_functions.sql": "50085d88ec66cca86ef07cd107738cf13fdfcbe328d32b4b5a55e3185b53ebe2",
+      "web\\backend\\migrations\\versions\\0006_local_reconciler_security.py": "ef648852aa3bebc80b0a0bd701314dbe2d2d35b8d6b441f4e65d6087178939af",
+      "web\\backend\\migrations\\versions\\0006_local_reconciler_security.sql": "c87ad8fb31fca1032bcbf03c72c1163afd88e928451919c386940b5853dece0b",
       "web\\backend\\tests\\integration\\conftest.py": "8351aa9a2cbd64510e52bc67e56f3373181f8b2a0f1553900211b5ca4aae3b45",
       "web\\backend\\tests\\integration\\test_data_foundation.py": "cde8f1702aa875c92d7e5c1396b48c062a58cabb8a031104fb56783570f81a1a",
       "web\\backend\\tests\\integration\\test_identity.py": "80ec3054b472229d1104d080f240778b0512239b9c4141ca97e8e5108b1490d1",
       "web\\backend\\tests\\integration\\test_identity_migrations.py": "d18bad1dfebd4edead96f5705c1edef6177410334adb813276561c389c1b978d",
       "web\\backend\\tests\\integration\\test_identity_recovery.py": "dccb5a0e22019366b8c0d5669e1ff301bb40da5548a722304f2c70553933f8fa",
       "web\\backend\\tests\\integration\\test_identity_recovery_migrations.py": "de7483716ecaf51a31ee17dea720570a918de67535215dbd101e14778d02a73c",
+      "web\\backend\\tests\\integration\\test_local_reconciler_migrations.py": "a57ad699db2cb0a9ef270bd6a58f04f3c4e4b7d762ecacd86be03adaf90f3f93",
+      "web\\backend\\tests\\integration\\test_local_reconciler_third_round.py": "8e0a6d2f3e3d783ac3866374609a1057fc68a6ea7dcb57bf0bdeabe390d18cd8",
       "web\\backend\\tests\\integration\\test_material_revocation_race.py": "8489a800d1bcf7520c9780f557f3686f83a2464cff25db3bb1b14d298ea521cf",
       "web\\backend\\tests\\integration\\test_migration_remediation.py": "a985c0cbf977e499f4f3c604e51c0217acbe3ba429a14eaa3257d97fe62240e4",
       "web\\backend\\tests\\integration\\test_persistent_tasks.py": "ac6ebadb298409ab5756594f6d79dcf3a994b94259575b09dd011899a791ee78",
       "web\\backend\\tests\\integration\\test_pr03a_review_regressions.py": "afc80d0435c4a36f263298d62dfa69430ac0f9aa3f22404696534401776a9b26",
+      "web\\backend\\tests\\integration\\test_pr03a_second_review_regressions.py": "23ab5c06bc29ff2de469e3ae71b6fe9a736a025a980c53e953f5965491e77cfd",
       "web\\backend\\tests\\integration\\test_semester_limits.py": "ded2713a5cd93ebefda667a8ff6793659486e553027322310816edfad6aaace2",
       "web\\backend\\tests\\integration\\test_task_cancel_remediation.py": "c16d20aa3a1a982536a20a2c2d87fa140a1b49674492b7b9e974ca105de3176f",
       "web\\backend\\tests\\integration\\test_task_material_remediation.py": "eebda662c2c5cc6a35af4bab1979c0ce5ecadb9bac273e534f2c6241a81f349d",
@@ -162,40 +201,616 @@
       "web\\backend\\tests\\unit\\test_test_database_target.py": "7cbddc042b33f1aab7663001f159537a1e67cea8acd525d0067447ec13769327"
     },
     "executable_source_stable_during_run": true,
-    "minimum_previous_backend_cases": 358,
+    "minimum_previous_backend_cases": 423,
     "isolation": "Verified worktree-owned loopback cluster; fixture creates/drops random database and restricted login",
     "limitations": "Synthetic PostgreSQL and simulated mail/provider only; no paid model, real email, HTTP/frontend, deployment or production migration"
   },
-  "web_evidence": "outputs/pr03a/remediation/runs/20261030T172928.118399Z/results.json",
-  "web_by_module": {
-    "tests.integration.test_data_foundation": 40,
-    "tests.integration.test_identity": 35,
-    "tests.integration.test_identity_migrations": 3,
-    "tests.integration.test_identity_recovery": 51,
-    "tests.integration.test_identity_recovery_migrations": 4,
-    "tests.integration.test_material_revocation_race": 4,
-    "tests.integration.test_migration_remediation": 3,
-    "tests.integration.test_persistent_tasks": 35,
-    "tests.integration.test_pr03a_review_regressions": 10,
-    "tests.integration.test_semester_limits": 26,
-    "tests.integration.test_task_cancel_remediation": 12,
-    "tests.integration.test_task_material_remediation": 41,
-    "tests.integration.test_task_migrations": 5,
-    "tests.integration.test_task_worker": 16,
-    "tests.unit.test_identity_values": 27,
-    "tests.unit.test_pr02b_runner": 40,
-    "tests.unit.test_task_values": 16,
-    "tests.unit.test_test_database_target": 55
+  "seven_review_probes": {
+    "python": "3.12.14 (main, Aug 25 2026, 14:01:42) [MSC v.1944 64 bit (AMD64)]",
+    "executable": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr03a\\venv\\Scripts\\python.exe",
+    "command": [
+      "J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr03a\\venv\\Scripts\\python.exe",
+      "-m",
+      "pytest",
+      "-q",
+      "-p",
+      "pr03a_probe_evidence",
+      "tests/integration/test_pr03a_second_review_regressions.py",
+      "--basetemp=J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr03a\\third-round\\probes\\20261102T124839.732662Z\\tmp\\pytest",
+      "--junitxml=J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\third-round\\probes\\20261102T124839.732662Z\\pytest.xml",
+      "-o",
+      "cache_dir=J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr03a\\third-round\\probes\\20261102T124839.732662Z\\cache\\pytest"
+    ],
+    "suite": "probes",
+    "exit_code": 0,
+    "seconds": 9.141,
+    "cluster_identity": {
+      "login": "pr02a_pr03a_migrator",
+      "database": "pr02a_pr03a_synthetic",
+      "data_directory": "J:/class-assistant/worktrees/web-pr03a-identity/work/pr03a/pg/data",
+      "host": "127.0.0.1",
+      "port": 55439,
+      "listen_addresses": "127.0.0.1",
+      "version": "PostgreSQL 17.11 on x86_64-windows, compiled by msvc-19.44.35228, 64-bit"
+    },
+    "junit": {
+      "tests": 7,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "postgres_log": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\third-round\\implementation-cluster-20261102T122852.560033Z\\postgres.log",
+    "probe_evidence": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\third-round\\probes\\20261102T124839.732662Z\\probe-evidence",
+    "network_guard_selftest": true,
+    "passed": true,
+    "executable_source_sha256_before": {
+      "tools\\pr03a\\check_protected.py": "a1133d0c4f6c74ca7c931b57312b291e39bbb5116ec6004e25d5c2daa82bf271",
+      "tools\\pr03a\\check_static.py": "b97c9d3a50f21ca1db118c17036702edd78f9d6e1c566b9178856008a86ee18f",
+      "tools\\pr03a\\remediation\\check_protected.py": "9b998ebef9b2cd4e796238a25f277cc7e73736cc824c60b9849aa1c8d1817b07",
+      "tools\\pr03a\\remediation\\check_static.py": "205f1affb2efe68ed7365f4145e577443107b55e61129bede09c4ce1b7ba4566",
+      "tools\\pr03a\\remediation\\run_tests.py": "7356eabe4f22c3fa45913841824856c28e1e1baedcdd0a42fccf239a10a7db92",
+      "tools\\pr03a\\remediation\\selftest_runner.py": "c5a321b794c5cbbe9c548641c08e137bab45f24193f2a1302c5e718b4a366c44",
+      "tools\\pr03a\\run_tests.py": "061617c03c1530ad8d3d8db25c2a241885e5ac5e32c5fb00f38c39f2b6ce2bce",
+      "tools\\pr03a\\selftest_runner.py": "f5ce2bcb28c3e957e569f445ebc6a32a371d0d750660b409d3fdf580a050cef5",
+      "tools\\pr03a\\third_round\\pr03a_probe_evidence.py": "37ee6d5ee61408b0f48c142e3abd4a1635fd77c5705e150d80d6c03e860f718d",
+      "tools\\pr03a\\third_round\\run_legacy.py": "aa488240ae24fa99e7a75885e389ca97ebd2ea6671de460ca1294e0041c65b91",
+      "tools\\pr03a\\third_round\\run_tests.py": "f6e09817cbb79cc624a2e9ceaf3e4bd2662699a4a010c48529b610079c397b00",
+      "web\\backend\\classroom_web\\__init__.py": "1fbc2de79614199bdfe3c08a685a3364bd960f206da31688c64f75284dc221e6",
+      "web\\backend\\classroom_web\\application\\__init__.py": "d28e85da4929d31d12cb77619ac59b9e466761bf0972dd356add288b10a2fe92",
+      "web\\backend\\classroom_web\\application\\identity.py": "84aeeb4b053eb2f67d62bd1bfd02b1644d352153d1644d315784ba1460c31757",
+      "web\\backend\\classroom_web\\application\\task_worker.py": "57271089c7c71510606a5d9f1a57138e860f6475c65989483774663ce87f58af",
+      "web\\backend\\classroom_web\\domain\\__init__.py": "84bc88db7e5cc50948973b073042ad7f6845c046ee9d1f07f3cc172b59fc0695",
+      "web\\backend\\classroom_web\\domain\\data.py": "68b7548f41a37caf9bcc4c523c59c37b14846380b1b2984f4bb749801ccc907c",
+      "web\\backend\\classroom_web\\domain\\identity.py": "b5d174ec35d0f3ab3eeb3072b6ffa0243e6706c8c056f0a37185c3fe87afbb36",
+      "web\\backend\\classroom_web\\domain\\identity_ports.py": "b3c38e459f6479daa934cd765e0dc0c98e2477bc16baa4fef4c90a16095b6ef0",
+      "web\\backend\\classroom_web\\domain\\policies.py": "e58aa5dc149a07e2bd6fb963b5eaeb842dea7d01e975eccfba0eab03989b4501",
+      "web\\backend\\classroom_web\\domain\\ports.py": "970145d49a3791f4f9a7460d8b0704a25c73cc0be00b6106e26c4aa170f439d2",
+      "web\\backend\\classroom_web\\domain\\task_ports.py": "6f50041945c84329e1d1c4efaee7ad6be5f644386a2d295893cf076749d14c71",
+      "web\\backend\\classroom_web\\domain\\tasks.py": "16d33474342919a42a1ff694d4184ec7e13c92438e21a735543aca909816d549",
+      "web\\backend\\classroom_web\\entrypoints\\__init__.py": "6d72ab7b464b8d504d88dde0cda182c445578de275257f1368458384607aedf3",
+      "web\\backend\\classroom_web\\entrypoints\\worker.py": "86c6d91a8699b88afc773c28f665d6f3ee06e7a7d40165c6081de29855e468df",
+      "web\\backend\\classroom_web\\infrastructure\\__init__.py": "b22dfa7dc72b71a69022e1ac11ade4535cda28123401813833103fe27308fa27",
+      "web\\backend\\classroom_web\\infrastructure\\database.py": "e074fbdcb9b5b0dffe69437724d744b8bbcaff48c9bd868451912f78d9143cb5",
+      "web\\backend\\classroom_web\\infrastructure\\ddl.py": "06124382066888325a82a687626a76d59fc4bc7f779256ddd927ee89d9fb6c3e",
+      "web\\backend\\classroom_web\\infrastructure\\identity_mail.py": "227ba75bb1c3636e8eaaa9e8efde1843bcbc099cca1653c48c12efe50f9d849a",
+      "web\\backend\\classroom_web\\infrastructure\\identity_passwords.py": "fd4e7a60b59806ff165a16fb1eef6c2b8ad01cc777c6ba985b462f27da7ee764",
+      "web\\backend\\classroom_web\\infrastructure\\identity_repository.py": "40506e33b8c49ffa12d2fe2e6e967991b3f865e60473b4f97c2828542cdf1098",
+      "web\\backend\\classroom_web\\infrastructure\\identity_schema.py": "a9e46715d44402ba62d0137b63786e0bc5415a13c38c1cb04dad10da0b4cc324",
+      "web\\backend\\classroom_web\\infrastructure\\local_reconciler.py": "b5c87fb08354445346f8fdbcd677aec63d771cd13410f8a89ea3d866c7969547",
+      "web\\backend\\classroom_web\\infrastructure\\repositories.py": "451fc199baea3f06cfcc554c975fc71747189b102a740cd46afde56b0b67bff7",
+      "web\\backend\\classroom_web\\infrastructure\\schema.py": "aca8051e0abe218d683b2f52109f3ae038b0c9e9e827101f248e7cd6b805e7b4",
+      "web\\backend\\classroom_web\\infrastructure\\task_events.py": "7ef98e907a6ee3a41f0e2394d9749d8820ec9da9b356655edb242611db5f8572",
+      "web\\backend\\classroom_web\\infrastructure\\task_repository.py": "7b9cf9afef207c3f7bdc41a28b86b4b29927670021b31b42457cd8b09916f3ae",
+      "web\\backend\\classroom_web\\infrastructure\\task_scheduler.py": "1970b4f3246d1abedf84b3da461b5fd4162ac3454968b9153e5c7eb9468bb241",
+      "web\\backend\\classroom_web\\infrastructure\\task_schema.py": "1af8683ff16882944960eaed7d73dc83f9283fa94a1801777b33e59df90902dc",
+      "web\\backend\\classroom_web\\infrastructure\\task_sources.py": "cdc389d4b6a14ab51c4c3d5e28d78dfaad79ed86f14aad6e2424caef4a838b3d",
+      "web\\backend\\classroom_web\\test_support.py": "04eb4a800d05281d8fcf138599785089b6ea65d5286699e4c2d2812b2a79330a",
+      "web\\backend\\migrations\\env.py": "43e605128548a4078e8a37c58c4a7cd60a3e61b6f5a01e16e69f78880b4bbca8",
+      "web\\backend\\migrations\\versions\\0001_data_foundation.py": "d7f5bf06145eb21f9cd5d8f6ec093ecb1deebfb590b2829f39ce7e05fcbedf16",
+      "web\\backend\\migrations\\versions\\0001_data_foundation.sql": "87c475d46a647cc838c0ad9f75a6121cc4ad1c7b537fb9c7f94e568f987bbaa8",
+      "web\\backend\\migrations\\versions\\0002_pr02a_review.py": "f7c04dcbb80dc691e5060847a27be9c1fbeb4bbf4011eaa589e6fb7ad8631f69",
+      "web\\backend\\migrations\\versions\\0002_pr02a_review.sql": "4e9b9046202f0712f474eab2594c3cb7aff177854c8bd6bc0453e08995d3cf72",
+      "web\\backend\\migrations\\versions\\0003_persistent_tasks.py": "3af350e6860c6975473bc1d14e56b34d091dfc8900e17871b2f2f52c1fb05e92",
+      "web\\backend\\migrations\\versions\\0003_persistent_tasks.sql": "d5993db7732f49203317f91a3d4832bb810884b708b3a17223479d7aca69cc51",
+      "web\\backend\\migrations\\versions\\0004_identity.py": "88408dd198b6253cc83b60cac6ee17f66a8962fcf4b46a0b06200e557988bfb7",
+      "web\\backend\\migrations\\versions\\0004_identity.sql": "d8f4358a218d2d00999f90f85f123b3ed9e942bbaf86647019b7f03b8436e414",
+      "web\\backend\\migrations\\versions\\0005_identity_recovery.py": "f56a068abf916b9e8ecf4cca02f75479599fa2ea223ee5f814a9ba894157fa26",
+      "web\\backend\\migrations\\versions\\0005_identity_recovery.sql": "ecadca6ccf993a18dda52895156534051f21073df057eeda664ac80187ee2e12",
+      "web\\backend\\migrations\\versions\\0006_local_reconciler_functions.sql": "50085d88ec66cca86ef07cd107738cf13fdfcbe328d32b4b5a55e3185b53ebe2",
+      "web\\backend\\migrations\\versions\\0006_local_reconciler_security.py": "ef648852aa3bebc80b0a0bd701314dbe2d2d35b8d6b441f4e65d6087178939af",
+      "web\\backend\\migrations\\versions\\0006_local_reconciler_security.sql": "c87ad8fb31fca1032bcbf03c72c1163afd88e928451919c386940b5853dece0b",
+      "web\\backend\\tests\\integration\\conftest.py": "8351aa9a2cbd64510e52bc67e56f3373181f8b2a0f1553900211b5ca4aae3b45",
+      "web\\backend\\tests\\integration\\test_data_foundation.py": "cde8f1702aa875c92d7e5c1396b48c062a58cabb8a031104fb56783570f81a1a",
+      "web\\backend\\tests\\integration\\test_identity.py": "80ec3054b472229d1104d080f240778b0512239b9c4141ca97e8e5108b1490d1",
+      "web\\backend\\tests\\integration\\test_identity_migrations.py": "d18bad1dfebd4edead96f5705c1edef6177410334adb813276561c389c1b978d",
+      "web\\backend\\tests\\integration\\test_identity_recovery.py": "dccb5a0e22019366b8c0d5669e1ff301bb40da5548a722304f2c70553933f8fa",
+      "web\\backend\\tests\\integration\\test_identity_recovery_migrations.py": "de7483716ecaf51a31ee17dea720570a918de67535215dbd101e14778d02a73c",
+      "web\\backend\\tests\\integration\\test_local_reconciler_migrations.py": "a57ad699db2cb0a9ef270bd6a58f04f3c4e4b7d762ecacd86be03adaf90f3f93",
+      "web\\backend\\tests\\integration\\test_local_reconciler_third_round.py": "8e0a6d2f3e3d783ac3866374609a1057fc68a6ea7dcb57bf0bdeabe390d18cd8",
+      "web\\backend\\tests\\integration\\test_material_revocation_race.py": "8489a800d1bcf7520c9780f557f3686f83a2464cff25db3bb1b14d298ea521cf",
+      "web\\backend\\tests\\integration\\test_migration_remediation.py": "a985c0cbf977e499f4f3c604e51c0217acbe3ba429a14eaa3257d97fe62240e4",
+      "web\\backend\\tests\\integration\\test_persistent_tasks.py": "ac6ebadb298409ab5756594f6d79dcf3a994b94259575b09dd011899a791ee78",
+      "web\\backend\\tests\\integration\\test_pr03a_review_regressions.py": "afc80d0435c4a36f263298d62dfa69430ac0f9aa3f22404696534401776a9b26",
+      "web\\backend\\tests\\integration\\test_pr03a_second_review_regressions.py": "23ab5c06bc29ff2de469e3ae71b6fe9a736a025a980c53e953f5965491e77cfd",
+      "web\\backend\\tests\\integration\\test_semester_limits.py": "ded2713a5cd93ebefda667a8ff6793659486e553027322310816edfad6aaace2",
+      "web\\backend\\tests\\integration\\test_task_cancel_remediation.py": "c16d20aa3a1a982536a20a2c2d87fa140a1b49674492b7b9e974ca105de3176f",
+      "web\\backend\\tests\\integration\\test_task_material_remediation.py": "eebda662c2c5cc6a35af4bab1979c0ce5ecadb9bac273e534f2c6241a81f349d",
+      "web\\backend\\tests\\integration\\test_task_migrations.py": "5c3b49c370f887ce94ca8f4ffc42782d70a4e257e11a4cc13196a1fc746bcdbf",
+      "web\\backend\\tests\\integration\\test_task_worker.py": "87ba248535a33d48fcfa3a36ee3104cb12dc608dc0a74dd008829530ce6ce103",
+      "web\\backend\\tests\\unit\\test_identity_values.py": "b270613ae2e504522be033d2f742e47aa256270d5477c7903f34c52dcffba509",
+      "web\\backend\\tests\\unit\\test_pr02b_runner.py": "b55a6d90dc2f46f0e8fb111fa9549b33afb24fe392b62afaf7ff60d00f520a8e",
+      "web\\backend\\tests\\unit\\test_task_values.py": "ef01d6f5de55e6bd7cce001b6cf8c09ab43a96b8fe28ee56a1b5519f86065425",
+      "web\\backend\\tests\\unit\\test_test_database_target.py": "7cbddc042b33f1aab7663001f159537a1e67cea8acd525d0067447ec13769327"
+    },
+    "executable_source_sha256_after": {
+      "tools\\pr03a\\check_protected.py": "a1133d0c4f6c74ca7c931b57312b291e39bbb5116ec6004e25d5c2daa82bf271",
+      "tools\\pr03a\\check_static.py": "b97c9d3a50f21ca1db118c17036702edd78f9d6e1c566b9178856008a86ee18f",
+      "tools\\pr03a\\remediation\\check_protected.py": "9b998ebef9b2cd4e796238a25f277cc7e73736cc824c60b9849aa1c8d1817b07",
+      "tools\\pr03a\\remediation\\check_static.py": "205f1affb2efe68ed7365f4145e577443107b55e61129bede09c4ce1b7ba4566",
+      "tools\\pr03a\\remediation\\run_tests.py": "7356eabe4f22c3fa45913841824856c28e1e1baedcdd0a42fccf239a10a7db92",
+      "tools\\pr03a\\remediation\\selftest_runner.py": "c5a321b794c5cbbe9c548641c08e137bab45f24193f2a1302c5e718b4a366c44",
+      "tools\\pr03a\\run_tests.py": "061617c03c1530ad8d3d8db25c2a241885e5ac5e32c5fb00f38c39f2b6ce2bce",
+      "tools\\pr03a\\selftest_runner.py": "f5ce2bcb28c3e957e569f445ebc6a32a371d0d750660b409d3fdf580a050cef5",
+      "tools\\pr03a\\third_round\\pr03a_probe_evidence.py": "37ee6d5ee61408b0f48c142e3abd4a1635fd77c5705e150d80d6c03e860f718d",
+      "tools\\pr03a\\third_round\\run_legacy.py": "aa488240ae24fa99e7a75885e389ca97ebd2ea6671de460ca1294e0041c65b91",
+      "tools\\pr03a\\third_round\\run_tests.py": "f6e09817cbb79cc624a2e9ceaf3e4bd2662699a4a010c48529b610079c397b00",
+      "web\\backend\\classroom_web\\__init__.py": "1fbc2de79614199bdfe3c08a685a3364bd960f206da31688c64f75284dc221e6",
+      "web\\backend\\classroom_web\\application\\__init__.py": "d28e85da4929d31d12cb77619ac59b9e466761bf0972dd356add288b10a2fe92",
+      "web\\backend\\classroom_web\\application\\identity.py": "84aeeb4b053eb2f67d62bd1bfd02b1644d352153d1644d315784ba1460c31757",
+      "web\\backend\\classroom_web\\application\\task_worker.py": "57271089c7c71510606a5d9f1a57138e860f6475c65989483774663ce87f58af",
+      "web\\backend\\classroom_web\\domain\\__init__.py": "84bc88db7e5cc50948973b073042ad7f6845c046ee9d1f07f3cc172b59fc0695",
+      "web\\backend\\classroom_web\\domain\\data.py": "68b7548f41a37caf9bcc4c523c59c37b14846380b1b2984f4bb749801ccc907c",
+      "web\\backend\\classroom_web\\domain\\identity.py": "b5d174ec35d0f3ab3eeb3072b6ffa0243e6706c8c056f0a37185c3fe87afbb36",
+      "web\\backend\\classroom_web\\domain\\identity_ports.py": "b3c38e459f6479daa934cd765e0dc0c98e2477bc16baa4fef4c90a16095b6ef0",
+      "web\\backend\\classroom_web\\domain\\policies.py": "e58aa5dc149a07e2bd6fb963b5eaeb842dea7d01e975eccfba0eab03989b4501",
+      "web\\backend\\classroom_web\\domain\\ports.py": "970145d49a3791f4f9a7460d8b0704a25c73cc0be00b6106e26c4aa170f439d2",
+      "web\\backend\\classroom_web\\domain\\task_ports.py": "6f50041945c84329e1d1c4efaee7ad6be5f644386a2d295893cf076749d14c71",
+      "web\\backend\\classroom_web\\domain\\tasks.py": "16d33474342919a42a1ff694d4184ec7e13c92438e21a735543aca909816d549",
+      "web\\backend\\classroom_web\\entrypoints\\__init__.py": "6d72ab7b464b8d504d88dde0cda182c445578de275257f1368458384607aedf3",
+      "web\\backend\\classroom_web\\entrypoints\\worker.py": "86c6d91a8699b88afc773c28f665d6f3ee06e7a7d40165c6081de29855e468df",
+      "web\\backend\\classroom_web\\infrastructure\\__init__.py": "b22dfa7dc72b71a69022e1ac11ade4535cda28123401813833103fe27308fa27",
+      "web\\backend\\classroom_web\\infrastructure\\database.py": "e074fbdcb9b5b0dffe69437724d744b8bbcaff48c9bd868451912f78d9143cb5",
+      "web\\backend\\classroom_web\\infrastructure\\ddl.py": "06124382066888325a82a687626a76d59fc4bc7f779256ddd927ee89d9fb6c3e",
+      "web\\backend\\classroom_web\\infrastructure\\identity_mail.py": "227ba75bb1c3636e8eaaa9e8efde1843bcbc099cca1653c48c12efe50f9d849a",
+      "web\\backend\\classroom_web\\infrastructure\\identity_passwords.py": "fd4e7a60b59806ff165a16fb1eef6c2b8ad01cc777c6ba985b462f27da7ee764",
+      "web\\backend\\classroom_web\\infrastructure\\identity_repository.py": "40506e33b8c49ffa12d2fe2e6e967991b3f865e60473b4f97c2828542cdf1098",
+      "web\\backend\\classroom_web\\infrastructure\\identity_schema.py": "a9e46715d44402ba62d0137b63786e0bc5415a13c38c1cb04dad10da0b4cc324",
+      "web\\backend\\classroom_web\\infrastructure\\local_reconciler.py": "b5c87fb08354445346f8fdbcd677aec63d771cd13410f8a89ea3d866c7969547",
+      "web\\backend\\classroom_web\\infrastructure\\repositories.py": "451fc199baea3f06cfcc554c975fc71747189b102a740cd46afde56b0b67bff7",
+      "web\\backend\\classroom_web\\infrastructure\\schema.py": "aca8051e0abe218d683b2f52109f3ae038b0c9e9e827101f248e7cd6b805e7b4",
+      "web\\backend\\classroom_web\\infrastructure\\task_events.py": "7ef98e907a6ee3a41f0e2394d9749d8820ec9da9b356655edb242611db5f8572",
+      "web\\backend\\classroom_web\\infrastructure\\task_repository.py": "7b9cf9afef207c3f7bdc41a28b86b4b29927670021b31b42457cd8b09916f3ae",
+      "web\\backend\\classroom_web\\infrastructure\\task_scheduler.py": "1970b4f3246d1abedf84b3da461b5fd4162ac3454968b9153e5c7eb9468bb241",
+      "web\\backend\\classroom_web\\infrastructure\\task_schema.py": "1af8683ff16882944960eaed7d73dc83f9283fa94a1801777b33e59df90902dc",
+      "web\\backend\\classroom_web\\infrastructure\\task_sources.py": "cdc389d4b6a14ab51c4c3d5e28d78dfaad79ed86f14aad6e2424caef4a838b3d",
+      "web\\backend\\classroom_web\\test_support.py": "04eb4a800d05281d8fcf138599785089b6ea65d5286699e4c2d2812b2a79330a",
+      "web\\backend\\migrations\\env.py": "43e605128548a4078e8a37c58c4a7cd60a3e61b6f5a01e16e69f78880b4bbca8",
+      "web\\backend\\migrations\\versions\\0001_data_foundation.py": "d7f5bf06145eb21f9cd5d8f6ec093ecb1deebfb590b2829f39ce7e05fcbedf16",
+      "web\\backend\\migrations\\versions\\0001_data_foundation.sql": "87c475d46a647cc838c0ad9f75a6121cc4ad1c7b537fb9c7f94e568f987bbaa8",
+      "web\\backend\\migrations\\versions\\0002_pr02a_review.py": "f7c04dcbb80dc691e5060847a27be9c1fbeb4bbf4011eaa589e6fb7ad8631f69",
+      "web\\backend\\migrations\\versions\\0002_pr02a_review.sql": "4e9b9046202f0712f474eab2594c3cb7aff177854c8bd6bc0453e08995d3cf72",
+      "web\\backend\\migrations\\versions\\0003_persistent_tasks.py": "3af350e6860c6975473bc1d14e56b34d091dfc8900e17871b2f2f52c1fb05e92",
+      "web\\backend\\migrations\\versions\\0003_persistent_tasks.sql": "d5993db7732f49203317f91a3d4832bb810884b708b3a17223479d7aca69cc51",
+      "web\\backend\\migrations\\versions\\0004_identity.py": "88408dd198b6253cc83b60cac6ee17f66a8962fcf4b46a0b06200e557988bfb7",
+      "web\\backend\\migrations\\versions\\0004_identity.sql": "d8f4358a218d2d00999f90f85f123b3ed9e942bbaf86647019b7f03b8436e414",
+      "web\\backend\\migrations\\versions\\0005_identity_recovery.py": "f56a068abf916b9e8ecf4cca02f75479599fa2ea223ee5f814a9ba894157fa26",
+      "web\\backend\\migrations\\versions\\0005_identity_recovery.sql": "ecadca6ccf993a18dda52895156534051f21073df057eeda664ac80187ee2e12",
+      "web\\backend\\migrations\\versions\\0006_local_reconciler_functions.sql": "50085d88ec66cca86ef07cd107738cf13fdfcbe328d32b4b5a55e3185b53ebe2",
+      "web\\backend\\migrations\\versions\\0006_local_reconciler_security.py": "ef648852aa3bebc80b0a0bd701314dbe2d2d35b8d6b441f4e65d6087178939af",
+      "web\\backend\\migrations\\versions\\0006_local_reconciler_security.sql": "c87ad8fb31fca1032bcbf03c72c1163afd88e928451919c386940b5853dece0b",
+      "web\\backend\\tests\\integration\\conftest.py": "8351aa9a2cbd64510e52bc67e56f3373181f8b2a0f1553900211b5ca4aae3b45",
+      "web\\backend\\tests\\integration\\test_data_foundation.py": "cde8f1702aa875c92d7e5c1396b48c062a58cabb8a031104fb56783570f81a1a",
+      "web\\backend\\tests\\integration\\test_identity.py": "80ec3054b472229d1104d080f240778b0512239b9c4141ca97e8e5108b1490d1",
+      "web\\backend\\tests\\integration\\test_identity_migrations.py": "d18bad1dfebd4edead96f5705c1edef6177410334adb813276561c389c1b978d",
+      "web\\backend\\tests\\integration\\test_identity_recovery.py": "dccb5a0e22019366b8c0d5669e1ff301bb40da5548a722304f2c70553933f8fa",
+      "web\\backend\\tests\\integration\\test_identity_recovery_migrations.py": "de7483716ecaf51a31ee17dea720570a918de67535215dbd101e14778d02a73c",
+      "web\\backend\\tests\\integration\\test_local_reconciler_migrations.py": "a57ad699db2cb0a9ef270bd6a58f04f3c4e4b7d762ecacd86be03adaf90f3f93",
+      "web\\backend\\tests\\integration\\test_local_reconciler_third_round.py": "8e0a6d2f3e3d783ac3866374609a1057fc68a6ea7dcb57bf0bdeabe390d18cd8",
+      "web\\backend\\tests\\integration\\test_material_revocation_race.py": "8489a800d1bcf7520c9780f557f3686f83a2464cff25db3bb1b14d298ea521cf",
+      "web\\backend\\tests\\integration\\test_migration_remediation.py": "a985c0cbf977e499f4f3c604e51c0217acbe3ba429a14eaa3257d97fe62240e4",
+      "web\\backend\\tests\\integration\\test_persistent_tasks.py": "ac6ebadb298409ab5756594f6d79dcf3a994b94259575b09dd011899a791ee78",
+      "web\\backend\\tests\\integration\\test_pr03a_review_regressions.py": "afc80d0435c4a36f263298d62dfa69430ac0f9aa3f22404696534401776a9b26",
+      "web\\backend\\tests\\integration\\test_pr03a_second_review_regressions.py": "23ab5c06bc29ff2de469e3ae71b6fe9a736a025a980c53e953f5965491e77cfd",
+      "web\\backend\\tests\\integration\\test_semester_limits.py": "ded2713a5cd93ebefda667a8ff6793659486e553027322310816edfad6aaace2",
+      "web\\backend\\tests\\integration\\test_task_cancel_remediation.py": "c16d20aa3a1a982536a20a2c2d87fa140a1b49674492b7b9e974ca105de3176f",
+      "web\\backend\\tests\\integration\\test_task_material_remediation.py": "eebda662c2c5cc6a35af4bab1979c0ce5ecadb9bac273e534f2c6241a81f349d",
+      "web\\backend\\tests\\integration\\test_task_migrations.py": "5c3b49c370f887ce94ca8f4ffc42782d70a4e257e11a4cc13196a1fc746bcdbf",
+      "web\\backend\\tests\\integration\\test_task_worker.py": "87ba248535a33d48fcfa3a36ee3104cb12dc608dc0a74dd008829530ce6ce103",
+      "web\\backend\\tests\\unit\\test_identity_values.py": "b270613ae2e504522be033d2f742e47aa256270d5477c7903f34c52dcffba509",
+      "web\\backend\\tests\\unit\\test_pr02b_runner.py": "b55a6d90dc2f46f0e8fb111fa9549b33afb24fe392b62afaf7ff60d00f520a8e",
+      "web\\backend\\tests\\unit\\test_task_values.py": "ef01d6f5de55e6bd7cce001b6cf8c09ab43a96b8fe28ee56a1b5519f86065425",
+      "web\\backend\\tests\\unit\\test_test_database_target.py": "7cbddc042b33f1aab7663001f159537a1e67cea8acd525d0067447ec13769327"
+    },
+    "executable_source_stable_during_run": true,
+    "minimum_previous_backend_cases": 7,
+    "isolation": "Verified worktree-owned loopback cluster; fixture creates/drops random database and restricted login",
+    "limitations": "Synthetic PostgreSQL and simulated mail/provider only; no paid model, real email, HTTP/frontend, deployment or production migration"
   },
-  "original_backend_retained": 358,
-  "recovery_added": 51,
-  "migration_added": 4,
-  "astra_probes_retained": 10,
-  "legacy": {
+  "targeted_security": {
+    "python": "3.12.14 (main, Aug 25 2026, 14:01:42) [MSC v.1944 64 bit (AMD64)]",
+    "executable": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr03a\\venv\\Scripts\\python.exe",
+    "command": [
+      "J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr03a\\venv\\Scripts\\python.exe",
+      "-m",
+      "pytest",
+      "-q",
+      "-p",
+      "pr03a_probe_evidence",
+      "J:\\class-assistant\\worktrees\\web-pr03a-identity\\web\\backend\\tests\\integration\\test_local_reconciler_third_round.py",
+      "--basetemp=J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr03a\\third-round\\targeted\\20261102T123941.921914Z\\tmp\\pytest",
+      "--junitxml=J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\third-round\\targeted\\20261102T123941.921914Z\\pytest.xml",
+      "-o",
+      "cache_dir=J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr03a\\third-round\\targeted\\20261102T123941.921914Z\\cache\\pytest"
+    ],
+    "suite": "targeted",
+    "exit_code": 0,
+    "seconds": 51.0,
+    "cluster_identity": {
+      "login": "pr02a_pr03a_migrator",
+      "database": "pr02a_pr03a_synthetic",
+      "data_directory": "J:/class-assistant/worktrees/web-pr03a-identity/work/pr03a/pg/data",
+      "host": "127.0.0.1",
+      "port": 55439,
+      "listen_addresses": "127.0.0.1",
+      "version": "PostgreSQL 17.11 on x86_64-windows, compiled by msvc-19.44.35228, 64-bit"
+    },
+    "junit": {
+      "tests": 26,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "postgres_log": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\third-round\\implementation-cluster-20261102T122852.560033Z\\postgres.log",
+    "probe_evidence": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\third-round\\targeted\\20261102T123941.921914Z\\probe-evidence",
+    "network_guard_selftest": true,
+    "passed": true,
+    "executable_source_sha256_before": {
+      "tools\\pr03a\\check_protected.py": "a1133d0c4f6c74ca7c931b57312b291e39bbb5116ec6004e25d5c2daa82bf271",
+      "tools\\pr03a\\check_static.py": "b97c9d3a50f21ca1db118c17036702edd78f9d6e1c566b9178856008a86ee18f",
+      "tools\\pr03a\\remediation\\check_protected.py": "e60f55753d69c4c6eabc4e1b7cf55955e1de20394a70ce453231ae13b05a0acd",
+      "tools\\pr03a\\remediation\\check_static.py": "205f1affb2efe68ed7365f4145e577443107b55e61129bede09c4ce1b7ba4566",
+      "tools\\pr03a\\remediation\\run_tests.py": "7356eabe4f22c3fa45913841824856c28e1e1baedcdd0a42fccf239a10a7db92",
+      "tools\\pr03a\\remediation\\selftest_runner.py": "c5a321b794c5cbbe9c548641c08e137bab45f24193f2a1302c5e718b4a366c44",
+      "tools\\pr03a\\run_tests.py": "061617c03c1530ad8d3d8db25c2a241885e5ac5e32c5fb00f38c39f2b6ce2bce",
+      "tools\\pr03a\\selftest_runner.py": "f5ce2bcb28c3e957e569f445ebc6a32a371d0d750660b409d3fdf580a050cef5",
+      "tools\\pr03a\\third_round\\pr03a_probe_evidence.py": "37ee6d5ee61408b0f48c142e3abd4a1635fd77c5705e150d80d6c03e860f718d",
+      "tools\\pr03a\\third_round\\run_legacy.py": "9c45246ce7aa77b5cdbb66183d61ffc5064927c1abccd7ac8715166cbc0682e5",
+      "tools\\pr03a\\third_round\\run_tests.py": "664c4a272d164c5c1bd561cc745a774975cdc849c7ca8f9eb926b12df5a4c84d",
+      "web\\backend\\classroom_web\\__init__.py": "1fbc2de79614199bdfe3c08a685a3364bd960f206da31688c64f75284dc221e6",
+      "web\\backend\\classroom_web\\application\\__init__.py": "d28e85da4929d31d12cb77619ac59b9e466761bf0972dd356add288b10a2fe92",
+      "web\\backend\\classroom_web\\application\\identity.py": "84aeeb4b053eb2f67d62bd1bfd02b1644d352153d1644d315784ba1460c31757",
+      "web\\backend\\classroom_web\\application\\task_worker.py": "57271089c7c71510606a5d9f1a57138e860f6475c65989483774663ce87f58af",
+      "web\\backend\\classroom_web\\domain\\__init__.py": "84bc88db7e5cc50948973b073042ad7f6845c046ee9d1f07f3cc172b59fc0695",
+      "web\\backend\\classroom_web\\domain\\data.py": "68b7548f41a37caf9bcc4c523c59c37b14846380b1b2984f4bb749801ccc907c",
+      "web\\backend\\classroom_web\\domain\\identity.py": "b5d174ec35d0f3ab3eeb3072b6ffa0243e6706c8c056f0a37185c3fe87afbb36",
+      "web\\backend\\classroom_web\\domain\\identity_ports.py": "b3c38e459f6479daa934cd765e0dc0c98e2477bc16baa4fef4c90a16095b6ef0",
+      "web\\backend\\classroom_web\\domain\\policies.py": "e58aa5dc149a07e2bd6fb963b5eaeb842dea7d01e975eccfba0eab03989b4501",
+      "web\\backend\\classroom_web\\domain\\ports.py": "970145d49a3791f4f9a7460d8b0704a25c73cc0be00b6106e26c4aa170f439d2",
+      "web\\backend\\classroom_web\\domain\\task_ports.py": "6f50041945c84329e1d1c4efaee7ad6be5f644386a2d295893cf076749d14c71",
+      "web\\backend\\classroom_web\\domain\\tasks.py": "16d33474342919a42a1ff694d4184ec7e13c92438e21a735543aca909816d549",
+      "web\\backend\\classroom_web\\entrypoints\\__init__.py": "6d72ab7b464b8d504d88dde0cda182c445578de275257f1368458384607aedf3",
+      "web\\backend\\classroom_web\\entrypoints\\worker.py": "86c6d91a8699b88afc773c28f665d6f3ee06e7a7d40165c6081de29855e468df",
+      "web\\backend\\classroom_web\\infrastructure\\__init__.py": "b22dfa7dc72b71a69022e1ac11ade4535cda28123401813833103fe27308fa27",
+      "web\\backend\\classroom_web\\infrastructure\\database.py": "e074fbdcb9b5b0dffe69437724d744b8bbcaff48c9bd868451912f78d9143cb5",
+      "web\\backend\\classroom_web\\infrastructure\\ddl.py": "06124382066888325a82a687626a76d59fc4bc7f779256ddd927ee89d9fb6c3e",
+      "web\\backend\\classroom_web\\infrastructure\\identity_mail.py": "227ba75bb1c3636e8eaaa9e8efde1843bcbc099cca1653c48c12efe50f9d849a",
+      "web\\backend\\classroom_web\\infrastructure\\identity_passwords.py": "fd4e7a60b59806ff165a16fb1eef6c2b8ad01cc777c6ba985b462f27da7ee764",
+      "web\\backend\\classroom_web\\infrastructure\\identity_repository.py": "40506e33b8c49ffa12d2fe2e6e967991b3f865e60473b4f97c2828542cdf1098",
+      "web\\backend\\classroom_web\\infrastructure\\identity_schema.py": "a9e46715d44402ba62d0137b63786e0bc5415a13c38c1cb04dad10da0b4cc324",
+      "web\\backend\\classroom_web\\infrastructure\\local_reconciler.py": "b5c87fb08354445346f8fdbcd677aec63d771cd13410f8a89ea3d866c7969547",
+      "web\\backend\\classroom_web\\infrastructure\\repositories.py": "451fc199baea3f06cfcc554c975fc71747189b102a740cd46afde56b0b67bff7",
+      "web\\backend\\classroom_web\\infrastructure\\schema.py": "aca8051e0abe218d683b2f52109f3ae038b0c9e9e827101f248e7cd6b805e7b4",
+      "web\\backend\\classroom_web\\infrastructure\\task_events.py": "7ef98e907a6ee3a41f0e2394d9749d8820ec9da9b356655edb242611db5f8572",
+      "web\\backend\\classroom_web\\infrastructure\\task_repository.py": "7b9cf9afef207c3f7bdc41a28b86b4b29927670021b31b42457cd8b09916f3ae",
+      "web\\backend\\classroom_web\\infrastructure\\task_scheduler.py": "1970b4f3246d1abedf84b3da461b5fd4162ac3454968b9153e5c7eb9468bb241",
+      "web\\backend\\classroom_web\\infrastructure\\task_schema.py": "1af8683ff16882944960eaed7d73dc83f9283fa94a1801777b33e59df90902dc",
+      "web\\backend\\classroom_web\\infrastructure\\task_sources.py": "cdc389d4b6a14ab51c4c3d5e28d78dfaad79ed86f14aad6e2424caef4a838b3d",
+      "web\\backend\\classroom_web\\test_support.py": "04eb4a800d05281d8fcf138599785089b6ea65d5286699e4c2d2812b2a79330a",
+      "web\\backend\\migrations\\env.py": "43e605128548a4078e8a37c58c4a7cd60a3e61b6f5a01e16e69f78880b4bbca8",
+      "web\\backend\\migrations\\versions\\0001_data_foundation.py": "d7f5bf06145eb21f9cd5d8f6ec093ecb1deebfb590b2829f39ce7e05fcbedf16",
+      "web\\backend\\migrations\\versions\\0001_data_foundation.sql": "87c475d46a647cc838c0ad9f75a6121cc4ad1c7b537fb9c7f94e568f987bbaa8",
+      "web\\backend\\migrations\\versions\\0002_pr02a_review.py": "f7c04dcbb80dc691e5060847a27be9c1fbeb4bbf4011eaa589e6fb7ad8631f69",
+      "web\\backend\\migrations\\versions\\0002_pr02a_review.sql": "4e9b9046202f0712f474eab2594c3cb7aff177854c8bd6bc0453e08995d3cf72",
+      "web\\backend\\migrations\\versions\\0003_persistent_tasks.py": "3af350e6860c6975473bc1d14e56b34d091dfc8900e17871b2f2f52c1fb05e92",
+      "web\\backend\\migrations\\versions\\0003_persistent_tasks.sql": "d5993db7732f49203317f91a3d4832bb810884b708b3a17223479d7aca69cc51",
+      "web\\backend\\migrations\\versions\\0004_identity.py": "88408dd198b6253cc83b60cac6ee17f66a8962fcf4b46a0b06200e557988bfb7",
+      "web\\backend\\migrations\\versions\\0004_identity.sql": "d8f4358a218d2d00999f90f85f123b3ed9e942bbaf86647019b7f03b8436e414",
+      "web\\backend\\migrations\\versions\\0005_identity_recovery.py": "f56a068abf916b9e8ecf4cca02f75479599fa2ea223ee5f814a9ba894157fa26",
+      "web\\backend\\migrations\\versions\\0005_identity_recovery.sql": "ecadca6ccf993a18dda52895156534051f21073df057eeda664ac80187ee2e12",
+      "web\\backend\\migrations\\versions\\0006_local_reconciler_functions.sql": "50085d88ec66cca86ef07cd107738cf13fdfcbe328d32b4b5a55e3185b53ebe2",
+      "web\\backend\\migrations\\versions\\0006_local_reconciler_security.py": "ef648852aa3bebc80b0a0bd701314dbe2d2d35b8d6b441f4e65d6087178939af",
+      "web\\backend\\migrations\\versions\\0006_local_reconciler_security.sql": "c87ad8fb31fca1032bcbf03c72c1163afd88e928451919c386940b5853dece0b",
+      "web\\backend\\tests\\integration\\conftest.py": "8351aa9a2cbd64510e52bc67e56f3373181f8b2a0f1553900211b5ca4aae3b45",
+      "web\\backend\\tests\\integration\\test_data_foundation.py": "cde8f1702aa875c92d7e5c1396b48c062a58cabb8a031104fb56783570f81a1a",
+      "web\\backend\\tests\\integration\\test_identity.py": "80ec3054b472229d1104d080f240778b0512239b9c4141ca97e8e5108b1490d1",
+      "web\\backend\\tests\\integration\\test_identity_migrations.py": "d18bad1dfebd4edead96f5705c1edef6177410334adb813276561c389c1b978d",
+      "web\\backend\\tests\\integration\\test_identity_recovery.py": "dccb5a0e22019366b8c0d5669e1ff301bb40da5548a722304f2c70553933f8fa",
+      "web\\backend\\tests\\integration\\test_identity_recovery_migrations.py": "de7483716ecaf51a31ee17dea720570a918de67535215dbd101e14778d02a73c",
+      "web\\backend\\tests\\integration\\test_local_reconciler_third_round.py": "8e0a6d2f3e3d783ac3866374609a1057fc68a6ea7dcb57bf0bdeabe390d18cd8",
+      "web\\backend\\tests\\integration\\test_material_revocation_race.py": "8489a800d1bcf7520c9780f557f3686f83a2464cff25db3bb1b14d298ea521cf",
+      "web\\backend\\tests\\integration\\test_migration_remediation.py": "a985c0cbf977e499f4f3c604e51c0217acbe3ba429a14eaa3257d97fe62240e4",
+      "web\\backend\\tests\\integration\\test_persistent_tasks.py": "ac6ebadb298409ab5756594f6d79dcf3a994b94259575b09dd011899a791ee78",
+      "web\\backend\\tests\\integration\\test_pr03a_review_regressions.py": "afc80d0435c4a36f263298d62dfa69430ac0f9aa3f22404696534401776a9b26",
+      "web\\backend\\tests\\integration\\test_pr03a_second_review_regressions.py": "23ab5c06bc29ff2de469e3ae71b6fe9a736a025a980c53e953f5965491e77cfd",
+      "web\\backend\\tests\\integration\\test_semester_limits.py": "ded2713a5cd93ebefda667a8ff6793659486e553027322310816edfad6aaace2",
+      "web\\backend\\tests\\integration\\test_task_cancel_remediation.py": "c16d20aa3a1a982536a20a2c2d87fa140a1b49674492b7b9e974ca105de3176f",
+      "web\\backend\\tests\\integration\\test_task_material_remediation.py": "eebda662c2c5cc6a35af4bab1979c0ce5ecadb9bac273e534f2c6241a81f349d",
+      "web\\backend\\tests\\integration\\test_task_migrations.py": "5c3b49c370f887ce94ca8f4ffc42782d70a4e257e11a4cc13196a1fc746bcdbf",
+      "web\\backend\\tests\\integration\\test_task_worker.py": "87ba248535a33d48fcfa3a36ee3104cb12dc608dc0a74dd008829530ce6ce103",
+      "web\\backend\\tests\\unit\\test_identity_values.py": "b270613ae2e504522be033d2f742e47aa256270d5477c7903f34c52dcffba509",
+      "web\\backend\\tests\\unit\\test_pr02b_runner.py": "b55a6d90dc2f46f0e8fb111fa9549b33afb24fe392b62afaf7ff60d00f520a8e",
+      "web\\backend\\tests\\unit\\test_task_values.py": "ef01d6f5de55e6bd7cce001b6cf8c09ab43a96b8fe28ee56a1b5519f86065425",
+      "web\\backend\\tests\\unit\\test_test_database_target.py": "7cbddc042b33f1aab7663001f159537a1e67cea8acd525d0067447ec13769327"
+    },
+    "executable_source_sha256_after": {
+      "tools\\pr03a\\check_protected.py": "a1133d0c4f6c74ca7c931b57312b291e39bbb5116ec6004e25d5c2daa82bf271",
+      "tools\\pr03a\\check_static.py": "b97c9d3a50f21ca1db118c17036702edd78f9d6e1c566b9178856008a86ee18f",
+      "tools\\pr03a\\remediation\\check_protected.py": "e60f55753d69c4c6eabc4e1b7cf55955e1de20394a70ce453231ae13b05a0acd",
+      "tools\\pr03a\\remediation\\check_static.py": "205f1affb2efe68ed7365f4145e577443107b55e61129bede09c4ce1b7ba4566",
+      "tools\\pr03a\\remediation\\run_tests.py": "7356eabe4f22c3fa45913841824856c28e1e1baedcdd0a42fccf239a10a7db92",
+      "tools\\pr03a\\remediation\\selftest_runner.py": "c5a321b794c5cbbe9c548641c08e137bab45f24193f2a1302c5e718b4a366c44",
+      "tools\\pr03a\\run_tests.py": "061617c03c1530ad8d3d8db25c2a241885e5ac5e32c5fb00f38c39f2b6ce2bce",
+      "tools\\pr03a\\selftest_runner.py": "f5ce2bcb28c3e957e569f445ebc6a32a371d0d750660b409d3fdf580a050cef5",
+      "tools\\pr03a\\third_round\\pr03a_probe_evidence.py": "37ee6d5ee61408b0f48c142e3abd4a1635fd77c5705e150d80d6c03e860f718d",
+      "tools\\pr03a\\third_round\\run_legacy.py": "9c45246ce7aa77b5cdbb66183d61ffc5064927c1abccd7ac8715166cbc0682e5",
+      "tools\\pr03a\\third_round\\run_tests.py": "664c4a272d164c5c1bd561cc745a774975cdc849c7ca8f9eb926b12df5a4c84d",
+      "web\\backend\\classroom_web\\__init__.py": "1fbc2de79614199bdfe3c08a685a3364bd960f206da31688c64f75284dc221e6",
+      "web\\backend\\classroom_web\\application\\__init__.py": "d28e85da4929d31d12cb77619ac59b9e466761bf0972dd356add288b10a2fe92",
+      "web\\backend\\classroom_web\\application\\identity.py": "84aeeb4b053eb2f67d62bd1bfd02b1644d352153d1644d315784ba1460c31757",
+      "web\\backend\\classroom_web\\application\\task_worker.py": "57271089c7c71510606a5d9f1a57138e860f6475c65989483774663ce87f58af",
+      "web\\backend\\classroom_web\\domain\\__init__.py": "84bc88db7e5cc50948973b073042ad7f6845c046ee9d1f07f3cc172b59fc0695",
+      "web\\backend\\classroom_web\\domain\\data.py": "68b7548f41a37caf9bcc4c523c59c37b14846380b1b2984f4bb749801ccc907c",
+      "web\\backend\\classroom_web\\domain\\identity.py": "b5d174ec35d0f3ab3eeb3072b6ffa0243e6706c8c056f0a37185c3fe87afbb36",
+      "web\\backend\\classroom_web\\domain\\identity_ports.py": "b3c38e459f6479daa934cd765e0dc0c98e2477bc16baa4fef4c90a16095b6ef0",
+      "web\\backend\\classroom_web\\domain\\policies.py": "e58aa5dc149a07e2bd6fb963b5eaeb842dea7d01e975eccfba0eab03989b4501",
+      "web\\backend\\classroom_web\\domain\\ports.py": "970145d49a3791f4f9a7460d8b0704a25c73cc0be00b6106e26c4aa170f439d2",
+      "web\\backend\\classroom_web\\domain\\task_ports.py": "6f50041945c84329e1d1c4efaee7ad6be5f644386a2d295893cf076749d14c71",
+      "web\\backend\\classroom_web\\domain\\tasks.py": "16d33474342919a42a1ff694d4184ec7e13c92438e21a735543aca909816d549",
+      "web\\backend\\classroom_web\\entrypoints\\__init__.py": "6d72ab7b464b8d504d88dde0cda182c445578de275257f1368458384607aedf3",
+      "web\\backend\\classroom_web\\entrypoints\\worker.py": "86c6d91a8699b88afc773c28f665d6f3ee06e7a7d40165c6081de29855e468df",
+      "web\\backend\\classroom_web\\infrastructure\\__init__.py": "b22dfa7dc72b71a69022e1ac11ade4535cda28123401813833103fe27308fa27",
+      "web\\backend\\classroom_web\\infrastructure\\database.py": "e074fbdcb9b5b0dffe69437724d744b8bbcaff48c9bd868451912f78d9143cb5",
+      "web\\backend\\classroom_web\\infrastructure\\ddl.py": "06124382066888325a82a687626a76d59fc4bc7f779256ddd927ee89d9fb6c3e",
+      "web\\backend\\classroom_web\\infrastructure\\identity_mail.py": "227ba75bb1c3636e8eaaa9e8efde1843bcbc099cca1653c48c12efe50f9d849a",
+      "web\\backend\\classroom_web\\infrastructure\\identity_passwords.py": "fd4e7a60b59806ff165a16fb1eef6c2b8ad01cc777c6ba985b462f27da7ee764",
+      "web\\backend\\classroom_web\\infrastructure\\identity_repository.py": "40506e33b8c49ffa12d2fe2e6e967991b3f865e60473b4f97c2828542cdf1098",
+      "web\\backend\\classroom_web\\infrastructure\\identity_schema.py": "a9e46715d44402ba62d0137b63786e0bc5415a13c38c1cb04dad10da0b4cc324",
+      "web\\backend\\classroom_web\\infrastructure\\local_reconciler.py": "b5c87fb08354445346f8fdbcd677aec63d771cd13410f8a89ea3d866c7969547",
+      "web\\backend\\classroom_web\\infrastructure\\repositories.py": "451fc199baea3f06cfcc554c975fc71747189b102a740cd46afde56b0b67bff7",
+      "web\\backend\\classroom_web\\infrastructure\\schema.py": "aca8051e0abe218d683b2f52109f3ae038b0c9e9e827101f248e7cd6b805e7b4",
+      "web\\backend\\classroom_web\\infrastructure\\task_events.py": "7ef98e907a6ee3a41f0e2394d9749d8820ec9da9b356655edb242611db5f8572",
+      "web\\backend\\classroom_web\\infrastructure\\task_repository.py": "7b9cf9afef207c3f7bdc41a28b86b4b29927670021b31b42457cd8b09916f3ae",
+      "web\\backend\\classroom_web\\infrastructure\\task_scheduler.py": "1970b4f3246d1abedf84b3da461b5fd4162ac3454968b9153e5c7eb9468bb241",
+      "web\\backend\\classroom_web\\infrastructure\\task_schema.py": "1af8683ff16882944960eaed7d73dc83f9283fa94a1801777b33e59df90902dc",
+      "web\\backend\\classroom_web\\infrastructure\\task_sources.py": "cdc389d4b6a14ab51c4c3d5e28d78dfaad79ed86f14aad6e2424caef4a838b3d",
+      "web\\backend\\classroom_web\\test_support.py": "04eb4a800d05281d8fcf138599785089b6ea65d5286699e4c2d2812b2a79330a",
+      "web\\backend\\migrations\\env.py": "43e605128548a4078e8a37c58c4a7cd60a3e61b6f5a01e16e69f78880b4bbca8",
+      "web\\backend\\migrations\\versions\\0001_data_foundation.py": "d7f5bf06145eb21f9cd5d8f6ec093ecb1deebfb590b2829f39ce7e05fcbedf16",
+      "web\\backend\\migrations\\versions\\0001_data_foundation.sql": "87c475d46a647cc838c0ad9f75a6121cc4ad1c7b537fb9c7f94e568f987bbaa8",
+      "web\\backend\\migrations\\versions\\0002_pr02a_review.py": "f7c04dcbb80dc691e5060847a27be9c1fbeb4bbf4011eaa589e6fb7ad8631f69",
+      "web\\backend\\migrations\\versions\\0002_pr02a_review.sql": "4e9b9046202f0712f474eab2594c3cb7aff177854c8bd6bc0453e08995d3cf72",
+      "web\\backend\\migrations\\versions\\0003_persistent_tasks.py": "3af350e6860c6975473bc1d14e56b34d091dfc8900e17871b2f2f52c1fb05e92",
+      "web\\backend\\migrations\\versions\\0003_persistent_tasks.sql": "d5993db7732f49203317f91a3d4832bb810884b708b3a17223479d7aca69cc51",
+      "web\\backend\\migrations\\versions\\0004_identity.py": "88408dd198b6253cc83b60cac6ee17f66a8962fcf4b46a0b06200e557988bfb7",
+      "web\\backend\\migrations\\versions\\0004_identity.sql": "d8f4358a218d2d00999f90f85f123b3ed9e942bbaf86647019b7f03b8436e414",
+      "web\\backend\\migrations\\versions\\0005_identity_recovery.py": "f56a068abf916b9e8ecf4cca02f75479599fa2ea223ee5f814a9ba894157fa26",
+      "web\\backend\\migrations\\versions\\0005_identity_recovery.sql": "ecadca6ccf993a18dda52895156534051f21073df057eeda664ac80187ee2e12",
+      "web\\backend\\migrations\\versions\\0006_local_reconciler_functions.sql": "50085d88ec66cca86ef07cd107738cf13fdfcbe328d32b4b5a55e3185b53ebe2",
+      "web\\backend\\migrations\\versions\\0006_local_reconciler_security.py": "ef648852aa3bebc80b0a0bd701314dbe2d2d35b8d6b441f4e65d6087178939af",
+      "web\\backend\\migrations\\versions\\0006_local_reconciler_security.sql": "c87ad8fb31fca1032bcbf03c72c1163afd88e928451919c386940b5853dece0b",
+      "web\\backend\\tests\\integration\\conftest.py": "8351aa9a2cbd64510e52bc67e56f3373181f8b2a0f1553900211b5ca4aae3b45",
+      "web\\backend\\tests\\integration\\test_data_foundation.py": "cde8f1702aa875c92d7e5c1396b48c062a58cabb8a031104fb56783570f81a1a",
+      "web\\backend\\tests\\integration\\test_identity.py": "80ec3054b472229d1104d080f240778b0512239b9c4141ca97e8e5108b1490d1",
+      "web\\backend\\tests\\integration\\test_identity_migrations.py": "d18bad1dfebd4edead96f5705c1edef6177410334adb813276561c389c1b978d",
+      "web\\backend\\tests\\integration\\test_identity_recovery.py": "dccb5a0e22019366b8c0d5669e1ff301bb40da5548a722304f2c70553933f8fa",
+      "web\\backend\\tests\\integration\\test_identity_recovery_migrations.py": "de7483716ecaf51a31ee17dea720570a918de67535215dbd101e14778d02a73c",
+      "web\\backend\\tests\\integration\\test_local_reconciler_third_round.py": "8e0a6d2f3e3d783ac3866374609a1057fc68a6ea7dcb57bf0bdeabe390d18cd8",
+      "web\\backend\\tests\\integration\\test_material_revocation_race.py": "8489a800d1bcf7520c9780f557f3686f83a2464cff25db3bb1b14d298ea521cf",
+      "web\\backend\\tests\\integration\\test_migration_remediation.py": "a985c0cbf977e499f4f3c604e51c0217acbe3ba429a14eaa3257d97fe62240e4",
+      "web\\backend\\tests\\integration\\test_persistent_tasks.py": "ac6ebadb298409ab5756594f6d79dcf3a994b94259575b09dd011899a791ee78",
+      "web\\backend\\tests\\integration\\test_pr03a_review_regressions.py": "afc80d0435c4a36f263298d62dfa69430ac0f9aa3f22404696534401776a9b26",
+      "web\\backend\\tests\\integration\\test_pr03a_second_review_regressions.py": "23ab5c06bc29ff2de469e3ae71b6fe9a736a025a980c53e953f5965491e77cfd",
+      "web\\backend\\tests\\integration\\test_semester_limits.py": "ded2713a5cd93ebefda667a8ff6793659486e553027322310816edfad6aaace2",
+      "web\\backend\\tests\\integration\\test_task_cancel_remediation.py": "c16d20aa3a1a982536a20a2c2d87fa140a1b49674492b7b9e974ca105de3176f",
+      "web\\backend\\tests\\integration\\test_task_material_remediation.py": "eebda662c2c5cc6a35af4bab1979c0ce5ecadb9bac273e534f2c6241a81f349d",
+      "web\\backend\\tests\\integration\\test_task_migrations.py": "5c3b49c370f887ce94ca8f4ffc42782d70a4e257e11a4cc13196a1fc746bcdbf",
+      "web\\backend\\tests\\integration\\test_task_worker.py": "87ba248535a33d48fcfa3a36ee3104cb12dc608dc0a74dd008829530ce6ce103",
+      "web\\backend\\tests\\unit\\test_identity_values.py": "b270613ae2e504522be033d2f742e47aa256270d5477c7903f34c52dcffba509",
+      "web\\backend\\tests\\unit\\test_pr02b_runner.py": "b55a6d90dc2f46f0e8fb111fa9549b33afb24fe392b62afaf7ff60d00f520a8e",
+      "web\\backend\\tests\\unit\\test_task_values.py": "ef01d6f5de55e6bd7cce001b6cf8c09ab43a96b8fe28ee56a1b5519f86065425",
+      "web\\backend\\tests\\unit\\test_test_database_target.py": "7cbddc042b33f1aab7663001f159537a1e67cea8acd525d0067447ec13769327"
+    },
+    "executable_source_stable_during_run": true,
+    "minimum_previous_backend_cases": 1,
+    "isolation": "Verified worktree-owned loopback cluster; fixture creates/drops random database and restricted login",
+    "limitations": "Synthetic PostgreSQL and simulated mail/provider only; no paid model, real email, HTTP/frontend, deployment or production migration"
+  },
+  "targeted_migration": {
+    "python": "3.12.14 (main, Aug 25 2026, 14:01:42) [MSC v.1944 64 bit (AMD64)]",
+    "executable": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr03a\\venv\\Scripts\\python.exe",
+    "command": [
+      "J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr03a\\venv\\Scripts\\python.exe",
+      "-m",
+      "pytest",
+      "-q",
+      "-p",
+      "pr03a_probe_evidence",
+      "J:\\class-assistant\\worktrees\\web-pr03a-identity\\web\\backend\\tests\\integration\\test_local_reconciler_migrations.py",
+      "--basetemp=J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr03a\\third-round\\targeted\\20261102T124503.682975Z\\tmp\\pytest",
+      "--junitxml=J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\third-round\\targeted\\20261102T124503.682975Z\\pytest.xml",
+      "-o",
+      "cache_dir=J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr03a\\third-round\\targeted\\20261102T124503.682975Z\\cache\\pytest"
+    ],
+    "suite": "targeted",
+    "exit_code": 0,
+    "seconds": 23.813,
+    "cluster_identity": {
+      "login": "pr02a_pr03a_migrator",
+      "database": "pr02a_pr03a_synthetic",
+      "data_directory": "J:/class-assistant/worktrees/web-pr03a-identity/work/pr03a/pg/data",
+      "host": "127.0.0.1",
+      "port": 55439,
+      "listen_addresses": "127.0.0.1",
+      "version": "PostgreSQL 17.11 on x86_64-windows, compiled by msvc-19.44.35228, 64-bit"
+    },
+    "junit": {
+      "tests": 8,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "postgres_log": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\third-round\\implementation-cluster-20261102T122852.560033Z\\postgres.log",
+    "probe_evidence": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\third-round\\targeted\\20261102T124503.682975Z\\probe-evidence",
+    "network_guard_selftest": true,
+    "passed": true,
+    "executable_source_sha256_before": {
+      "tools\\pr03a\\check_protected.py": "a1133d0c4f6c74ca7c931b57312b291e39bbb5116ec6004e25d5c2daa82bf271",
+      "tools\\pr03a\\check_static.py": "b97c9d3a50f21ca1db118c17036702edd78f9d6e1c566b9178856008a86ee18f",
+      "tools\\pr03a\\remediation\\check_protected.py": "e60f55753d69c4c6eabc4e1b7cf55955e1de20394a70ce453231ae13b05a0acd",
+      "tools\\pr03a\\remediation\\check_static.py": "205f1affb2efe68ed7365f4145e577443107b55e61129bede09c4ce1b7ba4566",
+      "tools\\pr03a\\remediation\\run_tests.py": "7356eabe4f22c3fa45913841824856c28e1e1baedcdd0a42fccf239a10a7db92",
+      "tools\\pr03a\\remediation\\selftest_runner.py": "c5a321b794c5cbbe9c548641c08e137bab45f24193f2a1302c5e718b4a366c44",
+      "tools\\pr03a\\run_tests.py": "061617c03c1530ad8d3d8db25c2a241885e5ac5e32c5fb00f38c39f2b6ce2bce",
+      "tools\\pr03a\\selftest_runner.py": "f5ce2bcb28c3e957e569f445ebc6a32a371d0d750660b409d3fdf580a050cef5",
+      "tools\\pr03a\\third_round\\pr03a_probe_evidence.py": "37ee6d5ee61408b0f48c142e3abd4a1635fd77c5705e150d80d6c03e860f718d",
+      "tools\\pr03a\\third_round\\run_legacy.py": "aa488240ae24fa99e7a75885e389ca97ebd2ea6671de460ca1294e0041c65b91",
+      "tools\\pr03a\\third_round\\run_tests.py": "f6e09817cbb79cc624a2e9ceaf3e4bd2662699a4a010c48529b610079c397b00",
+      "web\\backend\\classroom_web\\__init__.py": "1fbc2de79614199bdfe3c08a685a3364bd960f206da31688c64f75284dc221e6",
+      "web\\backend\\classroom_web\\application\\__init__.py": "d28e85da4929d31d12cb77619ac59b9e466761bf0972dd356add288b10a2fe92",
+      "web\\backend\\classroom_web\\application\\identity.py": "84aeeb4b053eb2f67d62bd1bfd02b1644d352153d1644d315784ba1460c31757",
+      "web\\backend\\classroom_web\\application\\task_worker.py": "57271089c7c71510606a5d9f1a57138e860f6475c65989483774663ce87f58af",
+      "web\\backend\\classroom_web\\domain\\__init__.py": "84bc88db7e5cc50948973b073042ad7f6845c046ee9d1f07f3cc172b59fc0695",
+      "web\\backend\\classroom_web\\domain\\data.py": "68b7548f41a37caf9bcc4c523c59c37b14846380b1b2984f4bb749801ccc907c",
+      "web\\backend\\classroom_web\\domain\\identity.py": "b5d174ec35d0f3ab3eeb3072b6ffa0243e6706c8c056f0a37185c3fe87afbb36",
+      "web\\backend\\classroom_web\\domain\\identity_ports.py": "b3c38e459f6479daa934cd765e0dc0c98e2477bc16baa4fef4c90a16095b6ef0",
+      "web\\backend\\classroom_web\\domain\\policies.py": "e58aa5dc149a07e2bd6fb963b5eaeb842dea7d01e975eccfba0eab03989b4501",
+      "web\\backend\\classroom_web\\domain\\ports.py": "970145d49a3791f4f9a7460d8b0704a25c73cc0be00b6106e26c4aa170f439d2",
+      "web\\backend\\classroom_web\\domain\\task_ports.py": "6f50041945c84329e1d1c4efaee7ad6be5f644386a2d295893cf076749d14c71",
+      "web\\backend\\classroom_web\\domain\\tasks.py": "16d33474342919a42a1ff694d4184ec7e13c92438e21a735543aca909816d549",
+      "web\\backend\\classroom_web\\entrypoints\\__init__.py": "6d72ab7b464b8d504d88dde0cda182c445578de275257f1368458384607aedf3",
+      "web\\backend\\classroom_web\\entrypoints\\worker.py": "86c6d91a8699b88afc773c28f665d6f3ee06e7a7d40165c6081de29855e468df",
+      "web\\backend\\classroom_web\\infrastructure\\__init__.py": "b22dfa7dc72b71a69022e1ac11ade4535cda28123401813833103fe27308fa27",
+      "web\\backend\\classroom_web\\infrastructure\\database.py": "e074fbdcb9b5b0dffe69437724d744b8bbcaff48c9bd868451912f78d9143cb5",
+      "web\\backend\\classroom_web\\infrastructure\\ddl.py": "06124382066888325a82a687626a76d59fc4bc7f779256ddd927ee89d9fb6c3e",
+      "web\\backend\\classroom_web\\infrastructure\\identity_mail.py": "227ba75bb1c3636e8eaaa9e8efde1843bcbc099cca1653c48c12efe50f9d849a",
+      "web\\backend\\classroom_web\\infrastructure\\identity_passwords.py": "fd4e7a60b59806ff165a16fb1eef6c2b8ad01cc777c6ba985b462f27da7ee764",
+      "web\\backend\\classroom_web\\infrastructure\\identity_repository.py": "40506e33b8c49ffa12d2fe2e6e967991b3f865e60473b4f97c2828542cdf1098",
+      "web\\backend\\classroom_web\\infrastructure\\identity_schema.py": "a9e46715d44402ba62d0137b63786e0bc5415a13c38c1cb04dad10da0b4cc324",
+      "web\\backend\\classroom_web\\infrastructure\\local_reconciler.py": "b5c87fb08354445346f8fdbcd677aec63d771cd13410f8a89ea3d866c7969547",
+      "web\\backend\\classroom_web\\infrastructure\\repositories.py": "451fc199baea3f06cfcc554c975fc71747189b102a740cd46afde56b0b67bff7",
+      "web\\backend\\classroom_web\\infrastructure\\schema.py": "aca8051e0abe218d683b2f52109f3ae038b0c9e9e827101f248e7cd6b805e7b4",
+      "web\\backend\\classroom_web\\infrastructure\\task_events.py": "7ef98e907a6ee3a41f0e2394d9749d8820ec9da9b356655edb242611db5f8572",
+      "web\\backend\\classroom_web\\infrastructure\\task_repository.py": "7b9cf9afef207c3f7bdc41a28b86b4b29927670021b31b42457cd8b09916f3ae",
+      "web\\backend\\classroom_web\\infrastructure\\task_scheduler.py": "1970b4f3246d1abedf84b3da461b5fd4162ac3454968b9153e5c7eb9468bb241",
+      "web\\backend\\classroom_web\\infrastructure\\task_schema.py": "1af8683ff16882944960eaed7d73dc83f9283fa94a1801777b33e59df90902dc",
+      "web\\backend\\classroom_web\\infrastructure\\task_sources.py": "cdc389d4b6a14ab51c4c3d5e28d78dfaad79ed86f14aad6e2424caef4a838b3d",
+      "web\\backend\\classroom_web\\test_support.py": "04eb4a800d05281d8fcf138599785089b6ea65d5286699e4c2d2812b2a79330a",
+      "web\\backend\\migrations\\env.py": "43e605128548a4078e8a37c58c4a7cd60a3e61b6f5a01e16e69f78880b4bbca8",
+      "web\\backend\\migrations\\versions\\0001_data_foundation.py": "d7f5bf06145eb21f9cd5d8f6ec093ecb1deebfb590b2829f39ce7e05fcbedf16",
+      "web\\backend\\migrations\\versions\\0001_data_foundation.sql": "87c475d46a647cc838c0ad9f75a6121cc4ad1c7b537fb9c7f94e568f987bbaa8",
+      "web\\backend\\migrations\\versions\\0002_pr02a_review.py": "f7c04dcbb80dc691e5060847a27be9c1fbeb4bbf4011eaa589e6fb7ad8631f69",
+      "web\\backend\\migrations\\versions\\0002_pr02a_review.sql": "4e9b9046202f0712f474eab2594c3cb7aff177854c8bd6bc0453e08995d3cf72",
+      "web\\backend\\migrations\\versions\\0003_persistent_tasks.py": "3af350e6860c6975473bc1d14e56b34d091dfc8900e17871b2f2f52c1fb05e92",
+      "web\\backend\\migrations\\versions\\0003_persistent_tasks.sql": "d5993db7732f49203317f91a3d4832bb810884b708b3a17223479d7aca69cc51",
+      "web\\backend\\migrations\\versions\\0004_identity.py": "88408dd198b6253cc83b60cac6ee17f66a8962fcf4b46a0b06200e557988bfb7",
+      "web\\backend\\migrations\\versions\\0004_identity.sql": "d8f4358a218d2d00999f90f85f123b3ed9e942bbaf86647019b7f03b8436e414",
+      "web\\backend\\migrations\\versions\\0005_identity_recovery.py": "f56a068abf916b9e8ecf4cca02f75479599fa2ea223ee5f814a9ba894157fa26",
+      "web\\backend\\migrations\\versions\\0005_identity_recovery.sql": "ecadca6ccf993a18dda52895156534051f21073df057eeda664ac80187ee2e12",
+      "web\\backend\\migrations\\versions\\0006_local_reconciler_functions.sql": "50085d88ec66cca86ef07cd107738cf13fdfcbe328d32b4b5a55e3185b53ebe2",
+      "web\\backend\\migrations\\versions\\0006_local_reconciler_security.py": "ef648852aa3bebc80b0a0bd701314dbe2d2d35b8d6b441f4e65d6087178939af",
+      "web\\backend\\migrations\\versions\\0006_local_reconciler_security.sql": "c87ad8fb31fca1032bcbf03c72c1163afd88e928451919c386940b5853dece0b",
+      "web\\backend\\tests\\integration\\conftest.py": "8351aa9a2cbd64510e52bc67e56f3373181f8b2a0f1553900211b5ca4aae3b45",
+      "web\\backend\\tests\\integration\\test_data_foundation.py": "cde8f1702aa875c92d7e5c1396b48c062a58cabb8a031104fb56783570f81a1a",
+      "web\\backend\\tests\\integration\\test_identity.py": "80ec3054b472229d1104d080f240778b0512239b9c4141ca97e8e5108b1490d1",
+      "web\\backend\\tests\\integration\\test_identity_migrations.py": "d18bad1dfebd4edead96f5705c1edef6177410334adb813276561c389c1b978d",
+      "web\\backend\\tests\\integration\\test_identity_recovery.py": "dccb5a0e22019366b8c0d5669e1ff301bb40da5548a722304f2c70553933f8fa",
+      "web\\backend\\tests\\integration\\test_identity_recovery_migrations.py": "de7483716ecaf51a31ee17dea720570a918de67535215dbd101e14778d02a73c",
+      "web\\backend\\tests\\integration\\test_local_reconciler_migrations.py": "4940171a98008aec1015c11980d4f506a600d3ecec6a27110e68dba165b4acbe",
+      "web\\backend\\tests\\integration\\test_local_reconciler_third_round.py": "8e0a6d2f3e3d783ac3866374609a1057fc68a6ea7dcb57bf0bdeabe390d18cd8",
+      "web\\backend\\tests\\integration\\test_material_revocation_race.py": "8489a800d1bcf7520c9780f557f3686f83a2464cff25db3bb1b14d298ea521cf",
+      "web\\backend\\tests\\integration\\test_migration_remediation.py": "a985c0cbf977e499f4f3c604e51c0217acbe3ba429a14eaa3257d97fe62240e4",
+      "web\\backend\\tests\\integration\\test_persistent_tasks.py": "ac6ebadb298409ab5756594f6d79dcf3a994b94259575b09dd011899a791ee78",
+      "web\\backend\\tests\\integration\\test_pr03a_review_regressions.py": "afc80d0435c4a36f263298d62dfa69430ac0f9aa3f22404696534401776a9b26",
+      "web\\backend\\tests\\integration\\test_pr03a_second_review_regressions.py": "23ab5c06bc29ff2de469e3ae71b6fe9a736a025a980c53e953f5965491e77cfd",
+      "web\\backend\\tests\\integration\\test_semester_limits.py": "ded2713a5cd93ebefda667a8ff6793659486e553027322310816edfad6aaace2",
+      "web\\backend\\tests\\integration\\test_task_cancel_remediation.py": "c16d20aa3a1a982536a20a2c2d87fa140a1b49674492b7b9e974ca105de3176f",
+      "web\\backend\\tests\\integration\\test_task_material_remediation.py": "eebda662c2c5cc6a35af4bab1979c0ce5ecadb9bac273e534f2c6241a81f349d",
+      "web\\backend\\tests\\integration\\test_task_migrations.py": "5c3b49c370f887ce94ca8f4ffc42782d70a4e257e11a4cc13196a1fc746bcdbf",
+      "web\\backend\\tests\\integration\\test_task_worker.py": "87ba248535a33d48fcfa3a36ee3104cb12dc608dc0a74dd008829530ce6ce103",
+      "web\\backend\\tests\\unit\\test_identity_values.py": "b270613ae2e504522be033d2f742e47aa256270d5477c7903f34c52dcffba509",
+      "web\\backend\\tests\\unit\\test_pr02b_runner.py": "b55a6d90dc2f46f0e8fb111fa9549b33afb24fe392b62afaf7ff60d00f520a8e",
+      "web\\backend\\tests\\unit\\test_task_values.py": "ef01d6f5de55e6bd7cce001b6cf8c09ab43a96b8fe28ee56a1b5519f86065425",
+      "web\\backend\\tests\\unit\\test_test_database_target.py": "7cbddc042b33f1aab7663001f159537a1e67cea8acd525d0067447ec13769327"
+    },
+    "executable_source_sha256_after": {
+      "tools\\pr03a\\check_protected.py": "a1133d0c4f6c74ca7c931b57312b291e39bbb5116ec6004e25d5c2daa82bf271",
+      "tools\\pr03a\\check_static.py": "b97c9d3a50f21ca1db118c17036702edd78f9d6e1c566b9178856008a86ee18f",
+      "tools\\pr03a\\remediation\\check_protected.py": "e60f55753d69c4c6eabc4e1b7cf55955e1de20394a70ce453231ae13b05a0acd",
+      "tools\\pr03a\\remediation\\check_static.py": "205f1affb2efe68ed7365f4145e577443107b55e61129bede09c4ce1b7ba4566",
+      "tools\\pr03a\\remediation\\run_tests.py": "7356eabe4f22c3fa45913841824856c28e1e1baedcdd0a42fccf239a10a7db92",
+      "tools\\pr03a\\remediation\\selftest_runner.py": "c5a321b794c5cbbe9c548641c08e137bab45f24193f2a1302c5e718b4a366c44",
+      "tools\\pr03a\\run_tests.py": "061617c03c1530ad8d3d8db25c2a241885e5ac5e32c5fb00f38c39f2b6ce2bce",
+      "tools\\pr03a\\selftest_runner.py": "f5ce2bcb28c3e957e569f445ebc6a32a371d0d750660b409d3fdf580a050cef5",
+      "tools\\pr03a\\third_round\\pr03a_probe_evidence.py": "37ee6d5ee61408b0f48c142e3abd4a1635fd77c5705e150d80d6c03e860f718d",
+      "tools\\pr03a\\third_round\\run_legacy.py": "aa488240ae24fa99e7a75885e389ca97ebd2ea6671de460ca1294e0041c65b91",
+      "tools\\pr03a\\third_round\\run_tests.py": "f6e09817cbb79cc624a2e9ceaf3e4bd2662699a4a010c48529b610079c397b00",
+      "web\\backend\\classroom_web\\__init__.py": "1fbc2de79614199bdfe3c08a685a3364bd960f206da31688c64f75284dc221e6",
+      "web\\backend\\classroom_web\\application\\__init__.py": "d28e85da4929d31d12cb77619ac59b9e466761bf0972dd356add288b10a2fe92",
+      "web\\backend\\classroom_web\\application\\identity.py": "84aeeb4b053eb2f67d62bd1bfd02b1644d352153d1644d315784ba1460c31757",
+      "web\\backend\\classroom_web\\application\\task_worker.py": "57271089c7c71510606a5d9f1a57138e860f6475c65989483774663ce87f58af",
+      "web\\backend\\classroom_web\\domain\\__init__.py": "84bc88db7e5cc50948973b073042ad7f6845c046ee9d1f07f3cc172b59fc0695",
+      "web\\backend\\classroom_web\\domain\\data.py": "68b7548f41a37caf9bcc4c523c59c37b14846380b1b2984f4bb749801ccc907c",
+      "web\\backend\\classroom_web\\domain\\identity.py": "b5d174ec35d0f3ab3eeb3072b6ffa0243e6706c8c056f0a37185c3fe87afbb36",
+      "web\\backend\\classroom_web\\domain\\identity_ports.py": "b3c38e459f6479daa934cd765e0dc0c98e2477bc16baa4fef4c90a16095b6ef0",
+      "web\\backend\\classroom_web\\domain\\policies.py": "e58aa5dc149a07e2bd6fb963b5eaeb842dea7d01e975eccfba0eab03989b4501",
+      "web\\backend\\classroom_web\\domain\\ports.py": "970145d49a3791f4f9a7460d8b0704a25c73cc0be00b6106e26c4aa170f439d2",
+      "web\\backend\\classroom_web\\domain\\task_ports.py": "6f50041945c84329e1d1c4efaee7ad6be5f644386a2d295893cf076749d14c71",
+      "web\\backend\\classroom_web\\domain\\tasks.py": "16d33474342919a42a1ff694d4184ec7e13c92438e21a735543aca909816d549",
+      "web\\backend\\classroom_web\\entrypoints\\__init__.py": "6d72ab7b464b8d504d88dde0cda182c445578de275257f1368458384607aedf3",
+      "web\\backend\\classroom_web\\entrypoints\\worker.py": "86c6d91a8699b88afc773c28f665d6f3ee06e7a7d40165c6081de29855e468df",
+      "web\\backend\\classroom_web\\infrastructure\\__init__.py": "b22dfa7dc72b71a69022e1ac11ade4535cda28123401813833103fe27308fa27",
+      "web\\backend\\classroom_web\\infrastructure\\database.py": "e074fbdcb9b5b0dffe69437724d744b8bbcaff48c9bd868451912f78d9143cb5",
+      "web\\backend\\classroom_web\\infrastructure\\ddl.py": "06124382066888325a82a687626a76d59fc4bc7f779256ddd927ee89d9fb6c3e",
+      "web\\backend\\classroom_web\\infrastructure\\identity_mail.py": "227ba75bb1c3636e8eaaa9e8efde1843bcbc099cca1653c48c12efe50f9d849a",
+      "web\\backend\\classroom_web\\infrastructure\\identity_passwords.py": "fd4e7a60b59806ff165a16fb1eef6c2b8ad01cc777c6ba985b462f27da7ee764",
+      "web\\backend\\classroom_web\\infrastructure\\identity_repository.py": "40506e33b8c49ffa12d2fe2e6e967991b3f865e60473b4f97c2828542cdf1098",
+      "web\\backend\\classroom_web\\infrastructure\\identity_schema.py": "a9e46715d44402ba62d0137b63786e0bc5415a13c38c1cb04dad10da0b4cc324",
+      "web\\backend\\classroom_web\\infrastructure\\local_reconciler.py": "b5c87fb08354445346f8fdbcd677aec63d771cd13410f8a89ea3d866c7969547",
+      "web\\backend\\classroom_web\\infrastructure\\repositories.py": "451fc199baea3f06cfcc554c975fc71747189b102a740cd46afde56b0b67bff7",
+      "web\\backend\\classroom_web\\infrastructure\\schema.py": "aca8051e0abe218d683b2f52109f3ae038b0c9e9e827101f248e7cd6b805e7b4",
+      "web\\backend\\classroom_web\\infrastructure\\task_events.py": "7ef98e907a6ee3a41f0e2394d9749d8820ec9da9b356655edb242611db5f8572",
+      "web\\backend\\classroom_web\\infrastructure\\task_repository.py": "7b9cf9afef207c3f7bdc41a28b86b4b29927670021b31b42457cd8b09916f3ae",
+      "web\\backend\\classroom_web\\infrastructure\\task_scheduler.py": "1970b4f3246d1abedf84b3da461b5fd4162ac3454968b9153e5c7eb9468bb241",
+      "web\\backend\\classroom_web\\infrastructure\\task_schema.py": "1af8683ff16882944960eaed7d73dc83f9283fa94a1801777b33e59df90902dc",
+      "web\\backend\\classroom_web\\infrastructure\\task_sources.py": "cdc389d4b6a14ab51c4c3d5e28d78dfaad79ed86f14aad6e2424caef4a838b3d",
+      "web\\backend\\classroom_web\\test_support.py": "04eb4a800d05281d8fcf138599785089b6ea65d5286699e4c2d2812b2a79330a",
+      "web\\backend\\migrations\\env.py": "43e605128548a4078e8a37c58c4a7cd60a3e61b6f5a01e16e69f78880b4bbca8",
+      "web\\backend\\migrations\\versions\\0001_data_foundation.py": "d7f5bf06145eb21f9cd5d8f6ec093ecb1deebfb590b2829f39ce7e05fcbedf16",
+      "web\\backend\\migrations\\versions\\0001_data_foundation.sql": "87c475d46a647cc838c0ad9f75a6121cc4ad1c7b537fb9c7f94e568f987bbaa8",
+      "web\\backend\\migrations\\versions\\0002_pr02a_review.py": "f7c04dcbb80dc691e5060847a27be9c1fbeb4bbf4011eaa589e6fb7ad8631f69",
+      "web\\backend\\migrations\\versions\\0002_pr02a_review.sql": "4e9b9046202f0712f474eab2594c3cb7aff177854c8bd6bc0453e08995d3cf72",
+      "web\\backend\\migrations\\versions\\0003_persistent_tasks.py": "3af350e6860c6975473bc1d14e56b34d091dfc8900e17871b2f2f52c1fb05e92",
+      "web\\backend\\migrations\\versions\\0003_persistent_tasks.sql": "d5993db7732f49203317f91a3d4832bb810884b708b3a17223479d7aca69cc51",
+      "web\\backend\\migrations\\versions\\0004_identity.py": "88408dd198b6253cc83b60cac6ee17f66a8962fcf4b46a0b06200e557988bfb7",
+      "web\\backend\\migrations\\versions\\0004_identity.sql": "d8f4358a218d2d00999f90f85f123b3ed9e942bbaf86647019b7f03b8436e414",
+      "web\\backend\\migrations\\versions\\0005_identity_recovery.py": "f56a068abf916b9e8ecf4cca02f75479599fa2ea223ee5f814a9ba894157fa26",
+      "web\\backend\\migrations\\versions\\0005_identity_recovery.sql": "ecadca6ccf993a18dda52895156534051f21073df057eeda664ac80187ee2e12",
+      "web\\backend\\migrations\\versions\\0006_local_reconciler_functions.sql": "50085d88ec66cca86ef07cd107738cf13fdfcbe328d32b4b5a55e3185b53ebe2",
+      "web\\backend\\migrations\\versions\\0006_local_reconciler_security.py": "ef648852aa3bebc80b0a0bd701314dbe2d2d35b8d6b441f4e65d6087178939af",
+      "web\\backend\\migrations\\versions\\0006_local_reconciler_security.sql": "c87ad8fb31fca1032bcbf03c72c1163afd88e928451919c386940b5853dece0b",
+      "web\\backend\\tests\\integration\\conftest.py": "8351aa9a2cbd64510e52bc67e56f3373181f8b2a0f1553900211b5ca4aae3b45",
+      "web\\backend\\tests\\integration\\test_data_foundation.py": "cde8f1702aa875c92d7e5c1396b48c062a58cabb8a031104fb56783570f81a1a",
+      "web\\backend\\tests\\integration\\test_identity.py": "80ec3054b472229d1104d080f240778b0512239b9c4141ca97e8e5108b1490d1",
+      "web\\backend\\tests\\integration\\test_identity_migrations.py": "d18bad1dfebd4edead96f5705c1edef6177410334adb813276561c389c1b978d",
+      "web\\backend\\tests\\integration\\test_identity_recovery.py": "dccb5a0e22019366b8c0d5669e1ff301bb40da5548a722304f2c70553933f8fa",
+      "web\\backend\\tests\\integration\\test_identity_recovery_migrations.py": "de7483716ecaf51a31ee17dea720570a918de67535215dbd101e14778d02a73c",
+      "web\\backend\\tests\\integration\\test_local_reconciler_migrations.py": "4940171a98008aec1015c11980d4f506a600d3ecec6a27110e68dba165b4acbe",
+      "web\\backend\\tests\\integration\\test_local_reconciler_third_round.py": "8e0a6d2f3e3d783ac3866374609a1057fc68a6ea7dcb57bf0bdeabe390d18cd8",
+      "web\\backend\\tests\\integration\\test_material_revocation_race.py": "8489a800d1bcf7520c9780f557f3686f83a2464cff25db3bb1b14d298ea521cf",
+      "web\\backend\\tests\\integration\\test_migration_remediation.py": "a985c0cbf977e499f4f3c604e51c0217acbe3ba429a14eaa3257d97fe62240e4",
+      "web\\backend\\tests\\integration\\test_persistent_tasks.py": "ac6ebadb298409ab5756594f6d79dcf3a994b94259575b09dd011899a791ee78",
+      "web\\backend\\tests\\integration\\test_pr03a_review_regressions.py": "afc80d0435c4a36f263298d62dfa69430ac0f9aa3f22404696534401776a9b26",
+      "web\\backend\\tests\\integration\\test_pr03a_second_review_regressions.py": "23ab5c06bc29ff2de469e3ae71b6fe9a736a025a980c53e953f5965491e77cfd",
+      "web\\backend\\tests\\integration\\test_semester_limits.py": "ded2713a5cd93ebefda667a8ff6793659486e553027322310816edfad6aaace2",
+      "web\\backend\\tests\\integration\\test_task_cancel_remediation.py": "c16d20aa3a1a982536a20a2c2d87fa140a1b49674492b7b9e974ca105de3176f",
+      "web\\backend\\tests\\integration\\test_task_material_remediation.py": "eebda662c2c5cc6a35af4bab1979c0ce5ecadb9bac273e534f2c6241a81f349d",
+      "web\\backend\\tests\\integration\\test_task_migrations.py": "5c3b49c370f887ce94ca8f4ffc42782d70a4e257e11a4cc13196a1fc746bcdbf",
+      "web\\backend\\tests\\integration\\test_task_worker.py": "87ba248535a33d48fcfa3a36ee3104cb12dc608dc0a74dd008829530ce6ce103",
+      "web\\backend\\tests\\unit\\test_identity_values.py": "b270613ae2e504522be033d2f742e47aa256270d5477c7903f34c52dcffba509",
+      "web\\backend\\tests\\unit\\test_pr02b_runner.py": "b55a6d90dc2f46f0e8fb111fa9549b33afb24fe392b62afaf7ff60d00f520a8e",
+      "web\\backend\\tests\\unit\\test_task_values.py": "ef01d6f5de55e6bd7cce001b6cf8c09ab43a96b8fe28ee56a1b5519f86065425",
+      "web\\backend\\tests\\unit\\test_test_database_target.py": "7cbddc042b33f1aab7663001f159537a1e67cea8acd525d0067447ec13769327"
+    },
+    "executable_source_stable_during_run": true,
+    "minimum_previous_backend_cases": 1,
+    "isolation": "Verified worktree-owned loopback cluster; fixture creates/drops random database and restricted login",
+    "limitations": "Synthetic PostgreSQL and simulated mail/provider only; no paid model, real email, HTTP/frontend, deployment or production migration"
+  },
+  "legacy_current_run": {
     "schema_version": 1,
-    "started_at": "2026-10-30T16:59:47.827222+00:00",
+    "started_at": "2026-11-02T12:34:06.127073+00:00",
     "repository": "J:\\class-assistant\\worktrees\\web-pr03a-identity",
-    "output": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr00\\pr03a-remediation-20261030T165947Z",
+    "output": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr03a\\third-round\\legacy\\20261102T123405.950189Z",
     "python": "3.10.4 (tags/v3.10.4:9d38120, Mar 23 2022, 23:13:41) [MSC v.1929 64 bit (AMD64)]",
     "python_executable": "J:\\class-assistant\\classroom-os\\work\\pr00\\venv\\Scripts\\python.exe",
     "platform": "Windows-10-10.0.26300-SP0",
@@ -211,7 +826,7 @@
           "HEAD"
         ],
         "exit_code": 0,
-        "seconds": 0.062,
+        "seconds": 0.063,
         "log": "git-head.log"
       },
       {
@@ -223,7 +838,7 @@
           "--branch"
         ],
         "exit_code": 0,
-        "seconds": 0.079,
+        "seconds": 0.078,
         "log": "git-status.log"
       },
       {
@@ -233,7 +848,7 @@
           "--version"
         ],
         "exit_code": 0,
-        "seconds": 0.062,
+        "seconds": 0.063,
         "log": "node-version.log"
       },
       {
@@ -246,7 +861,7 @@
           "$PSVersionTable.PSVersion.ToString()"
         ],
         "exit_code": 0,
-        "seconds": 0.297,
+        "seconds": 3.703,
         "log": "powershell-version.log"
       },
       {
@@ -256,7 +871,7 @@
           "J:\\class-assistant\\worktrees\\web-pr03a-identity\\tools\\pr00\\selftest_guards.py"
         ],
         "exit_code": 0,
-        "seconds": 0.328,
+        "seconds": 0.343,
         "log": "python-guard.log"
       },
       {
@@ -268,7 +883,7 @@
           "tools/pr00/selftest_guards.cjs"
         ],
         "exit_code": 0,
-        "seconds": 0.109,
+        "seconds": 0.125,
         "log": "node-guard.log"
       },
       {
@@ -289,13 +904,13 @@
           "pytest",
           "tests",
           "-q",
-          "--basetemp=J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr00\\pr03a-remediation-20261030T165947Z\\tmp\\pytest",
-          "--junitxml=J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr00\\pr03a-remediation-20261030T165947Z\\pytest-junit.xml",
+          "--basetemp=J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr03a\\third-round\\legacy\\20261102T123405.950189Z\\tmp\\pytest",
+          "--junitxml=J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr03a\\third-round\\legacy\\20261102T123405.950189Z\\pytest-junit.xml",
           "-o",
-          "cache_dir=J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr00\\pr03a-remediation-20261030T165947Z\\cache\\pytest"
+          "cache_dir=J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr03a\\third-round\\legacy\\20261102T123405.950189Z\\cache\\pytest"
         ],
         "exit_code": 0,
-        "seconds": 64.562,
+        "seconds": 69.797,
         "log": "pytest.log"
       },
       {
@@ -307,7 +922,7 @@
           "tests/audio.cjs"
         ],
         "exit_code": 0,
-        "seconds": 0.407,
+        "seconds": 0.406,
         "log": "node-audio.log"
       },
       {
@@ -319,7 +934,7 @@
           "tests/ai-settings.cjs"
         ],
         "exit_code": 0,
-        "seconds": 0.125,
+        "seconds": 0.141,
         "log": "node-ai-settings.log"
       },
       {
@@ -331,7 +946,7 @@
           "tests/input-limits.cjs"
         ],
         "exit_code": 0,
-        "seconds": 0.14,
+        "seconds": 0.141,
         "log": "node-input-limits.log"
       },
       {
@@ -343,7 +958,7 @@
           "tests/study-ui.cjs"
         ],
         "exit_code": 0,
-        "seconds": 0.156,
+        "seconds": 0.172,
         "log": "node-study-ui.log"
       },
       {
@@ -367,7 +982,7 @@
           "tests/review-render.cjs"
         ],
         "exit_code": 0,
-        "seconds": 0.141,
+        "seconds": 0.125,
         "log": "node-review-render.log"
       },
       {
@@ -379,7 +994,7 @@
           "tests/review-ui.cjs"
         ],
         "exit_code": 0,
-        "seconds": 0.156,
+        "seconds": 0.125,
         "log": "node-review-ui.log"
       },
       {
@@ -403,7 +1018,7 @@
           "tests/portable-reader.cjs"
         ],
         "exit_code": 0,
-        "seconds": 0.125,
+        "seconds": 0.141,
         "log": "node-portable-reader.log"
       },
       {
@@ -426,7 +1041,7 @@
           "static/app.js"
         ],
         "exit_code": 0,
-        "seconds": 0.093,
+        "seconds": 0.094,
         "log": "js-syntax-app.js.log"
       },
       {
@@ -437,7 +1052,7 @@
           "static/pcm-worklet.js"
         ],
         "exit_code": 0,
-        "seconds": 0.079,
+        "seconds": 0.093,
         "log": "js-syntax-pcm-worklet.js.log"
       },
       {
@@ -448,7 +1063,7 @@
           "static/study-cache.js"
         ],
         "exit_code": 0,
-        "seconds": 0.078,
+        "seconds": 0.094,
         "log": "js-syntax-study-cache.js.log"
       },
       {
@@ -459,7 +1074,7 @@
           "static/review-render.js"
         ],
         "exit_code": 0,
-        "seconds": 0.078,
+        "seconds": 0.094,
         "log": "js-syntax-review-render.js.log"
       },
       {
@@ -494,7 +1109,7 @@
           "$failed = $false; foreach ($name in @('setup.ps1','start.ps1','stop.ps1')) { $tokens = $null; $errors = $null; [void][System.Management.Automation.Language.Parser]::ParseFile((Join-Path (Get-Location) $name), [ref]$tokens, [ref]$errors); if ($errors.Count) { $failed = $true; $errors | ForEach-Object { Write-Output ($name + ': ' + $_.Message) } } else { Write-Output ($name + ': parsed') } }; if ($failed) { exit 1 }"
         ],
         "exit_code": 0,
-        "seconds": 0.375,
+        "seconds": 1.516,
         "log": "powershell-parse.log"
       },
       {
@@ -505,7 +1120,7 @@
           "--check"
         ],
         "exit_code": 0,
-        "seconds": 0.078,
+        "seconds": 0.094,
         "log": "git-diff-check.log"
       }
     ],
@@ -525,35 +1140,11 @@
       "parent_testcases": 525,
       "subtests": 171
     },
-    "finished_at": "2026-10-30T17:00:56.198239+00:00",
+    "finished_at": "2026-11-02T12:35:24.421662+00:00",
     "passed": true
   },
-  "legacy_evidence": "outputs/pr03a/remediation/local-baseline-20261030T165947Z/results.json",
-  "final_tool_commands": {
-    "recorded_at_utc": "2026-10-30T17:36:26.970765+00:00",
-    "source_unique_receipt": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\remediation\\tool-gates\\20261030T173016.996259Z\\commands.json",
-    "environment_scope": {
-      "platform": "Windows",
-      "web_python_executable": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr03a\\venv\\Scripts\\python.exe",
-      "web_python": "3.12.14 (main, Aug 25 2026, 14:01:42) [MSC v.1944 64 bit (AMD64)]",
-      "task_TEMP_TMP": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr03a\\remediation\\tmp",
-      "PYTHONDONTWRITEBYTECODE": "1",
-      "secret_or_full_environment_values_dumped": false,
-      "mypy_module_resolution_note": "--explicit-package-bases plus MYPYPATH=web/backend distinguishes additive tools namespaces; existing check-untyped-defs scope retained"
-    },
-    "checks": [
-      {
-        "name": "runner-adversarial",
-        "command": [
-          "J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr03a\\venv\\Scripts\\python.exe",
-          "tools/pr03a/remediation/selftest_runner.py"
-        ],
-        "cwd": "J:\\class-assistant\\worktrees\\web-pr03a-identity",
-        "nonsecret_environment_overrides": {},
-        "exit_code": 0,
-        "seconds": 0.609,
-        "log": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\remediation\\tool-gates\\20261030T173016.996259Z\\runner-adversarial.log"
-      },
+  "tool_gates": {
+    "commands": [
       {
         "name": "pip-check",
         "command": [
@@ -563,37 +1154,22 @@
           "check"
         ],
         "cwd": "J:\\class-assistant\\worktrees\\web-pr03a-identity",
-        "nonsecret_environment_overrides": {},
         "exit_code": 0,
-        "seconds": 0.687,
-        "log": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\remediation\\tool-gates\\20261030T173016.996259Z\\pip-check.log"
+        "seconds": 0.5,
+        "log": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\third-round\\tool-gates\\20261102T124839.222566Z\\pip-check.log",
+        "pythonpath": null
       },
       {
-        "name": "git-diff-check",
+        "name": "runner-adversarial",
         "command": [
-          "git",
-          "diff",
-          "--check"
+          "J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr03a\\venv\\Scripts\\python.exe",
+          "tools/pr03a/remediation/selftest_runner.py"
         ],
         "cwd": "J:\\class-assistant\\worktrees\\web-pr03a-identity",
-        "nonsecret_environment_overrides": {},
         "exit_code": 0,
-        "seconds": 0.11,
-        "log": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\remediation\\tool-gates\\20261030T173016.996259Z\\git-diff-check.log"
-      },
-      {
-        "name": "git-staged-diff-check",
-        "command": [
-          "git",
-          "diff",
-          "--cached",
-          "--check"
-        ],
-        "cwd": "J:\\class-assistant\\worktrees\\web-pr03a-identity",
-        "nonsecret_environment_overrides": {},
-        "exit_code": 0,
-        "seconds": 0.093,
-        "log": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\remediation\\tool-gates\\20261030T173016.996259Z\\git-staged-diff-check.log"
+        "seconds": 0.484,
+        "log": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\third-round\\tool-gates\\20261102T124839.222566Z\\runner-adversarial.log",
+        "pythonpath": null
       },
       {
         "name": "mypy",
@@ -606,18 +1182,15 @@
           "--ignore-missing-imports",
           "--check-untyped-defs",
           "--cache-dir",
-          "work/pr03a/remediation/mypy-cache",
+          "J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr03a\\third-round\\tool-gates\\20261102T124839.222566Z\\mypy-cache",
           "web/backend/classroom_web",
           "tools/pr03a"
         ],
         "cwd": "J:\\class-assistant\\worktrees\\web-pr03a-identity",
-        "nonsecret_environment_overrides": {
-          "PYTHONPATH": "J:/class-assistant/worktrees/web-pr02a-data/work/pr02a/remediation/type-deps",
-          "MYPYPATH": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\web\\backend"
-        },
         "exit_code": 0,
-        "seconds": 1.328,
-        "log": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\remediation\\tool-gates\\20261030T173016.996259Z\\mypy.log"
+        "seconds": 8.578,
+        "log": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\third-round\\tool-gates\\20261102T124839.222566Z\\mypy.log",
+        "pythonpath": "J:/class-assistant/worktrees/web-pr02a-data/work/pr02a/remediation/type-deps"
       },
       {
         "name": "static",
@@ -628,10 +1201,10 @@
           "J:/class-assistant/classroom-os/work/pr01/validation-deps"
         ],
         "cwd": "J:\\class-assistant\\worktrees\\web-pr03a-identity",
-        "nonsecret_environment_overrides": {},
         "exit_code": 0,
-        "seconds": 2.656,
-        "log": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\remediation\\tool-gates\\20261030T173016.996259Z\\static.log"
+        "seconds": 2.36,
+        "log": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\third-round\\tool-gates\\20261102T124839.222566Z\\static.log",
+        "pythonpath": null
       },
       {
         "name": "protection",
@@ -640,756 +1213,108 @@
           "tools/pr03a/remediation/check_protected.py"
         ],
         "cwd": "J:\\class-assistant\\worktrees\\web-pr03a-identity",
-        "nonsecret_environment_overrides": {},
         "exit_code": 0,
-        "seconds": 55.25,
-        "log": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\remediation\\tool-gates\\20261030T173016.996259Z\\protection.log"
+        "seconds": 58.25,
+        "log": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\third-round\\tool-gates\\20261102T124839.222566Z\\protection.log",
+        "pythonpath": null
+      },
+      {
+        "name": "git-diff-check",
+        "command": [
+          "git",
+          "diff",
+          "--check"
+        ],
+        "cwd": "J:\\class-assistant\\worktrees\\web-pr03a-identity",
+        "exit_code": 0,
+        "seconds": 0.093,
+        "log": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\third-round\\tool-gates\\20261102T124839.222566Z\\git-diff-check.log",
+        "pythonpath": null
       }
     ],
-    "passed": true,
-    "final_backend": {
-      "wrapper_command": [
-        "J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr03a\\venv\\Scripts\\python.exe",
-        "tools/pr03a/remediation/run_tests.py",
-        "--admin-url",
-        "postgresql+psycopg://pr02a_pr03a_migrator@127.0.0.1:55439/pr02a_pr03a_synthetic"
-      ],
-      "actual_pytest_child_command": [
-        "J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr03a\\venv\\Scripts\\python.exe",
-        "-m",
-        "pytest",
-        "-q",
-        "--basetemp=J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr03a\\remediation\\runs\\20261030T172928.118399Z\\tmp\\pytest",
-        "--junitxml=J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\remediation\\runs\\20261030T172928.118399Z\\pytest.xml",
-        "-o",
-        "cache_dir=J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr03a\\remediation\\runs\\20261030T172928.118399Z\\cache\\pytest"
-      ],
-      "wrapper_exit_code": 0,
-      "pytest_exit_code": 0,
-      "results": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\remediation\\runs\\20261030T172928.118399Z\\results.json",
-      "junit": {
-        "tests": 423,
-        "failures": 0,
-        "errors": 0,
-        "skipped": 0
-      },
-      "executable_source_stable_during_run": true
-    },
-    "failed_history_preserved": [
-      "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\remediation\\prefix-recovery\\20261030T170312.992527Z\\results.json",
-      "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\remediation\\smoke\\20261030T171922.420048Z\\results.json",
-      "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\remediation\\runs\\20261030T172147.138300Z\\results.json"
-    ],
-    "latest_static_evidence": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\remediation\\static\\20261030T173017.613440Z\\static-architecture.json",
-    "latest_protection_evidence": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\remediation\\protection\\20261030T173017.780567Z\\protected-files.json"
+    "passed": true
   },
-  "static": {
-    "checked_at_utc": "2026-10-30T17:30:19.538117+00:00",
-    "python": "3.12.14 (main, Aug 25 2026, 14:01:42) [MSC v.1944 64 bit (AMD64)]",
-    "checks": [
-      {
-        "name": "Python AST",
-        "passed": true,
-        "details": {
-          "python_files": 63
-        }
-      },
-      {
-        "name": "OpenAPI 3.1 and unique operationId",
-        "passed": true,
-        "details": {
-          "operations": 134,
-          "paths": 118
-        }
-      },
-      {
-        "name": "Events JSON Schema",
-        "passed": true,
-        "details": null
-      },
-      {
-        "name": "All contract local refs resolve",
-        "passed": true,
-        "details": {
-          "resolved_refs": 599
-        }
-      },
-      {
-        "name": "Frozen positive and negative examples",
-        "passed": true,
-        "details": {
-          "positive_negative_cases": 34
-        }
-      },
-      {
-        "name": "Frozen model keys and owner composite FKs",
-        "passed": true,
-        "details": {
-          "tables": 60,
-          "foreign_keys": 164
-        }
-      },
-      {
-        "name": "Incremental single migration head and offline SQL",
-        "passed": true,
-        "details": {
-          "heads": [
-            "0005_identity_recovery"
-          ],
-          "history_retained": [
-            "0001_data_foundation",
-            "0002_pr02a_review",
-            "0003_persistent_tasks",
-            "0004_identity"
-          ],
-          "offline_rendered": true
-        }
-      },
-      {
-        "name": "Limited source credential-pattern scan",
-        "passed": true,
-        "details": {
-          "files": 68,
-          "matches": [],
-          "scope": "Limited credential-shaped pattern scan; not a security audit"
-        }
-      }
-    ],
-    "passed": true,
-    "limitations": "Syntax, frozen contract structure and offline SQL only. Runtime concurrency/RLS use separate PostgreSQL integration gates."
+  "original_423_cases": {
+    "historical_expected_case_list": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\remediation\\runs\\20261030T172928.118399Z\\pytest.xml",
+    "current_junit": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\third-round\\full\\20261102T124856.901159Z\\pytest.xml",
+    "expected_case_count": 423,
+    "all_executed_in_current_full_run": true,
+    "current_total": 464,
+    "missing_cases": [],
+    "original_test_module_asts_preserved": true
   },
-  "static_evidence": "outputs/pr03a/remediation/static/20261030T173017.613440Z/static-architecture.json",
-  "protection": {
-    "base": "088984fbd7c9f36f4250c9af340d6a73a0c57960",
-    "checked_at_utc": "2026-10-30T17:31:12.338116+00:00",
-    "baseline_files": 301,
-    "protected_files_checked": 250,
-    "prior_migration_files": {
-      "web/backend/migrations/versions/0001_data_foundation.py": {
-        "baseline_git_object": "4472bacc3ab0f9360c241882bc6b9239e0b20bfa",
-        "current_git_object": "4472bacc3ab0f9360c241882bc6b9239e0b20bfa",
-        "baseline_checkout_sha256": "d7f5bf06145eb21f9cd5d8f6ec093ecb1deebfb590b2829f39ce7e05fcbedf16",
-        "current_sha256": "d7f5bf06145eb21f9cd5d8f6ec093ecb1deebfb590b2829f39ce7e05fcbedf16",
-        "raw_bytes_equal": true,
-        "git_content_equal": true
-      },
-      "web/backend/migrations/versions/0001_data_foundation.sql": {
-        "baseline_git_object": "d7c77f05c2fecfc3d7d4593a01d85c29341ebe31",
-        "current_git_object": "d7c77f05c2fecfc3d7d4593a01d85c29341ebe31",
-        "baseline_checkout_sha256": "87c475d46a647cc838c0ad9f75a6121cc4ad1c7b537fb9c7f94e568f987bbaa8",
-        "current_sha256": "87c475d46a647cc838c0ad9f75a6121cc4ad1c7b537fb9c7f94e568f987bbaa8",
-        "raw_bytes_equal": true,
-        "git_content_equal": true
-      },
-      "web/backend/migrations/versions/0002_pr02a_review.py": {
-        "baseline_git_object": "b457da7499261c71d1d3fb11c6e6bf148c8910d8",
-        "current_git_object": "b457da7499261c71d1d3fb11c6e6bf148c8910d8",
-        "baseline_checkout_sha256": "f7c04dcbb80dc691e5060847a27be9c1fbeb4bbf4011eaa589e6fb7ad8631f69",
-        "current_sha256": "f7c04dcbb80dc691e5060847a27be9c1fbeb4bbf4011eaa589e6fb7ad8631f69",
-        "raw_bytes_equal": true,
-        "git_content_equal": true
-      },
-      "web/backend/migrations/versions/0002_pr02a_review.sql": {
-        "baseline_git_object": "5e59a2b7c81a040ceb6d074a539ba176fd6378c9",
-        "current_git_object": "5e59a2b7c81a040ceb6d074a539ba176fd6378c9",
-        "baseline_checkout_sha256": "4e9b9046202f0712f474eab2594c3cb7aff177854c8bd6bc0453e08995d3cf72",
-        "current_sha256": "4e9b9046202f0712f474eab2594c3cb7aff177854c8bd6bc0453e08995d3cf72",
-        "raw_bytes_equal": true,
-        "git_content_equal": true
-      },
-      "web/backend/migrations/versions/0003_persistent_tasks.py": {
-        "baseline_git_object": "75a82323498163d0b59291c0eb5c4113ba73fd2a",
-        "current_git_object": "75a82323498163d0b59291c0eb5c4113ba73fd2a",
-        "baseline_checkout_sha256": "3af350e6860c6975473bc1d14e56b34d091dfc8900e17871b2f2f52c1fb05e92",
-        "current_sha256": "3af350e6860c6975473bc1d14e56b34d091dfc8900e17871b2f2f52c1fb05e92",
-        "raw_bytes_equal": true,
-        "git_content_equal": true
-      },
-      "web/backend/migrations/versions/0003_persistent_tasks.sql": {
-        "baseline_git_object": "960deabed6b884194877ce5d070a831cfb242cc8",
-        "current_git_object": "960deabed6b884194877ce5d070a831cfb242cc8",
-        "baseline_checkout_sha256": "d5993db7732f49203317f91a3d4832bb810884b708b3a17223479d7aca69cc51",
-        "current_sha256": "d5993db7732f49203317f91a3d4832bb810884b708b3a17223479d7aca69cc51",
-        "raw_bytes_equal": true,
-        "git_content_equal": true
-      },
-      "web/backend/migrations/versions/0004_identity.py": {
-        "baseline_git_object": "efded097d16bc307ef9f32a7ee6220863353c974",
-        "current_git_object": "efded097d16bc307ef9f32a7ee6220863353c974",
-        "baseline_checkout_sha256": "88408dd198b6253cc83b60cac6ee17f66a8962fcf4b46a0b06200e557988bfb7",
-        "current_sha256": "88408dd198b6253cc83b60cac6ee17f66a8962fcf4b46a0b06200e557988bfb7",
-        "raw_bytes_equal": true,
-        "git_content_equal": true
-      },
-      "web/backend/migrations/versions/0004_identity.sql": {
-        "baseline_git_object": "7f44162f924d563cc95459068aa51bd34d146bb7",
-        "current_git_object": "7f44162f924d563cc95459068aa51bd34d146bb7",
-        "baseline_checkout_sha256": "d8f4358a218d2d00999f90f85f123b3ed9e942bbaf86647019b7f03b8436e414",
-        "current_sha256": "d8f4358a218d2d00999f90f85f123b3ed9e942bbaf86647019b7f03b8436e414",
-        "raw_bytes_equal": true,
-        "git_content_equal": true
-      }
-    },
-    "frozen_contract_files": {
-      "docs/web-alpha/architecture/contracts/CHANGELOG.md": {
-        "baseline_git_object": "ae4d7722b87155aee4adfd5a22844d4bcb3befdc",
-        "current_git_object": "ae4d7722b87155aee4adfd5a22844d4bcb3befdc",
-        "baseline_checkout_sha256": "657a617af59964990cc1f48298b140c82eca9f9bfe937233f6e74fef13707859",
-        "current_sha256": "657a617af59964990cc1f48298b140c82eca9f9bfe937233f6e74fef13707859",
-        "raw_bytes_equal": true,
-        "git_content_equal": true
-      },
-      "docs/web-alpha/architecture/contracts/domain-model.json": {
-        "baseline_git_object": "d18d40a8cb5fdce6871f02c416becdfafa7c6e10",
-        "current_git_object": "d18d40a8cb5fdce6871f02c416becdfafa7c6e10",
-        "baseline_checkout_sha256": "ba0a194e36eb919685e6ab49fca138e61a5c31158daf839b668546c278d8a798",
-        "current_sha256": "ba0a194e36eb919685e6ab49fca138e61a5c31158daf839b668546c278d8a798",
-        "raw_bytes_equal": true,
-        "git_content_equal": true
-      },
-      "docs/web-alpha/architecture/contracts/events.schema.json": {
-        "baseline_git_object": "4ac758be50e5576243f3a35f21533409ed23db5e",
-        "current_git_object": "4ac758be50e5576243f3a35f21533409ed23db5e",
-        "baseline_checkout_sha256": "1f04c47c261869a57afb956c1051cdd76b8c5f9e671dd7cd73cdff98ab62e256",
-        "current_sha256": "1f04c47c261869a57afb956c1051cdd76b8c5f9e671dd7cd73cdff98ab62e256",
-        "raw_bytes_equal": true,
-        "git_content_equal": true
-      },
-      "docs/web-alpha/architecture/contracts/examples.json": {
-        "baseline_git_object": "1a0ff7724b861a04944a04a34da393b536fdf3c9",
-        "current_git_object": "1a0ff7724b861a04944a04a34da393b536fdf3c9",
-        "baseline_checkout_sha256": "3250851b3377e16fae00df227877b7d672b8fbde12bb55584ed08fb858f81349",
-        "current_sha256": "3250851b3377e16fae00df227877b7d672b8fbde12bb55584ed08fb858f81349",
-        "raw_bytes_equal": true,
-        "git_content_equal": true
-      },
-      "docs/web-alpha/architecture/contracts/openapi.json": {
-        "baseline_git_object": "dec2dcfcddb5a3a22edf99e09afcca50cee0cdc5",
-        "current_git_object": "dec2dcfcddb5a3a22edf99e09afcca50cee0cdc5",
-        "baseline_checkout_sha256": "331fee959f06372602a6d55256e605a1c79a95563ea7c6887a7703bb5c5a255b",
-        "current_sha256": "331fee959f06372602a6d55256e605a1c79a95563ea7c6887a7703bb5c5a255b",
-        "raw_bytes_equal": true,
-        "git_content_equal": true
-      },
-      "docs/web-alpha/architecture/contracts/pr-dependencies.json": {
-        "baseline_git_object": "a91482b174db73760e72a9e59e22d5549e8cd2ed",
-        "current_git_object": "a91482b174db73760e72a9e59e22d5549e8cd2ed",
-        "baseline_checkout_sha256": "f2db891c2f685a5979f6c722b09c7abc7389b6f279bc7a5a0ba756a987ccc3a9",
-        "current_sha256": "f2db891c2f685a5979f6c722b09c7abc7389b6f279bc7a5a0ba756a987ccc3a9",
-        "raw_bytes_equal": true,
-        "git_content_equal": true
-      },
-      "docs/web-alpha/architecture/contracts/requirements-traceability.json": {
-        "baseline_git_object": "71d32a78c1902ce82c2cf20eb0fad2cf8a86a505",
-        "current_git_object": "71d32a78c1902ce82c2cf20eb0fad2cf8a86a505",
-        "baseline_checkout_sha256": "5763f06a5224b2e527c30b63509396963c2f1d11a244bd0ff7ab0d1d509c66e9",
-        "current_sha256": "5763f06a5224b2e527c30b63509396963c2f1d11a244bd0ff7ab0d1d509c66e9",
-        "raw_bytes_equal": true,
-        "git_content_equal": true
-      },
-      "docs/web-alpha/architecture/contracts/state-machines.json": {
-        "baseline_git_object": "963f63a713502999ad3b40ad89d144bd875f6f87",
-        "current_git_object": "963f63a713502999ad3b40ad89d144bd875f6f87",
-        "baseline_checkout_sha256": "e066dcef52d8350a25dca60d7a8807c7a1079ac5cdd89ed839c7e0b286614bf7",
-        "current_sha256": "e066dcef52d8350a25dca60d7a8807c7a1079ac5cdd89ed839c7e0b286614bf7",
-        "raw_bytes_equal": true,
-        "git_content_equal": true
-      }
-    },
-    "backend_test_retention": {
-      "web/backend/tests/integration/conftest.py": {
-        "old_test_functions": 0,
-        "current_test_functions": 0,
-        "whole_module_ast_unchanged": true,
-        "errors": []
-      },
-      "web/backend/tests/integration/test_data_foundation.py": {
-        "old_test_functions": 39,
-        "current_test_functions": 39,
-        "whole_module_ast_unchanged": true,
-        "errors": []
-      },
-      "web/backend/tests/integration/test_identity.py": {
-        "old_test_functions": 19,
-        "current_test_functions": 19,
-        "whole_module_ast_unchanged": true,
-        "errors": []
-      },
-      "web/backend/tests/integration/test_identity_migrations.py": {
-        "old_test_functions": 3,
-        "current_test_functions": 3,
-        "whole_module_ast_unchanged": true,
-        "errors": []
-      },
-      "web/backend/tests/integration/test_material_revocation_race.py": {
-        "old_test_functions": 3,
-        "current_test_functions": 3,
-        "whole_module_ast_unchanged": true,
-        "errors": []
-      },
-      "web/backend/tests/integration/test_migration_remediation.py": {
-        "old_test_functions": 2,
-        "current_test_functions": 2,
-        "whole_module_ast_unchanged": true,
-        "errors": []
-      },
-      "web/backend/tests/integration/test_persistent_tasks.py": {
-        "old_test_functions": 32,
-        "current_test_functions": 32,
-        "whole_module_ast_unchanged": true,
-        "errors": []
-      },
-      "web/backend/tests/integration/test_semester_limits.py": {
-        "old_test_functions": 4,
-        "current_test_functions": 4,
-        "whole_module_ast_unchanged": true,
-        "errors": []
-      },
-      "web/backend/tests/integration/test_task_cancel_remediation.py": {
-        "old_test_functions": 8,
-        "current_test_functions": 8,
-        "whole_module_ast_unchanged": true,
-        "errors": []
-      },
-      "web/backend/tests/integration/test_task_material_remediation.py": {
-        "old_test_functions": 7,
-        "current_test_functions": 7,
-        "whole_module_ast_unchanged": true,
-        "errors": []
-      },
-      "web/backend/tests/integration/test_task_migrations.py": {
-        "old_test_functions": 5,
-        "current_test_functions": 5,
-        "whole_module_ast_unchanged": true,
-        "errors": []
-      },
-      "web/backend/tests/integration/test_task_worker.py": {
-        "old_test_functions": 11,
-        "current_test_functions": 11,
-        "whole_module_ast_unchanged": true,
-        "errors": []
-      },
-      "web/backend/tests/unit/test_identity_values.py": {
-        "old_test_functions": 6,
-        "current_test_functions": 6,
-        "whole_module_ast_unchanged": true,
-        "errors": []
-      },
-      "web/backend/tests/unit/test_pr02b_runner.py": {
-        "old_test_functions": 8,
-        "current_test_functions": 8,
-        "whole_module_ast_unchanged": true,
-        "errors": []
-      },
-      "web/backend/tests/unit/test_task_values.py": {
-        "old_test_functions": 6,
-        "current_test_functions": 6,
-        "whole_module_ast_unchanged": true,
-        "errors": []
-      },
-      "web/backend/tests/unit/test_test_database_target.py": {
-        "old_test_functions": 5,
-        "current_test_functions": 5,
-        "whole_module_ast_unchanged": true,
-        "errors": []
-      }
-    },
-    "reviewed_test_evolution": "No new exceptions: every reviewed backend-test module AST is preserved; remediation regressions are additive modules",
-    "mismatches": [],
-    "scope_violations": [],
-    "changed_tracked_files": [
-      "web/backend/README.md",
-      "web/backend/classroom_web/application/task_worker.py",
-      "web/backend/classroom_web/domain/task_ports.py",
-      "web/backend/classroom_web/entrypoints/worker.py",
-      "web/backend/classroom_web/infrastructure/database.py"
-    ],
-    "new_untracked_files": [
-      "docs/web-alpha/pr03a/remediation/REPORT.md",
-      "docs/web-alpha/pr03a/remediation/RESULT-RECONCILIATION-PROPOSAL.md",
-      "tools/pr03a/remediation/check_protected.py",
-      "tools/pr03a/remediation/check_static.py",
-      "tools/pr03a/remediation/run_tests.py",
-      "tools/pr03a/remediation/selftest_runner.py",
-      "web/backend/classroom_web/infrastructure/local_reconciler.py",
-      "web/backend/migrations/versions/0005_identity_recovery.py",
-      "web/backend/migrations/versions/0005_identity_recovery.sql",
-      "web/backend/tests/integration/test_identity_recovery.py",
-      "web/backend/tests/integration/test_identity_recovery_migrations.py",
-      "web/backend/tests/integration/test_pr03a_review_regressions.py"
-    ],
-    "sibling_snapshot_baseline": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\remediation\\protection\\20261030T173017.780567Z\\sibling-frontend-before.json",
-    "siblings_unchanged_since_snapshot": true,
-    "sibling_observation": "Read-only snapshots; sibling dirty state and concurrent work belong to their owning agents. Sibling drift is reported separately and never repaired or overwritten here.",
-    "limitations": "Scope/test preservation guard, not independent code review or proof of behavior. Ignored sibling files and private .claude content are not read.",
-    "passed": true,
-    "reviewed_pr03a_base": "088984fbd7c9f36f4250c9af340d6a73a0c57960",
-    "minimum_preserved_backend_cases": 358,
-    "original_tool_bytes": {
-      "tools/pr03a/check_protected.py": {
-        "baseline_checkout_sha256": "a1133d0c4f6c74ca7c931b57312b291e39bbb5116ec6004e25d5c2daa82bf271",
-        "current_sha256": "a1133d0c4f6c74ca7c931b57312b291e39bbb5116ec6004e25d5c2daa82bf271",
-        "raw_bytes_equal": true
-      },
-      "tools/pr03a/check_static.py": {
-        "baseline_checkout_sha256": "b97c9d3a50f21ca1db118c17036702edd78f9d6e1c566b9178856008a86ee18f",
-        "current_sha256": "b97c9d3a50f21ca1db118c17036702edd78f9d6e1c566b9178856008a86ee18f",
-        "raw_bytes_equal": true
-      },
-      "tools/pr03a/run_tests.py": {
-        "baseline_checkout_sha256": "061617c03c1530ad8d3d8db25c2a241885e5ac5e32c5fb00f38c39f2b6ce2bce",
-        "current_sha256": "061617c03c1530ad8d3d8db25c2a241885e5ac5e32c5fb00f38c39f2b6ce2bce",
-        "raw_bytes_equal": true
-      },
-      "tools/pr03a/selftest_runner.py": {
-        "baseline_checkout_sha256": "f5ce2bcb28c3e957e569f445ebc6a32a371d0d750660b409d3fdf580a050cef5",
-        "current_sha256": "f5ce2bcb28c3e957e569f445ebc6a32a371d0d750660b409d3fdf580a050cef5",
-        "raw_bytes_equal": true
-      }
-    },
-    "original_tool_bytes_unchanged": true,
-    "original_baseline_file_count": 304,
-    "authorized_document_updates": {
-      "docs/web-alpha/pr03a/ACCEPTANCE.md": {
-        "baseline_checkout_sha256": "ff434eee5c84c2c4fc6f13250b2190f20e60638666700f537f6211a85ad8d459",
-        "original_archive": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\remediation\\before-documents\\ACCEPTANCE.md",
-        "archive_sha256": "ff434eee5c84c2c4fc6f13250b2190f20e60638666700f537f6211a85ad8d459",
-        "current_sha256": "ff434eee5c84c2c4fc6f13250b2190f20e60638666700f537f6211a85ad8d459",
-        "original_baseline_archived_exactly": true,
-        "current_document_exists": true
-      },
-      "docs/web-alpha/pr03a/CHANGES.md": {
-        "baseline_checkout_sha256": "86ab107f49c4326b3ed57273cdcc588db73f454f05edf3caff688fa2e25a9d8a",
-        "original_archive": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\remediation\\before-documents\\CHANGES.md",
-        "archive_sha256": "86ab107f49c4326b3ed57273cdcc588db73f454f05edf3caff688fa2e25a9d8a",
-        "current_sha256": "0acedd93d9f9555981eaf8c8ad288582b4d035ce9a6b0510e499fb6c584b1518",
-        "original_baseline_archived_exactly": true,
-        "current_document_exists": true
-      },
-      "docs/web-alpha/pr03a/VALIDATION.json": {
-        "baseline_checkout_sha256": "0f00329c76ca8edd8373a432dcdbc616f16da01d1a83fb98896eaf83c8bf76a9",
-        "original_archive": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\remediation\\before-documents\\VALIDATION.json",
-        "archive_sha256": "0f00329c76ca8edd8373a432dcdbc616f16da01d1a83fb98896eaf83c8bf76a9",
-        "current_sha256": "5d41ef3a7c42b59cd021d331f1ac71bc387418af79f247becf96cca1ffceb688",
-        "original_baseline_archived_exactly": true,
-        "current_document_exists": true
-      }
-    },
-    "original_documents_preserved": true,
-    "immutable_migration_history": "0001,0002,0003,0004 .py/.sql remain exact baseline checkout bytes and Git content",
-    "sibling_initial_snapshot": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\remediation\\sibling-frontend-before.json"
-  },
-  "protection_evidence": "outputs/pr03a/remediation/protection/20261030T173017.780567Z/protected-files.json",
-  "prior_runs": [
+  "failure_history": [
     {
-      "path": "outputs/pr03a/remediation/runs/20261030T172147.138300Z/results.json",
+      "path": "outputs/pr03a/third-round/20261102T114612.393722Z",
       "exit_code": 1,
-      "junit": {
-        "tests": 418,
-        "failures": 1,
-        "errors": 0,
-        "skipped": 0
-      },
-      "passed": false
+      "tests": 7,
+      "passed": 2,
+      "failed": 5,
+      "purpose": "Unmodified original-HEAD reproduction"
+    },
+    {
+      "path": "outputs/pr03a/third-round/probes/20261102T123422.234893Z",
+      "pytest_exit": 0,
+      "wrapper_exit": 1,
+      "tests": 7,
+      "passed": 7,
+      "reason": "Executable manifest changed during smoke; rejected as final evidence"
+    },
+    {
+      "path": "outputs/pr03a/third-round/targeted/20261102T123519.413495Z",
+      "exit_code": 1,
+      "tests": 77,
+      "passed": 74,
+      "failed": 3,
+      "reason": "New test setup: psycopg percent parsing in two trigger DDLs; first-page-only helper used for intentionally second-page task",
+      "fix": "no_parameters DDL and explicit quarantine setup; all attack/state assertions retained"
+    },
+    {
+      "path": "outputs/pr03a/third-round/tool-gates/20261102T124345.947774Z",
+      "mypy_exit": 1,
+      "protection_exit": 1,
+      "reason": "Seven new wrapper typing errors and pre-existing CRLF raw-digest mismatch for immutable selftest tool",
+      "fix": "Typed dynamic module/namespace; exact committed historical digest plus Git object verifies untouched CRLF file"
     }
   ],
-  "failure_history": [
-    "Astra original independent probes: 6 passed/4 failed, exit1; exact copies and digests retained",
-    "Own original-HEAD reproduction:4 failed,exit1,7.05s,no source changes",
-    "First new smoke:58 passed/1 failed; fixed null-pointer Provider outcome restoration",
-    "First full:417 passed/1 failed; new numeric oracle compared memory float with stored JSONB; retained exact comparison against original Python-to-JSONB roundtrip instead",
-    "Intermediate source-hash mismatch preserved; final run requires identical before/after hashes",
-    "Four new wrapper-only mypy errors corrected without changing protected original tooling"
+  "non_super_migration_limit": "The tested non-superuser provisioning cannot revoke bootstrap-grantor ADMIN membership. 0006 refuses and rolls back. Bootstrap upgrade succeeds; independent non-superuser success is not claimed.",
+  "unchanged_boundaries": [
+    "0001-0005 ten migrations",
+    "frozen API/WS contracts",
+    "original 423 backend tests",
+    "legacy product and tests",
+    "PR-09a worktree",
+    "PR-02a/02b history"
   ],
-  "source_sha256": {
-    "tools/pr03a/remediation/check_protected.py": "05e7f822973bf3ec0e921f86ae4c4440d37441c3ee8f361937c127e953098692",
-    "tools/pr03a/remediation/check_static.py": "7e6bee29e85be7a8c83be89b8c4849d2f46dedf7e7326ec1359012a79bfc75ce",
-    "tools/pr03a/remediation/run_tests.py": "78b5a3a9687bffefc41546282a7665d8a198b56c0b267b949470d6f51d0a06b7",
-    "tools/pr03a/remediation/selftest_runner.py": "c5a321b794c5cbbe9c548641c08e137bab45f24193f2a1302c5e718b4a366c44",
-    "web/backend/README.md": "52334c777773577e4d81220205623396163cb976173590470c6017ad2112a603",
-    "web/backend/classroom_web/application/task_worker.py": "57271089c7c71510606a5d9f1a57138e860f6475c65989483774663ce87f58af",
-    "web/backend/classroom_web/domain/task_ports.py": "6f50041945c84329e1d1c4efaee7ad6be5f644386a2d295893cf076749d14c71",
-    "web/backend/classroom_web/entrypoints/worker.py": "86c6d91a8699b88afc773c28f665d6f3ee06e7a7d40165c6081de29855e468df",
-    "web/backend/classroom_web/infrastructure/database.py": "e074fbdcb9b5b0dffe69437724d744b8bbcaff48c9bd868451912f78d9143cb5",
-    "web/backend/classroom_web/infrastructure/local_reconciler.py": "b5c87fb08354445346f8fdbcd677aec63d771cd13410f8a89ea3d866c7969547",
-    "web/backend/migrations/versions/0005_identity_recovery.py": "f56a068abf916b9e8ecf4cca02f75479599fa2ea223ee5f814a9ba894157fa26",
-    "web/backend/migrations/versions/0005_identity_recovery.sql": "ecadca6ccf993a18dda52895156534051f21073df057eeda664ac80187ee2e12",
-    "web/backend/tests/integration/test_identity_recovery.py": "dccb5a0e22019366b8c0d5669e1ff301bb40da5548a722304f2c70553933f8fa",
-    "web/backend/tests/integration/test_identity_recovery_migrations.py": "de7483716ecaf51a31ee17dea720570a918de67535215dbd101e14778d02a73c",
-    "web/backend/tests/integration/test_pr03a_review_regressions.py": "afc80d0435c4a36f263298d62dfa69430ac0f9aa3f22404696534401776a9b26"
-  },
-  "evidence_sha256": {
-    "outputs/pr03a/remediation/runs/20261030T172928.118399Z/results.json": "f99e8897c7377a33a59b2d0c3368a6a5b0eaff66960681539b044bd2ce131bb7",
-    "outputs/pr03a/remediation/runs/20261030T172928.118399Z/pytest.xml": "902b1f1542512136d48717438d122c8757c26cb0e633a779b1de199baa2c06b9",
-    "outputs/pr03a/remediation/runs/20261030T172928.118399Z/pytest.log": "6ff183c08bc9845635932903632758bff03791ec5ddaf2ec83549cf800533a0b",
-    "outputs/pr03a/remediation/local-baseline-20261030T165947Z/results.json": "70e78438ddb80ed32fc1a84bed3a64d96d1ea36283d2b63b1794e2a60cf35314",
-    "outputs/pr03a/remediation/tool-command-receipts.json": "f52eb3356c532f91c67794fc1c50be3fabf11286b90eaa2334b9a7e01dae1b7b",
-    "outputs/pr03a/remediation/static/20261030T173017.613440Z/static-architecture.json": "47548828e73fac1ca5a7c26e22f0aa40176690d05dd2f9b52398b57757fc9f1c",
-    "outputs/pr03a/remediation/protection/20261030T173017.780567Z/protected-files.json": "874cc2dfb08e88cfc1db5c1175936a365e79060a8a159689deaa5b51759da765",
-    "outputs/pr03a/remediation/independent-review/SHA256-MANIFEST.json": "5cec6d65c64ed4583af15535cc3c550a4ed3dca133df8fb1d9ed74cd35649f05",
-    "outputs/pr03a/remediation/prefix-recovery/20261030T170312.992527Z/results.json": "63397f0c5e41cc767b3500bf911a01f0941e31d1def7f54949bf71e8cca88a05",
-    "outputs/pr03a/remediation/smoke/20261030T171922.420048Z/results.json": "6ff4528b02efda0459df0f0d3c09554a4cf8fd4818f39f73040b95aac81c0667",
-    "outputs/pr03a/remediation/runs/20261030T172147.138300Z/results.json": "4258f0e51bbcfd665bda85516b4cc7f09fb0f310667d70f7418327bdf48d5e79",
-    "outputs/pr03a/remediation/numeric-jsonb-oracle-20261030T172835.574947Z.json": "66b4ef8742aff7e04a2e521eedd97097bbdc372a3c068b719b0617c7075fee56",
-    "outputs/pr03a/remediation/fixture-cleanup.json": "879a2d0d357baf76deae187ed7aeb4a2255c128b2370c2a3abe300e214c397b0",
-    "outputs/pr03a/remediation/postgres-shutdown.json": "873eeefd52895644eaa9d007ab9b341942138d7c2a5a8afcf98ca3eec58ae9f8"
-  },
+  "limitations": [
+    "No real mail, Cookie, MFA, recovery codes or multi-device revoke",
+    "No real Provider, reservation/usage settlement, production restore or remote CI",
+    "No independent implementation APPROVE or integration authorization",
+    "Two PR-02b P3, PR-09a open P3 and eleven TBD remain open; privacy precheck NO-GO remains"
+  ],
   "changed_files": [
     "docs/web-alpha/pr03a/ACCEPTANCE.md",
     "docs/web-alpha/pr03a/CHANGES.md",
     "docs/web-alpha/pr03a/VALIDATION.json",
-    "docs/web-alpha/pr03a/remediation/REPORT.md",
-    "docs/web-alpha/pr03a/remediation/RESULT-RECONCILIATION-PROPOSAL.md",
+    "docs/web-alpha/pr03a/remediation/third-round/PERMISSIONS-PROPOSAL.md",
+    "docs/web-alpha/pr03a/remediation/third-round/R2-DESIGN-REVIEW.md",
+    "docs/web-alpha/pr03a/remediation/third-round/REPORT.md",
     "tools/pr03a/remediation/check_protected.py",
     "tools/pr03a/remediation/check_static.py",
     "tools/pr03a/remediation/run_tests.py",
-    "tools/pr03a/remediation/selftest_runner.py",
-    "web/backend/README.md",
-    "web/backend/classroom_web/application/task_worker.py",
-    "web/backend/classroom_web/domain/task_ports.py",
-    "web/backend/classroom_web/entrypoints/worker.py",
-    "web/backend/classroom_web/infrastructure/database.py",
-    "web/backend/classroom_web/infrastructure/local_reconciler.py",
-    "web/backend/migrations/versions/0005_identity_recovery.py",
-    "web/backend/migrations/versions/0005_identity_recovery.sql",
-    "web/backend/tests/integration/test_identity_recovery.py",
-    "web/backend/tests/integration/test_identity_recovery_migrations.py",
-    "web/backend/tests/integration/test_pr03a_review_regressions.py"
+    "tools/pr03a/third_round/pr03a_probe_evidence.py",
+    "tools/pr03a/third_round/run_legacy.py",
+    "tools/pr03a/third_round/run_tests.py",
+    "web/backend/migrations/versions/0006_local_reconciler_functions.sql",
+    "web/backend/migrations/versions/0006_local_reconciler_security.py",
+    "web/backend/migrations/versions/0006_local_reconciler_security.sql",
+    "web/backend/tests/integration/test_local_reconciler_migrations.py",
+    "web/backend/tests/integration/test_local_reconciler_third_round.py",
+    "web/backend/tests/integration/test_pr03a_second_review_regressions.py"
   ],
-  "operation_receipts": "Original immutable receipt rows unchanged; Task/Attempt/risk/Outbox change in one transaction",
-  "provider_evidence": "RecordingProvider.calls and request SHA256 asserted in real PostgreSQL tests:0 unsent,1 sent/saved;no extra submit",
-  "recovery_fairness": "Actual LIMIT100 stable-order queue:101 invalid expired tasks leave eligible set;later valid saved-raw task finishes across bounded polls",
-  "approved_system_boundary": "Status-only fixed SQL local reconciliation; ordinary owner authorization still denies unavailable subjects; no scheduler privilege expansion",
-  "open_items": [
-    "PR02B-P3-01 OPEN",
-    "PR02B-P3-02 OPEN",
-    "All original policy TBDs remain OPEN"
-  ],
-  "not_implemented": [
-    "real mail delivery",
-    "Cookie sessions",
-    "MFA/recovery codes",
-    "multi-device revocation",
-    "real Provider calls or reservation/usage settlement",
-    "production database recovery"
-  ],
-  "limitations": "Local synthetic PostgreSQL/captured mail/recording Provider only. JSON storage parity is tested corpus evidence, not a proof for all possible JSON; PostgreSQL cannot represent NUL or lone surrogates in JSONB. No paid provider, production DB, push/merge/tag/release/deployment. Await independent Astra review.",
-  "fixture_cleanup": {
-    "recorded_at_utc": "2026-10-30T17:36:27.699904+00:00",
-    "actual_cluster_identity": {
-      "login": "pr02a_pr03a_migrator",
-      "database": "pr02a_pr03a_synthetic",
-      "data_directory": "J:/class-assistant/worktrees/web-pr03a-identity/work/pr03a/pg/data",
-      "host": "127.0.0.1",
-      "port": 55439,
-      "listen_addresses": "127.0.0.1",
-      "version": "PostgreSQL 17.11 on x86_64-windows, compiled by msvc-19.44.35228, 64-bit"
-    },
-    "remaining_synthetic_databases": [
-      "pr02a_pr03a_synthetic"
-    ],
-    "remaining_synthetic_login_roles": [
-      "pr02a_pr03a_migrator"
-    ],
-    "random_fixture_database_and_role_cleanup_verified": true,
-    "passed_backend_cases_by_module": {
-      "tests.integration.test_data_foundation": 40,
-      "tests.integration.test_identity": 35,
-      "tests.integration.test_identity_migrations": 3,
-      "tests.integration.test_identity_recovery": 51,
-      "tests.integration.test_identity_recovery_migrations": 4,
-      "tests.integration.test_material_revocation_race": 4,
-      "tests.integration.test_migration_remediation": 3,
-      "tests.integration.test_persistent_tasks": 35,
-      "tests.integration.test_pr03a_review_regressions": 10,
-      "tests.integration.test_semester_limits": 26,
-      "tests.integration.test_task_cancel_remediation": 12,
-      "tests.integration.test_task_material_remediation": 41,
-      "tests.integration.test_task_migrations": 5,
-      "tests.integration.test_task_worker": 16,
-      "tests.unit.test_identity_values": 27,
-      "tests.unit.test_pr02b_runner": 40,
-      "tests.unit.test_task_values": 16,
-      "tests.unit.test_test_database_target": 55
-    },
-    "retained_reviewed_cases": 358,
-    "new_remediation_cases": 65,
-    "backend_total": 423,
-    "cluster_not_stopped_until_all_final_gates_passed": true,
-    "passed": true
-  },
-  "synthetic_cluster_shutdown": {
-    "checked_at_utc": "2026-10-30T17:37:01.432033+00:00",
-    "verified_identity_before_shutdown": {
-      "login": "pr02a_pr03a_migrator",
-      "database": "pr02a_pr03a_synthetic",
-      "data_directory": "J:/class-assistant/worktrees/web-pr03a-identity/work/pr03a/pg/data",
-      "host": "127.0.0.1",
-      "port": 55439,
-      "listen_addresses": "127.0.0.1",
-      "version": "PostgreSQL 17.11 on x86_64-windows, compiled by msvc-19.44.35228, 64-bit"
-    },
-    "command": [
-      "J:/class-assistant/worktrees/web-pr02a-data/work/pr02a/pg/runtime/Library/bin/pg_ctl.exe",
-      "-D",
-      "J:\\class-assistant\\worktrees\\web-pr03a-identity\\work\\pr03a\\pg\\data",
-      "-m",
-      "fast",
-      "-w",
-      "stop"
-    ],
-    "cwd": "J:\\class-assistant\\worktrees\\web-pr03a-identity",
-    "exit_code": 0,
-    "loopback_port_closed": true,
-    "synthetic_data_and_logs_preserved": true,
-    "other_clusters_not_operated": true,
-    "all_final_tests_and_tool_gates_passed_before_shutdown": true,
-    "passed": true
-  },
-  "review_provenance": {
-    "archived_at_utc": "2026-10-30T17:07:19.246525+00:00",
-    "source_directory": "J:\\class-assistant\\reviews\\pr03a-first-20261031",
-    "reviewed_sha": "088984fbd7c9f36f4250c9af340d6a73a0c57960",
-    "source_read_only_operations": true,
-    "files": [
-      {
-        "source": "J:\\class-assistant\\reviews\\pr03a-first-20261031\\outputs\\REVIEW.md",
-        "copy": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\remediation\\independent-review\\outputs\\REVIEW.md",
-        "bytes": 13314,
-        "source_sha256_before": "0890bdc4afc832ff6953955d2796ff98115b4cc4357adf344bd3ca9328056997",
-        "source_sha256_after": "0890bdc4afc832ff6953955d2796ff98115b4cc4357adf344bd3ca9328056997",
-        "copy_sha256": "0890bdc4afc832ff6953955d2796ff98115b4cc4357adf344bd3ca9328056997",
-        "exact_copy": true,
-        "source_preserved": true
-      },
-      {
-        "source": "J:\\class-assistant\\reviews\\pr03a-first-20261031\\outputs\\reviewer-final.log",
-        "copy": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\remediation\\independent-review\\outputs\\reviewer-final.log",
-        "bytes": 15296,
-        "source_sha256_before": "112557294a3c02f25366afe0aeae6b5070961c327d9d37422adb59479266a071",
-        "source_sha256_after": "112557294a3c02f25366afe0aeae6b5070961c327d9d37422adb59479266a071",
-        "copy_sha256": "112557294a3c02f25366afe0aeae6b5070961c327d9d37422adb59479266a071",
-        "exact_copy": true,
-        "source_preserved": true
-      },
-      {
-        "source": "J:\\class-assistant\\reviews\\pr03a-first-20261031\\outputs\\reviewer-final.xml",
-        "copy": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\remediation\\independent-review\\outputs\\reviewer-final.xml",
-        "bytes": 15684,
-        "source_sha256_before": "f0dafc8ee3239479f4d11a67d3292b9d24712c4f46281b7a5c4e763ebb429b40",
-        "source_sha256_after": "f0dafc8ee3239479f4d11a67d3292b9d24712c4f46281b7a5c4e763ebb429b40",
-        "copy_sha256": "f0dafc8ee3239479f4d11a67d3292b9d24712c4f46281b7a5c4e763ebb429b40",
-        "exact_copy": true,
-        "source_preserved": true
-      },
-      {
-        "source": "J:\\class-assistant\\reviews\\pr03a-first-20261031\\outputs\\reviewer-final-command.json",
-        "copy": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\remediation\\independent-review\\outputs\\reviewer-final-command.json",
-        "bytes": 135,
-        "source_sha256_before": "70f059a71ae51abd033d27383cbd5377a04ac0273ebe52a51d8f435d0145e6e5",
-        "source_sha256_after": "70f059a71ae51abd033d27383cbd5377a04ac0273ebe52a51d8f435d0145e6e5",
-        "copy_sha256": "70f059a71ae51abd033d27383cbd5377a04ac0273ebe52a51d8f435d0145e6e5",
-        "exact_copy": true,
-        "source_preserved": true
-      },
-      {
-        "source": "J:\\class-assistant\\reviews\\pr03a-first-20261031\\outputs\\reviewer-command.json",
-        "copy": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\remediation\\independent-review\\outputs\\reviewer-command.json",
-        "bytes": 198,
-        "source_sha256_before": "c536d1d8e931d9fbac44281972c7479980e15df0398f4fdaa76a8e48efe33c22",
-        "source_sha256_after": "c536d1d8e931d9fbac44281972c7479980e15df0398f4fdaa76a8e48efe33c22",
-        "copy_sha256": "c536d1d8e931d9fbac44281972c7479980e15df0398f4fdaa76a8e48efe33c22",
-        "exact_copy": true,
-        "source_preserved": true
-      },
-      {
-        "source": "J:\\class-assistant\\reviews\\pr03a-first-20261031\\outputs\\independent-counts.json",
-        "copy": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\remediation\\independent-review\\outputs\\independent-counts.json",
-        "bytes": 745,
-        "source_sha256_before": "553e997a6dcbcef7660fece29ec520f2fa4b126ef00c3b786e729fe7c343fc66",
-        "source_sha256_after": "553e997a6dcbcef7660fece29ec520f2fa4b126ef00c3b786e729fe7c343fc66",
-        "copy_sha256": "553e997a6dcbcef7660fece29ec520f2fa4b126ef00c3b786e729fe7c343fc66",
-        "exact_copy": true,
-        "source_preserved": true
-      },
-      {
-        "source": "J:\\class-assistant\\reviews\\pr03a-first-20261031\\outputs\\source-identity.json",
-        "copy": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\remediation\\independent-review\\outputs\\source-identity.json",
-        "bytes": 3799,
-        "source_sha256_before": "02f638da035ff8b95b47e0b6b7ae3fff514f26578aed2ef259a0b41b934eb4f0",
-        "source_sha256_after": "02f638da035ff8b95b47e0b6b7ae3fff514f26578aed2ef259a0b41b934eb4f0",
-        "copy_sha256": "02f638da035ff8b95b47e0b6b7ae3fff514f26578aed2ef259a0b41b934eb4f0",
-        "exact_copy": true,
-        "source_preserved": true
-      },
-      {
-        "source": "J:\\class-assistant\\reviews\\pr03a-first-20261031\\outputs\\backend-command.json",
-        "copy": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\remediation\\independent-review\\outputs\\backend-command.json",
-        "bytes": 161,
-        "source_sha256_before": "0dd4818790190bc82fb98aa132991c5278ca0cf4c66cc9634913f21cdffc94cc",
-        "source_sha256_after": "0dd4818790190bc82fb98aa132991c5278ca0cf4c66cc9634913f21cdffc94cc",
-        "copy_sha256": "0dd4818790190bc82fb98aa132991c5278ca0cf4c66cc9634913f21cdffc94cc",
-        "exact_copy": true,
-        "source_preserved": true
-      },
-      {
-        "source": "J:\\class-assistant\\reviews\\pr03a-first-20261031\\web\\backend\\tests\\integration\\test_reviewer_identity.py",
-        "copy": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\remediation\\independent-review\\web\\backend\\tests\\integration\\test_reviewer_identity.py",
-        "bytes": 11045,
-        "source_sha256_before": "afc80d0435c4a36f263298d62dfa69430ac0f9aa3f22404696534401776a9b26",
-        "source_sha256_after": "afc80d0435c4a36f263298d62dfa69430ac0f9aa3f22404696534401776a9b26",
-        "copy_sha256": "afc80d0435c4a36f263298d62dfa69430ac0f9aa3f22404696534401776a9b26",
-        "exact_copy": true,
-        "source_preserved": true
-      },
-      {
-        "source": "J:\\class-assistant\\reviews\\pr03a-first-20261031\\outputs\\pr03a\\20261030T163305.120095Z\\results.json",
-        "copy": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\remediation\\independent-review\\outputs\\pr03a\\20261030T163305.120095Z\\results.json",
-        "bytes": 1619,
-        "source_sha256_before": "f87545ce9b1c93d190a7e7e591717e7950c2e95fdd8f2723c18cdf8ffc460154",
-        "source_sha256_after": "f87545ce9b1c93d190a7e7e591717e7950c2e95fdd8f2723c18cdf8ffc460154",
-        "copy_sha256": "f87545ce9b1c93d190a7e7e591717e7950c2e95fdd8f2723c18cdf8ffc460154",
-        "exact_copy": true,
-        "source_preserved": true
-      },
-      {
-        "source": "J:\\class-assistant\\reviews\\pr03a-first-20261031\\outputs\\pr03a\\20261030T163305.120095Z\\pytest.xml",
-        "copy": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\remediation\\independent-review\\outputs\\pr03a\\20261030T163305.120095Z\\pytest.xml",
-        "bytes": 72065,
-        "source_sha256_before": "c795a8c02505935db7ad996ae071e7452b372a7abae6455f215b805c49afa623",
-        "source_sha256_after": "c795a8c02505935db7ad996ae071e7452b372a7abae6455f215b805c49afa623",
-        "copy_sha256": "c795a8c02505935db7ad996ae071e7452b372a7abae6455f215b805c49afa623",
-        "exact_copy": true,
-        "source_preserved": true
-      },
-      {
-        "source": "J:\\class-assistant\\reviews\\pr03a-first-20261031\\outputs\\pr03a\\20261030T163305.120095Z\\pytest.log",
-        "copy": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\remediation\\independent-review\\outputs\\pr03a\\20261030T163305.120095Z\\pytest.log",
-        "bytes": 16107,
-        "source_sha256_before": "259c453f7d0b15964f6df2191a26c57f358137f48de77dba56b3c0ad7b06719c",
-        "source_sha256_after": "259c453f7d0b15964f6df2191a26c57f358137f48de77dba56b3c0ad7b06719c",
-        "copy_sha256": "259c453f7d0b15964f6df2191a26c57f358137f48de77dba56b3c0ad7b06719c",
-        "exact_copy": true,
-        "source_preserved": true
-      },
-      {
-        "source": "J:\\class-assistant\\reviews\\pr03a-first-20261031\\outputs\\pr03a\\20261030T163305.120095Z\\network-guard.log",
-        "copy": "J:\\class-assistant\\worktrees\\web-pr03a-identity\\outputs\\pr03a\\remediation\\independent-review\\outputs\\pr03a\\20261030T163305.120095Z\\network-guard.log",
-        "bytes": 887,
-        "source_sha256_before": "f6adfbaee296c28b1a2684980fa0ea63b376d07eb6f2810a3e6e84c78b987c3a",
-        "source_sha256_after": "f6adfbaee296c28b1a2684980fa0ea63b376d07eb6f2810a3e6e84c78b987c3a",
-        "copy_sha256": "f6adfbaee296c28b1a2684980fa0ea63b376d07eb6f2810a3e6e84c78b987c3a",
-        "exact_copy": true,
-        "source_preserved": true
-      }
-    ],
-    "all_exact_and_originals_unchanged": true
-  },
-  "final_document_scope_protection": {
-    "path": "outputs/pr03a/remediation/protection/20261030T173844.741833Z/protected-files.json",
-    "sha256": "6f2b83d90d3068f77c56dd3839b00141b3af7b1c5195188d2635488f4a76c4da",
-    "passed": true,
-    "mismatches": [],
-    "scope_violations": []
+  "design_review": {
+    "source": "J:/class-assistant/reviews/pr03a-r2-design-20261102/outputs/R2-DESIGN-REVIEW.md",
+    "copy": "docs/web-alpha/pr03a/remediation/third-round/R2-DESIGN-REVIEW.md",
+    "sha256": "50f2a9fd783bb319d2f112b484a937ed7eb24a0213f3dbd43b44ab2fca71bb77"
   }
 }
