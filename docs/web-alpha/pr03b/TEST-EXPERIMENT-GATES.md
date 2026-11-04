@@ -1,6 +1,6 @@
 # PR-03b · 攻击测试、合成实验与分阶段门禁
 
-日期：2026-11-05（Asia/Taipei）。状态：**按本轮六项产品决定修订的准备方案；所有机制测试及实验均未执行**。管理员最低12字符、空闲15分钟/绝对8小时、不持久Cookie；学生remember_me仅决定Cookie持久性；分级再认证、人工恢复权限和本地密码名单故障规则按[政策记录](POLICY-DECISIONS.md)执行，不再列为待选择候选。技术/契约仍待Astra审查，真实恢复身份与凭据待受限登记。TBD-08 保持 **OPEN — PARTIALLY DECIDED**，不得据此声称实现或演练完成。
+日期：2026-11-05（Asia/Taipei）。状态：**按已确认产品决定及Astra设计审查D01–D03修订的准备方案；所有机制测试及实验均未执行**。Astra对`e02614259b5e6483127e14f06e78cdb13a89f0c5`的结论为REQUEST CHANGES，本轮补设计与用例，不自行关闭发现或宣称S1整体通过。管理员最低12字符、空闲15分钟/绝对8小时、不持久Cookie；学生remember_me仅决定Cookie持久性；分级再认证、人工恢复权限和本地密码名单故障规则按[政策记录](POLICY-DECISIONS.md)执行，不再列为待选择候选。技术/契约仍待Astra审查，真实恢复身份与凭据只在对应真实能力启用前受限登记，不阻碍使用合成身份继续设计和用例准备。TBD-08 保持 **OPEN — PARTIALLY DECIDED**，不得据此声称实现或演练完成。
 
 依据：[安全设计](../architecture/05-SECURITY-OFFLINE.md)、[HTTP/WS 与秘密响应](../architecture/04-CONTRACTS-FLOWS.md)、[数据与事务](../architecture/03-DATA-BACKEND.md)、[实施映射](../architecture/08-IMPLEMENTATION.md)、[后端现状](../../../web/backend/README.md)、[PR-03a 验收](../pr03a/ACCEPTANCE.md)。政策选择见 [POLICY-DECISIONS.md](POLICY-DECISIONS.md)，待审字段见 [CONTRACT-DELTA.md](CONTRACT-DELTA.md)，事务与权限边界见 [SESSION-RECOVERY-DESIGN.md](SESSION-RECOVERY-DESIGN.md)。
 
@@ -19,7 +19,7 @@
 
 抓包和 APM 证据用合成标记证明脱敏；默认不落原始 Cookie/seed/恢复码/ticket/密码。必要秘密只在测试进程内比较，持久证据保留存在/缺失断言、最小状态和非秘密标识，不能把测试报告变成泄露路径。
 
-学生人工恢复由获授权Admin使用专用受控命令；管理员人工恢复仅允许项目用户本人通过独立运维身份验证后，手动批准和执行专用命令，其他Admin、Agent及持有网页会话者均没有此权限。数据库更新只能在该命令内部受审事务执行，不人工SQL/改表。Agent本轮只设计；后续获明确实施授权后也只运行合成身份/签名key的测试，不登记、生成或使用用户真实恢复凭据，不为真实账号执行恢复。预登记运维OS身份与独立签名key的绑定、批准单及受限工具是待Astra审查的技术流程，不因产品决定自动上线。秘密不得进入CLI参数、终端history或日志。
+学生人工恢复由获授权Admin使用专用受控命令；管理员人工恢复仅允许项目用户本人通过独立运维身份验证后，手动批准和执行专用命令，其他Admin、Agent及持有网页会话者均没有此权限。数据库更新只能在该命令内部受审事务执行，不人工SQL/改表。Agent本轮只设计；后续获明确实施授权后也只运行合成身份/签名key的测试，不登记、生成或使用用户真实恢复凭据，不为真实账号执行恢复。本人运维OS身份、独立现场签名证明与登记维护授权须用途分离；不冻结硬件数量、备用策略、算法或候选TTL，不要求当前购买/提交真实凭据。真实登记缺失时真实恢复保持关闭，合成设计/用例准备可继续。秘密不得进入CLI参数、终端history或日志。
 
 ## 2. 攻击与故障矩阵
 
@@ -45,27 +45,64 @@
 | A16 / PG+B | R1学生10分钟/Admin5分钟、R2两者5分钟；R3注销、关闭或替换MFA等高风险操作两者2分钟前一刻/等于/后一刻；跨session/owner/epoch、低等级、目标/参数改变、重复消费 | 按已决定窗口和已列操作检查实际因子时间，不把活动时间当再认证；R3绑定具体操作/目标/参数并单次消费，不能窗口内复用；管理员和已启用MFA学生验证现有因子；其他管理写路由的风险归类及字段/响应具体技术契约待Astra审查，不将旧候选表全部提升为批准 |
 | A17 / PG+B | 受限恢复访问自己的绑定流程；尝试课堂、正文、导出、会话解锁、运营读写、WS ticket | 只允许批准的恢复动作；owner 相同也不扩大能力；恢复码不授运营权限；完成新因子后全部撤销并完整重新登录 |
 | A18 / PG+B | 学生全因子丢失、管理员全失、唯一管理员；核验不足/批准单过期重放/执行人不符/匿名申请 | 学生由获授权Admin按审定人工流程核验；管理员人工恢复仅项目用户本人手动；其他Admin不能恢复Admin；匿名申请不冻结管理员；无可信登记/批准路径维持管理写不可用，无公开bootstrap、DB手改、隐藏账号或skip_mfa |
-| A19 / PG+B+W | 注销单会话、撤设备、全退、重置、禁用分别与敏感写入/票据消费竞争；撤销推送丢失 | 数据库锁定及提交线性化可复现；撤销先提交则后续旧授权失败；先获锁提交的动作按定义处理；不靠通知达成正确性，不许事后声称回滚已发字节 |
+| A19 / PG+B+W | 注销单会话、撤设备、全退、重置、禁用分别与敏感写入/票据消费竞争；撤销推送丢失；与LocalReconciler持counter及Outbox隐式FK锁的双连接交错 | 数据库锁定及提交线性化可复现；撤销先提交则后续旧授权失败；先获锁提交的动作按定义处理；安全控制面仅独立identity内部事件/提交通知，不在user排他事务取业务counter或业务Outbox；N01交错详见A45，未实测；不靠通知达成正确性 |
 | A20 / W+PG | 正确 Cookie+Origin+subprotocol+首条票据；缺/恶意 Origin、错 Cookie、ticket 入 URL、重复 ticket、错 classroom/channel/epoch/fence | upgrade 与首消息均校验；票据一次消费且用途绑定；认证前不订阅/处理音频/泄露资源；不把票据放 URL/日志 |
 | A21 / W+PG | 未发首帧、先业务帧/二进制帧、超大帧、慢速连接、认证 deadline 前后；票据过期边界 | 有界未认证连接/内存/帧大小及超时关闭；认证前消息不缓冲成待处理音频；超时不因持续垃圾帧延后 |
 | A22 / W+PG | 活 WS 撤销后业务命令/新模拟收费帧；PG 短断、通知丢失、重连+旧 cursor、删除后重放 | 每次敏感命令/新收费帧由 PG 权威检查；故障拒绝新敏感动作；恢复重新鉴权，过期游标 resync_required，不复活被删正文；无真实 Provider 调用 |
 | A23 / PG+B+W | A/B 资源替换、嵌套课堂错配、连接池复用、Admin 请求他人正文、auth/scheduler 原始 SQL | 应用 owner+复合 FK+FORCE RLS+ACL 均有效；auth lookup 只返最小元数据；API 不能选择 owner，后台角色不能读正文 |
 | A24 / PG+B+M | Cookie/seed/恢复码/ticket 签发提交后响应丢失；同 op 重试、异体、日志/APM/异常抓取、浏览器 cache | 通用 Receipt/Outbox/日志/APM 无秘密；no-store；恢复码不从旧 receipt 回放；按秘密响应契约返回非秘密状态/拒绝后，近期再认证显式轮换 |
-| A25 / PG | PG 断开/lock_timeout/statement_timeout、审计插入错误、事务 COMMIT 前后断连、消费两事务死锁 | 失败全回滚或显式不确定后按已提交事实核对；不得返回假成功或降 MFA；只重试数据库事务，不重放外部行为；审计失败不能留下未审计授权变更 |
+| A25 / PG | PG断开/lock_timeout/statement_timeout、审计插入错误、COMMIT前后断连、消费死锁；新增安全事务与既有LocalReconciler隐式FK锁交错 | 恢复命令结果不明使用D03授权status只读核对，其他命令按各自持久事实核对；不据查不到/PG不可用猜失败，不返回假成功或降MFA；按A45验证独立identity通知，禁止业务counter/Outbox反向依赖；数据库重试有界且不重放外部行为；审计失败不留部分授权变更 |
 | A26 / PG+B | KEK 不可用/错误版本/解密失败；MFA/恢复/轮换中故障 | 拒绝需要因子的授权/签发，保留原因子与状态；不以密码临时替代 Admin MFA；不记录 seed/解密材料；健康恢复后按原权限继续 |
 | A27 / PG+H | 正常哈希并发与洪峰、全未知账号、长输入、取消/客户端断连、多个 API 进程+worker 共存 | 有界在算/排队/请求体，断连不无限遗留任务；预算不只限单进程；无 OOM/swap 抖动失控，不在过载时降低成本 |
-| A28 / PG | 重置/注销后已有 raw、unknown、Receipt/Outbox/fencing、旧 worker 与 LocalReconciler | 原不可变 raw/收据/风险保留；只做受限本地收尾，不能认证失效 owner；不触发 Provider 重发、切换、退款或清 unknown/可能收费风险；新授权不得复活旧内容 |
+| A28 / PG | 重置/注销后已有raw、unknown、Receipt/Outbox/fencing、旧worker与LocalReconciler；旧业务counter已存在、收尾插入Outbox的owner FK隐式user锁 | 原raw/收据/风险保留；只做受限本地收尾，不能认证失效owner；新安全控制面不向共享业务counter/Outbox写通知，A45完整双连接含隐式锁门禁保留且未测；不Provider重发/切换/退款或清unknown/可能收费风险，新授权不复活旧内容 |
 | A29 / PG | 增量迁移空库/前版本/重复执行、ACL 不足/恶意同名角色/失败中断；旧代码回退 | 保持既有迁移字节与 schema 兼容；越权 provisioning 安全拒绝并完整回滚；不以宽权限/BYPASSRLS/残留 membership“修好”；0006 bootstrap-only 限制仍在 |
 | A30 / PG+B | 六字符/可选MFA条件风险接受：补偿机制全部实测通过、10–30人邀请制Alpha范围内的合成放行组；任一未测/失败/失效或超范围组 | 风险接受仅在补偿措施验证通过后、仅对10–30人邀请制Alpha生效；本轮未测不得据产品决定开放真实用户；失败不能被“已接受风险”豁免或静默降低名单/限流/密码成本门槛，扩大阶段须重新审查 |
 | A31 / PG+合成专用命令 | 学生人工恢复：真实合成申请人与假冒者；获授权Admin、无恢复权限Admin、未完成MFA或过期再认证Admin；核验材料不足、审批缺失、证据引用变更、绕命令直接写SQL | 仅登记获授权者通过专用受控命令按技术审定流程核验/批准/执行；留存最小证据引用、核验结论、actor、target、时间及结果，拒绝无权限和假冒；DB更新只在命令内受审事务，不人工SQL/改表；不能读取课堂正文或索取密码/seed作核验；无审计不完成变更 |
 | A32 / PG+合成专用运维命令 | 管理员/唯一管理员人工恢复：预登记项目用户本人的运维OS身份＋独立签名key匹配后手动专用命令；其他Admin、伪称本人、仅邮箱/浏览器会话、错误OS身份、未登记/撤销/错key、只拥有其中一个因子、直接SQL | 只有登记绑定同时有效且由项目用户本人手动批准/执行专用命令才可能进入受限重绑；网页Admin权限、邮箱控制或浏览器会话不能代替；Agent与其他Admin无执行权；DB更新只在命令内受审事务；未登记/遗失运维证明时保持不可用，不临时自登记为本人 |
-| A33 / PG+合成签名校验 | 有效人工恢复批准；target/epoch/用途/证据/接收端公钥与挑战/nonce/expiry/部署篡改；跨账号/部署、双消费；登记/key/执行Admin权限撤销与签发/最终确认竞争；批准到期但派生能力仍有效；更换接收端 | 签名/批准含接收端计划hash，按审定派生期限分别消费批准nonce和能力，不重复消费同一nonce；authority配置hash/PG当前版本及执行权限锁内重核；更换接收端须重新证明并签新nonce、原子废旧flow；旧epoch/跨部署/已撤权拒绝，规范化和协议待独立审查 |
+| A33 / PG+合成签名校验 | 有效人工恢复批准；target/epoch/用途/证据/接收端公钥与挑战/nonce/deadline/部署篡改；跨账号/部署、双消费；登记/key/执行Admin撤权与issue/complete竞争；原issue挑战已到期但pending有效；更换接收端 | 批准含接收端计划hash；issue和complete各验证fresh、具体操作绑定、单次且至多2分钟的证明，锁后重核；分别消费批准nonce、fresh completion_nonce及最终能力，不重复消费issue nonce；独立根/当前配置hash与PG版本/权限重核；fresh complete可处理有效pending，不延长issue证明；新接收端重新批准并废旧flow |
 | A34 / PG+合成受限运维工具 | 匿名恢复请求；如审定流程在核验后暂停写入则覆盖其边界；批准/消费/新因子确认/撤销各阶段执行中断、PG/KEK/审计故障、COMMIT响应不明后重试 | 匿名申请不冻结目标；如已按审定流程暂停则不因中断意外恢复运营；中断不授完整会话、不先删旧因子；仅按持久事实核对/续受限流程，不重放已消费批准；状态与审计原子，故障安全失败 |
-| A35 / PG+B+合成受限运维工具 | 人工恢复重绑秘密响应丢失、恢复码整组轮换响应丢失、批准单/恢复上下文重复请求与超时 | 不从Receipt/Outbox/log/APM回放seed/恢复码/ticket；秘密响应no-store；按审定重新证明/重签或近期再认证显式轮换，不重授已消费权限；审计只留最小状态和非秘密引用 |
-| A36 / PG+B+W+合成专用命令 | 新因子证明pending/失败/超时、浏览器直接finalize、其他Admin代complete、原执行者中断、fresh completion_nonce重放/并发；旧seed/码组/Cookie/再认证/WS ticket；完整重新登录 | 浏览器只能提交pending证明，旧因子保持；仅原执行者手动专用命令complete并重新验证权限/新单次证明，命令事务原子轮换因子、增加security_epoch并全撤旧授权/审计；中断不自动完成；受限上下文不读课堂/导出/运营，不自动登录，完整认证才恢复角色权限 |
-| A37 / 合成专用命令+PG | 合成秘密输入/输出、失败/取消/异常；检查CLI argv、环境变量、shell trace、终端history/会话录制、stdout/stderr、日志/APM/审计、进程诊断/core dump及通用Receipt/Outbox | 密码、seed、恢复码、PIN、私钥及恢复票据不进入上述通道或通用持久结果；验证不回显输入、硬件key不导出、敏感响应仅绑定浏览器no-store与禁转录/转储控制；不能以debug/人工排障输出秘密；不用真实秘密测试 |
+| A35 / PG+B+合成受限运维工具 | 人工恢复seed/能力交付响应丢失、issue/complete响应不明；完整重登后显式生成新恢复码组时响应丢失；批准单/能力重试与超时 | final仅废旧码，不产生或交付新码；status不含秘密；不从Receipt/Outbox/log/APM回放seed/码/ticket；按D03只读查事实，重签是独立重新授权动作；新组仅在完整重登及所需近期证明后显式生成，丢响应不回放原码，按既有规则再轮换 |
+| A36 / PG+B+W+合成专用命令 | 新因子证明pending/失败/超时、浏览器finalize、其他Admin代complete、原执行者中断、fresh completion_nonce重放/并发/超过2分钟；旧seed/码组/Cookie/再认证/ticket/cap；完整重登及显式生成新码 | 浏览器仅pending证明；原执行者手动complete，以当前权限及新操作绑定单次≤2分钟证明锁后复核；最终命令事务激活新因子、仅废旧码组、升epoch、全撤/审计；不自动生成新恢复码/登录；status绝不返回码；完整重登后才能显式新建码组，旧cap不能领秘密 |
+| A37 / 合成专用命令+PG | 合成秘密输入/输出、失败/取消/异常；检查CLI argv、环境变量、shell trace、终端history/会话录制、stdout/stderr、日志/APM/审计、进程诊断/core dump及通用Receipt/Outbox | 密码、seed、恢复码、PIN、私钥及恢复票据不进入上述通道或通用持久结果；验证不回显输入、采用硬件key时私钥不导出、敏感响应仅绑定浏览器no-store与禁转录/转储控制；不冻结硬件数量/算法，不以debug/人工排障输出秘密；不用真实秘密测试 |
+| A38 / 合成部署配置+PG | D01合法独立部署根及本人绑定；输入同时自带root/自签清单/PG active_version；同authority换成人或OS主体；恢复命令/普通Admin/runtime/DB访问者尝试写root/配置 | 清单验签根和首次项目用户绑定只来自既存受信部署渠道及已授权人工核对，不能从待登记清单/PG推导；即使自签与PG完全匹配也拒绝循环信任；恢复角色无写根/配置权；新key PoP不能证明是项目用户 |
+| A39 / 合成维护命令+PG | D01登记/换key/撤销：合法独立维护批准；仅新key PoP、旧恢复权限、自称本人、错误deployment/authority/action/old_hash/new_hash/nonce/期限；维护与issue/complete并发 | 维护授权独立于恢复签发权，批准绑定完整变更及当前版本，nonce单次；PoP仅证明新key控制，不是授权来源；同序锁登记行，撤销先提交则旧恢复拒绝，恢复先持锁则维护等待；普通恢复命令不能自授维护权 |
+| A40 / 合成部署配置+PG | D01旧签名清单回滚、active_version回退、配置/PG hash或版本错配、分步切换中断、撤销状态竞争、验签根缺失/全失 | active_version只前进；配置与PG短暂错配安全拒绝，不自动降级旧清单或旧登记；撤销/切换串行化并保最小审计；根缺失/全失维持真实恢复关闭，另审重建，不临时认领 |
+| A41 / PG+合成时间与命令 | D02 challenge存活、server verified_at、operation_deadline、flow_expiry四时间；issue验证后4分钟执行、complete验证后4分钟执行；5分钟候选challenge在4:59验证或到期后才验证；锁等待跨2分钟 | 验证全部因子完成时DB时钟必须早于challenge_expiry，实际完成时记verified_at；issue/complete各fresh、不同action/证明/nonce、单次≤2分钟；operation_deadline取verified_at+至多2分钟、当前资格期限及已有pending期限较早值，锁后now<deadline；4:59验证可在fresh窗口内执行，不以已消费challenge到期再次拒绝；到期后验证、4分钟后执行或锁后过期拒绝 |
+| A42 / PG+合成时间与命令 | D02 issue已合法消费且原challenge已过期、候选10分钟pending仍有效、fresh complete；pending超时/目标epoch变更、旧completion_nonce重复/并发；流TTL试图续执行证明 | 有效pending可由原执行者重新验证的≤2分钟单次complete完成，不重复消费issue nonce；pending超时/版本变化拒绝；fresh completion_nonce至多一次，10分钟仅流程TTL候选，不能放宽issue或complete；锁后重新核全部期限 |
+| A43 / PG+合成status命令 | final提交丢响应、cap已消费/目标epoch已升；final明确未提交或正在并发提交；原actor当前资格fresh认证读本人case/op，等待status共享锁跨过2分钟期限；其他Admin/旧cap/browser/公开case/op | 独立只读status不依赖旧目标epoch/cap；锁后及返回前复核当前资格/证明期限，共享锁读取提交事实，无法证明时unknown；not_committed仅为读取线性化点事实、不授权盲重做；只返最小阶段/非秘密audit/op，不消费恢复nonce/cap，不签发/推进/切因子 |
+| A44 / PG+合成status命令 | status读锁与actor专用权限/authority/key撤销两个提交顺序；同actor新登录；未知case/错op、PG不可用/超时、重复查询、status后重签已完成case | 撤权先提交则后续查询拒绝，查询先持共享锁则按该线性化点读后撤权生效，不靠历史批准；稳定actor当前重新认证可读本人历史case；未知或PG故障结果不明，重复查询零流程/因子/epoch写；completed不得重签/再切因子 |
+| A45 / 真实双连接PG（未来门禁，未执行） | N01反例：连接L持业务owner counter，Outbox owner FK请求users KEY SHARE；连接S持users FOR UPDATE若再取同counter形成锁环；新设计在同交错签发/complete/撤销通知 | 安全控制面选择独立identity内部事件/提交通知，禁止在该user排他事务取业务counter/业务Outbox；核查新表FK/trigger/通知函数的隐式锁，证明S不等待业务counter使L可最终完成；回滚/重试有界无Provider重发；不把所有user锁改弱来消除反例 |
+| A46 / PG+B+合成命令 | N02 complete成功/响应丢失后旧恢复码/旧cap查询和领码；status重试；完整密码＋新MFA登录后显式生成码组及响应丢失 | complete仅废旧码，不生成新组；status无码；旧cap与旧epoch不能领新秘密；完整登录及所需近期证明后独立生成一次新组，no-store、只存摘要；响应丢失不回放原码，按既有明确轮换流程处理 |
 
 并发用真实连接、明确 barrier、提交顺序和有界等待复现，不能依靠 sleep 偶然命中。期限用服务端可控时钟/DB 时间与真实浏览器到期两类证据；不得修改机器全局时间或为了通过放宽生产检查。状态/权限/审计/副作用一起断言，只有 HTTP 状态码不足以证明拒绝后没有写入。
+
+### 2.1 D01–D03及N01/N02的静态状态推演
+
+以下是将审查反例转为后续可断言结果的**文档推演，均未执行**，不是Astra已经关闭发现的证据。issue和complete分别保留 `challenge_expiry`、服务端实际 `verified_at`、`operation_deadline` 及 `flow_expiry`；证明须绑定各自action/目标/case/flow/接收端与不同nonce。challenge候选5分钟只限制等待签名/验证阶段；pending候选10分钟只限制流程存活，不替代两次操作各自≤2分钟新鲜度。
+
+| 状态或交错 | 必须推导的结果及后续断言 |
+|---|---|
+| 输入同时携带自己的root、自签清单、本人OS/key映射和匹配PG版本 | 拒绝；验证根/首次项目用户绑定来自既存受信部署边界及独立人工核对，三者自洽不能自证授权；普通DB权限不等于部署信任 |
+| 新key完成PoP，但没有独立维护批准，或恢复角色尝试登记/换根 | 拒绝；PoP只证明控制，维护权与恢复权分离；维护批准绑定deployment/authority/action/old_hash/new_hash/nonce/expiry，不借恢复命令自授 |
+| 合法变更配置先切换、PG未切换或反向次序；旧有效签名清单被重放 | 暂态不匹配安全拒绝，active_version单调前进，不回退旧配置“恢复可用”；变更/撤销与issue/complete同序锁串行化；根丢失保持关闭，另审重建 |
+| t0全部独立验证成功，t+4分钟才issue；或complete独立证明已验证4分钟才执行 | 拒绝，即使5分钟challenge或10分钟pending仍存活；DB锁后重核operation_deadline≤verified_at+2分钟，未消费证明不能延期 |
+| 5分钟候选challenge在4:59完成服务端校验，随后fresh窗口内执行 | 可在实际verified_at起至多2分钟内执行，仍取当前资格/已有pending更早截止；challenge只管验证阶段，已消费后不再以其5分钟到期代替operation_deadline；若5:00或之后才完成验证则拒绝 |
+| 验证时证明新鲜，但等user/authority/case锁后超过operation_deadline | 拒绝且不消费批准/能力、不改因子；不能以请求进入队列或拿第一把锁的时间冻结授权 |
+| issue成功消费nonce；原issue证明/challenge已到期；pending仍有效且新因子已pending-confirmed | 原执行者以当前资格、不同action/新证明/fresh completion_nonce完成complete；不重复消费issue nonce，不要求它未用；flow/目标epoch/接收端及新因子版本均锁内匹配 |
+| 两个complete、旧completion_nonce重放或改变接收端 | 至多一次切换/一次epoch增加；旧证明不能换接收端；改接收端是独立重新核验/批准新nonce及原子废旧flow；不能靠浏览器直接finalize |
+| 初次issue前PG/必需审计失败 | nonce、能力摘要及审计全部回滚，旧因子不变；无秘密响应或普通session |
+| issue已提交但响应丢失，或浏览器未确认/超时、执行者中断 | 只留受限pending或到期状态，旧因子保留；原稳定执行者重新认证后status只读核对；重签是独立重新授权且先锁内重读case，不能按查不到猜失败 |
+| 新TOTP证明已pending-confirmed，浏览器/其他Admin请求finalize或代complete | 拒绝；仅原获权学生恢复Admin或项目用户本人独立运维身份手动complete，且新鲜证明、当前权限、scope及全部锁后条件成立 |
+| 原执行者撤权先提交；或complete先持有全部必要锁 | 前者issue/complete锁后拒绝且target不变；后者先提交一次变更，撤权随后生效，不能声称撤销倒转已提交动作；status仍重验查询时资格 |
+| 最终PG/KEK/必需审计失败，或最终COMMIT回包丢失 | 失败事务不部分切因子/撤权；回包丢失不能推断失败：由原稳定actor/authority以当前有效资格重新认证的独立status查自己的case/op，cap消费和target升epoch不妨碍此历史只读事实查询 |
+| status看到final已提交/未提交，或只看到pending | 分别返回最小持久阶段/提交事实及audit/op非秘密标识；任何分支均不签发能力、消费恢复nonce、finalize或返回恢复码；未完成需后续独立授权动作，不由status自动推进 |
+| status调用者权限/authority已撤销、其他Admin、旧targetepoch/cap/browser或仅case/op | 拒绝，历史批准不兜底；稳定actor当前合法重新认证可查询自己的历史case，不能将目标旧epoch或旧cap当查询权限；浏览器没有该控制面status权限 |
+| status查不到、错op、PG不可用/超时或重复查询 | 查不到或故障保持结果不明，不重做消费/切因子；重复查询对恢复流程/因子/epoch零变更；未知标识不泄露别人case，不返回raw/秘密 |
+| completed后要求重签能力/用旧cap领新恢复码，或complete响应丢失后重试 | 已完成不可再次切换或重签恢复能力；final只废旧恢复码，不生成新组；原actor合法status只给事实；完整密码＋新MFA重登及所需近期证明后显式生成新组，丢响应不回放原码 |
+| 安全事务持users排他锁，LocalReconciler持业务counter、Outbox owner FK等待user | 新通知路径不再等待该业务counter：只写独立identity内部事件/提交通知；S2列明含所有隐式FK/trigger锁的图与双连接门禁，实施阶段真实PG证明无该锁环；当前没有执行或“修复运行死锁”结论 |
+| 私钥/PIN/seed/能力进入错误诊断，或mark_submitting/旧unknown结果不明 | 前者必须由安全prompt/FD ACL、禁trace/录制/转储及脱敏阻止；后者保原持久意图/raw/Receipt/Outbox/风险，不新发Provider、不清unknown，不借恢复状态查询重做外部操作 |
+
+独立部署/root及受信安装渠道本身遭攻破超出应用恢复机制能提供的保证，必须作为威胁模型边界写明；不能因此把普通DB或Web权限升级为部署授权。硬件数量、算法、备用方式及5/10分钟候选TTL仍待目标环境技术审定，不因上表用例冻结。真实身份/凭据登记是对应能力真实启用条件；合成清单、key、OS主体和case足以继续设计及用例准备，实际执行仍需明确授权。
 
 ## 3. Argon2id 合成实验方案
 
@@ -120,7 +157,8 @@ CPU 核心/配额同时约束执行槽；p 增大要记录线程调度与其他�
 | MFA challenge | 5分钟、最多5次失败；账号跨 challenge 10次/30分钟 | 真实完成时长/时钟偏差/并发重发/慢速攻击；不能通过重签 challenge 重置总预算 |
 | TOTP | 30秒步长、±1步 | 设备偏差、边界并发、同一步防重放；易用性与可猜窗口一起报告 |
 | 邮件/重置 | 3次/账号/小时、重发60秒；重置令牌15分钟 | 捕获器测排队/迟到/重发旧代次；账号/IP/全局约束；匿名请求不能改变正常账号权限 |
-| 受限恢复 | 10分钟单流程；每组10个、每码至少128-bit随机熵 | 人工恢复演练完成率、过期/并发/响应丢失/码组轮换；熵下限不能以性能原因下调 |
+| 受限恢复 | pending流程10分钟候选；每组10个、每码至少128-bit随机熵 | 人工恢复完成率、到期/并发/响应丢失；10分钟仅流程TTL，不延长issue/complete各自fresh≤2分钟；final不生成码组，完整重登后显式生成及轮换；熵下限不因性能下调 |
+| 独立运维issue/complete四时间 | challenge存活5分钟候选；verified_at为服务端全部验证实际完成时刻；operation_deadline≤verified_at+2分钟并取当前资格/已有pending较早期限；flow_expiry候选10分钟 | 验签前challenge未到期；issue/complete分别不同action、新证明、新nonce，锁后再次验证deadline；覆盖验证4分钟后执行、4:59验证、到期后验证、锁等跨2分钟、有效pending的fresh complete及旧complete重放；5/10分钟与算法/硬件配置不冻结 |
 | WS ticket / 首消息 | 寿命30秒 / upgrade后5秒（本启动包新增测试候选） | 正常TLS/代理延迟、低速连接、首消息deadline、复用/票据临近到期、多连接内存；同时绑定会话绝对期限，任何候选不得使过期会话复活 |
 | 已决定的会话/再认证规则验证 | Admin15分钟/8小时且不持久Cookie；学生remember_me仅Cookie持久性；R1学生10分钟/Admin5分钟、R2均5分钟、R3注销/关闭或替换MFA等高风险操作均2分钟且具体操作单次 | 真实操作时长、后台轮询/心跳、轮换不续绝对期、过期中操作、逐笔重放；验证实现符合决定，其他管理路由归类待Astra；发现问题报告证据，不自行改回候选或调整已决定值 |
 
@@ -128,14 +166,14 @@ CPU 核心/配额同时约束执行槽；p 增大要记录线程调度与其他�
 
 ## 5. PR-03b 内部阶段与放行门禁
 
-沿用 [原 DAG](../architecture/contracts/pr-dependencies.json) 的03a→03b及TBD-08门禁；下表是PR-03b内部审查顺序，**不新增工作包、不改依赖图、不提前关闭TBD**。本轮产品政策已有明确决定，仅修订启动包并做文档校验；真实恢复身份/凭据登记、技术/契约审查、实验及演练放行均未完成，不重复征询同一政策。
+沿用 [原 DAG](../architecture/contracts/pr-dependencies.json) 的03a→03b及TBD-08门禁；下表是PR-03b内部审查顺序，**不新增工作包、不改依赖图、不提前关闭TBD**。Astra对上一精确SHA仍为REQUEST CHANGES；本轮为D01–D03及N01–N04的最小设计修订，**不能标S1整体通过，也不由作者关闭发现**。已确认政策不重新投票。设计/用例及获准后的隔离合成实验可用合成身份材料；真实登记是对应真实能力启用条件，不前置到纯合成准备。本轮没有启动实验、登记、实现或真实恢复。
 
 | 阶段 | 放行前必须具备 | 仍不得推断 |
 |---|---|---|
-| S1 已决定政策核对、登记与方案审定 | 核对本轮六项决定及条件风险接受范围留痕；登记获授权学生恢复人员、项目用户本人的运维OS身份与独立签名key绑定及非秘密证据引用；Astra审定恢复技术流程、名单有效性细节、实验方案和目标环境；登记未完成的路径保持关闭 | 要求产品重新选择已决定政策、真实身份/凭据已登记、补偿已通过、条件风险接受已生效、实验/演练已运行或TBD已关闭 |
-| S2 正式契约审查 | Astra审查版本/Changelog/ADR/需求追踪；Claude/Codex确认密码三模型、角色语义、恢复受限状态/逐笔授权所需差异；正反fixtures/类型/Mock/兼容窗口明确；本轮不实际修改冻结包 | 准备草案可直接编码、旧客户端自动兼容 |
+| S1 已决定政策核对、设计缺口复审与方案审定 | 核对六项已确认决定及条件风险；D01独立根/首次本人绑定/维护授权与版本切换、D02四时间、D03独立status授权及N01/N02路径补具体方案交新精确SHA复审；明确真实启用登记项、合成身份边界及实验方案/环境；当前尚未整体通过 | 由作者宣布D01–D03关闭或S1全通过、要求产品重选已决定政策、要求先交真实秘密才准设计/合成用例、真实登记或补偿已完成、风险已生效 |
+| S2 正式契约审查及实现门禁定义 | Astra审查版本/Changelog/ADR/需求追踪；Claude/Codex确认密码三模型、角色语义、pending/issue/complete/status和逐笔授权差异；N01已选择独立identity事件/提交通知，禁共享业务counter/Outbox，提供含隐式FK/trigger的锁图和A45双连接实现验收门禁（未执行）；final仅废旧码、重登后独立生成新组及无码status契约明确；fixtures/类型/Mock/兼容一致 | 文档选择等于真实PG证明无死锁、恢复契约已冻结、准备草案可直接编码、旧客户端自动兼容 |
 | S3 分步实施验证 | 明确授权的精确实现范围；先最小会话/CSRF/Principal/撤销，再MFA/恢复/密码邮箱，再WS与跨模块回归；各步真实机制测试、失败回退和合成实验通过；所需增量迁移逐步加入 | 一次建立全模型、启用私人持久缓存/真实采集ASR/运营后台/收费 |
-| S4 精确SHA独立复审 | 固定实现SHA、契约/依赖/环境、全命令结果与未验项；Astra独立复现关键负例及原回归；核验已决定政策的实现与补偿机制通过证据、真实恢复身份的受限登记和恢复演练，条件满足后才记风险接受生效；满足TBD-08全部关闭证据后才可申请关闭 | 本轮启动包等于实现验收、已做真实账号恢复、独审通过自动授权push/merge/部署/发布 |
+| S4 精确SHA独立复审与真实启用条件分列 | 固定实现SHA/契约/依赖/环境、全命令结果及未验项；Astra独立复现A01–A46、状态推演及原回归；合成实现验收与真实能力启用分列，真实启用前再核实际独立根/本人绑定/获权Admin及恢复材料受限登记、演练和启用批准；补偿全部通过后才记10–30邀请Alpha风险生效，满足TBD-08全部关闭证据后才可申请关闭 | 本轮启动包等于机制验收、要求真实凭据前置纯合成设计、合成通过等于已登记或已做真实账号恢复、独审自动授权push/merge/部署/发布 |
 
 认证绕过、Admin MFA 绕过、越权/正文泄露、秘密泄露、恢复后门、保存丢失与失控收费不能由总体成功率豁免。PG/KEK/审计故障须安全失败；代码回退不降 schema、不删账本、不降 MFA，不启用旧 Cookie/epoch 或内部 OwnerContext 作为临时 HTTP fallback。
 
@@ -155,4 +193,4 @@ CPU 核心/配额同时约束执行槽；p 增大要记录线程调度与其他�
 
 ## 7. 本轮实际执行边界
 
-本文件本轮仅按已决定政策修订测试计划并做文档自查；启动包整体的链接、契约引用、需求追踪、保护文件及diff校验以根代理交付的本轮验证记录为准。**未执行**：本矩阵A01–A37、Argon2id基准/资源压测、PG事务/迁移/并发、HTTPS浏览器、WS握手/首消息/撤销、本地邮件捕获实验、恢复演练、原后端/Windows/DPAPI/九Node/前端回归、远端CI；**未登记或使用真实运维身份/签名key、未执行真实账号恢复**。技术/契约审查尚未完成，条件风险接受尚未因本轮文档工作生效。不得用“规划覆盖”替代“实际通过”。
+本文件本轮仅据Astra REQUEST CHANGES报告修订D01–D03及N01–N04的测试计划和静态状态推演并做文档自查；启动包整体的链接、契约引用、需求追踪、保护文件及diff校验以根代理交付的本轮验证记录为准。**未执行**：本矩阵A01–A46及2.1节所有状态交错、Argon2id/资源压测、PG事务/迁移/权限/并发/隐式FK锁环、HTTPS浏览器、WS握手/首消息/撤销、本地邮件捕获、身份登记/维护/恢复工具合成演练、原后端/Windows/DPAPI/九Node/前端回归、远端CI；**未登记或使用真实运维身份/签名key、未执行真实账号恢复**。D01–D03待Astra新精确SHA复审，S1未整体通过，正式契约未冻结，条件风险接受未因文档工作生效。不得用“规划覆盖”或“静态推演”替代“实际通过”。

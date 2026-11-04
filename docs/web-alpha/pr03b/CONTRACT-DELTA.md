@@ -50,13 +50,23 @@
 |---|---|
 | 学生人工恢复 | 核验者/批准者/执行者的权限、身份核验证据与受控引用、目标学生和允许动作、专用命令输入/输出、拒绝与申诉状态；不得把邮箱或邀请记录单独当充分证明，也不得读取课堂正文或索取秘密 |
 | 管理员人工恢复 | 仅本项目用户本人执行的授权规则、独立运维身份与批准单的绑定、目标管理员及恢复用途；其他 Admin 明确拒绝，不能让 generic admin 接口/网页创建、批准或消费该恢复能力 |
-| 本人独立身份的实际绑定 | [会话与恢复设计](SESSION-RECOVERY-DESIGN.md) 提议 OS 受限运维身份＋预登记独立签名公钥及 nonce；公钥登记、身份绑定、签名许可内容、登记变更/撤销、信任来源和验签算法尚待 Astra 审查。不能只比较 role/email/session 或自行填写“本人”文本；Agent 不代用户登记真实凭据或执行恢复 |
+| 本人独立身份的实际绑定 | [会话与恢复设计](SESSION-RECOVERY-DESIGN.md) 提议固定个人OS主体/受限peer验证＋预登记独立现场签名证明；凭据用途、本人绑定及根维护权限必须分离，具体硬件数量、属性、算法和备用策略均未冻结。不能只比较role/email/session或自行填写“本人”文本；新key持有证明只证明该key控制权，不证明就是指定项目用户，也不构成变更授权。Agent不代用户登记真实凭据或执行恢复 |
+| 独立根安装及维护（D01） | 明确依赖外部可信部署控制面的既有资源owner/部署IAM授权及独立授权记录，先固定指定项目用户与清单验签根，再安装受控绑定；根不能由待批准清单、PG登记行、新key或恢复输入推导并自证。本包未建立或验证具体平台/IAM/PKI，不能把这一信任假设写成已部署事实。安装/换根/换key/撤销使用与恢复执行隔离的D0维护身份、凭据用途及变更授权（可同一实际人、不同权限用途），批准绑定deployment、authority、动作、old_hash/new_hash、nonce及期限；恢复命令、普通Web/Admin/runtime及仅有DB访问权者均无根写入权。具体安装责任、根固定位置/ACL、独立身份核对证据和变更协议须另审，不新增强制双人审批 |
+| 信任清单与当前撤销登记 | 签名清单引用独立固定的验签根，PG窄登记行只记录匹配版本/hash、有效期和当前撤销事实，不能反过来授予或替换根。登记维护、签发和manual complete按共同锁序串行化；active_version只前进，不匹配时安全拒绝，禁止旧清单降级回滚。未有可信根或根全失保持能力不可用，另审信任重建，不允许临时认领；部署/root自身被攻破超出应用层可保证边界，普通DB身份不等于受信部署身份 |
 | 签名许可及批准记录 | 提案绑定恢复用途、目标账号、当前 epoch、批准单/核验证据引用、动作/参数指纹、签名者/key ID、环境、签发/到期与唯一 nonce；批准记录不能把“用户本人手动执行”转成任何 Admin 可代执行。签名和能力的具体 wire/工具字段均未冻结 |
-| 单次能力与受限重绑状态 | 有效期、父证明和scope、事务单次消费、防跨目标/用途/旧epoch重放；签发批准nonce、派生能力及fresh completion_nonce分开消费，期限关系显式审查。浏览器仅提交pending新因子证明，无finalize权限；原执行者手动专用命令complete，重新验证权限并绑定新因子/接收端/flow；新增state/受限cookie/token均须显式差异，不伪装authenticated。命令最终事务撤旧授权后要求完整重登 |
-| 响应丢失、中断与故障 | 命令/HTTP 响应丢失不回放秘密，不重复执行已消费授权；重启后查询最小非秘密状态、重新核验或申请新许可的边界须明定。PG/KEK/必须审计失败安全回滚，不以恢复便利性跳 MFA、直接改表或临时放权 |
+| 单次能力与受限重绑状态（D02） | 分开表达challenge_expiry、server verified_at、operation_deadline、pending_expiry；issue与manual complete各自重新验证并签发绑定具体操作/目标/接收端/flow的单次至多2分钟证明，取得锁后重新核查期限与当前权限。签发批准nonce、派生能力及fresh completion_nonce分别消费，不能重复消费原批准。浏览器仅提交pending新因子证明，无finalize权限；原执行者手动专用命令complete，最终事务消费完成证明与能力、撤旧授权；新增状态/受限cookie/token须另审，不伪装authenticated |
+| 结果不明及control-plane status（D03） | 原case的稳定actor/authority以当前有效资格单独fresh重新认证，只查询自己执行的case/op；不依赖已经消费的cap、目标旧epoch或旧浏览器上下文，执行权/authority撤销仍拒绝。纯只读返回必要阶段、是否已提交及非秘密操作/审计标识，不消费恢复批准/能力/完成nonce，不reissue、不finalize、不返回码组；重复查询零恢复写。无记录或PG不可用时保持结果不明，不将case/op定位标识当授权或猜测失败后重做 |
+| 中断、重签与故障 | 状态查询与重新签发严格分离；重签须原同一主体重新认证/批准新计划与nonce，锁内查当前case，已完成不得再签发或切换。命令/HTTP响应丢失不回放秘密，不重复执行已消费授权；PG/KEK/必须审计失败安全回滚，不以恢复便利性跳MFA、直接改表或临时放权。浏览器状态查询如需要另审完整重登后的owner最小查询或独立只读协议，禁止复用旧cap及公开case/op |
+| 最终恢复码与通知（N01/N02） | 选择人工恢复final仅废旧恢复码，不生成或交付新组；完整重新登录后通过受保护流程显式生成新组，不能直接复用现有`confirmMfa → RecoveryCodes`响应作为manual complete交付。final原子写最小审计及独立identity内部事件/提交通知，不共享业务owner counter/Outbox、不新增公开WS事件；秘密不入任何事件。具体内部表/ACL/唤醒与回查协议须另审 |
 | 审计与秘密传输 | 审计只留必要操作状态、主体/目标、证据/批准单引用、许可/nonce消费结果及执行时间；密码、seed、恢复码、Cookie、票据和恢复秘密不得进入 CLI 参数、终端历史、通用日志/APM/Receipt/Outbox。工具秘密输入/输出通道及不回显行为也须审查 |
 
 管理员人工恢复不设公共网页入口，不由普通 Web 管理会话发起运维级恢复授权；唯一管理员失去全部恢复因子仍使用上述本人独立身份边界。若无法验证该独立身份或缺少有效许可，保持不可恢复，不转为公开 bootstrap、`skip_mfa`、隐藏账号或手工 SQL 后门。学生和管理员恢复职责已经确认；具体凭据登记、协议字段和实现仍待技术审查与另行授权。
+
+四类时间不能合并为一个“批准有效期”：验签/全部验证完成必须满足DB时间`now < challenge_expiry`，`verified_at`取服务端实际全校验成功时的DB时间；对issue和manual complete分别设`operation_deadline = min(verified_at + 至多2分钟, 当前资格期限, pending_expiry（已有pending时）)`，不再取已消费challenge的expiry。`pending_expiry`只限制待重绑流程存续，不延长操作新鲜度。5分钟仅为challenge存活期候选、10分钟仅为pending候选，不是认证后可执行5/10分钟的许可；临近challenge到期但已及时验证可派生fresh至多2分钟操作证明，过challenge_expiry才验证、认证后4分钟执行、锁等待跨过operation_deadline均拒绝。issue与complete各自使用新proof nonce；有效pending可在原issue批准已消费且其挑战TTL已过后，由新的合格complete证明完成，无需再消费旧nonce。
+
+独立恢复使用新的独立运维证明，不要求先取得已经丢失的Web MFA；两分钟限制的是新证明的新鲜度。学生恢复执行管理员仍按其当前Admin/MFA/专用权限重新验证。control-plane status使用稳定执行身份的当前资格，而非目标账户的失效授权；只读查询授权与issue/complete的单次执行证明分开定义，不借查询扩大恢复范围。
+
+真实身份/凭据登记是相应能力**真实启用前**的条件，不阻碍仅用合成身份、key和清单准备设计、实验方案及测试用例；实验执行仍须在明确授权范围内。未登记、未审查、未验证不能被写成能力已启用，Agent不创建或使用用户真实恢复凭据。Astra对`e02614259b5e6483127e14f06e78cdb13a89f0c5`的D01–D03为REQUEST CHANGES；本次只提交修订提案，不代独立审查关闭问题。
 
 密码邮件重置保持：单次 token、重置后撤全部会话及派生授权、**不清除 MFA、不自动登录**。新因子未确认前保留旧因子；恢复码响应丢失不回放原明文。
 
@@ -84,8 +94,8 @@
 | [ADR-05 / TBD-08](../architecture/07-ADR-REGISTER.md) 与 [05-SECURITY-OFFLINE](../architecture/05-SECURITY-OFFLINE.md) | 用追加变更记录区分历史 12 字符初值、学生 6 字符、10–30人邀请制Alpha且补偿措施验证通过后才适用的条件风险接受、已确认管理员值/恢复职责与待审技术/实验结论；不用文档同步关闭 TBD |
 | [requirements-traceability.json](../architecture/contracts/requirements-traceability.json) 与 [REQUIREMENTS_MATRIX.md](../REQUIREMENTS_MATRIX.md) | AUTH-01 的“12 字符初值”追踪到新产品决定及批准版本；AUTH-03 对应会话/设备，AUTH-04 对应 MFA/恢复，AUTH-05/06 对应权限/撤销；AUTH-07/08 保留后续后台/集成归属 |
 | [openapi.json](../architecture/contracts/openapi.json) | 三处限制、角色条件/本地名单暂停、reauth 因子和R1/R2/R3约束、remember_me/管理员非持久Cookie、必要受限恢复/逐笔字段及错误/状态；独立运维工具协议不伪装成generic admin网页API；保持 strict schema 与 secret replay policy |
-| [domain-model.json](../architecture/contracts/domain-model.json) | 仅对本阶段实际需要的 session/challenge/MFA/recovery/邮件/名单状态增量差异，以及恢复批准引用、独立执行身份/许可/nonce消费的最小必要持久映射；与实际迁移字段、权限一致，不一次创建全部逻辑表 |
-| [events.schema.json](../architecture/contracts/events.schema.json) | 只有实际采用的新 WS 契约才变更；保留认证前禁止资源/音频、撤销后拒绝与 owner 游标；schema_version 与契约包版本分别记录 |
+| [domain-model.json](../architecture/contracts/domain-model.json) | 仅对本阶段实际需要的session/challenge/MFA/recovery/邮件/名单状态增量差异，以及独立根/清单版本映射、当前authority登记、四类时间、批准/完成nonce、control-plane status最小历史投影和独立identity内部事件；与实际迁移/ACL一致，不一次创建全部逻辑表 |
+| [events.schema.json](../architecture/contracts/events.schema.json) | 本次选择内部identity事件/提交通知，不新增公开WS契约，不与业务owner counter/Outbox混用；现有认证前禁止资源/音频、撤销后拒绝与owner游标保持。将来若确需公开WS差异另审，schema_version与契约包版本分别记录 |
 | [state-machines.json](../architecture/contracts/state-machines.json) | 现有五流状态机继续保留；认证/恢复若需新机须明确新增范围，不改 unknown/发送风险不变量 |
 | [examples.json](../architecture/contracts/examples.json) | 同版本正反 schema fixtures 与认证语义用例；原 cases 原样保留，新增用例不得替代真实 PG/browser/WS 证据 |
 | [pr-dependencies.json](../architecture/contracts/pr-dependencies.json) | 本包只读取 PR03b→03a 依赖和 TBD08 gate；本轮及拟议内部阶段不更改 DAG，不新增工作包 |
@@ -103,6 +113,8 @@
 | Mock 与契约测试 | [fixtures.ts](../../../web/frontend/src/mock/fixtures.ts)、[start.ts](../../../web/frontend/src/mock/start.ts)、[runtime.ts](../../../web/frontend/src/mock/runtime.ts)、[contract.test.ts](../../../web/frontend/tests/contract.test.ts) 同步新增认证状态、名单安全暂停、已确认期限/remember_me、错误及空上下文；不把管理员人工恢复做成普通后台按钮，不伪造后端安全通过；原跨账号清理/unknown 风险显示保留 |
 
 拟新增 fixture 组：三个密码字段的 5/6/11/12/1024/1025、非字符串/缺字段/未知 role、Unicode；管理员11拒绝/12接受；名单命中/无有效名单三类新设入口暂停而正常login可用；未启用 MFA 学生密码再认证成功、已启用学生/管理员缺第二因素拒绝；R1/R2/R3边界及R3目标/参数改变或二次消费拒绝；失效/错 scope/跨 session/跨 epoch 的再认证；学生/Admin人工恢复命令权限及批准单/签名/nonce/到期/中断；其他Admin冒充本人独立运维身份必拒；恢复受限上下文对课堂/导出/运营全拒；恢复码单次及秘密丢失 `SECRET_ALREADY_ISSUED`；学生remember_me仅控制持久化、管理员非持久Cookie且15分钟/8小时有效期、正常活动不延长绝对期限；WS票据错用途/跨课堂/重放/认证前帧拒绝。结构cases、工具协议用例与真实有状态机制验证分别标记，不能让JSON fixture宣称并发、Cookie、身份核验或事务安全。
+
+针对D01–D03/N01–N04再补：自签清单/自带验签根、同authority换人/OS、新key PoP冒充变更批准、旧清单/版本回退、DB访问者/恢复角色改根、根维护与issue/complete竞争；issue与complete各自在认证后4分钟或锁等待越2分钟拒绝、challenge临近到期及有效pending的新complete；final已提交/未提交/结果不明、cap已消费/目标epoch已升、原actor撤权、其他Admin、未知case、旧browser和PG不可用的status，重复只读查询无恢复状态变更；独立identity通知与既有LocalReconciler业务counter并发无新锁环/无秘密或新公开WS；final废旧码且零新码签发，完整重登后显式生成及新组响应丢失；未真实登记仍可准备合成设计与用例、不能真实启用。具体字段/schema fixtures与有状态机制测试分开留证，数量不构成实现验收。
 
 ## 5. 兼容、升级和安全回退
 
@@ -125,4 +137,4 @@
 
 ## 7. 本文件的核查口径
 
-初始包已只读核对全部七份契约JSON的可解析性及上述相关字段/状态、当前identity/password/Principal/transaction代码、前端生成器与Mock/测试入口；本次文档修订落实用户最新确认政策并列明独立恢复契约缺口，未更新或生成任何正式契约/类型。参数实验、真实PG、HTTPS浏览器、WS/邮件、工具恢复演练及完整回归均不由本文件证明；初始包成绩不冒充本次重跑，以当前启动包实际验证记录为准。
+初始包已只读核对全部七份契约JSON的可解析性及上述相关字段/状态、当前identity/password/Principal/transaction代码、前端生成器与Mock/测试入口；本次读取Astra精确e026142审查并针对D01–D03及N01–N04形成契约差异修订，产品已确认政策保持不变，未更新或生成任何正式契约/类型。参数实验、真实PG、HTTPS浏览器、WS/邮件、工具恢复演练及完整回归均不由本文件证明；历史成绩不冒充本次重跑，以当前启动包实际验证记录为准。

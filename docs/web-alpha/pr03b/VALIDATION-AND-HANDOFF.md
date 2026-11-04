@@ -1,61 +1,68 @@
-# PR-03b 产品决定修订：验证与独立审查交接
+# PR-03b Astra D01–D03整改与精确SHA设计复审交接
 
-日期：2026-11-05（Asia/Taipei）。本轮只修订六份准备文档。**产品指定规则与人工恢复职责已确认；技术/契约待Astra审查，真实执行身份及凭据待登记，实验/演练未执行。** 风险接受仅在补偿措施验证通过后、仅对10–30人邀请制Alpha生效；本轮未满足该生效条件。TBD-08继续 **OPEN — PARTIALLY DECIDED**。
+日期：2026-11-05（Asia/Taipei）。本轮docs-only修订原六份准备文档，依据Astra对e02614259b5e6483127e14f06e78cdb13a89f0c5的REQUEST CHANGES。**本稿提交设计回应，D01–D03是否关闭由Astra复审；S1未整体通过，正式恢复契约未批准。** 产品政策不变；风险接受仍须补偿措施验证通过后才对10–30人邀请制Alpha生效。TBD-08保持 **OPEN — PARTIALLY DECIDED**。
 
-## 1. 基线与六文件变更清单
+## 1. 精确对象与操作前核验
 
-复用分支feature/web-pr03b-sessions、工作树J:\class-assistant\worktrees\web-pr03b-sessions，修订父基线为前轮启动包提交 **9e0a03ab013b9e8f565a0c10d171e2330130be98**。正式main、origin/main及只读远端main仍为b5f7ef97833ad0166c743a4c3f01fa7aaff99df4。开始时本树/main均clean；未另建重复分支/工作树，未覆盖原启动包证据。
+复用feature/web-pr03b-sessions及J:\class-assistant\worktrees\web-pr03b-sessions，开始HEAD精确为被审e02614259b5e6483127e14f06e78cdb13a89f0c5，工作树/main均clean。正式main、origin/main及只读远端main仍为b5f7ef97833ad0166c743a4c3f01fa7aaff99df4；origin fetch/push均为classroom-os唯一正式远端，历史旧仓push仍disabled。本轮未重建分支/工作树、未改写历史，保留9e0a03a及e026142两轮提交与全部旧失败证据。
 
-| 本轮唯一允许修改的文件 | 相对前轮启动包的变化 |
+指定报告J:\class-assistant\reviews\pr03b-design-20261105\outputs\reviewer\REVIEW.md已完整读取；原报告SHA-256为671c490e72e0bf7ca698bdfe0719b64a5b6314de03a07d68e66f50527c0db77f。原报告不改动；副本和六份修前Git blob保存在outputs/pr03b/astra-design-remediation-20261105-01/的ASTRA-REVIEW-INPUT.md、before/及INPUT-MANIFEST.json。
+
+## 2. 六文件修改清单与逐项回应
+
+| 唯一允许修改的文件 | 本轮实质变化 |
 |---|---|
-| [README.md](README.md) | 更新四类状态，复用树及本轮证据定位、范围/停止点 |
-| [POLICY-DECISIONS.md](POLICY-DECISIONS.md) | 将六项政策及专用命令补充记为已确认；保留条件风险限定，移除旧投票/不提供人工恢复备选，不擅升其他路由分级 |
-| [CONTRACT-DELTA.md](CONTRACT-DELTA.md) | 区分已确认政策与待审字段/兼容；名单暂停、具体操作单次、人工恢复命令及本人身份协议单列独立审查 |
-| [SESSION-RECOVERY-DESIGN.md](SESSION-RECOVERY-DESIGN.md) | 补学生核验/命令权限、本人独立运维主体与签名key登记、批准/消费、受限重绑/全撤销/故障原子性、安全秘密通道及锁序 |
-| [TEST-EXPERIMENT-GATES.md](TEST-EXPERIMENT-GATES.md) | 同步已确认值；保留A01–A29并增加A30–A37：条件生效、冒名/代执行/重放/匿名申请/中断/响应丢失/命令秘密等负例 |
-| [VALIDATION-AND-HANDOFF.md](VALIDATION-AND-HANDOFF.md) | 以本轮实际验证/变更清单和精确SHA审查任务替换前轮交接口径 |
+| [README.md](README.md) | 更新被审状态/父SHA/证据目录；D01–D03及N01/N02回应索引，真实启用与合成准备区分 |
+| [POLICY-DECISIONS.md](POLICY-DECISIONS.md) | 保留产品规则，明确独立根/维护执行分离、四时间及两分钟证明、status独立授权、N01/N02与N03/N04门禁 |
+| [CONTRACT-DELTA.md](CONTRACT-DELTA.md) | 安装/登记变更协议、issue/complete四时间、独立status权限/响应、通知和恢复码方案列入S2；不改正式contracts |
+| [SESSION-RECOVERY-DESIGN.md](SESSION-RECOVERY-DESIGN.md) | 重写信任起点、状态/期限/权限、只读status；锁序和FK隐式锁、N01独立内部事件、N02新码后置及真实登记条件 |
+| [TEST-EXPERIMENT-GATES.md](TEST-EXPERIMENT-GATES.md) | 保留并同步A01–A37，新增A38–A46及19条静态状态推演，覆盖全部报告反例；未运行 |
+| [VALIDATION-AND-HANDOFF.md](VALIDATION-AND-HANDOFF.md) | 本轮父SHA/修前修后证据、逐项回应、实际检查范围和Astra复审任务 |
 
-最终新commit的完整SHA、唯一父、六文件mode/blob/hash、diff统计、clean状态和命令结果在提交外的outputs/pr03b/revision-20261105-01/COMMIT-RECEIPT.json及DELIVERY.md，避免自引用SHA。前轮outputs/pr03b/证据只读保留；本轮helper在work/pr03b/revision-20261105-01/，不提交正式代码或测试。
+| 报告项 | 具体设计回应 | 后续验证/决定 |
+|---|---|---|
+| D01/P1 | D0外部既存资源owner/部署IAM授权及独立安装批准先固定清单验签根、K_change、指定项目用户映射；维护与恢复执行权分离；新key PoP非授权；变更签名含deployment/authority/action/old_hash/new_hash/版本/nonce/期限；外部高水位+清单/PG只前进、错配拒绝，登记撤销与恢复共享串行边界 | 当前没有已建立的真实部署渠道/PKI，列明假设和首次安装/真实启用条件；根未登记/全失不可执行，重建另审；部署root完全控制不由应用层抵御；待Astra新SHA复审 |
+| D02/P2 | challenge_expiry、服务端实际verified_at、operation_deadline、pending_flow_expiry分开；issue/manual complete各重新验证、具体操作绑定、单次且≤2分钟，锁后再检查；独立恢复用新运维证明，无需丢失的Web MFA | 5分钟challenge/10分钟pending只是候选；覆盖四分钟旧验证/近挑战到期/锁等跨两分钟/有效pending的fresh complete/旧complete重放；无产品例外、未实验 |
+| D03/P2 | control-plane status仅原稳定actor/authority按当前资格fresh重新认证只读本人case/op；不依赖旧cap/target epoch/browser，撤权拒；最小提交事实/阶段/op/audit标识；未知或PG故障结果不明 | 不消费恢复nonce/cap、不重签/切因子/finalize/返回码；not_committed须有一致读证据且不授权盲目重做；浏览器另审完整重登owner绑定协议；未实验 |
+| N01 | 明确选独立identity内部事件/提交通知，不共享业务counter/Outbox、不新增公开WS事件；事件领取提交释放后再另事务查user，不反向持锁 | S2审完整显式/FK/唯一锁图及A45双连接反例；现有identity_events仅激活须最小增量，不改旧迁移，不笼统降user锁；未实测 |
+| N02 | final仅废弃旧恢复码组，不生成新组；完整重登后另行显式生成/轮换新组 | S2审新组操作及一次秘密响应丢失；旧cap/CLI/status不领码，不复用confirmMfa同步响应；未实测 |
+| N03/N04 | 硬件数量/算法/候选TTL不冻结；真实根/人/凭据登记仅对应能力真实启用条件 | 可用合成身份材料准备设计/实验用例，不要求现在交真实key/秘密或采购；本轮也不执行机制实验 |
 
-## 2. 本轮检查、命令与证据边界
+开发者不将上表“回应”写成Astra已关闭发现，不以静态推演代替PG/浏览器/命令演练，不标记S1整体通过或批准正式恢复契约。
 
-本轮重新执行适用检查，不把前轮88链接等计数或机制测试计划写成新结果。精确计数和退出码在本轮CHECKS、CONTRACT-CHECKS及FINAL-CHECK-COMMANDS，最终结果摘要见交付回执。
+## 3. 本轮适用检查及证据
 
-| 命令/检查 | 本轮核验内容 |
+中间helper在work/pr03b/astra-design-remediation-20261105-01/；证据在同名outputs目录，旧轮次只读保留。所有最终检查保留argv/cwd/退出码/stdout/stderr，修前/修后hash、diff和提交收据一并保存。最终精确计数和结果见CHECKS、CONTRACT-CHECKS、FINAL-CHECK-COMMANDS及DELIVERY，不把报告的91链接/32断言或前轮成绩当本轮结果。
+
+| 命令或操作 | 本轮作用 |
 |---|---|
-| git rev-parse、branch --show-current、status --porcelain=v1、remote -v、worktree list --porcelain、ls-remote origin refs/heads/main | 核对复用工作树、旧启动包完整SHA、dirty及正式origin；开始main与本树clean、HEAD正确；历史remote仍disabled push |
-| python -B work/pr03b/revision-20261105-01/check_docs.py snapshot | 本轮PREFLIGHT：父基线、main/origin/远端、六文件外378跟踪文件物理SHA、其他7树HEAD/branch/status及迁移收据hash；退出0 |
-| 已安装Python3.12.14 -B work/pr03b/revision-20261105-01/check_contracts.py | 复用原J盘隔离依赖，只读正式OpenAPI3.1、事件JSON Schema、唯一operationId、既有正反fixtures及五流guard；未改或生成正式契约/类型 |
-| python -B work/pr03b/revision-20261105-01/check_docs.py check | 六份Markdown相对文件链接/围栏/空白/UTF-8、7契约JSON/本地引用、118需求/设计路径、28包DAG/03b门禁、原PRD hash、三密码模型12–1024不变；六文件外378文件和其他7树保护；产品状态/37矩阵行及精确六文件白名单 |
-| git diff --check、git diff --cached --check、git diff --cached --name-status；本地commit后父链/文件集/status | 确认只修改六份既有Markdown，未改正式contracts/代码/测试/SQL/迁移/权限配置；新提交唯一父为前轮启动包，提交后clean |
-| 内部只读交叉审校 | 文件作者之外检查政策是否误升/重开、本人运维信任来源、批准消费/原子性/秘密通道与状态一致性；结果保存在本轮INTERNAL-CROSSCHECK；不冒称Astra正式独审 |
+| git rev-parse、branch/status/remote/worktree list及ls-remote origin refs/heads/main | 核对被审HEAD/dirty/已有进度/正式main与origin，未写旧仓或其他树 |
+| python -B work/pr03b/astra-design-remediation-20261105-01/save_before.py | 从精确e026142 Git blob保存六份修前文档及报告原始副本/hash，退出0 |
+| python -B work/pr03b/astra-design-remediation-20261105-01/check_docs.py snapshot | 新PREFLIGHT记录六文件外378个跟踪文件原始SHA、main/origin/远端、其他7树HEAD/branch/status及迁移收据，退出0 |
+| python -B work/pr03b/astra-design-remediation-20261105-01/check_docs.py check | 六份Markdown文件链接/围栏/空白/UTF-8、7份JSON/本地引用、118需求/设计路径、28包DAG/TBD门禁、三密码模型12–1024/原PRD、保护文件/其他树、精确六M范围、A01–A46连续及D01–D03/N01/N02状态断言；修前证据/report hash不变 |
+| 已安装Python3.12.14 -B work/pr03b/astra-design-remediation-20261105-01/check_contracts.py | 复用J盘既有隔离依赖，只读OpenAPI3.1、事件JSON Schema、唯一operationId、34既有正反fixtures及五流16个guard；这是结构检查，不执行认证 |
+| git diff --check、git diff --cached --check、精确git add及提交前后父链/文件集/status | 只修改六份既有Markdown；新commit唯一父为e026142，未改代码/正式契约/测试/迁移；最后clean |
+| 内部只读交叉审查 | 分别核对独立根/D0假设/权限分离、时间/状态查询、N01/N02和跨文件一致性；不是Astra正式独立复审 |
 
-既有架构图及DAG字节保持不变，本包无新增Mermaid，检查围栏和机器DAG而不重跑图渲染。文件链接检查不包括外部URL可用性及Markdown锚点。静态检查只证明结构、范围及保护一致性，不证明真实命令/密码/MFA/恢复安全。
+本稿无新增Mermaid，既有图和DAG文件字节不变；检查围栏/机器DAG而不重跑图渲染。相对链接只检查文件存在，不检查Markdown锚点或外部URL可用性。原审查报告及其审查副本不改动。辅助准备失败若发生如实存PREPARATION-ISSUES及原日志，不改正式断言刷绿。
 
-本轮同组静态检查在修正文档后已全退出0：91条相对文件链接、7契约JSON及599本地引用、134个唯一operationId、34个既有正反fixtures、5流/16条guard、118项需求和28包DAG通过；A01–A37编号连续及四类产品状态断言通过。六文件外378跟踪文件SHA-256、其他7树HEAD/branch/status、正式main/origin/远端main、三密码字段12–1024和原PRD SHA保持不变。最终暂存及提交后检查的精确记录随回执保存，不以这些结构数字代表37项机制已经运行。
+本轮同组静态检查已实际全退出0：91条相对文件链接、7份JSON/599个本地引用、134个唯一operationId、34个既有正反fixtures、5流/16条guard、118需求和28包DAG通过结构检查；A01–A46编号连续及D01–D03/N01/N02状态标记有效。六文件外378个跟踪文件、其他7树HEAD/branch/status、main/origin/远端main、三密码模型12–1024及原PRD SHA未变；修前六文档和Astra输入报告hash保全。最终暂存/提交后同组记录另随回执保存；46条矩阵及19条状态推演仍未执行。
 
-## 3. 提交前后的记录原则
+## 4. 本轮未执行和保留边界
 
-本轮验证命令保留argv/cwd/退出码/stdout/stderr；未通过/跳过与辅助准备问题如实另存，不以外层shell最终退出0掩盖子命令失败。前轮首次提交缺作者身份/路径helper等原记录保留，不计作本轮结果。本轮一次补丁将同一路径删除再新增，被apply_patch以重复目标拒绝、未产生改动；改用单次文件更新，未改正式断言，摘要存本轮PREPARATION-ISSUES。提交沿用项目历史命令级作者身份，不改共享或全局Git配置。
+未改正式contracts、认证代码、测试/生成类型/Mock或迁移；未实现恢复命令、建立真实部署PKI、登记实际身份/凭据或运行恢复。未跑A01–A46及19条交错、真实PG锁/ACL/RLS/FK/nonce竞争、HTTPS/WS/邮件、Argon2id或机制实验/恢复演练。方案选择、状态推演和结构检查不构成机制通过。
 
-产品来源是当前对话六条及补充，不把专项旧候选当新批准；真实OS主体、公钥指纹、硬件凭据/证书和学生核验材料未收集/登记，不在聊天要求秘密。Argon2id、challenge/票据/运维批准等候选参数和恢复命令流程尚未实测。实质问题先修文档再检查，不改正式业务断言或冻结文件以求通过。
+未机械重跑历史后端464、Windows525主+171子/DPAPI、九Node或相关前端回归，保留它们在相应实施阶段的回归义务和原失败证据；未运行远端CI、连接正式数据库、读取课堂/秘密、真实Provider/收费/麦克风、Push、合并、部署或发布。PR03a bootstrap-only/P3-01、PR02b两项P3及原unknown风险/账本/COMMIT发送授权边界不变；注销/重置/恢复不能重发Provider或清风险。
 
-## 4. 明确未执行
+## 5. 交Astra新精确SHA独立设计复审
 
-未实现认证或专用恢复工具，未改正式contracts/生成类型/Mock/代码/测试/数据库迁移。未运行A01–A37、Argon2id及资源压测、PG事务/ACL/RLS/nonce消费/撤销竞争、真实HTTPS Cookie/CSRF/fixation、WS握手/首消息/撤销、本地邮件捕获、身份核验/恢复命令合成演练或故障注入。仅做文档及既有契约结构检查。
+新完整SHA、唯一父e02614259b5e6483127e14f06e78cdb13a89f0c5、六文件清单与mode/blob/hash、diff统计、实际检查和未验项写入提交外的本轮COMMIT-RECEIPT.json / DELIVERY.md，避免自引用SHA。请以新精确SHA对被审父作六文件差异审查，不把本稿当实现复审。
 
-未重跑原后端464、原探针、Windows525主+171子/合成DPAPI、九Node及前端typecheck/lint/contract/unit/ui/build；它们仍是实施阶段回归义务，历史成绩不计作本轮通过。未运行远端CI、连接正式数据库、读取真实课堂或配置秘密、登记/使用真实运维凭据、执行真实学生或管理员恢复、创建真实管理员、启用麦克风/ASR/收费Provider、Push、合并、部署或发布。Agent不代用户执行真实管理员恢复。
+1. 对D01逐项核实首次安装的既存外部部署授权、实际指定用户映射、验签根来源、根/登记维护和恢复执行隔离、变更签名字段/新key PoP边界、版本高水位/错配拒绝/撤销串行化及根丢失；判断假设/真实启用条件是否充分，不要求当前交真实key。
+2. 对D02核实四类时间的计算/验证时点、issue和manual complete各fresh单次≤2分钟、锁后重核、独立证明无需已失Web MFA；逐条推演四分钟延迟、近challenge到期、锁跨120秒、旧批准已用但pending有效的新complete、旧complete重放。
+3. 对D03核实原稳定actor/authority当前资格的独立只读status：本人case/op、cap消费与target epoch变化不影响、执行者撤权拒、未知/PG故障结果不明、重复零恢复写；不得顺带领码/reissue/finalize，浏览器旧cap无权。
+4. 对N01/N02判断独立identity通知方案和完整锁图/双连接S2门禁、final废旧码/重登后显式新组及秘密丢响应协议；不笼统降锁、不新增公开WS事件、不把本轮列方案等同实测。
+5. 核对产品政策、条件风险、隐私/无后门/无人工SQL/无代执行/秘密通道、任务不变量及P3具体关口不变；六文档状态机/权限/期限/契约差异/矩阵/阶段门禁一致。确认N03/N04适度设计，真实登记不挡纯合成准备。
+6. 给出D01–D03逐项独立结论、剩余设计项和下一阶段边界；S1未整体通过、恢复契约未批准、TBD-08继续OPEN，不能把该稿批准自动变成实施、真实启用、Push或合并授权。
 
-## 5. 给Astra的精确SHA独立审查任务
-
-从本轮交付回执取得新完整SHA，以 **9e0a03ab013b9e8f565a0c10d171e2330130be98** 为唯一父核对仅六文件修改；正式main仍为b5f7ef97833ad0166c743a4c3f01fa7aaff99df4。只读审查启动包，给出准备设计结论、需修事项和保留门禁，不将其当认证实现复审。
-
-1. 核对已确认产品：学生6字符/MFA可选、条件风险仅补偿验证通过后在10–30邀请Alpha生效；本地名单无效暂停注册/改密/重置而正常login继续；管理员12字符无组合、建议密码管理器16字符以上、15分钟/8小时/非持久Cookie；学生remember仅持久性；R1/R2/R3指定窗口及高风险操作绑定单次、当前退出不拦截。未明确的路由分级仍需审查，不重新投票已批方向。
-2. 学生人工恢复是否有可执行的核验证据组合、预登记依据、获权Admin权限/MFA/再认证/批准和审计；专用受控命令不得靠角色自称、单一邮箱/邀请或课堂正文核验身份，不可用同一权限恢复Admin目标。
-3. 管理员人工恢复是否严格仅项目用户本人：独立个人OS/证书主体＋预登记独立签名key的实际绑定、登记信任根/更换/撤销权限、现场批准与nonce/部署/目标/操作/版本/期限绑定；其他Admin、转交批准、普通Web会话或邮箱不得代执行。实际资产待登记，Agent只设计及后续获准的合成测试，不真实恢复。
-4. 命令能否在内部受审事务完成身份/权限/核验/批准审计、受限重绑、新MFA确认后全撤销和故障原子性；无人工SQL/改表、公开bootstrap或skip_mfa。秘密不进argv、环境/终端历史、stdout/stderr、日志/APM/通用Receipt/Outbox；交付通道/响应丢失/重签/中断与最小状态查询是否严谨。
-5. 三密码字段及两个入口、角色/Unicode、名单暂停和token消费、版本/Changelog/ADR/需求/fixtures/类型/Mock/兼容，以及人工恢复/逐笔授权独立契约是否完整；本轮正式三字段及实现仍12–1024，不因产品确认静默改变。
-6. 普通HTTP不能构造Principal或借OwnerContext；唯一security_epoch、session/device实时校验、锁序、批准/能力/TOTP消费、撤销通知丢失仍有效；邮箱重置不清MFA/不自动登录，新因子确认前不删旧因子，恢复不读课堂/导出/运营或给Admin正文后门。
-7. 原PR03a fallback/LocalReconciler/raw/Receipt/Outbox/fencing/unknown与Provider发送COMMIT边界保留；PR02b P3按原关口，不一概阻塞或擅自关闭。S1技术/登记/实验方案→S2正式契约→S3分步实施→S4实现精确SHA独审，不改DAG、不提前关闭TBD08。
-
-以上为可交Astra的审查任务，不声称已经取得结论。正式实施须待技术/契约审查及明确实施范围；真实身份登记在受限流程完成，不向聊天交秘密。修订包交付即停止；如需撤销文档，应另审反向diff，保留提交及历史证据。
+此为复审交接入口，不声称Astra已复审新提交。交付后停止，不继续实施或实验；若需撤销文档先另审反向diff，保留前轮提交和全部证据。
