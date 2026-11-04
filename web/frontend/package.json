@@ -1,0 +1,61 @@
+{
+  "name": "@classroom-os/web-frontend",
+  "private": true,
+  "version": "0.1.0-alpha.0",
+  "type": "module",
+  "description": "Classroom OS Web Alpha 0.1.0 frontend shell and Aurora design system (PR-09a).",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "dev:mock": "vite --mode mock",
+    "catalog": "vite --mode mock --open /__dev/catalog",
+    "storybook": "vite --mode mock --open /__dev/catalog",
+    "gen:contracts": "node scripts/gen-contracts.mjs",
+    "typecheck": "node scripts/gen-contracts.mjs --check && tsc -b --pretty false",
+    "lint": "eslint . --max-warnings 0",
+    "test:contract": "vitest run --config tests/vitest.config.ts tests/contract.test.ts",
+    "test:unit": "vitest run --config tests/vitest.config.ts tests/unit.test.ts tests/api.test.ts",
+    "test:ui": "playwright test --config tests/playwright.config.ts",
+    "build": "tsc -b --pretty false && vite build --mode production && node scripts/verify-build.mjs",
+    "preview": "vite preview --mode production"
+  },
+  "packageManager": "pnpm@10.34.9+sha512.f49b5a8ea0fdedb44bb3c0c1d6575092a53c2950d95b7ad15df11f17974877a2de3a01c07e934e9b28ce716e51c09a94962c7306d09be2e1e4b18a8c8762fd32",
+  "dependencies": {
+    "@radix-ui/react-dialog": "^1.3.1",
+    "@radix-ui/react-tooltip": "^1.4.1",
+    "@radix-ui/react-visually-hidden": "^1.2.13",
+    "@tabler/icons-react": "^3.50.0",
+    "@tanstack/react-query": "^5.105.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "react-hook-form": "^7.91.0",
+    "react-router": "^7.18.5",
+    "zustand": "^5.0.16"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "@playwright/test": "^1.64.1",
+    "@testing-library/dom": "^10.4.2",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.3",
+    "@testing-library/user-event": "^14.6.8",
+    "@types/node": "^24.19.2",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^5.2.0",
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1",
+    "eslint": "^9.39.5",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "globals": "^16.5.0",
+    "jsdom": "^26.1.0",
+    "json-schema-to-typescript": "^15.0.4",
+    "msw": "^2.15.0",
+    "openapi-typescript": "^7.13.0",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.72.1",
+    "vite": "^7.3.7",
+    "vitest": "^4.1.12"
+  }
+}
