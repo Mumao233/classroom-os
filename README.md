@@ -1,3 +1,21 @@
+# Classroom OS Web Alpha
+
+Classroom OS Web Alpha 0.1.0 的独立开发仓库：<https://github.com/Mumao233/classroom-os>，正式主线为 `main`。后续开发、测试和版本管理只在此仓库继续；不再将 Web 分支合入旧 `Mumao233/classroom-assistant/main`，也不建立长期双向同步。
+
+当前已审核整合基线包含 PR-00 工程基线、PR-01 架构与冻结契约、PR-02a 数据库、PR-02b 持久任务、PR-03a 邀请与归属，以及 PR-09a Aurora 前端壳。前端使用合成 Mock；这不是完整 Web 服务、正式部署或可发布版本。
+
+- [Web 文档入口](docs/web-alpha/README.md) · [架构与契约](docs/web-alpha/architecture/README.md)
+- [后端运行与合成测试](web/backend/README.md) · [前端运行与门禁](web/frontend/README.md) · [Windows 回归与 CI](docs/web-alpha/TESTING.md)
+- [独立仓库迁移记录与证据索引](docs/web-alpha/repository-migration/README.md)
+
+迁移保留完整批准历史和已有 Windows 产品。数据库 `0006` 仍为 **bootstrap-only**，部署支持 **P3-01 OPEN**；其他 P3、11 项 TBD 和真实服务验收边界见迁移记录。历史本地验证不能替代本次远端 CI，PR-00 CI 也不覆盖全部 Web 业务。
+
+---
+
+## 历史产品说明：Windows 本地 v1.3.0
+
+以下原 Windows README 原文保留，安装脚本和本地模型说明仅适用于该历史产品线，不是 Web Alpha 部署说明。
+
 # 课间 · Classroom Assistant v1.3.0
 
 面向 Windows 线下课堂的本地学习助手：用麦克风分段转写以英语为主、夹杂中文的讲课内容，再按意群解释，并支持随时打字提问。语音识别在本机运行，文字分析可选择已登录的本地 Codex CLI，或自己配置的 OpenAI 兼容 API。
