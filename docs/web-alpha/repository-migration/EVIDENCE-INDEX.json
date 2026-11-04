@@ -1,0 +1,53 @@
+{
+  "source_commit": "c80fd29d7834cca040a0a037019c8ba4731ce4ec",
+  "source_tree": "a7d8e70828d1187fb55485879013e1b3f11408dd",
+  "repo_id": 1445898183,
+  "scope": "Local evidence index only; raw ignored logs, backup bundle and outputs are not uploaded by this document PR.",
+  "entries": [
+    {
+      "local_original": "J:\\class-assistant\\classroom-os\\outputs\\integration-20261104-pr03a-pr09a\\INTEGRATION-RECEIPT.md",
+      "sha256": "5d1b6bb2fbacb66c7cdde145e602edccd56a5b3001f75eb049399bbb1866a504",
+      "bytes": 18675
+    },
+    {
+      "local_original": "J:\\class-assistant\\reviews\\pr03a-checkout-20261104\\outputs\\reviewer\\REVIEW.md",
+      "sha256": "e3fda71166dab6fdfcc2adc53e7888770bb997c773f48b290f7593ee3b4f2fdd",
+      "bytes": 13467
+    },
+    {
+      "local_original": "J:\\class-assistant\\reviews\\pr09a-fifth-20261031\\outputs\\REVIEW.md",
+      "sha256": "d63d3c498b4823df3b2f6568af14ff3001c2a6239dad45ca1d828af7c093e229",
+      "bytes": 15578
+    },
+    {
+      "local_original": "J:\\class-assistant\\classroom-os\\outputs\\repository-migration\\20261105-migration-01\\source-audit\\tree-manifest.tsv",
+      "sha256": "2d59789cc5223142147886d56f57a597aa8db5a2f9ccd887fd7456b976d6f87f",
+      "bytes": 36150
+    },
+    {
+      "local_original": "J:\\class-assistant\\classroom-os\\outputs\\repository-migration\\20261105-migration-01\\source-audit\\ancestry-26.json",
+      "sha256": "3fc70442d3dcd7220c7c7e6bfbe8e86498484e19f1941274fb7d29bd98c513ca",
+      "bytes": 8518
+    },
+    {
+      "local_original": "J:\\class-assistant\\classroom-os\\outputs\\repository-migration\\20261105-migration-01\\audit\\AUDIT-REPORT.md",
+      "sha256": "edebd35736ac6ffb233a08a322f26e2d7f3ccf9dbac4922b1a016b970db3fa04",
+      "bytes": 4294
+    },
+    {
+      "local_original": "J:\\class-assistant\\classroom-os\\outputs\\repository-migration\\20261105-migration-01\\audit\\AUDIT-SUMMARY.json",
+      "sha256": "1fb4322337681ed2251c5a61d194cf6286696be903f3a261b9caf622abf1aa27",
+      "bytes": 2072
+    },
+    {
+      "local_original": "J:\\class-assistant\\classroom-os\\outputs\\repository-migration\\20261105-migration-01\\pure-transfer-verified.json",
+      "sha256": "083402c43bc1b3706682b63f9d98a372e12714f015afebc79203e2153ebc6c08",
+      "bytes": 503
+    },
+    {
+      "local_original": "J:\\class-assistant\\classroom-os\\outputs\\repository-migration\\20261105-migration-01\\backup.json",
+      "sha256": "b7accc9b07a206fe578b2963196ebb62ab535a1a06ce8444d341dd8a7e06d02a",
+      "bytes": 269
+    }
+  ]
+}

@@ -1,3 +1,15 @@
+# Classroom OS Web Alpha · 当前仓库入口
+
+正式远端：<https://github.com/Mumao233/classroom-os>；正式主线：新仓库 `main`。正式本地入口保持 `J:\class-assistant\classroom-os`。独立仓库决定替代历史“将 Web 合入旧仓 main”的计划；旧仓库只保留历史，不再同步后续 Web 开发。
+
+迁入的审核源提交为 `c80fd29d7834cca040a0a037019c8ba4731ce4ec`，完整 tree 为 `a7d8e70828d1187fb55485879013e1b3f11408dd`。迁移后的文档提交和 GitHub merge commit 不改业务、测试、SQL、迁移、RLS、工作流或冻结契约。
+
+当前已整合 PR-00/01/02a/02b/03a/09a。请从 [架构](architecture/README.md)、[后端入口](../../web/backend/README.md)、[前端入口](../../web/frontend/README.md)、[测试说明](TESTING.md) 和 [迁移记录](repository-migration/README.md) 继续。数据库支持仅限已验证可信 bootstrap；P3-01、PR-02b 两项 P3、PR-09a Mock 实体 ID P3 与 11 项 TBD 继续 OPEN。真实认证/邮件/收费 Provider/麦克风/生产迁移及完整 HTTP 联调尚未验收。
+
+下方 PR-00 索引原文属于历史阶段快照。其中 `main`/v1.3.0 指旧仓 Windows 基线，授权和“远端 CI 待验证”也描述当时状态；本次实际远端 run、checkout 和最终 main 以迁移收据为准，不改写旧报告。
+
+---
+
 # Web Alpha 0.1.0 · PR-00 工程基线
 
 正式 Git 仓库：`J:\class-assistant\classroom-os`。
