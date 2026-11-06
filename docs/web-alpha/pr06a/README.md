@@ -29,6 +29,11 @@ bounded batch of actual frozen-schema wire payloads. It advances the injected
 `script`, and may be called before finish for partials/finals. A terminal action
 waits for draining. There is no success until the terminal action is consumed
 after all earlier finals have committed in the synthetic memory model.
+Success also requires at least one committed final and a committed revision at
+least as new as every observed partial for each segment. A partial-only segment
+or a newer unresolved partial keeps the stream draining. Terminal-only silent
+audio/no-transcript outcomes are unsupported; this POC does not invent proof of
+silence. Such incomplete evidence cannot complete a stream.
 
 Script transcript actions use `kind` (`partial` or `final`), UUID `segment_id`,
 positive `revision`, nonnegative `sequence`, `start_sample`, `end_sample`, `text`;
@@ -50,6 +55,10 @@ identity tuples, retaining the original committed result. Quarantine is exposed
 as a read-only snapshot. Finals carry event/cursor/version identifiers; partials
 carry only connection sequence. Timestamps use a fixed synthetic UTC instant;
 sample-to-ms capture mapping truncates sub-ms fractions.
+Partial revision tracking is separate from committed final revision tracking.
+A newer partial cannot suppress an older uncommitted final or bypass its commit
+failure/retry gate; committing that older final still leaves the newer partial
+unresolved for the success check.
 
 `query(receipt)` defaults to `{'status': 'unsupported'}` and preserves unknown.
 A receipt comes from start/send/finish and identifies the current stream.
@@ -61,6 +70,10 @@ cannot strand the stream in draining. Correcting synthetic proof in fault tests
 is a private test injection, not a public resend or proof-replacement interface.
 repeat query uses the same identities. No `not_found`, resend, refund, billing
 settlement or provider switching path exists.
+Terminal-only proof leaves unknown when no final has committed. It can confirm
+completion when finals already committed before outcome loss, provided no
+segment still has newer transient evidence. Terminal evidence cannot create
+committed finals. A no-transcript proof type is deliberately not implemented.
 
 ## Reconnect guard and bounds
 

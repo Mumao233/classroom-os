@@ -264,6 +264,69 @@ class SimulatorTests(unittest.TestCase):
         with self.assertRaises(ProtocolError):
             sim.send(frame(128, 1))
 
+    def test_partial_cannot_suppress_final_commit_or_complete_stream(self):
+        partial = final(kind='partial', revision=3)
+        del partial['timestamp_source']
+        sim = self.running([partial, final(revision=2), {'kind': 'terminal'}],
+                           commit_failures=1)
+        expected = sim._payload(final(revision=2))
+        sim.finish()
+        output = sim.events()
+        self.assertEqual([e['type'] for e in output], ['transcript.partial'])
+        self.assertEqual(sim._commit_failures, 0)
+        self.assertEqual(sim._seen, {})
+        self.assertEqual(sim._revisions, {})
+        self.assertEqual(sim.state, 'draining')
+        self.assertEqual(sim.events(), [expected])
+        self.assertEqual(sim._revisions, {uid(4): 2})
+        self.assertEqual(len(sim._seen), 1)
+        # Revision 3 still has only transient evidence, despite final 2 commit.
+        self.assertEqual(sim.state, 'draining')
+        self.assertEqual(sim.events(), [])
+        self.assertEqual(sim.state, 'draining')
+
+    def test_partial_only_segment_prevents_success(self):
+        partial = final(segment=5, kind='partial')
+        del partial['timestamp_source']
+        sim = self.running([final(), partial, {'kind': 'terminal'}])
+        sim.finish()
+        self.assertEqual(len(sim.events()), 2)
+        self.assertEqual(len(sim._seen), 1)
+        self.assertEqual(sim.state, 'draining')
+
+    def test_terminal_alone_cannot_prove_commit(self):
+        sim = self.running([{'kind': 'terminal'}])
+        sim.finish()
+        self.assertEqual(sim.events(), [])
+        self.assertEqual(sim.state, 'draining')
+        self.assertEqual(sim._seen, {})
+
+    def test_terminal_only_query_remains_unknown(self):
+        partial = final(kind='partial')
+        del partial['timestamp_source']
+        for script in ([{'kind': 'terminal'}],
+                       [partial, {'kind': 'terminal'}]):
+            sim = self.running([{'kind': 'lost'}],
+                               query_result=dict(proven=True, script=script))
+            receipt = sim.finish()
+            sim.events()
+            for _ in range(2):
+                result = sim.query(receipt)
+                self.assertEqual(result['status'], 'unknown')
+                self.assertEqual(sim._seen, {})
+                self.assertEqual(sim.pending_bytes, 0)
+            with self.assertRaises(ProtocolError):
+                sim.send(frame())
+
+    def test_query_can_confirm_already_committed_final(self):
+        sim = self.running([final(), {'kind': 'lost'}], query_result=dict(
+            proven=True, script=[{'kind': 'terminal'}]))
+        receipt = sim.finish()
+        self.assertEqual(len(sim.events()), 1)
+        self.assertEqual(sim.state, 'unknown')
+        self.assertEqual(sim.query(receipt), {'status': 'succeeded', 'events': []})
+        self.assertEqual(len(sim._seen), 1)
+
     def test_known_failure_and_input_copy(self):
         script = [final(), {'kind': 'failure'}]
         sim = self.running(script)

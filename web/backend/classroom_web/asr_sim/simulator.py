@@ -49,6 +49,7 @@ class Simulator:
         self._position = 0
         self._pending_bytes = 0
         self._revisions = {}
+        self._partial_revisions = {}
         self._seen = {}
         self._quarantine = set()
         self._terminal = False
@@ -100,6 +101,7 @@ class Simulator:
         self._terminal = False
         self._commit_failures = failures
         self._revisions, self._seen, self._quarantine = {}, {}, set()
+        self._partial_revisions = {}
         self.state = 'streaming'
         return self._receipt()
 
@@ -223,6 +225,13 @@ class Simulator:
                 if self.state != 'draining':
                     break
                 self._terminal = True
+                # A terminal receipt proves completion, not transcript commit.
+                # No-transcript evidence is intentionally unsupported here.
+                if not self._seen or any(
+                    self._revisions.get(segment, 0) < revision
+                    for segment, revision in self._partial_revisions.items()
+                ):
+                    break
                 self.state = 'succeeded'
                 self._pending_bytes = 0
             elif kind in ('lost', 'failure'):
@@ -242,9 +251,12 @@ class Simulator:
                         self._seen[key] = deepcopy(action)
                         self._revisions[action['segment_id']] = action['revision']
                         output.append(event)
-                elif action['revision'] >= self._revisions.get(action['segment_id'], 0):
+                elif action['revision'] >= max(
+                    self._revisions.get(action['segment_id'], 0),
+                    self._partial_revisions.get(action['segment_id'], 0)
+                ):
                     output.append(event)
-                    self._revisions[action['segment_id']] = action['revision']
+                    self._partial_revisions[action['segment_id']] = action['revision']
                     self._seq += 1
             self._position += 1
             if self.state in ('unknown', 'failed', 'succeeded'):

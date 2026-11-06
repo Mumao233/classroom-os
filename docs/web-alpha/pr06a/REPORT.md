@@ -1,5 +1,44 @@
 # Local simulation evidence — 2026-11-06
 
+## Second independent-review repair
+
+SIMULATION ONLY. Checkout HEAD `c80fca0e177597b40d02125ebea7f1b03d08ab1f`,
+branch `feature/web-pr06a-pilot-20261106`. Restricted Windows cmd.exe; no
+dependencies installed. The initial Git status was clean. Only previously
+added POC files in authorized directories are edited in this repair.
+
+Committed-final revisions now advance only on successful final commits;
+partials have a separate revision map. Terminal success requires committed
+final evidence and no segment whose newest partial exceeds its committed final.
+No-transcript outcome proofs are unsupported. Terminal-only positive query
+evidence cannot resolve unknown unless finals already committed before loss.
+
+Five added regression tests cover partial revision 3 followed by final revision
+2 with an injected commit failure (failure consumed, stable retry committed,
+newer transient evidence still blocks success), a distinct partial-only segment,
+terminal without finals, repeated terminal-only/partial-only reconciliation,
+and successful reconciliation against a final committed before outcome loss.
+
+| Command | Actual result |
+| --- | --- |
+| `python -B -m unittest discover -s web/backend/tests/asr_sim -p test_*.py -v` | Exit 1; 18 tests, 17 passed, schema/FormatChecker test errors: missing jsonschema |
+| `python -B tools/pr06a/inspect_contract.py` | Exit 0; frozen contract inspection |
+| `git diff --check` | Exit 0 |
+| `python -B tools/pr06a/check_repair_scope.py` | Exit 0; authorized-directory inventory below 30 files / 500000 bytes |
+
+The mandatory full-discovery acceptance gate remains **unpassed locally**.
+The trusted harness dependency directory is not on this worker's import path;
+the controller must supply its isolated jsonschema dependency and rerun full
+discovery. No assertion was skipped, relaxed or substituted. No successful
+schema-validation result is claimed. Shell startup attempts with PowerShell
+and Bash failed; cmd.exe worked. Two optional inline Python inspection commands
+failed with shell quoting SyntaxError; they changed no files. Frozen sources
+were read directly and through the existing contract inspection helper.
+
+No commit, push, PR, networking, credentials, other agents/models, microphone,
+provider, real data or database operations occurred. All proofs remain synthetic
+memory facts; no real quality, cost, SDK, persistence or device validation.
+
 ## Independent-review repair
 
 SIMULATION ONLY. Repair checkout HEAD:
