@@ -212,7 +212,8 @@ class GitHubClient:
         for hop in range(3):
             headers = {"User-Agent": "Classroom-OS-trusted-publisher", "Accept": "application/octet-stream"}
             if hop == 0:
-                headers.update(Authorization="Bearer " + self._token, **{"X-GitHub-Api-Version": "2022-11-28"})
+                headers.update(Authorization="Bearer " + self._token,
+                    Accept="application/vnd.github+json", **{"X-GitHub-Api-Version": "2022-11-28"})
             req = request.Request(url, method="GET", headers=headers)
             try:
                 with self._opener.open(req, timeout=30) as response:
