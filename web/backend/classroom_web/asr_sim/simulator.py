@@ -199,6 +199,22 @@ class Simulator:
         """One bounded batch; commit failures leave the action queued for retry."""
         if self.state not in ('streaming', 'draining'):
             return []
+        # Preflight the entire remaining batch before any commit or sequence
+        # advance. A later invalid action must not strand earlier committed
+        # events in a local output list that the caller never receives.
+        self._validate_script(self._script)
+        for action in self._script[self._position:]:
+            if action['kind'] in ('partial', 'final'):
+                covered = action['start_sample']
+                for start, end in self._ranges:
+                    if start > covered:
+                        break
+                    if start <= covered < end:
+                        covered = end
+                    if covered >= action['end_sample']:
+                        break
+                if covered < action['end_sample']:
+                    raise ProtocolError('transcript outside sent audio')
         output = []
         while self._position < len(self._script):
             action = self._script[self._position]
@@ -213,9 +229,6 @@ class Simulator:
                 self.state = 'unknown' if kind == 'lost' else 'failed'
                 self._pending_bytes = 0
             else:
-                if not any(a <= action['start_sample'] and action['end_sample'] <= b
-                           for a, b in self._ranges):
-                    raise ProtocolError('transcript outside sent audio')
                 event = self._payload(action)
                 if kind == 'final':
                     key = (action['segment_id'], action['revision'])
@@ -229,8 +242,9 @@ class Simulator:
                         self._seen[key] = deepcopy(action)
                         self._revisions[action['segment_id']] = action['revision']
                         output.append(event)
-                else:
+                elif action['revision'] >= self._revisions.get(action['segment_id'], 0):
                     output.append(event)
+                    self._revisions[action['segment_id']] = action['revision']
                     self._seq += 1
             self._position += 1
             if self.state in ('unknown', 'failed', 'succeeded'):
@@ -249,7 +263,9 @@ class Simulator:
         self._script = deepcopy(self._query_result['script'])
         self._position = 0
         self.state = 'draining'
-        emitted = self.events()
-        if self.state != 'succeeded':
-            self.state = 'unknown'
+        try:
+            emitted = self.events()
+        finally:
+            if self.state != 'succeeded':
+                self.state = 'unknown'
         return {'status': self.state, 'events': emitted}

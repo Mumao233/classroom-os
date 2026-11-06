@@ -1,5 +1,34 @@
 # Local simulation evidence — 2026-11-06
 
+## Independent-review repair
+
+SIMULATION ONLY. Repair checkout HEAD:
+`956d27bff24989a0ec7f341926775df79a5fa970`, branch
+`feature/web-pr06a-pilot-20261106`. Python 3.10.4, restricted Windows cmd.exe.
+The earlier base/results below are historical, not this repair's acceptance.
+
+Four regression tests now cover repeated batch validation failures followed by
+safe completion with stable event IDs, reconciliation validation errors retaining
+unknown followed by corrected synthetic proof, contiguous multi-frame coverage
+and out-of-range boundaries, and partial/final revision ordering. Batch preflight
+prevents any earlier final from committing before a later validation error.
+Query restores unknown on exceptions as well as unsuccessful commits.
+
+| Command | Repair result |
+| --- | --- |
+| `python -B -m unittest discover -s web/backend/tests/asr_sim -p test_*.py -v` | Exit 1; 13 tests, 12 passed, 1 error: missing jsonschema |
+| `python -B tools/pr06a/run_stdlib_tests.py` | Exit 0; 12 passed; schema gate explicitly not run |
+| `python -B tools/pr06a/check_scope.py` | Exit 1; helper assumes no tracked edits, but this repair edits the previously added POC files |
+| `python -B tools/pr06a/check_repair_scope.py` | Exit 0; 10 regular files in allowed directories, below 500000 bytes; four tracked edits and one new helper, all allowed |
+| `git diff --check` | Exit 0; no whitespace errors |
+
+The schema/FormatChecker assertion is unchanged and mandatory. No installation,
+network access or assertion skipping was used to claim a full pass. A successful
+full trusted-harness run with its isolated jsonschema directory is still required.
+No publication, commit or external service invocation was performed.
+
+## Historical initial implementation results
+
 SIMULATION ONLY. Worker base HEAD:
 `1cc35d5db3117bce0585acbd9d9c7aa8d2d0498b`.
 Windows restricted worker, Python 3.10.4 at `C:\Program Files\Python310\python.exe`.

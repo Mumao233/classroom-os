@@ -162,6 +162,84 @@ class SimulatorTests(unittest.TestCase):
         bad['simulation'] = True
         self.assertTrue(list(validator.iter_errors(bad)))
 
+    def test_batch_validation_does_not_lose_committed_finals(self):
+        sim = self.running([final(), final(segment=5, end_sample=3200),
+                            {'kind': 'terminal'}])
+        expected = sim._payload(final())
+        for _ in range(2):
+            with self.assertRaisesRegex(ProtocolError, 'outside sent audio'):
+                sim.events()
+            self.assertEqual(sim.state, 'streaming')
+            self.assertEqual(sim._position, 0)
+            self.assertEqual(sim._seen, {})
+            self.assertEqual(sim._revisions, {})
+            self.assertEqual(sim.pending_bytes, 3200)
+        # Supply missing synthetic audio; no final was committed or lost by
+        # the rejected batches, and the first final keeps its stable identity.
+        sim.send(frame(1600))
+        sim.finish()
+        output = sim.events()
+        self.assertEqual(output[0], expected)
+        self.assertEqual(len(output), 2)
+        self.assertEqual(sim.state, 'succeeded')
+        self.assertEqual(sim.events(), [])
+
+    def test_reconciliation_validation_preserves_unknown(self):
+        proof = dict(proven=True, script=[final(), final(segment=5, end_sample=3200),
+                                        {'kind': 'terminal'}])
+        sim = self.running([{'kind': 'lost'}], query_result=proof)
+        receipt = sim.finish()
+        sim.events()
+        for _ in range(2):
+            with self.assertRaisesRegex(ProtocolError, 'outside sent audio'):
+                sim.query(receipt)
+            self.assertEqual(sim.state, 'unknown')
+            self.assertEqual(sim._seen, {})
+            self.assertEqual(sim._position, 0)
+            self.assertEqual(sim.pending_bytes, 0)
+            with self.assertRaises(ProtocolError):
+                sim.send(frame(1600))
+        # Test-only injection of corrected positive evidence. There is no
+        # public proof replacement API or resend during reconciliation.
+        sim._query_result['script'][1]['end_sample'] = 1600
+        result = sim.query(receipt)
+        self.assertEqual(result['status'], 'succeeded')
+        self.assertEqual(len(result['events']), 2)
+        self.assertEqual(result['events'][0], sim._payload(final()))
+
+    def test_segment_coverage_across_frames_and_boundaries(self):
+        sim = self.running([final(start_sample=800, end_sample=3200),
+                            {'kind': 'terminal'}])
+        sim.send(frame(1600))
+        sim.finish()
+        self.assertEqual(len(sim.events()), 1)
+        self.assertEqual(sim.state, 'succeeded')
+        for start, end in ((0, 3201), (0, 1600)):
+            sim = Simulator()
+            sim.start(config([final(start_sample=start, end_sample=end)]))
+            sim.send(frame(1600))
+            with self.assertRaises(ProtocolError):
+                sim.events()
+            self.assertEqual(sim._seen, {})
+
+    def test_partial_final_revision_ordering(self):
+        def partial(revision):
+            action = final(kind='partial', revision=revision)
+            del action['timestamp_source']
+            return action
+        sim = self.running([final(revision=2), partial(1), partial(3),
+                            partial(2), final(revision=2), final(revision=3),
+                            {'kind': 'terminal'}])
+        sim.finish()
+        events = sim.events()
+        self.assertEqual([(e['type'], e['data']['revision']) for e in events],
+                         [('transcript.final', 2), ('transcript.partial', 3),
+                          ('transcript.final', 3)])
+        self.assertEqual(events[1]['connection_seq'], 0)
+        self.assertNotIn('event_id', events[1])
+        self.assertNotIn('cursor', events[1])
+        self.assertEqual(sim.state, 'succeeded')
+
     def test_bounds_and_cleanup(self):
         for script in ([final()] * 129, [final(text='x' * 20001)],
                        [final(revision=True)], [final(start_sample=-1)],

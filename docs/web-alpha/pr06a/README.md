@@ -33,7 +33,11 @@ after all earlier finals have committed in the synthetic memory model.
 Script transcript actions use `kind` (`partial` or `final`), UUID `segment_id`,
 positive `revision`, nonnegative `sequence`, `start_sample`, `end_sample`, `text`;
 finals also require `timestamp_source` (`provider_segment` or `capture_mapping`).
-Each segment must fit a frame sent on that stream. Control actions contain only
+Each segment must be covered by contiguous frames sent on that stream; it may
+span frame boundaries. Before committing anything, events validates the entire
+remaining batch against sent audio. A validation error leaves position, finals,
+revisions and connection sequence unchanged, so earlier events cannot be lost.
+Control actions contain only
 `kind`: `terminal`, `lost`, or `failure`, and must be last. No script action
 causes an external operation. `failure` represents injected known negative
 evidence; `lost` represents a sent/outcome-lost fault and enters unknown.
@@ -41,7 +45,7 @@ evidence; `lost` represents a sent/outcome-lost fault and enters unknown.
 `commit_failures=N` fails the next N synthetic final commits without publishing
 them. `events()` retries the same queued final, preserving UUID5 stable IDs.
 Deduplication uses stream/segment/revision, never text. Higher revisions advance;
-older revisions cannot regress. Same-revision conflicts are quarantined as
+older partial and final revisions cannot regress. Same-revision final conflicts are quarantined as
 identity tuples, retaining the original committed result. Quarantine is exposed
 as a read-only snapshot. Finals carry event/cursor/version identifiers; partials
 carry only connection sequence. Timestamps use a fixed synthetic UTC instant;
@@ -51,7 +55,10 @@ sample-to-ms capture mapping truncates sub-ms fractions.
 A receipt comes from start/send/finish and identifies the current stream.
 Optional `query_result={'proven': True, 'script': [...]}` injects synthetic
 positive outcome evidence ending in terminal. Only this evidence plus successful
-final commits resolves unknown. Failed reconciliation commits remain unknown;
+final commits resolves unknown. Failed reconciliation commits and validation
+exceptions remain unknown; validation exceptions propagate to the caller and
+cannot strand the stream in draining. Correcting synthetic proof in fault tests
+is a private test injection, not a public resend or proof-replacement interface.
 repeat query uses the same identities. No `not_found`, resend, refund, billing
 settlement or provider switching path exists.
 
