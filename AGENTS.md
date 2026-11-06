@@ -53,3 +53,12 @@ The latest user decision supersedes historical plans to merge Web work into the 
 - Preserve approved commit history, historical URLs/SHAs/reports, Windows product behavior and all existing safety/collaboration constraints. Migration documentation is not authorization for new business packages, deployment, release, production database migration or paid services.
 - Temporary migration clones are transport/evidence copies, not additional long-term development sources. Preserve other worktrees and user changes; shared Git configuration changes require all-worktree checks.
 - PR-00 Actions proves only its actual Windows/Node/static gates. Keep historical local results separate; bootstrap-only, P3-01, other P3/TBD and real-service limitations remain open as recorded in [migration notes](docs/web-alpha/repository-migration/README.md).
+
+## Authorized unattended pilot (2026-11-06)
+
+- The user authorized automation infrastructure and one PR-06a **simulated** trial, including feature branches, commits, pushes and Draft PRs in this repository. This supersedes the historical PR-00 no-write stage only for this scope. No other new business package is enabled.
+- Model execution uses the user's existing ChatGPT/Codex subscription locally. Extra API expenditure is **$0**; do not configure API keys, buy credits, switch billing providers, upload Codex authentication caches, or fall back to an API after an authentication/quota error. The earlier $50 API ceiling was replaced by this instruction.
+- All new Git authors and committers must be `Mumao233 <325669781+Mumao233@users.noreply.github.com>`; Draft PR author must be `Mumao233`. Do not add Codex or other coauthor trailers.
+- Task workers may only add files in the four PR-06a directories approved by `automation/prompts/06a.md`. They may not change this file, control scripts, workflow/configuration, existing tests, migrations, frozen contracts or Git metadata. Only the trusted controller publishes validated objects.
+- Use a pinned clean control commit, isolated tracked-source checkout, restricted local executor and persistent limits. Maximum three repairs; unresolved calls block further invocation. Passing a simulation does not approve real ASR, budget, persistence, security or recovery integration.
+- All PRs remain Draft. No automatic merge, deployment, release, tags, production operations or real business service calls. See [pilot operation guide](docs/web-alpha/overnight/README.md).

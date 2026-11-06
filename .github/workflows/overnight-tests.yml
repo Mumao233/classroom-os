@@ -1,0 +1,161 @@
+name: Overnight pipeline and Web verification
+
+on:
+  push:
+    branches:
+      - 'feature/overnight-*'
+      - 'feature/web-pr06a-*'
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: overnight-tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  PYTHONDONTWRITEBYTECODE: '1'
+  PYTHONUTF8: '1'
+  PIP_DISABLE_PIP_VERSION_CHECK: '1'
+  PYTEST_DISABLE_PLUGIN_AUTOLOAD: '1'
+
+jobs:
+  controller:
+    name: Controller tests (${{ matrix.os }}, Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            python: '3.10'
+          - os: ubuntu-latest
+            python: '3.12'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Keep configurable scratch files in the checkout
+        shell: pwsh
+        run: |
+          $scratch = Join-Path $env:GITHUB_WORKSPACE 'work/overnight'
+          foreach ($name in @('tmp', 'cache/pip')) {
+            New-Item -ItemType Directory -Force -Path (Join-Path $scratch $name) | Out-Null
+          }
+          New-Item -ItemType Directory -Force -Path outputs/overnight | Out-Null
+          "TEMP=$(Join-Path $scratch 'tmp')" >> $env:GITHUB_ENV
+          "TMP=$(Join-Path $scratch 'tmp')" >> $env:GITHUB_ENV
+          "TMPDIR=$(Join-Path $scratch 'tmp')" >> $env:GITHUB_ENV
+          "PIP_CACHE_DIR=$(Join-Path $scratch 'cache/pip')" >> $env:GITHUB_ENV
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Run controller safety and recovery tests
+        shell: pwsh
+        run: |
+          python -m unittest discover -s tools/overnight/tests -p 'test_*.py' -v 2>&1 | Tee-Object -FilePath outputs/overnight/controller-tests.log
+          exit $LASTEXITCODE
+      - name: Preserve controller evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: overnight-controller-${{ matrix.os }}-${{ matrix.python }}-${{ github.run_attempt }}
+          path: outputs/overnight/
+          retention-days: 14
+          if-no-files-found: warn
+
+  web:
+    name: Contracts, PostgreSQL and explicit ASR simulation tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Keep configurable scratch files in the checkout
+        shell: bash
+        run: |
+          mkdir -p work/overnight/tmp work/overnight/cache/pip outputs/overnight
+          printf '%s\n' "TEMP=$GITHUB_WORKSPACE/work/overnight/tmp" "TMP=$GITHUB_WORKSPACE/work/overnight/tmp" "TMPDIR=$GITHUB_WORKSPACE/work/overnight/tmp" "PIP_CACHE_DIR=$GITHUB_WORKSPACE/work/overnight/cache/pip" >> "$GITHUB_ENV"
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - name: Install pinned Web and static-validation dependencies
+        run: |
+          python -m pip install -r web/backend/requirements.lock -r automation/validation-requirements.txt
+          python -m pip check
+          python -m pip freeze > outputs/overnight/web-pip-freeze.txt
+      - name: Record the exact checkout identity
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json, os, platform, subprocess
+          from pathlib import Path
+          report = {
+              "checkout_sha": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
+              "event_sha": os.environ["GITHUB_SHA"],
+              "event": os.environ["GITHUB_EVENT_NAME"],
+              "run_id": os.environ["GITHUB_RUN_ID"],
+              "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+              "python": platform.python_version(),
+              "platform": platform.platform(),
+          }
+          Path("outputs/overnight/checkout.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+          PY
+      - name: Validate the frozen contracts and complete dependency DAG
+        run: python tools/overnight/check_contracts.py --output outputs/overnight/contracts.json
+      - name: Locate PostgreSQL 17 binaries
+        shell: bash
+        run: |
+          if [ ! -x /usr/lib/postgresql/17/bin/postgres ]; then
+            sudo apt-get update
+            sudo apt-get install --yes --no-install-recommends postgresql-17
+          fi
+          /usr/lib/postgresql/17/bin/postgres --version
+          test "$(id -u)" -ne 0
+      - name: Run the original full backend suite on a private native cluster
+        run: python tools/overnight/ci_backend.py --pg-bin /usr/lib/postgresql/17/bin --port 55461 --timeout-seconds 2400 --output outputs/overnight/backend.json
+      - name: Run PR-06a simulation tests explicitly when implemented
+        shell: bash
+        env:
+          PYTHONPATH: ${{ github.workspace }}/web/backend
+        run: |
+          python - <<'PY' 2>&1 | tee outputs/overnight/asr-sim-tests.log
+          import json, os, unittest
+          from pathlib import Path
+          test_dir = Path("web/backend/tests/asr_sim")
+          requested = any(os.environ.get(name, "").startswith("feature/web-pr06a-")
+                          for name in ("GITHUB_HEAD_REF", "GITHUB_REF_NAME"))
+          present = test_dir.exists() or Path("web/backend/classroom_web/asr_sim").exists()
+          report = {"scope": "Explicit PR-06a simulation gate; no real Provider or quality acceptance"}
+          if requested or present:
+              suite = unittest.defaultTestLoader.discover(str(test_dir), pattern="test_*.py")
+              if not suite.countTestCases():
+                  raise SystemExit("PR-06a cannot pass without independently discovered tests")
+              result = unittest.TextTestRunner(verbosity=2).run(suite)
+              passed = result.wasSuccessful() and result.testsRun > 0 and not result.skipped
+              report.update(status="passed" if passed else "failed", passed=passed,
+                            tests_run=result.testsRun, failures=len(result.failures),
+                            errors=len(result.errors), skipped=len(result.skipped))
+          else:
+              passed = True
+              report.update(status="not_run", passed=False, reason="PR-06a is absent from this infrastructure checkout")
+              print("PR-06a is not present; its explicit gate was NOT RUN.")
+          Path("outputs/overnight/asr-sim.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+          raise SystemExit(0 if passed else 1)
+          PY
+      - name: Preserve raw validation and PostgreSQL evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: overnight-web-${{ github.run_attempt }}
+          path: |
+            outputs/overnight/
+            outputs/pr03a/third-round/
+          retention-days: 14
+          if-no-files-found: warn

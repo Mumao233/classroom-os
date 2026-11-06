@@ -1,0 +1,43 @@
+name: Overnight request queue (no model credentials)
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 6 * * *'
+  push:
+    branches: ['feature/overnight-*']
+    paths: ['automation/**', 'tools/overnight/**', '.github/workflows/overnight-queue.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: overnight-request-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  request:
+    if: github.repository == 'Mumao233/classroom-os'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Emit data-only pinned request
+        env:
+          REQUEST_SHA: ${{ github.sha }}
+          REQUEST_RUN_ID: ${{ github.run_id }}
+        run: |
+          python - <<'PY'
+          import json, os, pathlib
+          pathlib.Path('request.json').write_text(json.dumps({
+              'version': 1, 'task': '06a', 'simulation_only': True,
+              'repository': 'Mumao233/classroom-os',
+              'base_sha': os.environ['REQUEST_SHA'],
+              'request_id': os.environ['REQUEST_RUN_ID'],
+          }) + '\n')
+          PY
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: overnight-request
+          path: request.json
+          retention-days: 7
+          if-no-files-found: error

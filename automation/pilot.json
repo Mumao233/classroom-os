@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "repository": "Mumao233/classroom-os",
+  "author_login": "Mumao233",
+  "model": "gpt-6.1-sol",
+  "enabled_tasks": ["06a"],
+  "simulation_only": true,
+  "extra_api_spend_usd": 0,
+  "max_repairs": 3,
+  "call_timeout_seconds": 1200,
+  "limits": {
+    "extra_api_spend_usd": 0,
+    "batch_wall_seconds": 10800,
+    "task_wall_seconds": 10800,
+    "batch_max_calls": 8,
+    "task_max_calls": 8,
+    "batch_max_turns": 8,
+    "task_max_turns": 8,
+    "max_repairs": 3
+  }
+}
