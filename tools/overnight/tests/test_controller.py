@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from tools.overnight.controller import validate_config, validate_request, commit_candidate, Pilot
+from tools.overnight.controller import validate_config, validate_request, commit_candidate, Pilot, review_with_test_evidence
 from tools.overnight.state import StateError
 from tools.overnight.budget import SubscriptionLimits
 
@@ -13,6 +13,22 @@ ROOT = Path(__file__).resolve().parents[3]
 
 
 class ControllerTests(unittest.TestCase):
+    def test_reviewer_receives_exact_candidate_test_evidence(self):
+        binding = {"head_sha": "a" * 40, "patch_sha256": "b" * 64}
+        prompt = review_with_test_evidence("Review defects", {"passed": True, "candidate_binding": binding},
+                                          binding, "", "Ran 9 tests\nOK")
+        self.assertIn("a" * 40, prompt)
+        self.assertIn("Ran 9 tests", prompt)
+        self.assertIn("jsonschema/FormatChecker", prompt)
+        self.assertIn("Do not waive real implementation defects", prompt)
+
+    def test_failed_or_other_candidate_tests_cannot_authorize_review(self):
+        binding = {"head_sha": "a" * 40}
+        for result in ({"passed": False, "candidate_binding": binding},
+                       {"passed": True, "candidate_binding": {"head_sha": "b" * 40}}):
+            with self.assertRaises(StateError):
+                review_with_test_evidence("Review", result, binding, "", "")
+
     def test_only_explicit_simulation_subscription_scope(self):
         config = json.loads((ROOT / "automation/pilot.json").read_text())
         validate_config(config)

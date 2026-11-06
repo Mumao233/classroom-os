@@ -126,7 +126,10 @@ fallback and does not refund the failed reservation.
 
 The controller's local gate includes nonzero synthetic tests with zero skips,
 frozen-contract static checks, scope validation and independent read-only model
-review. GitHub additionally runs original Windows Python/Node/DPAPI gates and
+review. The reviewer receives the passing harness result and logs bound to the
+exact candidate SHA and patch hash. Missing packages in the review shell are
+recorded as a rerun limitation, while real defects still block acceptance.
+GitHub additionally runs original Windows Python/Node/DPAPI gates and
 the original PostgreSQL backend suite on Linux/Python3.12/PG17. These are distinct
 evidence sets. A local pass is not a remote CI pass, and mock guards do not prove
 database durability or real-service fees/quality.
