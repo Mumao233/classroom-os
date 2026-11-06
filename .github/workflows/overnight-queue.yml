@@ -6,7 +6,6 @@ on:
     - cron: '17 6 * * *'
   push:
     branches: ['feature/overnight-*']
-    paths: ['automation/**', 'tools/overnight/**', '.github/workflows/overnight-queue.yml']
 
 permissions:
   contents: read
