@@ -25,6 +25,10 @@ ALLOWED = ("web/backend/classroom_web/asr_sim", "web/backend/tests/asr_sim",
            "tools/pr06a", "docs/web-alpha/pr06a")
 
 
+def call_name(kind, round_number, attempt=1):
+    return kind + "-" + str(round_number) + ("-attempt-" + str(attempt) if attempt > 1 else "")
+
+
 def git(repo, *args, data=None):
     env = {k: v for k, v in os.environ.items() if not k.upper().startswith("GIT_")}
     env.update(GIT_TERMINAL_PROMPT="0", GIT_NO_REPLACE_OBJECTS="1",
@@ -189,11 +193,12 @@ class Pilot:
         if self.state.snapshot()["tasks"]["06a"]["state"] == "AUDIT":
             self.transition("READY")
         doc = self.state.snapshot()
-        self.state.begin_attempt("06a", self.run_id + "-attempt", expected_revision=doc["revision"],
-            event_id="begin-attempt", dependency_fingerprint=dependency_fingerprint(doc, "06a"))
+        attempt = doc["tasks"]["06a"]["attempt_count"] + 1
+        self.state.begin_attempt("06a", self.run_id + "-attempt-" + str(attempt), expected_revision=doc["revision"],
+            event_id="begin-attempt-" + str(attempt), dependency_fingerprint=dependency_fingerprint(doc, "06a"))
 
-    def model(self, kind, round_number, prompt, readonly=False, schema=None, binding=None):
-        call_id = kind + "-" + str(round_number)
+    def model(self, kind, round_number, prompt, readonly=False, schema=None, binding=None, attempt=1):
+        call_id = call_name(kind, round_number, attempt)
         output = self.root / call_id
         receipt = output / "receipt.json"
         ledger = self.limits.snapshot()
@@ -264,13 +269,13 @@ class Pilot:
                 feedback = ""
                 if round_number:
                     feedback = "\nFix these independently observed failures without relaxing requirements:\n" + task["reason"]
-                    prior = self.root / ("review-" + str(round_number - 1)) / "final.json"
+                    prior = self.root / call_name("review", round_number - 1, task["attempt_count"]) / "final.json"
                     if prior.exists():
                         feedback += "\n" + prior.read_text(encoding="utf-8")[:20000]
                     failure = self.root / "test-failure.json"
                     if failure.exists():
                         feedback += "\n" + read_json(failure)["detail"]
-                self.model("develop", round_number, prompt + feedback)
+                self.model("develop", round_number, prompt + feedback, attempt=task["attempt_count"])
                 self.transition("TESTING")
             task = self.state.snapshot()["tasks"]["06a"]
             if task["state"] == "TESTING":
@@ -303,7 +308,8 @@ class Pilot:
                     raise StateError("test evidence belongs to a different candidate")
                 review_prompt = (self.source / "automation/prompts/review.md").read_text(encoding="utf-8")
                 _, output = self.model("review", round_number, review_prompt, readonly=True,
-                                       schema=self.source / "automation/review.schema.json", binding=binding)
+                                       schema=self.source / "automation/review.schema.json", binding=binding,
+                                       attempt=task["attempt_count"])
                 review = read_json(output / "final.json")
                 if (not isinstance(review, dict) or set(review) != {"verdict", "findings", "limitations"}
                         or review["verdict"] not in {"approve", "request_changes"}
@@ -320,7 +326,7 @@ class Pilot:
                     continue
                 candidate = read_json(self.root / "candidate.json")
                 self.transition("READY_FOR_HUMAN_REVIEW", head_sha=candidate["head_sha"],
-                                evidence="candidate.json + tests.json + review-" + str(round_number) + "/final.json")
+                                evidence="candidate.json + tests.json + " + call_name("review", round_number, task["attempt_count"]) + "/final.json")
             task = self.state.snapshot()["tasks"]["06a"]
             if task["state"] in {"READY_FOR_HUMAN_REVIEW", "FAILED", "BLOCKED"}:
                 break
@@ -348,7 +354,7 @@ class Pilot:
         doc = self.state.snapshot()
         task = doc["tasks"]["06a"]
         candidate = read_json(self.root / "candidate.json")
-        review_receipt = read_json(self.root / ("review-" + str(task["repairs"])) / "receipt.json")
+        review_receipt = read_json(self.root / call_name("review", task["repairs"], task["attempt_count"]) / "receipt.json")
         if (read_json(self.root / "tests.json").get("candidate_binding") != binding
                 or review_receipt.get("candidate_binding") != binding):
             raise StateError("publication evidence is not bound to candidate")

@@ -71,9 +71,10 @@ on another machine install `automation/validation-requirements.txt` in ignored
 work storage first.
 
 ```powershell
-python -B -m unittest discover -s tools/overnight/tests -p test_*.py -v
-python -B tools/overnight/check_contracts.py --repo . --deps work/pr01/validation-deps
-python -B -m tools.overnight.queue --source . --base APPROVED_SHA --base-ref feature/overnight-pipeline-20261106 --run-id pilot-20261106 --deps work/pr01/validation-deps --publish --watch
+$pilotPython = 'C:\Users\Mumao\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe'
+& $pilotPython -B -m unittest discover -s tools/overnight/tests -p test_*.py -v
+& $pilotPython -B tools/overnight/check_contracts.py --repo . --deps work/pr01/validation-deps
+& $pilotPython -B -m tools.overnight.queue --source . --base APPROVED_SHA --base-ref feature/overnight-pipeline-20261106 --run-id pilot-20261106 --deps work/pr01/validation-deps --publish --watch
 ```
 
 The watcher polls once per minute and consumes one matching request. This pilot
@@ -84,7 +85,7 @@ daemon or OS scheduled task remains. For an explicitly local initial trial the
 same controller can run directly with identical flags, omitting `--watch`:
 
 ```powershell
-python -B -m tools.overnight.controller --source . --base APPROVED_SHA --base-ref feature/overnight-pipeline-20261106 --run-id pilot-20261106 --deps work/pr01/validation-deps --publish
+& $pilotPython -B -m tools.overnight.controller --source . --base APPROVED_SHA --base-ref feature/overnight-pipeline-20261106 --run-id pilot-20261106 --deps work/pr01/validation-deps --publish
 ```
 
 The publisher obtains the existing GitHub credential through Git Credential
@@ -105,6 +106,15 @@ the sandbox. The publisher independently revalidates the exact Git objects.
 | Dependency/base changes, conflicting remote branch/PR | Stop for explicit reconciliation; no force push |
 | Controller interrupted during a settled stage | Resume the same state and completed-call receipt |
 | Crash between initialization or publication steps | Preserve state; reconcile exact objects/PR, never blindly restart |
+
+`tools/overnight/recover.py` is an explicit operator repair for the observed
+first-launch MCP transport configuration error only. It requires empty model
+stdout, the exact startup error, unchanged clean source/candidate mappings and
+an unpublished candidate. Its journal retains the original failed reservation,
+clock, limits and logs while binding the same run ID to a corrected descendant
+infrastructure commit. It cannot recover quota/auth failures, uncertain model
+execution, exhausted limits or a modified candidate. It is never an automatic
+fallback and does not refund the failed reservation.
 
 The controller's local gate includes nonzero synthetic tests with zero skips,
 frozen-contract static checks, scope validation and independent read-only model

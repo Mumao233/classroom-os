@@ -273,8 +273,11 @@ def _mcp_disable_args(codex, work, timeout_seconds=30):
         if not match:
             raise ValueError("unsupported MCP inventory")
         names.append(match.group(1))
+    # --ignore-user-config removes original transports. A disabled entry must
+    # still be structurally valid, otherwise Codex rejects it before startup.
     return [item for name in names for item in
-            ("-c", "mcp_servers." + json.dumps(name) + ".enabled=false")]
+            ("-c", "mcp_servers." + json.dumps(name)
+             + '={enabled=false,command="overnight-disabled-not-executed"}')]
 
 
 def run_sandbox_command(codex, workspace, command, output, timeout_seconds,

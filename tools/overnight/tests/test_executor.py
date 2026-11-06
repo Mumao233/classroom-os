@@ -104,7 +104,8 @@ class ExecutorTests(unittest.TestCase):
         with patch.object(executor, "_private_cli", return_value=({"passed": True}, listing, "")) as cli:
             args = executor._mcp_disable_args("codex", self.root / "tmp")
         self.assertEqual(cli.call_args.args[1], ["mcp", "list"])
-        self.assertEqual(args, ["-c", 'mcp_servers."alpha".enabled=false', "-c", 'mcp_servers."beta".enabled=false'])
+        self.assertEqual(args, ["-c", 'mcp_servers."alpha"={enabled=false,command="overnight-disabled-not-executed"}',
+                                "-c", 'mcp_servers."beta"={enabled=false,command="overnight-disabled-not-executed"}'])
         with patch.object(executor, "_private_cli", return_value=({"passed": True}, "unexpected listing", "")):
             with self.assertRaises(ValueError):
                 executor._mcp_disable_args("codex", self.root / "tmp")
@@ -130,7 +131,7 @@ class ExecutorTests(unittest.TestCase):
         schema.write_text('{"type":"object"}')
         with patch.object(executor, "authentication_status", return_value={"ready": True}), \
              patch.object(executor, "sandbox_probe", return_value={"passed": True}), \
-             patch.object(executor, "_mcp_disable_args", return_value=["-c", 'mcp_servers."known".enabled=false']), \
+             patch.object(executor, "_mcp_disable_args", return_value=["-c", 'mcp_servers."known"={enabled=false,command="overnight-disabled-not-executed"}']), \
              patch.object(executor, "_bounded_process", side_effect=self._mock_invocation(event)) as run:
             result = executor.run_codex("codex", self.workspace, self.output, "SYNTHETIC PROMPT", 30,
                                         readonly=True, schema=schema)
