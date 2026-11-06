@@ -70,6 +70,44 @@ class SubscriptionLimitTests(unittest.TestCase):
             with self.assertRaises(LimitExceeded):
                 ledger.begin_call("retry", "06a", expected_revision=2)
 
+    def test_block_preserves_observed_usage_and_reserved_turns_after_restart(self):
+        self.ledger.initialize()
+        self.ledger.begin_call("one", "05a", expected_revision=0)
+        self.ledger.finish_call("one", {"turns": 1, "input_tokens": 20, "output_tokens": 10},
+                                expected_revision=1)
+        self.ledger.begin_call("two", "06a", reserved_turns=3, expected_revision=2)
+        self.now += 7
+        usage = {"turns": 2, "input_tokens": 100, "output_tokens": 30}
+        result = self.ledger.block("two", "timeout", usage=usage, elapsed_seconds=7,
+                                   expected_revision=3)
+        resumed = SubscriptionLimits(self.path, clock=lambda: self.now)
+        self.assertEqual(resumed.snapshot(), result)
+        self.assertEqual(result["status"], "BLOCKED")
+        self.assertEqual(result["block_reason"], "timeout")
+        self.assertEqual(result["calls"]["two"]["status"], "BLOCKED")
+        self.assertEqual(result["calls"]["two"]["usage"], usage)
+        self.assertEqual(result["calls"]["two"]["elapsed_seconds_reported"], 7)
+        self.assertEqual(result["calls"]["two"]["reserved_turns"], 3)
+        self.assertEqual(resumed.usage_totals(result), {"calls": 2, "turns": 4,
+            "input_tokens": 120, "output_tokens": 40, "usage_unknown": False})
+        self.assertEqual(resumed.usage_totals(result, "06a"), {"calls": 1, "turns": 3,
+            "input_tokens": 100, "output_tokens": 30, "usage_unknown": False})
+        with self.assertRaises(LimitExceeded):
+            resumed.begin_call("retry", "06a", expected_revision=4)
+        self.assertEqual(resumed.snapshot(), result)
+
+    def test_block_rejects_invalid_usage_and_elapsed_without_mutating_ledger(self):
+        self.ledger.initialize()
+        initial = self.ledger.begin_call("one", "06a", expected_revision=0)
+        for kwargs in (
+                {"usage": {"turns": True, "input_tokens": 1, "output_tokens": 2}},
+                {"usage": {"turns": 1, "input_tokens": -1, "output_tokens": 2}},
+                {"usage": {"turns": 1, "input_tokens": 1, "output_tokens": 2, "extra": 0}},
+                {"elapsed_seconds": True}, {"elapsed_seconds": -1}, {"elapsed_seconds": 1.5}):
+            with self.subTest(kwargs=kwargs), self.assertRaises(StateError):
+                self.ledger.block("one", "timeout", expected_revision=1, **kwargs)
+            self.assertEqual(self.ledger.snapshot(), initial)
+
     def test_deadline_uses_persisted_clock_not_reported_elapsed(self):
         self.ledger.initialize({"batch_wall_seconds": 60, "task_wall_seconds": 10})
         result = self.ledger.begin_call("one", "06a", expected_revision=0)

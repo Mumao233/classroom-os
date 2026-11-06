@@ -33,6 +33,14 @@ is unavailable; `subscription.json` records observed tokens, unknown usage,
 calls, turns, wall time and repairs. Calls reserve persistent allowance before
 launch. No automatic reset or repeated call follows an uncertain outcome.
 
+If this CLI build leaves its process alive after a successful model turn, the
+executor verifies the unique completion event, exact final message, usage and
+finished tool items, then allows five seconds for natural exit. It may then stop
+only the owned process group/job. Receipts distinguish forced cleanup from a
+natural exit and retain the actual exit code and observed usage. Missing or
+conflicting completion evidence remains a failure; it never triggers a second
+model call. Failed executions also retain any valid observed usage.
+
 ## Components
 
 | File | Responsibility |

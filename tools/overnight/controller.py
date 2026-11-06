@@ -224,7 +224,8 @@ class Pilot:
                 reason = result.get("error_reason") or "interrupted"
                 if reason not in {"rate_limit", "quota_exhausted", "authentication", "timeout"}:
                     reason = "interrupted"
-                self.limits.block(call_id, reason, expected_revision=latest["revision"])
+                self.limits.block(call_id, reason, expected_revision=latest["revision"],
+                                  usage=result.get("usage"), elapsed_seconds=int(result["elapsed_seconds"]))
                 raise StateError("Codex call stopped: " + reason)
             latest = self.limits.finish_call(call_id, result.get("usage"),
                 elapsed_seconds=int(result["elapsed_seconds"]), expected_revision=latest["revision"])

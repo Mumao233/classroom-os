@@ -210,9 +210,13 @@ class SubscriptionLimits(JsonStore):
                 call["status"], call["block_reason"] = "BLOCKED", reason
         return self._mutate(expected_revision, "finish:" + call_id, update)
 
-    def block(self, call_id, reason, *, expected_revision):
+    def block(self, call_id, reason, *, expected_revision, usage=None, elapsed_seconds=None):
         if reason not in BLOCK_REASONS:
             raise StateError("unknown stop reason")
+        if usage is not None:
+            self._validate_usage(usage)
+        if elapsed_seconds is not None:
+            strict_int(elapsed_seconds, "elapsed_seconds")
         def update(document):
             call = document["calls"].get(call_id)
             if call is None or call["status"] != "RUNNING":
@@ -220,7 +224,8 @@ class SubscriptionLimits(JsonStore):
             now = max(self._now(), document["last_seen_ms"])
             document["last_seen_ms"] = now
             document["status"], document["block_reason"] = "BLOCKED", reason
-            call.update(status="BLOCKED", block_reason=reason, finished_at_ms=now)
+            call.update(status="BLOCKED", block_reason=reason, finished_at_ms=now, usage=usage,
+                        elapsed_seconds_reported=elapsed_seconds)
         return self._mutate(expected_revision, "block:" + call_id, update)
 
     def record_repair(self, task_id, *, expected_revision, event_id):

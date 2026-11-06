@@ -86,6 +86,8 @@ class ExecutorTests(unittest.TestCase):
             env=executor.clean_environment(self.root / "tmp"), output=self.output, timeout_seconds=1)
         self.assertEqual(result["error_reason"], "timeout", result)
         self.assertEqual(result["exit_code"], 124)
+        (self.output / "stdout.jsonl").unlink()
+        (self.output / "stderr.log").unlink()
         time.sleep(2.2)
         self.assertFalse(marker.exists(), "child survived executor timeout")
 
@@ -96,6 +98,8 @@ class ExecutorTests(unittest.TestCase):
         result = executor._bounded_process([sys.executable, "-B", "-c", parent], cwd=self.workspace,
             env=executor.clean_environment(self.root / "tmp"), output=self.output, timeout_seconds=10)
         self.assertTrue(result["passed"], result)
+        (self.output / "stdout.jsonl").unlink()
+        (self.output / "stderr.log").unlink()
         time.sleep(1.2)
         self.assertFalse(marker.exists(), "child survived executor success")
 
@@ -119,7 +123,8 @@ class ExecutorTests(unittest.TestCase):
     def _mock_invocation(self, stdout, stderr="", exit_code=0):
         def run(command, **kwargs):
             out = kwargs["output"]
-            (out / "stdout.jsonl").write_text(stdout, encoding="utf-8")
+            message = json.dumps({"type": "item.completed", "item": {"id": "final", "type": "agent_message", "text": '{"verdict":"ok"}'}})
+            (out / "stdout.jsonl").write_text(message + "\n" + stdout, encoding="utf-8")
             (out / "stderr.log").write_text(stderr, encoding="utf-8")
             (out / "final.json").write_text('{"verdict":"ok"}', encoding="utf-8")
             return {"passed": exit_code == 0, "exit_code": exit_code, "elapsed_seconds": .1, "error_reason": None}
@@ -142,6 +147,7 @@ class ExecutorTests(unittest.TestCase):
             self.assertIn(arg, argv)
         self.assertNotIn("SYNTHETIC PROMPT", argv)
         self.assertEqual(run.call_args.kwargs["stdin"], "SYNTHETIC PROMPT")
+        self.assertEqual(run.call_args.kwargs["completion_output"], self.output)
         self.assertEqual(argv[-1], "-")
         self.assertNotIn("--dangerously-bypass-approvals-and-sandbox", argv)
 
@@ -179,6 +185,123 @@ class ExecutorTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             executor.sandbox_probe("codex", self.workspace, self.output)
         self.assertEqual((self.workspace / "keep.txt").read_text(), "user data")
+
+    @staticmethod
+    def completion_events(*, error=False, duplicate=False, malformed_usage=False):
+        usage = {"input_tokens": True if malformed_usage else 41, "output_tokens": 7}
+        events = [{"type": "thread.started", "thread_id": "synthetic-thread"},
+                  {"type": "item.completed", "item": {"id": "final", "type": "agent_message", "text": "SYNTHETIC FINAL"}},
+                  {"type": "turn.completed", "usage": usage}]
+        if error:
+            events.insert(1, {"type": "turn.failed", "error": {"message": "synthetic failure"}})
+        if duplicate:
+            events.append(events[-1])
+        return "\n".join(json.dumps(e) for e in events) + "\n"
+
+    def test_readonly_completion_verifier_retains_usage_on_rejection(self):
+        for index, options in enumerate(({}, {"error": True}, {"duplicate": True}, {"malformed_usage": True})):
+            out = self.root / ("verify-" + str(index))
+            out.mkdir()
+            (out / "stdout.jsonl").write_text(self.completion_events(**options))
+            (out / "stderr.log").write_text("")
+            (out / "final.json").write_text("SYNTHETIC FINAL\n")
+            before = {p.name: p.read_bytes() for p in out.iterdir()}
+            result = executor.verify_completed_output(out)
+            self.assertEqual(result["passed"], not options)
+            self.assertEqual(result["usage"] is None, options.get("malformed_usage", False))
+            self.assertEqual(before, {p.name: p.read_bytes() for p in out.iterdir()})
+            if not options:
+                self.assertEqual(result["usage"], {"turns": 1, "input_tokens": 41, "output_tokens": 7})
+                self.assertEqual(len(result["final_sha256"]), 64)
+
+    def test_missing_or_mismatched_final_is_not_completion(self):
+        self.output.mkdir()
+        (self.output / "stdout.jsonl").write_text(self.completion_events())
+        (self.output / "stderr.log").write_text("")
+        self.assertFalse(executor.verify_completed_output(self.output)["passed"])
+        (self.output / "final.json").write_text("different")
+        self.assertFalse(executor.verify_completed_output(self.output)["passed"])
+
+    def test_malformed_trailing_record_rejects_completion_but_retains_usage(self):
+        self.output.mkdir()
+        for trailing in (b"{", b"[]", b"\xff"):
+            with self.subTest(trailing=trailing):
+                (self.output / "stdout.jsonl").write_bytes(self.completion_events().encode() + trailing)
+                result = executor.verify_completed_output(self.output)
+                self.assertFalse(result["passed"])
+                self.assertEqual(result["terminal_count"], 1)
+                self.assertEqual(result["usage"], {"turns": 1, "input_tokens": 41, "output_tokens": 7})
+
+    def _synthetic_hanging_cli(self, *, error=False, final=True):
+        events = self.completion_events(error=error)
+        code = "import pathlib,sys,time;sys.stdout.write(" + repr(events) + ");sys.stdout.flush();"
+        if final:
+            code += "pathlib.Path(" + repr(str(self.output / "final.json")) + ").write_text('SYNTHETIC FINAL');"
+        return code + "time.sleep(30)"
+
+    def test_completed_hanging_process_is_cleaned_with_real_exit_code(self):
+        marker = self.root / "completed-orphan.txt"
+        child = "import pathlib,time;time.sleep(2);pathlib.Path(" + repr(str(marker)) + ").write_text('escaped')"
+        parent = "import subprocess,sys;subprocess.Popen([sys.executable,'-B','-c'," + repr(child) + "]);"
+        result = executor._bounded_process([sys.executable, "-B", "-c", parent + self._synthetic_hanging_cli()],
+            cwd=self.workspace, env=executor.clean_environment(self.root / "tmp"), output=self.output,
+            timeout_seconds=10, completion_output=self.output, completion_grace_seconds=.25)
+        self.assertTrue(result["forced_after_model_completion"], result)
+        self.assertFalse(result["natural_exit"])
+        self.assertEqual(result["exit_code"], result["actual_exit_code"])
+        self.assertIsNone(result["error_reason"])
+        self.assertLess(result["elapsed_seconds"], 5)
+        self.assertTrue(executor.verify_completed_output(self.output)["passed"])
+        (self.output / "stdout.jsonl").unlink()
+        (self.output / "stderr.log").unlink()
+        time.sleep(2.2)
+        self.assertFalse(marker.exists(), "child survived completed-model cleanup")
+
+    def test_completed_process_natural_exit_is_recorded_separately(self):
+        code = self._synthetic_hanging_cli().replace("time.sleep(30)", "sys.exit(0)")
+        result = executor._bounded_process([sys.executable, "-B", "-c", code],
+            cwd=self.workspace, env=executor.clean_environment(self.root / "tmp"), output=self.output,
+            timeout_seconds=10, completion_output=self.output, completion_grace_seconds=.25)
+        self.assertTrue(result["passed"], result)
+        self.assertTrue(result["natural_exit"])
+        self.assertFalse(result["forced_after_model_completion"])
+        self.assertEqual(result["actual_exit_code"], 0)
+        self.assertTrue(executor.verify_completed_output(self.output)["passed"])
+
+    def test_error_or_missing_final_never_uses_completion_cleanup(self):
+        for error, final in ((True, True), (False, False)):
+            self.output = self.root / ("error" if error else "no-final")
+            result = executor._bounded_process([sys.executable, "-B", "-c",
+                self._synthetic_hanging_cli(error=error, final=final)], cwd=self.workspace,
+                env=executor.clean_environment(self.root / "tmp"), output=self.output,
+                timeout_seconds=1, completion_output=self.output, completion_grace_seconds=.1)
+            self.assertFalse(result["forced_after_model_completion"], result)
+            self.assertEqual(result["error_reason"], "timeout")
+            self.assertFalse(result["passed"])
+
+    def test_generic_command_does_not_trust_completion_shaped_stdout(self):
+        result = executor._bounded_process([sys.executable, "-B", "-c", self._synthetic_hanging_cli()],
+            cwd=self.workspace, env=executor.clean_environment(self.root / "tmp"), output=self.output,
+            timeout_seconds=1)
+        self.assertFalse(result["forced_after_model_completion"])
+        self.assertEqual(result["error_reason"], "timeout")
+
+    def test_run_codex_keeps_forced_real_exit_and_accepts_verified_model_completion(self):
+        original = self._mock_invocation(self.completion_events().splitlines()[-1], exit_code=37)
+        def forced(command, **kwargs):
+            result = original(command, **kwargs)
+            result.update(actual_exit_code=37, forced_after_model_completion=True, natural_exit=False)
+            return result
+        with patch.object(executor, "authentication_status", return_value={"ready": True}), \
+             patch.object(executor, "sandbox_probe", return_value={"passed": True}), \
+             patch.object(executor, "_mcp_disable_args", return_value=[]), \
+             patch.object(executor, "_bounded_process", side_effect=forced):
+            result = executor.run_codex("codex", self.workspace, self.output, "test", 30)
+        self.assertTrue(result["passed"], result)
+        self.assertEqual(result["exit_code"], 37)
+        self.assertEqual(result["actual_exit_code"], 37)
+        self.assertFalse(result["natural_exit"])
+        self.assertEqual(result["usage"]["input_tokens"], 41)
 
 
 if __name__ == "__main__":

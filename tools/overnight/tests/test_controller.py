@@ -61,6 +61,24 @@ class ControllerTests(unittest.TestCase):
                 pilot.model("develop", 0, "prompt")
             invoke.assert_not_called()
 
+    def test_failed_execution_keeps_observed_usage(self):
+        with tempfile.TemporaryDirectory(dir=ROOT / "work") as directory:
+            pilot = object.__new__(Pilot)
+            pilot.root = Path(directory)
+            pilot.workspace, pilot.codex = pilot.root / "workspace", "synthetic-codex"
+            pilot.config = {"call_timeout_seconds": 30, "model": "gpt-6.1-sol"}
+            pilot.limits = SubscriptionLimits(pilot.root / "limits.json")
+            pilot.limits.initialize()
+            (pilot.root / "develop-0").mkdir()
+            usage = {"turns": 1, "input_tokens": 20, "output_tokens": 7}
+            result = {"passed": False, "elapsed_seconds": 12, "usage": usage, "error_reason": "timeout"}
+            with patch("tools.overnight.controller.run_codex", return_value=result), self.assertRaises(StateError):
+                pilot.model("develop", 0, "prompt")
+            ledger = pilot.limits.snapshot()
+            self.assertEqual(ledger["calls"]["develop-0"]["usage"], usage)
+            self.assertEqual(ledger["status"], "BLOCKED")
+            self.assertEqual(pilot.limits.usage_totals(ledger)["output_tokens"], 7)
+
     def test_uncommitted_control_edits_rejected(self):
         with patch("tools.overnight.controller.git", side_effect=["", "a" * 40, " M AGENTS.md"]), \
              patch("pathlib.Path.exists", return_value=False), \

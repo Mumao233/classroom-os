@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 from contextlib import nullcontext
 import ctypes
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -13,6 +14,7 @@ import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 
 _HOST_ENV = frozenset({"PATH", "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC", "PATHEXT",
@@ -92,6 +94,10 @@ class _WindowsJob:
         for name, args, result in (
             ("CreateJobObjectW", (ctypes.c_void_p, w.LPCWSTR), w.HANDLE),
             ("SetInformationJobObject", (w.HANDLE, ctypes.c_int, ctypes.c_void_p, w.DWORD), w.BOOL),
+            ("QueryInformationJobObject", (w.HANDLE, ctypes.c_int, ctypes.c_void_p, w.DWORD, ctypes.c_void_p), w.BOOL),
+            ("TerminateJobObject", (w.HANDLE, w.UINT), w.BOOL),
+            ("OpenProcess", (w.DWORD, w.BOOL, w.DWORD), w.HANDLE),
+            ("WaitForSingleObject", (w.HANDLE, w.DWORD), w.DWORD),
             ("AssignProcessToJobObject", (w.HANDLE, w.HANDLE), w.BOOL),
             ("CloseHandle", (w.HANDLE,), w.BOOL)):
             getattr(k, name).argtypes, getattr(k, name).restype = args, result
@@ -159,35 +165,215 @@ class _WindowsJob:
             k.CloseHandle(snapshot)
 
     def close(self):
-        if self.handle:
-            self.k.CloseHandle(self.handle)
-            self.handle = None
+        if not self.handle:
+            return
+        # Job active counts can reach zero before process termination finishes.
+        # Wait on owned process handles too, so inherited output files are closed.
+        class Accounting(ctypes.Structure):
+            _fields_ = [(name, ctypes.c_longlong) for name in
+                        ("UserTime", "KernelTime", "PeriodUserTime", "PeriodKernelTime")]
+            _fields_ += [(name, self.w.DWORD) for name in
+                         ("PageFaults", "TotalProcesses", "ActiveProcesses", "TerminatedProcesses")]
+        processes = {}
+        def capture_processes():
+            capacity = 64
+            while True:
+                class ProcessIds(ctypes.Structure):
+                    _fields_ = [("Assigned", self.w.DWORD), ("Count", self.w.DWORD),
+                                ("Ids", ctypes.c_size_t * capacity)]
+                ids = ProcessIds()
+                if self.k.QueryInformationJobObject(self.handle, 3, ctypes.byref(ids), ctypes.sizeof(ids), None):
+                    break
+                error = ctypes.get_last_error()
+                if error != 234:  # ERROR_MORE_DATA
+                    raise ctypes.WinError(error)
+                capacity = max(capacity * 2, ids.Assigned)
+            for pid in ids.Ids[:ids.Count]:
+                if pid in processes:
+                    continue
+                handle = self.k.OpenProcess(0x00100000, False, pid)  # SYNCHRONIZE only.
+                if handle:
+                    processes[pid] = handle
+                elif ctypes.get_last_error() != 87:  # Exited before OpenProcess.
+                    raise ctypes.WinError(ctypes.get_last_error())
+        try:
+            capture_processes()
+            if not self.k.TerminateJobObject(self.handle, 1):
+                raise ctypes.WinError(ctypes.get_last_error())
+            deadline = time.monotonic() + 5
+            while True:
+                capture_processes()
+                accounting = Accounting()
+                if not self.k.QueryInformationJobObject(self.handle, 1, ctypes.byref(accounting),
+                                                         ctypes.sizeof(accounting), None):
+                    raise ctypes.WinError(ctypes.get_last_error())
+                if accounting.ActiveProcesses == 0:
+                    break
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("job processes did not terminate")
+                time.sleep(.01)
+            for handle in processes.values():
+                remaining_ms = max(0, int((deadline - time.monotonic()) * 1000))
+                status = self.k.WaitForSingleObject(handle, remaining_ms)
+                if status == 258:
+                    raise TimeoutError("job process termination did not finish")
+                if status != 0:
+                    raise ctypes.WinError(ctypes.get_last_error())
+        finally:
+            for handle in processes.values():
+                self.k.CloseHandle(handle)
+            handle, self.handle = self.handle, None
+            if not self.k.CloseHandle(handle):
+                raise ctypes.WinError(ctypes.get_last_error())
 
 
-def _bounded_process(command, *, cwd, env, output, timeout_seconds, stdin=None, private=False):
+def verify_completed_output(output):
+    """Read-only terminal evidence, not proof of process exit or code acceptance.
+
+    A handled tool error is an item, not a failed model turn. Top-level error or
+    turn.failed always rejects completion. Usage is retained even on rejection.
+    No transcript or reasoning text is included in the returned metadata.
+    """
+    output = Path(output)
+    report = {"passed": False, "usage": None, "thread_id": None,
+              "terminal_count": 0, "nonfatal_item_errors": 0,
+              "final_sha256": None, "events_sha256": None, "stderr_sha256": None,
+              "error_reason": "completion_evidence_incomplete"}
+    try:
+        raw = (output / "stdout.jsonl").read_bytes()
+        report["events_sha256"] = hashlib.sha256(raw).hexdigest()
+        events, invalid_stream = [], False
+        for line in raw.splitlines():
+            if not line.strip():
+                continue
+            try:
+                event = json.loads(line.decode("utf-8"))
+            except (UnicodeError, ValueError):
+                invalid_stream = True
+                continue
+            if not isinstance(event, dict) or not isinstance(event.get("type"), str):
+                invalid_stream = True
+            else:
+                events.append(event)
+        if not events:
+            return report
+        terminals = [e for e in events if e["type"] == "turn.completed"]
+        report["terminal_count"] = len(terminals)
+        usage = {"turns": 0, "input_tokens": 0, "output_tokens": 0}
+        valid_usage = bool(terminals)
+        for terminal in terminals:
+            values = terminal.get("usage", {})
+            if not isinstance(values, dict) or any(type(values.get(k)) is not int or values[k] < 0 for k in ("input_tokens", "output_tokens")):
+                valid_usage = False
+                break
+            usage["turns"] += 1
+            for key in ("input_tokens", "output_tokens"):
+                usage[key] += values[key]
+        if valid_usage:
+            report["usage"] = usage
+        # A truncated record rejects completion without discarding previously
+        # observed usage, which recovery still has to charge to the same run.
+        if invalid_stream:
+            return report
+        threads = [e.get("thread_id") for e in events if e["type"] == "thread.started"]
+        if len(threads) == 1 and isinstance(threads[0], str):
+            report["thread_id"] = threads[0]
+        if any(e["type"] in ("error", "turn.failed") for e in events):
+            report["error_reason"] = "failed_turn_evidence"
+            return report
+        if len(terminals) != 1 or not valid_usage or len(threads) > 1 or events[-1]["type"] != "turn.completed":
+            return report
+        started, completed, messages = set(), set(), []
+        for event in events:
+            item = event.get("item", {})
+            if not isinstance(item, dict):
+                return report
+            if event["type"] == "item.started":
+                started.add(item.get("id"))
+            if event["type"] == "item.completed":
+                completed.add(item.get("id"))
+                if item.get("type") == "error":
+                    report["nonfatal_item_errors"] += 1
+                if item.get("type") == "agent_message" and isinstance(item.get("text"), str):
+                    messages.append(item["text"])
+        if started - completed:
+            return report
+        final = (output / "final.json").read_bytes()
+        report["final_sha256"] = hashlib.sha256(final).hexdigest()
+        stderr = (output / "stderr.log").read_bytes()
+        report["stderr_sha256"] = hashlib.sha256(stderr).hexdigest()
+        if not final.strip() or not messages or final.decode("utf-8").rstrip("\r\n") != messages[-1].rstrip("\r\n"):
+            report["error_reason"] = "final_message_mismatch"
+            return report
+        report.update(passed=True, error_reason=None)
+        return report
+    except (OSError, UnicodeError, ValueError, TypeError):
+        return report
+
+
+def _bounded_process(command, *, cwd, env, output, timeout_seconds, stdin=None, private=False,
+                     completion_output=None, completion_grace_seconds=5):
     if type(timeout_seconds) is not int or not 1 <= timeout_seconds <= 7200:
         raise ValueError("timeout_seconds must be an integer in 1..7200")
+    if completion_output is not None and private:
+        raise ValueError("completion monitoring requires public JSONL files")
+    if type(completion_grace_seconds) not in (int, float) or not 0 < completion_grace_seconds <= 5:
+        raise ValueError("completion grace must be positive and at most five seconds")
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
     started = time.monotonic()
     process, job = None, None
     code, error = 125, None
     captured = (b"", b"")
+    forced, natural_exit, observed = False, False, None
     try:
         out_context = nullcontext(subprocess.PIPE) if private else (output / "stdout.jsonl").open("wb")
         err_context = nullcontext(subprocess.PIPE) if private else (output / "stderr.log").open("wb")
-        with out_context as stdout, err_context as stderr:
+        scratch = output / "tmp"
+        scratch.mkdir(exist_ok=True)
+        # A bounded temporary stdin file avoids a synchronous pipe write hanging
+        # before communicate's timeout if a child never consumes a large prompt.
+        input_context = tempfile.TemporaryFile(mode="w+b", dir=scratch) if stdin is not None else nullcontext(subprocess.DEVNULL)
+        with out_context as stdout, err_context as stderr, input_context as input_stream:
+            if stdin is not None:
+                input_stream.write(stdin.encode("utf-8"))
+                input_stream.seek(0)
             extra = {"start_new_session": True} if os.name != "nt" else {
                 "creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW | 0x4}
             if os.name == "nt":
                 job = _WindowsJob()
-            process = subprocess.Popen(command, cwd=cwd, env=env, stdin=subprocess.PIPE,
+            process = subprocess.Popen(command, cwd=cwd, env=env, stdin=input_stream,
                                        stdout=stdout, stderr=stderr, **extra)
             if job:
                 job.attach_and_resume(process)
             try:
-                captured = process.communicate(None if stdin is None else stdin.encode("utf-8"), timeout=timeout_seconds)
-                code = process.returncode
+                if completion_output is None:
+                    captured = process.communicate(timeout=timeout_seconds)
+                    code, natural_exit = process.returncode, True
+                else:
+                    signature, stable_since, grace_since = None, None, None
+                    while True:
+                        if process.poll() is not None:
+                            code, natural_exit = process.returncode, True
+                            break
+                        now = time.monotonic()
+                        if now - started >= timeout_seconds:
+                            code, error = 124, "timeout"
+                            break
+                        evidence = verify_completed_output(completion_output)
+                        current = (evidence["events_sha256"], evidence["final_sha256"], evidence["stderr_sha256"])
+                        if not evidence["passed"]:
+                            signature, stable_since, grace_since = None, None, None
+                        elif current != signature:
+                            signature, stable_since, grace_since = current, now, None
+                        elif grace_since is None and now - stable_since >= .2:
+                            grace_since = now
+                        elif grace_since is not None and now - grace_since >= completion_grace_seconds:
+                            # The finally block closes the whole job/group. Keep
+                            # its observed exit code rather than manufacturing 0.
+                            forced, observed = True, evidence
+                            break
+                        time.sleep(min(.1, max(.01, timeout_seconds - (now - started))))
             except subprocess.TimeoutExpired:
                 code, error = 124, "timeout"
             except (KeyboardInterrupt, InterruptedError):
@@ -196,7 +382,10 @@ def _bounded_process(command, *, cwd, env, output, timeout_seconds, stdin=None, 
         code, error = 125, "executor_unavailable"
     finally:
         if job:
-            job.close()
+            try:
+                job.close()
+            except (OSError, TimeoutError):
+                code, error = 125, "cleanup_failed"
         if process is not None:
             if os.name != "nt":
                 try:
@@ -209,13 +398,19 @@ def _bounded_process(command, *, cwd, env, output, timeout_seconds, stdin=None, 
                 process.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 code, error = 125, "cleanup_failed"
+            if forced and error is None:
+                code = process.returncode
             if process.stdin:
                 process.stdin.close()
             for pipe in (process.stdout, process.stderr):
                 if pipe:
                     pipe.close()
     result = {"passed": code == 0 and error is None, "exit_code": code,
+              "actual_exit_code": None if process is None else process.returncode,
+              "forced_after_model_completion": forced, "natural_exit": natural_exit,
               "elapsed_seconds": round(time.monotonic() - started, 3), "error_reason": error}
+    if observed is not None:
+        result["completion_evidence"] = observed
     (output / "process.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
     if private:
         result["_stdout"], result["_stderr"] = [(value or b"").decode("utf-8", errors="replace") for value in captured]
@@ -478,11 +673,17 @@ def run_codex(codex, workspace, output, prompt, timeout_seconds, model="gpt-6.1-
     if call_timeout < 1:
         return blocked("timeout")
     result = _bounded_process(argv, cwd=workspace, env=env, output=output,
-                              timeout_seconds=call_timeout, stdin=prompt)
-    usage, reason = _usage_and_error(output / "stdout.jsonl", output / "stderr.log", result)
-    if reason is None and not (output / "final.json").is_file():
-        reason = "missing_final"
-    result.update(usage=usage, error_reason=reason, passed=result["passed"] and reason is None)
+                              timeout_seconds=call_timeout, stdin=prompt, completion_output=output)
+    evidence = verify_completed_output(output)
+    accounting = dict(result)
+    accounting["passed"] = (result["passed"] or
+        (result.get("forced_after_model_completion") and evidence["passed"] and result.get("error_reason") is None))
+    usage, reason = _usage_and_error(output / "stdout.jsonl", output / "stderr.log", accounting)
+    if reason is None and not evidence["passed"]:
+        reason = evidence["error_reason"]
+    result.update(usage=usage, error_reason=reason,
+                  passed=bool(accounting["passed"] and evidence["passed"] and reason is None),
+                  model_completion_verified=evidence["passed"], completion_evidence=evidence)
     result["elapsed_seconds"] = round(time.monotonic() - started, 3)
     (output / "result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
     return result
