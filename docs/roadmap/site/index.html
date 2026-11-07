@@ -202,17 +202,17 @@
     "12": "测试与发布"
   },
   "phases": [
-    {"id": "00", "title": "工程基线", "status": "done", "history": [{"date": "2026-11-07", "status": "done"}], "note": "工程基线已获人工验收并进入 main；Windows/Node 工程门禁已远端验证，不代表完整 Web 或生产验收。", "owner": "Codex"},
-    {"id": "01", "title": "整体架构与契约", "status": "done", "history": [{"date": "2026-11-07", "status": "done"}], "note": "整体架构、ADR、HTTP/WS 契约及实施映射已原则批准并进入 main；11 项 TBD 仍开放，架构批准不代表业务实现完成。", "owner": "Astra"},
-    {"id": "02a", "title": "PostgreSQL 实体与迁移", "status": "done", "history": [{"date": "2026-11-07", "status": "done"}], "note": "PostgreSQL 实体、迁移、RLS、Repository 及撤权竞态修复已获批准并整合到 main；不代表生产迁移、真实身份或完整 HTTP 联调已完成。", "owner": "Codex"},
-    {"id": "02b", "title": "持久任务与事件", "status": "done", "history": [{"date": "2026-11-07", "status": "done"}], "note": "持久 Task/Attempt、Receipt、Outbox、租约与恢复已获批准并整合到 main；同键 reconcile 与迟到结果语义、多 Attempt 终态覆盖两项 P3 仍开放。", "owner": "Codex"},
-    {"id": "03a", "title": "邀请验证与资源归属", "status": "done", "history": [{"date": "2026-11-07", "status": "done"}], "note": "邀请激活、资源归属及权限/来源恢复整改已获批准并整合到 main；0006 仅支持可信 bootstrap，P3-01 与非超级用户成功升级仍未关闭；真实邮件和完整认证未验收。", "owner": "Codex"},
-    {"id": "03b", "title": "会话、MFA 与恢复", "status": "blocked", "history": [{"date": "2026-11-07", "status": "blocked"}], "note": "S1、S2、S3 Batch 1 已通过，Batch 2 诊断修订已获独审接受；本机监听状态观察不一致，真实 PostgreSQL 归属/握手未验证，数据库执行权仍关闭，完整 Cookie/MFA/恢复未交付。", "owner": "Codex"},
+    {"id": "00", "title": "工程基线", "status": "done", "history": [{"date": "2026-10-27", "status": "doing"}, {"date": "2026-10-28", "status": "review"}, {"date": "2026-11-04", "status": "done"}], "note": "工程基线已获人工验收并进入 main；Windows/Node 工程门禁已远端验证，不代表完整 Web 或生产验收。 本地交付与原则验收为2026-10-28；历史首次明确进入新仓main为2026-11-04，历时包含等待整合。", "owner": "Codex"},
+    {"id": "01", "title": "整体架构与契约", "status": "done", "history": [{"date": "2026-10-28", "status": "doing"}, {"date": "2026-10-28", "status": "review"}, {"date": "2026-11-04", "status": "done"}], "note": "整体架构、ADR、HTTP/WS 契约及实施映射已原则批准并进入 main；11 项 TBD 仍开放，架构批准不代表业务实现完成。 本地架构交付和接受为2026-10-28；历史首次明确进入新仓main为2026-11-04。", "owner": "Astra"},
+    {"id": "02a", "title": "PostgreSQL 实体与迁移", "status": "done", "history": [{"date": "2026-10-28", "status": "doing"}, {"date": "2026-10-28", "status": "review"}, {"date": "2026-10-29", "status": "doing"}, {"date": "2026-10-29", "status": "review"}, {"date": "2026-10-29", "status": "done"}], "note": "PostgreSQL 实体、迁移、RLS、Repository 及撤权竞态修复已获批准并整合到 main；不代表生产迁移、真实身份或完整 HTTP 联调已完成。 历史完成日按当时获准正式Web开发线的本地整合和验证收尾记录，不是当日合并旧Windows main。", "owner": "Codex"},
+    {"id": "02b", "title": "持久任务与事件", "status": "done", "history": [{"date": "2026-10-29", "status": "doing"}, {"date": "2026-10-29", "status": "review"}, {"date": "2026-10-30", "status": "doing"}, {"date": "2026-10-30", "status": "review"}, {"date": "2026-10-30", "status": "done"}], "note": "持久 Task/Attempt、Receipt、Outbox、租约与恢复已获批准并整合到 main；同键 reconcile 与迟到结果语义、多 Attempt 终态覆盖两项 P3 仍开放。 历史完成日按当时获准正式Web开发线的本地整合和验证收尾记录，不是当日合并旧Windows main。", "owner": "Codex"},
+    {"id": "03a", "title": "邀请验证与资源归属", "status": "done", "history": [{"date": "2026-10-30", "status": "doing"}, {"date": "2026-11-02", "status": "review"}, {"date": "2026-11-04", "status": "done"}], "note": "邀请激活、资源归属及权限/来源恢复整改已获批准并整合到 main；0006 仅支持可信 bootstrap，P3-01 与非超级用户成功升级仍未关闭；真实邮件和完整认证未验收。", "owner": "Codex"},
+    {"id": "03b", "title": "会话、MFA 与恢复", "status": "blocked", "history": [{"date": "2026-11-04", "status": "doing"}, {"date": "2026-11-07", "status": "blocked"}], "note": "S1、S2、S3 Batch 1 已通过，Batch 2 诊断修订已获独审接受；本机监听状态观察不一致，真实 PostgreSQL 归属/握手未验证，数据库执行权仍关闭，完整 Cookie/MFA/恢复未交付。", "owner": "Codex"},
     {"id": "04a", "title": "私有对象存储与密钥边界", "status": "todo"},
     {"id": "04b", "title": "数据删除与备份恢复", "status": "todo"},
     {"id": "05a", "title": "缓存密钥安全 POC", "status": "todo", "note": "当前工作流仅保留关闭的未来模板，尚未启用或实施安全 POC。"},
     {"id": "05b", "title": "采集恢复与租约", "status": "todo"},
-    {"id": "06a", "title": "ASR 协议与模拟 POC", "status": "doing", "history": [{"date": "2026-11-07", "status": "doing"}], "note": "模拟协议 POC 已验收并通过 GitHub #4 整合到 main，原模拟 PR 为 #3；模拟候选 24 项及可信断言 4 项通过。PR-06a 的真实接口验证尚未执行，须专项授权及原付费前置门禁；本状态不授权继续调用真实 API。", "owner": "Codex", "prs": ["https://github.com/Mumao233/classroom-os/pull/3", "https://github.com/Mumao233/classroom-os/pull/4"]},
+    {"id": "06a", "title": "ASR 协议与模拟 POC", "status": "doing", "history": [{"date": "2026-11-06", "status": "doing"}], "note": "模拟协议 POC 已验收并通过 GitHub #4 整合到 main，原模拟 PR 为 #3；模拟候选 24 项及可信断言 4 项通过。PR-06a 的真实接口验证尚未执行，须专项授权及原付费前置门禁；本状态不授权继续调用真实 API。", "owner": "Codex", "prs": ["https://github.com/Mumao233/classroom-os/pull/3", "https://github.com/Mumao233/classroom-os/pull/4"]},
     {"id": "06b", "title": "实时 ASR 与恢复", "status": "todo"},
     {"id": "06c", "title": "Filetrans 与候选采用", "status": "todo"},
     {"id": "07a", "title": "问答与来源快照", "status": "todo"},
@@ -220,7 +220,7 @@
     {"id": "08a", "title": "可信加密缓存", "status": "todo"},
     {"id": "08b", "title": "离线同步与冲突", "status": "todo"},
     {"id": "08c", "title": "导入导出兼容", "status": "todo"},
-    {"id": "09a", "title": "Aurora 与 Web 壳", "status": "done", "history": [{"date": "2026-11-07", "status": "done"}], "note": "Aurora 导航、主题、响应式 Web 壳与 Mock 工作台已获批准并整合到 main；仅 Mock 范围，跨课堂合成实体 ID P3 仍开放，不代表真实课堂、认证、音频或 ASR 联调完成。", "owner": "Claude Code"},
+    {"id": "09a", "title": "Aurora 与 Web 壳", "status": "done", "history": [{"date": "2026-10-28", "status": "doing"}, {"date": "2026-10-30", "status": "review"}, {"date": "2026-11-04", "status": "done"}], "note": "Aurora 导航、主题、响应式 Web 壳与 Mock 工作台已获批准并整合到 main；仅 Mock 范围，跨课堂合成实体 ID P3 仍开放，不代表真实课堂、认证、音频或 ASR 联调完成。", "owner": "Claude Code"},
     {"id": "09b", "title": "Dashboard、课程与设置", "status": "todo"},
     {"id": "10a", "title": "Classroom 与课后页", "status": "todo"},
     {"id": "10b", "title": "Review、来源与采用", "status": "todo"},
@@ -473,7 +473,7 @@ function analyze() {
   // owners
   A.owners = [...new Set(data.phases.map(p => p.owner).filter(Boolean))].sort();
 }
-function started(p) { const h = (p.history || []).find(x => ['doing','review','done'].includes(x.status)); return h ? h.date : ''; }
+function started(p) { const h = (p.history || []).find(x => x.status === 'doing'); return h ? h.date : ''; }
 function finished(p) { if (p.status !== 'done') return ''; const h = [...(p.history || [])].reverse().find(x => x.status === 'done'); return h ? h.date : ''; }
 function warnings() {
   return data.phases.filter(p => ['doing','review','done'].includes(p.status) && missing(p.id).length)
@@ -842,7 +842,11 @@ function panelDetail(id) {
   const hs = p.history || [];
   h += `<h2>时间</h2>`;
   const s0 = started(p), f0 = finished(p);
-  h += `<div class="muted">${s0 ? `开始 ${s0}` : '还没开始'}${f0 ? ` · 完成 ${f0} · 用时 ${days(s0 || f0, f0)} 天` : s0 ? ` · 已进行 ${days(s0, today())} 天` : ''}</div>`;
+  const startLabel = s0 ? `开始 ${s0}` : p.status === 'todo' && !hs.length ? '还没开始' : '开始日期未记录';
+  const elapsed = s0 && f0 ? (s0 === f0 ? ' · 同日完成' : ` · 历时 ${days(s0, f0)} 天`)
+    : s0 ? ` · 历时 ${days(s0, today())} 天（截至今日）` : '';
+  h += `<div class="muted">${startLabel}${f0 ? ` · 完成 ${f0}` : ''}${elapsed}</div>`;
+  if (s0) h += '<div class="muted">历时为日历跨度，包含审查和等待，不代表实际工时。</div>';
   if (hs.length) h += `<ul style="margin-top:4px">${[...hs].reverse().map(x => `<li><i class="dot" style="background:${STYLE[x.status].fill};border-color:${STYLE[x.status].stroke}"></i>${esc(x.date)}　${LABEL[x.status]}</li>`).join('')}</ul>`;
   h += `<div class="lines">Shift + 点另一个节点，查看两者之间的依赖路径。</div>`;
   return h;

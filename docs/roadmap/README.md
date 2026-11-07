@@ -73,7 +73,7 @@ _site/
 
 页面打开或刷新时自动读取同目录的 `phases.json`，请求使用 `cache: 'no-store'`。适配 `https://<用户>.github.io/<仓库>/` 这样的项目子路径，不用手动导入、不用跨仓库复制。发布版只读，不会套用浏览器中的本地状态改动。数据请求失败或超时会持续提示「当前显示内置快照」，这时不能据此认定进度已更新。
 
-日常更新仍按 [SPEC.md](SPEC.md) 使用 `set`，将 `phases.json` 和自动生成的 `ROADMAP.md` 放进同一 PR。**合并后，等待本次 Pages 部署成功，再刷新网页**；仅修改本地文件、仅提交 PR、或部署失败都不会更新公开页面。`done` 仍由人验收后设置，合并 PR 不会自动把阶段改成 `done`。2026-11-07 已核对实际进度并获用户确认：6 项 `done`、03b `blocked`、06a `doing`，其余 20 项 `todo`；范围及证据见[本次盘点记录](PROGRESS-RECONCILIATION.md)。
+日常更新仍按 [SPEC.md](SPEC.md) 使用 `set`，将 `phases.json` 和自动生成的 `ROADMAP.md` 放进同一 PR。**合并后，等待本次 Pages 部署成功，再刷新网页**；仅修改本地文件、仅提交 PR、或部署失败都不会更新公开页面。`done` 仍由人验收后设置，合并 PR 不会自动把阶段改成 `done`。2026-11-07 已核对实际进度并获用户确认：6 项 `done`、03b `blocked`、06a `doing`，其余 20 项 `todo`；范围及证据见[本次盘点记录](PROGRESS-RECONCILIATION.md)。历史日期已按原始对话及整合记录补录，统一为 America/Los_Angeles，详见[历史时间依据](HISTORY-EVIDENCE.md)。页面“历时”是日历跨度，包含审查和等待，不是实际工时；缺少开工记录时不推算起点或用时。
 
 Pages 的地址以 Actions 部署任务的输出为准。本工作流接管该仓库的 Pages 站点根目录；已有其他 Pages 内容时，应先确认是否需要合并站点。项目的 Web 应用、业务 API 与数据库不由这个工作流部署。
 

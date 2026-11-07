@@ -189,7 +189,7 @@ class Graph:
     @staticmethod
     def started(p: dict) -> str:
         for h in p.get("history", []):
-            if h["status"] in ("doing", "review", "done"):
+            if h["status"] == "doing":
                 return h["date"]
         return ""
 
@@ -468,7 +468,7 @@ def render(g: Graph) -> str:
         parts.append(
             f"| {p['id']} {cell(p['title'])} | {ICON[s]} {LABEL[s]} | {cell(p.get('owner', '')) or '—'} | {prs} | "
             f"{', '.join(g.missing(p['id'])) or '—'} | {extra_gates(g, p['id']) or '—'} | "
-            f"{Graph.started(p) or '—'} | {Graph.finished(p) or '—'} | {cell(p.get('note', ''))} |"
+            f"{Graph.started(p) or ('开始日期未记录' if p.get('status') == 'done' else '—')} | {Graph.finished(p) or '—'} | {cell(p.get('note', ''))} |"
         )
     parts.append("")
     return "\n".join(parts)
