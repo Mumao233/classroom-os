@@ -128,15 +128,24 @@ unknown values, reserved calls and elapsed time remain separate report fields.
 ## Operation
 
 Use a reviewed clean checkout containing the v2 code, pinned by full SHA. Keep
-the checked-in authorization ID on resume. Validate before executing:
+the checked-in authorization ID on resume. Validate its pinned configuration:
 
 ```powershell
 $workflowPython = 'C:\Users\Mumao\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe'
 & $workflowPython -B -m tools.overnight.workflow --source . --control-sha REVIEWED_CONTROL_SHA --deps work/pr01/validation-deps
 ```
 
-With the reviewed default plan, execution only verifies accepted audit evidence
-and skips 06a. It does not redevelop ASR or call the model:
+This default CLI mode checks the tracked configuration, frozen DAG, scope,
+evidence hashes and pinned Git identities/ancestry. It does not compare current
+branch heads with the accepted base and is not an execution preflight. Ordinary
+PR CI uses this mode so later main commits do not require changing authorization
+pins. The output explicitly records `live_base_refs_checked: false`.
+
+With `--execute`, the CLI always uses the strict loader before creating an
+adapter or touching workflow state. Every configured current local/origin base
+must still match the approved SHA; missing, conflicting or moved refs stop the
+command. With matching authorization and the reviewed default plan, execution
+only verifies accepted audit evidence and skips 06a, without a model call:
 
 ```powershell
 & $workflowPython -B -m tools.overnight.workflow --source . --control-sha REVIEWED_CONTROL_SHA --deps work/pr01/validation-deps --execute
@@ -157,9 +166,10 @@ identity through the same Workflow. No request means report and exit. The legacy
 & $workflowPython -B -m tools.overnight.workflow_queue --source . --control-sha REVIEWED_CONTROL_SHA
 ```
 
-The default plan pins its accepted base to b71e08d. If `main` moves, validation
-stops until the operator reviews the new base and updates the configuration;
-neither CI nor the queue silently advances this approval.
+The default plan pins its accepted base to b71e08d. If `main` moves, static PR
+validation can still pass, but execution and the request queue's strict preflight
+stop until the operator reviews the new base and updates the configuration.
+Neither mode advances pins, grants approval or changes an existing run identity.
 
 ## Recovery and evidence
 

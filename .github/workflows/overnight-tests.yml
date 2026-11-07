@@ -54,7 +54,7 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: ${{ matrix.python }}
-      - name: Validate the pinned default workflow without execution
+      - name: Validate pinned configuration without execution preflight
         shell: pwsh
         run: |
           $controlSha = git rev-parse --verify HEAD

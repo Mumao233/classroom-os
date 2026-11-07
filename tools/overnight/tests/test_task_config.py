@@ -8,7 +8,7 @@ import tempfile
 import unittest
 
 from tools.overnight.state import StateError, load_dag
-from tools.overnight.task_config import load_plan, plan_hash, validate_evidence, validate_plan
+from tools.overnight.task_config import load_plan, load_static_plan, plan_hash, validate_evidence, validate_plan
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -196,13 +196,74 @@ class TaskConfigTests(unittest.TestCase):
     def test_load_rejects_dirty_wrong_pin_and_outside_paths(self):
         repo, git, _ = self.repository()
         control = git('rev-parse', 'HEAD')
-        with self.assertRaises(StateError):
-            load_plan(repo, 'automation/workflow.json', git('rev-parse', 'HEAD^'))
-        with self.assertRaises(StateError):
-            load_plan(repo, '../other.json', control)
+        for loader in (load_plan, load_static_plan):
+            with self.subTest(loader=loader.__name__), self.assertRaises(StateError):
+                loader(repo, 'automation/workflow.json', git('rev-parse', 'HEAD^'))
+            with self.subTest(loader=loader.__name__), self.assertRaises(StateError):
+                loader(repo, '../other.json', control)
         (repo / 'automation/workflow.json').write_text('{}', 'utf-8')
-        with self.assertRaises(StateError):
-            load_plan(repo, 'automation/workflow.json', control)
+        for loader in (load_plan, load_static_plan):
+            with self.subTest(loader=loader.__name__), self.assertRaises(StateError):
+                loader(repo, 'automation/workflow.json', control)
+
+    def test_static_frozen_plan_survives_two_main_merges_while_execution_rejects_drift(self):
+        repo, git, expected = self.repository()
+        base = expected['tasks']['06a']['base']
+        base['ref'] = 'main'
+        path = repo / 'automation/workflow.json'
+        path.write_text(json.dumps(expected), 'utf-8')
+        git('add', 'automation/workflow.json'); git('commit', '-q', '-m', 'synthetic frozen main plan')
+        feature_head = git('rev-parse', 'HEAD')
+        tree = git('rev-parse', 'HEAD^{tree}')
+        git('checkout', '--detach', '-q', feature_head)
+        git('update-ref', 'refs/heads/main', base['sha'])
+        git('update-ref', 'refs/remotes/origin/main', base['sha'])
+        self.assertEqual(load_plan(repo, 'automation/workflow.json', feature_head)[0], expected)
+        frozen_bytes = path.read_bytes()
+        main_head = base['sha']
+        for number in (1, 2):
+            merge_head = git('commit-tree', tree, '-p', main_head, '-p', feature_head,
+                             '-m', 'synthetic future merge ' + str(number))
+            git('update-ref', 'refs/heads/main', merge_head)
+            git('update-ref', 'refs/remotes/origin/main', merge_head)
+            git('checkout', '--detach', '-q', merge_head)
+            with self.subTest(merge=number):
+                self.assertEqual(len(git('rev-list', '--parents', '-n', '1', 'HEAD').split()), 3)
+                self.assertEqual(path.read_bytes(), frozen_bytes)
+                plan, dag, config_sha = load_static_plan(repo, 'automation/workflow.json', merge_head)
+                self.assertEqual(plan, expected)
+                self.assertEqual(len(dag), 28)
+                self.assertEqual(config_sha, plan_hash(expected))
+                with self.assertRaisesRegex(StateError, 'configured base branch moved'):
+                    load_plan(repo, 'automation/workflow.json', merge_head)
+            main_head = merge_head
+            feature_head = git('commit-tree', tree, '-p', main_head, '-m', 'synthetic next feature')
+        # CI may also have no local or remote branch refs; pinned objects remain
+        # sufficient for static checks, while execution must still fail closed.
+        git('update-ref', '-d', 'refs/heads/main')
+        git('update-ref', '-d', 'refs/remotes/origin/main')
+        self.assertEqual(load_static_plan(repo, 'automation/workflow.json', main_head)[0], expected)
+        with self.assertRaisesRegex(StateError, 'missing or local/origin refs disagree'):
+            load_plan(repo, 'automation/workflow.json', main_head)
+
+    def test_static_load_retains_pinned_base_dependency_and_audit_ancestry(self):
+        for change in ('base', 'dependency', 'audit'):
+            with self.subTest(change=change):
+                repo, git, plan = self.repository()
+                tree = git('rev-parse', 'HEAD^{tree}')
+                unrelated = git('commit-tree', tree, '-m', 'synthetic unrelated pinned object')
+                if change == 'base':
+                    plan['tasks']['06a']['base']['sha'] = unrelated
+                elif change == 'dependency':
+                    plan['tasks']['06a']['base']['dependency_heads']['01'] = unrelated
+                else:
+                    # The newer audit is in control history but not in the
+                    # older fixed base: static validation must retain that check.
+                    plan['tasks']['06a']['audit'].update(head_sha=git('rev-parse', 'HEAD'), tree_sha=tree)
+                (repo / 'automation/workflow.json').write_text(json.dumps(plan), 'utf-8')
+                git('add', 'automation/workflow.json'); git('commit', '-q', '-m', 'synthetic invalid ancestry')
+                with self.assertRaises(StateError):
+                    load_static_plan(repo, 'automation/workflow.json', git('rev-parse', 'HEAD'))
 
     def test_detached_checkout_accepts_only_exact_offline_origin_base(self):
         repo, git, expected = self.repository()
@@ -232,8 +293,9 @@ class TaskConfigTests(unittest.TestCase):
         repo, git, _ = self.repository()
         (repo / EVIDENCE).write_text('{"synthetic":"changed"}', 'utf-8')
         git('add', EVIDENCE); git('commit', '-q', '-m', 'synthetic evidence drift')
-        with self.assertRaises(StateError):
-            load_plan(repo, 'automation/workflow.json', git('rev-parse', 'HEAD'))
+        for loader in (load_plan, load_static_plan):
+            with self.subTest(loader=loader.__name__), self.assertRaises(StateError):
+                loader(repo, 'automation/workflow.json', git('rev-parse', 'HEAD'))
 
     def test_evidence_requires_regular_tracked_blob_not_ignored_file_or_symlink(self):
         repo, git, _ = self.repository()
@@ -280,8 +342,9 @@ class TaskConfigTests(unittest.TestCase):
                     (repo / 'automation/workflow.json').write_text(json.dumps(plan), 'utf-8')
                     git('add', 'automation/workflow.json')
                 git('commit', '-q', '-m', 'synthetic invalid input')
-                with self.assertRaises(StateError):
-                    load_plan(repo, 'automation/workflow.json', git('rev-parse', 'HEAD'))
+                for loader in (load_plan, load_static_plan):
+                    with self.subTest(loader=loader.__name__), self.assertRaises(StateError):
+                        loader(repo, 'automation/workflow.json', git('rev-parse', 'HEAD'))
 
     def test_load_rejects_duplicate_json_and_wrong_audit_tree(self):
         for change in ('duplicate', 'tree'):
@@ -294,8 +357,9 @@ class TaskConfigTests(unittest.TestCase):
                     raw = json.dumps(plan)
                 (repo / 'automation/workflow.json').write_text(raw, 'utf-8')
                 git('add', 'automation/workflow.json'); git('commit', '-q', '-m', 'synthetic invalid plan')
-                with self.assertRaises(StateError):
-                    load_plan(repo, 'automation/workflow.json', git('rev-parse', 'HEAD'))
+                for loader in (load_plan, load_static_plan):
+                    with self.subTest(loader=loader.__name__), self.assertRaises(StateError):
+                        loader(repo, 'automation/workflow.json', git('rev-parse', 'HEAD'))
 
 
 if __name__ == '__main__':

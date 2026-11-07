@@ -19,7 +19,7 @@ import uuid
 from .budget import SubscriptionLimits, DEFAULT_LIMITS, LimitExceeded
 from .state import (StateStore, StateError, atomic_json, read_json, process_lock,
                     dependency_fingerprint, ACTIVE)
-from .task_config import load_plan, plan_hash
+from .task_config import load_plan, load_static_plan, plan_hash
 
 
 def digest(value):
@@ -724,16 +724,18 @@ def main():
     parser.add_argument("--plan", type=Path, default=Path("automation/workflow.json"))
     parser.add_argument("--deps", type=Path, required=True)
     parser.add_argument("--approvals", type=Path)
-    parser.add_argument("--execute", action="store_true", help="Execute enabled tasks; otherwise only validate the trusted plan")
+    parser.add_argument("--execute", action="store_true", help="Check current base refs and execute enabled tasks; otherwise validate pinned configuration only")
     parser.add_argument("--publish", action="store_true", help="Allow validated personal-account Draft PRs only")
     parser.add_argument("--codex", default=shutil.which("codex"))
     args = parser.parse_args()
     if args.source.resolve() != Path(__file__).resolve().parents[2]:
         raise StateError("execute this entrypoint from its exact pinned control repository")
-    plan, dag, config_sha = load_plan(args.source, args.plan, args.control_sha)
+    loader = load_plan if args.execute else load_static_plan
+    plan, dag, config_sha = loader(args.source, args.plan, args.control_sha)
     if not args.execute:
         print(json.dumps({"status": "validated_not_executed", "packages": len(dag),
-                          "enabled": plan["enabled_tasks"], "config_sha": config_sha, "model_calls": 0}))
+                          "enabled": plan["enabled_tasks"], "config_sha": config_sha, "model_calls": 0,
+                          "validation_scope": "static_pinned_configuration", "live_base_refs_checked": False}))
         return 0
     from .workflow_adapter import ProductionAdapter
     root = args.source.resolve() / "work/overnight/workflows" / plan["authorization_id"]

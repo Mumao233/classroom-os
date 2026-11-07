@@ -1,6 +1,7 @@
 """Workflow fault injection: fake workers, real locked state/usage files, no models."""
 from copy import deepcopy
 import hashlib
+import io
 import json
 from pathlib import Path
 import tempfile
@@ -619,6 +620,57 @@ class WorkflowTests(unittest.TestCase):
         self.now += 3
         self.engine().initialize()
         self.assertEqual(before, engine.ledger.path.read_bytes())
+
+
+class WorkflowCliTests(unittest.TestCase):
+    def argv(self, *flags):
+        return ["workflow", "--source", str(ROOT), "--control-sha", CONTROL,
+                "--deps", str(ROOT / "work/pr5-p2-main-drift-20261107/unused-deps"), *flags]
+
+    def test_default_static_validation_never_constructs_execution_adapter(self):
+        loaded = ({"enabled_tasks": ["06a"]}, {str(i): {} for i in range(28)}, "f" * 64)
+        with patch("sys.argv", self.argv()), patch("sys.stdout", new_callable=io.StringIO) as output, \
+                patch.object(workflow, "load_static_plan", return_value=loaded) as static, \
+                patch.object(workflow, "load_plan", side_effect=StateError("configured base branch moved")) as strict, \
+                patch("tools.overnight.workflow_adapter.ProductionAdapter") as adapter, \
+                patch.object(workflow, "Workflow") as engine:
+            self.assertEqual(workflow.main(), 0)
+        static.assert_called_once_with(ROOT, Path("automation/workflow.json"), CONTROL)
+        strict.assert_not_called()
+        adapter.assert_not_called()
+        engine.assert_not_called()
+        report = json.loads(output.getvalue())
+        self.assertEqual(report["validation_scope"], "static_pinned_configuration")
+        self.assertFalse(report["live_base_refs_checked"])
+        self.assertEqual(report["model_calls"], 0)
+
+    def test_execute_ref_drift_fails_before_adapter_or_state(self):
+        with patch("sys.argv", self.argv("--execute")), \
+                patch.object(workflow, "load_static_plan") as static, \
+                patch.object(workflow, "load_plan", side_effect=StateError("configured base branch moved")) as strict, \
+                patch("tools.overnight.workflow_adapter.ProductionAdapter") as adapter, \
+                patch.object(workflow, "Workflow") as engine, \
+                self.assertRaisesRegex(StateError, "configured base branch moved"):
+            workflow.main()
+        strict.assert_called_once_with(ROOT, Path("automation/workflow.json"), CONTROL)
+        static.assert_not_called()
+        adapter.assert_not_called()
+        engine.assert_not_called()
+
+    def test_execute_uses_strict_loader_without_static_fallback(self):
+        plan = {"authorization_id": "synthetic-cli", "enabled_tasks": ["06a"]}
+        with patch("sys.argv", self.argv("--execute")), patch("sys.stdout", new_callable=io.StringIO), \
+                patch.object(workflow, "load_static_plan") as static, \
+                patch.object(workflow, "load_plan", return_value=(plan, {}, "f" * 64)) as strict, \
+                patch("tools.overnight.workflow_adapter.ProductionAdapter") as adapter, \
+                patch.object(workflow, "Workflow") as engine:
+            engine.return_value.run.return_value = {
+                "status": "STOPPED_NO_READY_TASKS", "tasks": {"06a": {"effective_state": "SKIPPED"}}}
+            self.assertEqual(workflow.main(), 0)
+        strict.assert_called_once()
+        static.assert_not_called()
+        adapter.assert_called_once()
+        engine.return_value.run.assert_called_once()
 
 
 if __name__ == "__main__":

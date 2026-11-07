@@ -334,7 +334,25 @@ def _base_head(source, ref):
 
 
 def load_plan(source, path, control_sha):
-    """Read a clean pinned control commit; return (plan, full_dag, plan_hash)."""
+    """Load an execution plan, also requiring its live base refs to match.
+
+    Queue and execution callers must use this strict entrypoint. Return
+    (plan, full_dag, plan_hash) from the exact clean control commit.
+    """
+    return _load_plan(source, path, control_sha, check_current_base=True)
+
+
+def load_static_plan(source, path, control_sha):
+    """Validate pinned plan objects for CI without requiring live base equality.
+
+    This is not execution authorization. Only the mutable local/origin branch
+    comparison is omitted; the pinned base, prerequisites, audits and evidence
+    still need their original object identities and ancestry relationships.
+    """
+    return _load_plan(source, path, control_sha, check_current_base=False)
+
+
+def _load_plan(source, path, control_sha, *, check_current_base):
     source = Path(source).resolve(strict=True)
     _sha(control_sha, 'control sha')
     if Path(_git(source, 'rev-parse', '--show-toplevel').decode().strip()).resolve() != source:
@@ -385,7 +403,7 @@ def load_plan(source, path, control_sha):
     for task in plan['tasks'].values():
         base = task['base']
         if base['sha'] is not None:
-            if _base_head(source, base['ref']) != base['sha']:
+            if check_current_base and _base_head(source, base['ref']) != base['sha']:
                 raise StateError('configured base branch moved')
             _git(source, 'merge-base', '--is-ancestor', base['sha'], control_sha)
             for head in base['dependency_heads'].values():
