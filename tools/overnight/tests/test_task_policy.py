@@ -7,7 +7,6 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
-import tomllib
 import unittest
 from unittest.mock import patch
 
@@ -19,6 +18,29 @@ BRANCH = "feature/workflow-05a-synthetic"
 BASE = "a" * 40
 HEAD = "b" * 40
 PATCH = "c" * 64
+
+
+def permission_table(text):
+    """Parse the executor's JSON-string inline table on Python 3.10 too."""
+    if not isinstance(text, str) or not text.startswith("{"):
+        raise ValueError("permission table must start with an opening brace")
+    decoder, result, position = json.JSONDecoder(), {}, 1
+    if text[position:] == "}":
+        return result
+    while True:
+        key, position = decoder.raw_decode(text, position)
+        if not isinstance(key, str) or key in result or text[position:position + 1] != "=":
+            raise ValueError("permission table requires unique string keys and equals signs")
+        value, position = decoder.raw_decode(text, position + 1)
+        if not isinstance(value, str):
+            raise ValueError("permission table values must be strings")
+        result[key] = value
+        delimiter = text[position:position + 1]
+        if delimiter == "}" and position == len(text) - 1:
+            return result
+        if delimiter != ",":
+            raise ValueError("permission table has an invalid delimiter or trailing content")
+        position += 1
 
 
 def scope(**changes):
@@ -236,7 +258,7 @@ class ExecutionPolicyTests(unittest.TestCase):
     def permissions(self, **kwargs):
         args = executor.permission_args(self.workspace, env=self.env, **kwargs)
         entry = next(arg for arg in args if arg.startswith("permissions.overnight.filesystem="))
-        return tomllib.loads("fs=" + entry.split("=", 1)[1])["fs"]
+        return permission_table(entry.split("=", 1)[1])
 
     def test_explicit_writes_preserve_readonly_workspace_and_existing_files(self):
         fs = self.permissions(write_paths=[self.new_dir])
@@ -253,6 +275,13 @@ class ExecutionPolicyTests(unittest.TestCase):
         self.assertEqual(self.permissions()[self.workspace.as_posix()], "write")
         self.assertEqual(self.permissions(readonly=True)[self.workspace.as_posix()], "read")
         self.assertEqual(self.permissions(write_paths=[])[self.workspace.as_posix()], "read")
+        escaped = {'path with "quote", comma=and\\slash': "read"}
+        self.assertEqual(permission_table(executor._toml_table(escaped)), escaped)
+        for malformed in ('{"key":"read"}', '{"key"="read",}', '{"key"="read"}trailing',
+                          '{"key"="read","key"="write"}', '{"key"=true}', '{1="read"}',
+                          '{"key"="read"', '{"key"="read" "other"="write"}'):
+            with self.subTest(malformed=malformed), self.assertRaises(ValueError):
+                permission_table(malformed)
 
     def test_outside_root_protected_and_duplicate_writes_rejected(self):
         for paths in ([self.root], [self.workspace], ["../outside"], ["web/../other"],
