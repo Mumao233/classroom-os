@@ -1,0 +1,166 @@
+{
+  "schema_version": 1,
+  "repository": "Mumao233/classroom-os",
+  "source_head": "b71e08db53aed6d75b68e0d7fae100734872a49c",
+  "source_tree": "f9c93afa16670de024985b0d3f82043a1f099de8",
+  "scope": "Existing integrated engineering baseline, approved architecture, and PR-06a simulated ASR protocol POC only.",
+  "provenance": {
+    "kind": "Extracted from existing observed postmerge main CI receipts; no new CI/model/provider run during configuration authoring.",
+    "verified_at_utc": "2026-11-07T07:25:10.061236+00:00",
+    "sources": [
+      {
+        "path": "outputs/main-integration-pr2-pr3-20261106/postmerge-ci.json",
+        "sha256": "a8bf6fe575cdc0230fb0b4d1592a91b4d18e25e0bd149d09bddbc688b6f334df"
+      },
+      {
+        "path": "outputs/main-integration-pr2-pr3-20261106/main-remote-verification.json",
+        "sha256": "ff43e1da0af9437d1d7a5bdaa0daebd5cae0bbbe8c6fef9846d0255da9bf0115"
+      },
+      {
+        "path": "outputs/main-integration-pr2-pr3-20261106/MAIN-INTEGRATION-REPORT.md",
+        "sha256": "11419c1eb3df612d1cdc65698e8fd07c861f4aac1891306b7e32fd5be5cc12ce"
+      }
+    ],
+    "runs": [
+      {
+        "id": 42350808154,
+        "url": "https://github.com/Mumao233/classroom-os/actions/runs/42350808154",
+        "event": "workflow_dispatch",
+        "branch": "main",
+        "conclusion": "success",
+        "job_checkouts": [
+          {
+            "job_id": 128338335121,
+            "sha": "b71e08db53aed6d75b68e0d7fae100734872a49c",
+            "conclusion": "success"
+          },
+          {
+            "job_id": 128338335340,
+            "sha": "b71e08db53aed6d75b68e0d7fae100734872a49c",
+            "conclusion": "success"
+          },
+          {
+            "job_id": 128338335384,
+            "sha": "b71e08db53aed6d75b68e0d7fae100734872a49c",
+            "conclusion": "success"
+          }
+        ]
+      },
+      {
+        "id": 42350810231,
+        "url": "https://github.com/Mumao233/classroom-os/actions/runs/42350810231",
+        "event": "workflow_dispatch",
+        "branch": "main",
+        "conclusion": "success",
+        "job_checkouts": [
+          {
+            "job_id": 128338342214,
+            "sha": "b71e08db53aed6d75b68e0d7fae100734872a49c",
+            "conclusion": "success"
+          }
+        ]
+      }
+    ],
+    "artifacts": [
+      {
+        "id": 13565582214,
+        "sha256": "c17e46c82a04494cb7cc95ebf66be78323fa4a4046ae696b72461f72464ff921",
+        "bytes": 168267,
+        "github_digest_matches": true
+      },
+      {
+        "id": 13565187677,
+        "sha256": "d44f2a46a558bf31d5ff6fb48763c1c6ad72e6027db6ff93ae0a47e4627ae932",
+        "bytes": 20080,
+        "github_digest_matches": true
+      }
+    ]
+  },
+  "human_acceptance": {
+    "actor": "Mumao233",
+    "basis": "Explicitly authorized preservation of the approved PR2/PR3 history into main via integration PR #4; the prior architecture acceptance remains limited to its approved design scope.",
+    "integration_pr": "https://github.com/Mumao233/classroom-os/pull/4",
+    "accepted_baselines": [
+      "00",
+      "01"
+    ],
+    "new_development_authorized_by_this_receipt": false,
+    "gates_approved": []
+  },
+  "results": {
+    "contracts_groups_passed": 9,
+    "asr_simulation": {
+      "passed": true,
+      "candidate_binding": {
+        "head_sha": "b71e08db53aed6d75b68e0d7fae100734872a49c",
+        "patch_sha256": "69fc2365b63f1ee3f0bdcb717ae4791bca24d14961f8c034a7dce154f96d03fb"
+      },
+      "sessions": {
+        "candidate": {
+          "exit_code": 0,
+          "passed": true,
+          "tests_run": 24,
+          "complete": true,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        },
+        "trusted": {
+          "exit_code": 0,
+          "passed": true,
+          "tests_run": 4,
+          "complete": true,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 0
+        }
+      }
+    },
+    "backend": {
+      "pytest_items_passed": 488,
+      "pytest_subtests_passed": 29,
+      "junit": {
+        "tests": 517,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "asr_testcases": 24
+    },
+    "windows": {
+      "pytest_items_passed": 525,
+      "pytest_subtests_passed": 171,
+      "junit": {
+        "tests": 696,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      },
+      "all_steps_exit_zero": true
+    },
+    "counting_note": "ASR candidate tests are already included in backend totals; no double counting. These are historical main CI results, not newly run workflow tests."
+  },
+  "unclosed_gates": {
+    "06a": [
+      "explicit paid scope",
+      "TBD-01",
+      "TBD-02"
+    ],
+    "05a": [
+      "TBD-03 before enablement"
+    ],
+    "03b": [
+      "TBD-08"
+    ]
+  },
+  "not_validated": [
+    "real ASR SDK or quality",
+    "paid provider calls or costs",
+    "microphone/browser/device integration",
+    "persistent encrypted recovery",
+    "05a implementation",
+    "remaining product/security/TBD decisions"
+  ],
+  "schedule_enabled": false,
+  "deployment_authorized": false
+}

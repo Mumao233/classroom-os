@@ -62,3 +62,11 @@ The latest user decision supersedes historical plans to merge Web work into the 
 - Task workers may only add files in the four PR-06a directories approved by `automation/prompts/06a.md`. They may not change this file, control scripts, workflow/configuration, existing tests, migrations, frozen contracts or Git metadata. Only the trusted controller publishes validated objects.
 - Use a pinned clean control commit, isolated tracked-source checkout, restricted local executor and persistent limits. Maximum three repairs; unresolved calls block further invocation. Passing a simulation does not approve real ASR, budget, persistence, security or recovery integration.
 - All PRs remain Draft. No automatic merge, deployment, release, tags, production operations or real business service calls. See [pilot operation guide](docs/web-alpha/overnight/README.md).
+
+## Authorized configurable workflow engineering (2026-11-07)
+
+- The user authorized incremental generalization of the existing pilot inside this repository, with controlled task configuration, serial scheduling, synthetic failure/recovery acceptance and retained 06a regression. Do not extract a separate platform or rewrite completed work.
+- Default v2 scope audits and skips the accepted simulated 06a result. The 05a entry is a disabled future template, not authorization to implement its business/security behavior. Loading the 28-node frozen DAG never enables all packages.
+- Control/configuration/schema, approval records and trusted acceptance entrypoints are pinned and outside worker write authority. Automatic review or Draft publication cannot supply human acceptance, enablement gates or a common merged base.
+- Keep the v1 pilot and all previous ledgers/review/integration evidence unchanged. Do not clear cumulative reservations, reset repair limits, change authorization identity on resume, or rerun a real model trial merely to validate the new workflow.
+- Current delivery may use a feature branch, Mumao233 commits/push and a Draft PR under the existing infrastructure authorization. It does not authorize merging this new change into main, scheduling, deployment, release, real data/microphone/provider work, or starting 05a. See [v2 operation and recovery](docs/web-alpha/overnight/WORKFLOW.md).

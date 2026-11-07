@@ -12,10 +12,16 @@ import re
 import shutil
 import signal
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
 import time
+
+try:
+    from .validation import HARD_DENY_PREFIXES, hard_protected_path, _scope_path, _covers
+except ImportError:
+    from validation import HARD_DENY_PREFIXES, hard_protected_path, _scope_path, _covers
 
 _HOST_ENV = frozenset({"PATH", "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC", "PATHEXT",
     "USERPROFILE", "HOME", "HOMEDRIVE", "HOMEPATH", "APPDATA", "LOCALAPPDATA",
@@ -25,6 +31,8 @@ _SHELL_ENV = frozenset({"PATH", "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC"
     "LANG", "LC_ALL", "LC_CTYPE", "TERM", "TZ", "TEMP", "TMP", "TMPDIR",
     "PYTHONDONTWRITEBYTECODE", "PYTHONNOUSERSITE", "PYTHONUTF8"})
 _PROTECTED = (".git", ".codex", ".agents", ".github", "automation", "tools/overnight", "AGENTS.md")
+_REASONING = frozenset({"low", "medium", "high", "xhigh", "max", "ultra"})
+_PINNED_MODELS = frozenset({"gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-astra", "gpt-6-sol", "gpt-6-luna"})
 
 
 def clean_environment(work: Path, source=None) -> dict[str, str]:
@@ -42,11 +50,48 @@ def _toml_table(values):
     return "{" + ",".join(json.dumps(k) + "=" + json.dumps(v) for k, v in values.items()) + "}"
 
 
-def permission_args(workspace: Path, *, readonly=False, read_roots=(), env=None) -> list[str]:
+def _write_locations(workspace, write_paths):
+    if not isinstance(write_paths, (list, tuple)):
+        raise ValueError("write_paths must be an explicit path list")
+    paths = []
+    for value in write_paths:
+        if not isinstance(value, (str, Path)):
+            raise ValueError("invalid write path")
+        original = Path(value)
+        if ".." in original.parts:
+            raise ValueError("write path traversal is forbidden")
+        path = Path(os.path.abspath(original if original.is_absolute() else workspace / original))
+        if path == workspace or workspace not in path.parents:
+            raise ValueError("write path must be inside the candidate workspace")
+        relative = path.relative_to(workspace).as_posix()
+        _scope_path(relative)
+        if hard_protected_path(relative) or any(_covers(relative, name) for name in HARD_DENY_PREFIXES):
+            raise ValueError("write path overlaps protected controller or baseline files")
+        for component in (path, *path.parents):
+            if component == workspace:
+                break
+            if os.path.lexists(component):
+                info = component.lstat()
+                if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
+                    raise ValueError("write path cannot contain links or reparse points")
+                if stat.S_ISREG(info.st_mode) and info.st_nlink != 1:
+                    raise ValueError("write file cannot be hardlinked")
+        if path.resolve() != path:
+            raise ValueError("write path changed after resolution")
+        if path in paths:
+            raise ValueError("duplicate write path")
+        paths.append(path)
+    return paths
+
+
+def permission_args(workspace: Path, *, readonly=False, read_roots=(), env=None, write_paths=None) -> list[str]:
     """Named profiles preserve deny rules; --sandbox must not override them."""
     workspace = Path(workspace).resolve()
+    writes = None if write_paths is None else _write_locations(workspace, write_paths)
+    if readonly and writes:
+        raise ValueError("read-only execution cannot grant source writes")
     fs = {":root": "deny", ":minimal": "read", ":slash_tmp": "deny",
-          workspace.as_posix(): "read" if readonly else "write",
+          workspace.as_posix(): "read" if readonly or writes is not None else "write",
           Path(sys.executable).resolve().parent.as_posix(): "read",
           "~/.codex": "deny", "~/.ssh": "deny", "~/.aws": "deny"}
     git = shutil.which("git", path=(env or os.environ).get("PATH"))
@@ -63,11 +108,31 @@ def permission_args(workspace: Path, *, readonly=False, read_roots=(), env=None)
         if any(root == p.resolve() or p.resolve() in root.parents or root in p.resolve().parents for p in sensitive):
             raise ValueError("read root overlaps host credentials")
         fs[root.as_posix()] = "read"
+    for path in writes or ():
+        fs[path.as_posix()] = "write"
+        if path.is_dir():
+            for folder, dirs, files in os.walk(path, followlinks=False):
+                for name in dirs + files:
+                    child = Path(folder) / name
+                    info = child.lstat()
+                    if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
+                        raise ValueError("writable directory contains a link or reparse point")
+                    # Directory grants are for additions. The controller lists
+                    # exact modified/deleted files and prior task additions.
+                    if stat.S_ISREG(info.st_mode) and child not in writes:
+                        fs[child.as_posix()] = "read"
     for name in _PROTECTED:
         fs[(workspace / name).resolve().as_posix()] = "read"
     if env and env.get("TEMP"):
         # Only this invocation's scratch, never its controller-output siblings.
         fs[Path(env["TEMP"]).resolve().as_posix()] = "write"
+    if writes is not None:
+        # These rules are last and cannot be weakened by a write/scratch grant.
+        for name in HARD_DENY_PREFIXES:
+            fs[(workspace / name).as_posix()] = "read"
+        for path in workspace.iterdir():
+            if hard_protected_path(path.name):
+                fs[path.as_posix()] = "read"
     shell_env = {k: v for k, v in (env or {}).items() if k.upper() in _SHELL_ENV}
     config = ['default_permissions="overnight"', "permissions.overnight.filesystem=" + _toml_table(fs),
               "permissions.overnight.network.enabled=false", 'approval_policy="never"',
@@ -619,17 +684,29 @@ def _usage_and_error(stdout, stderr, result):
 
 
 def run_codex(codex, workspace, output, prompt, timeout_seconds, model="gpt-6.1-sol",
-              readonly=False, schema=None):
+              readonly=False, schema=None, reasoning_effort=None, write_paths=None, read_roots=()):
     workspace, output = _layout(workspace, output)
     if not isinstance(prompt, str) or not prompt.strip() or len(prompt.encode("utf-8")) > 1_000_000:
         raise ValueError("prompt must contain 1..1000000 bytes")
     if not isinstance(model, str) or not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}", model):
         raise ValueError("invalid pinned model")
+    if reasoning_effort is not None:
+        if model not in _PINNED_MODELS or not isinstance(reasoning_effort, str) or reasoning_effort not in _REASONING:
+            raise ValueError("unknown pinned model or reasoning effort; no fallback is permitted")
+    if write_paths is not None:
+        write_paths = _write_locations(workspace, write_paths)
+        if readonly and write_paths:
+            raise ValueError("read-only execution cannot grant source writes")
     if type(timeout_seconds) is not int or not 1 <= timeout_seconds <= 7200:
         raise ValueError("invalid timeout")
     if any(output.iterdir()):
         raise ValueError("model invocation output directory must be new/empty")
     started = time.monotonic()
+    parameters = None
+    if reasoning_effort is not None or write_paths is not None or read_roots:
+        parameters = {"model": model, "reasoning_effort": reasoning_effort,
+            "write_paths": None if write_paths is None else [p.relative_to(workspace).as_posix() for p in write_paths],
+            "read_roots": [str(Path(p).resolve()) for p in read_roots]}
 
     def remaining(cap):
         return max(0, min(cap, timeout_seconds - int(time.monotonic() - started)))
@@ -637,6 +714,8 @@ def run_codex(codex, workspace, output, prompt, timeout_seconds, model="gpt-6.1-
     def blocked(reason):
         result = {"passed": False, "exit_code": 126, "elapsed_seconds": round(time.monotonic()-started, 3),
                   "usage": None, "error_reason": reason}
+        if parameters is not None:
+            result["execution_parameters"] = parameters
         (output / "result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
         return result
 
@@ -660,8 +739,12 @@ def run_codex(codex, workspace, output, prompt, timeout_seconds, model="gpt-6.1-
         return blocked("configuration_unavailable")
     argv = [str(codex), "--no-daemon", "exec", "--ignore-user-config", "--ignore-rules", "--ephemeral",
             "--json", "--color", "never", "--model", model, "--cd", str(workspace),
-            *permission_args(workspace, readonly=readonly, env=env), *mcp,
+            *permission_args(workspace, readonly=readonly, env=env, read_roots=read_roots, write_paths=write_paths), *mcp,
             "--output-last-message", str(output / "final.json")]
+    if reasoning_effort is not None:
+        # Availability is model/client dependent. CLI rejection is terminal;
+        # never silently substitute a model or a lower reasoning effort.
+        argv += ["-c", "model_reasoning_effort=" + json.dumps(reasoning_effort)]
     if schema is not None:
         schema_path = Path(schema).resolve(strict=True)
         if schema_path == workspace or workspace in schema_path.parents:
@@ -684,6 +767,8 @@ def run_codex(codex, workspace, output, prompt, timeout_seconds, model="gpt-6.1-
     result.update(usage=usage, error_reason=reason,
                   passed=bool(accounting["passed"] and evidence["passed"] and reason is None),
                   model_completion_verified=evidence["passed"], completion_evidence=evidence)
+    if parameters is not None:
+        result["execution_parameters"] = parameters
     result["elapsed_seconds"] = round(time.monotonic() - started, 3)
     (output / "result.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
     return result

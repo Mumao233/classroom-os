@@ -1,5 +1,10 @@
 # Subscription-only unattended pilot
 
+This page describes the retained v1 06a pilot and its historical recovery.
+For the new controlled task configuration, serial lifecycle and approval-aware
+recovery, use [Configured development workflow (v2)](WORKFLOW.md). The v2 default
+only audits/skips the existing 06a result; 05a and new business work remain off.
+
 The approved scope is automation infrastructure plus **one simulated PR-06a**.
 The controller retains existing packages 00/01 and only adds the missing 06a
 simulator. Other packages are disabled; paid-mode gates are never marked passed.

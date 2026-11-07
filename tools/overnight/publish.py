@@ -16,9 +16,9 @@ import subprocess
 from urllib import error, parse, request
 
 try:
-    from .validation import validate_candidate
+    from .validation import ValidationError, WORKFLOW_BRANCH, validate_candidate, validate_policy
 except ImportError:
-    from validation import validate_candidate
+    from validation import ValidationError, WORKFLOW_BRANCH, validate_candidate, validate_policy
 
 
 OWNER = "Mumao233"
@@ -74,13 +74,14 @@ def _run_git(repo, *args, input_bytes=None, extra_env=None):
     return result.stdout
 
 
-def _valid_branch(branch):
-    return (isinstance(branch, str) and BRANCH.fullmatch(branch) is not None
+def _valid_branch(branch, *, allow_workflow=False):
+    return (isinstance(branch, str) and (BRANCH.fullmatch(branch) is not None
+            or allow_workflow and WORKFLOW_BRANCH.fullmatch(branch) is not None)
             and ".." not in branch and not branch.endswith((".", ".lock")))
 
 
-def _base_ref(ref):
-    if ref != "main" and not _valid_branch(ref):
+def _base_ref(ref, *, allow_workflow=False):
+    if ref != "main" and not _valid_branch(ref, allow_workflow=allow_workflow):
         raise PublishError("unapproved base branch")
 
 
@@ -148,9 +149,9 @@ class GitHubClient:
                 raise PublishError("only Draft PR creation is permitted")
             if payload.get("draft") is not True or set(payload) != {"title", "body", "head", "base", "draft", "maintainer_can_modify"}:
                 raise PublishError("invalid Draft PR payload")
-            if not _valid_branch(payload["head"]) or payload["maintainer_can_modify"] is not False:
+            if not _valid_branch(payload["head"], allow_workflow=True) or payload["maintainer_can_modify"] is not False:
                 raise PublishError("invalid Draft PR head or permissions")
-            _base_ref(payload["base"])
+            _base_ref(payload["base"], allow_workflow=True)
         data = None if payload is None else json.dumps(payload, allow_nan=False).encode("utf-8")
         req = request.Request("https://api.github.com" + path, data=data, method=method,
             headers={"Authorization": "Bearer " + self._token, "Accept": "application/vnd.github+json",
@@ -305,10 +306,21 @@ class Publisher:
         if not valid:
             raise PublishError("existing or returned PR does not match the approved Draft, identity and source mapping")
 
-    def publish(self, *, task, branch, base_ref, base_sha, head_sha, title, body, expected_patch_sha256=None):
-        if task != "06a" or not _valid_branch(branch) or branch == base_ref:
-            raise PublishError("unapproved task or destination branch")
-        _base_ref(base_ref)
+    def publish(self, *, task, branch, base_ref, base_sha, head_sha, title, body,
+                expected_patch_sha256=None, policy=None):
+        if policy is None:
+            if task != "06a" or not _valid_branch(branch) or branch == base_ref:
+                raise PublishError("unapproved task or destination branch")
+        else:
+            try:
+                policy = validate_policy(policy, task)
+            except ValidationError:
+                raise PublishError("invalid trusted publication policy") from None
+            if branch != policy["branch"] or base_ref != policy["base_ref"]:
+                raise PublishError("publication branch/base differs from trusted task policy")
+            if expected_patch_sha256 is None:
+                raise PublishError("generic publication requires the approved patch hash")
+        _base_ref(base_ref, allow_workflow=policy is not None)
         if any(not isinstance(value, str) or SHA.fullmatch(value) is None for value in (base_sha, head_sha)):
             raise PublishError("full base and head SHAs are required")
         if (not isinstance(title, str) or not 1 <= len(title) <= 240 or any(ord(c) < 32 for c in title)
@@ -318,10 +330,14 @@ class Publisher:
             raise PublishError("invalid expected patch hash")
         verify_remote(self.repo)
         self.client.verify_user()
-        report = validate_candidate(self.repo, base_sha, head_sha, task)
+        # Re-read immutable objects with controller-owned scope; worker reports
+        # cannot confer publication authority or change the task binding.
+        report = (validate_candidate(self.repo, base_sha, head_sha, task) if policy is None else
+                  validate_candidate(self.repo, base_sha, head_sha, task, policy=policy))
         if (report.get("valid") is not True or report.get("base_sha") != base_sha or report.get("head_sha") != head_sha
                 or not isinstance(report.get("patch_sha256"), str) or HASH.fullmatch(report["patch_sha256"]) is None
-                or (expected_patch_sha256 is not None and report["patch_sha256"] != expected_patch_sha256)):
+                or (expected_patch_sha256 is not None and report["patch_sha256"] != expected_patch_sha256)
+                or (policy is not None and report.get("policy_sha256") != policy["sha256"])):
             raise PublishError("trusted candidate validation failed")
         _verify_commit_identity(self.repo, base_sha, head_sha)
         if self._remote_head(base_ref) != base_sha:
@@ -345,7 +361,10 @@ class Publisher:
             "title": title, "body": body, "head": branch, "base": base_ref,
             "draft": True, "maintainer_can_modify": False})
         self._check_pr(pr, branch, base_ref, base_sha, head_sha)
-        return {"status": "existing" if existing else "created", "repository": REPOSITORY,
+        receipt = {"status": "existing" if existing else "created", "repository": REPOSITORY,
             "author": OWNER, "author_id": USER_ID, "draft": True, "pr_number": pr["number"],
             "pr_url": pr["html_url"], "branch": branch, "base_ref": base_ref,
             "base_sha": base_sha, "head_sha": head_sha, "patch_sha256": report["patch_sha256"]}
+        if policy is not None:
+            receipt["policy_sha256"] = policy["sha256"]
+        return receipt
