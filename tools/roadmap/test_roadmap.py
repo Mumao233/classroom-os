@@ -2,6 +2,7 @@
 
 Run from the repository root: python -B -m unittest discover -s tools/roadmap -v
 """
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -15,6 +16,78 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 WORK = ROOT / "work" / "roadmap-pages-20261107"
+
+
+class RoadmapHistoryDatesTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location("roadmap_history_dates", ROOT / "scripts" / "roadmap.py")
+        cls.roadmap = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.roadmap)
+
+    def test_review_and_done_do_not_invent_start_date(self):
+        for phase in (
+            {"status": "todo"},
+            {"status": "done"},
+            {"status": "review", "history": [{"date": "2026-11-06", "status": "review"}]},
+            {"status": "done", "history": [
+                {"date": "2026-11-06", "status": "review"},
+                {"date": "2026-11-07", "status": "done"},
+            ]},
+        ):
+            with self.subTest(phase=phase):
+                self.assertEqual(self.roadmap.Graph.started(phase), "")
+
+    def test_first_doing_remains_start_after_blocking_and_resume(self):
+        phase = {"status": "done", "history": [
+            {"date": "2026-11-01", "status": "blocked"},
+            {"date": "2026-11-02", "status": "doing"},
+            {"date": "2026-11-03", "status": "blocked"},
+            {"date": "2026-11-04", "status": "doing"},
+            {"date": "2026-11-05", "status": "review"},
+            {"date": "2026-11-06", "status": "done"},
+        ]}
+        self.assertEqual(self.roadmap.Graph.started(phase), "2026-11-02")
+        self.assertEqual(self.roadmap.Graph.finished(phase), "2026-11-06")
+
+    def test_blocked_phase_has_start_but_no_completion(self):
+        phase = {"status": "blocked", "history": [
+            {"date": "2026-11-02", "status": "doing"},
+            {"date": "2026-11-03", "status": "review"},
+            {"date": "2026-11-04", "status": "blocked"},
+        ]}
+        self.assertEqual(self.roadmap.Graph.started(phase), "2026-11-02")
+        self.assertEqual(self.roadmap.Graph.finished(phase), "")
+
+    def test_reopened_phase_has_no_current_completion(self):
+        phase = {"status": "doing", "history": [
+            {"date": "2026-11-01", "status": "doing"},
+            {"date": "2026-11-02", "status": "done"},
+            {"date": "2026-11-03", "status": "doing"},
+        ]}
+        self.assertEqual(self.roadmap.Graph.started(phase), "2026-11-01")
+        self.assertEqual(self.roadmap.Graph.finished(phase), "")
+
+    def test_completion_uses_last_done_after_reopening(self):
+        phase = {"status": "done", "history": [
+            {"date": "2026-11-01", "status": "doing"},
+            {"date": "2026-11-02", "status": "done"},
+            {"date": "2026-11-03", "status": "doing"},
+            {"date": "2026-11-04", "status": "done"},
+        ]}
+        self.assertEqual(self.roadmap.Graph.finished(phase), "2026-11-04")
+
+    def test_report_labels_missing_start_instead_of_copying_finish(self):
+        data = {
+            "phases": [{"id": "00", "title": "工程基线", "status": "done", "history": [
+                {"date": "2026-11-07", "status": "done"},
+            ]}],
+            "edges": {"hard": []},
+        }
+        graph = self.roadmap.Graph(data)
+        self.assertEqual(graph.errors(), [])
+        report = self.roadmap.render(graph)
+        self.assertIn("| 开始日期未记录 | 2026-11-07 |", report)
 
 
 class RoadmapCliTests(unittest.TestCase):
