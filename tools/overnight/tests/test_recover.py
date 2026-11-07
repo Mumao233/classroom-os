@@ -120,6 +120,47 @@ class RecoverTests(unittest.TestCase):
         self.assertEqual(self.ledger.snapshot(), ledger)
         self.assertEqual(sum(args[0] == "checkout" for repo, args in self.git_calls), 1)
 
+    def test_resume_guard_is_readonly_until_dedicated_recovery_completes(self):
+        self.assertIsNone(recover.pending_recovery_reason(self.run))
+        with patch("tools.overnight.recover._cas_change", side_effect=RuntimeError("synthetic crash")), \
+                self.assertRaises(RuntimeError):
+            self.reconcile()
+        paths = [self.state.path, self.ledger.path, self.run / "scope.json", self.run / recover.JOURNAL_NAME]
+        before = {path: path.read_bytes() for path in paths}
+        for _ in range(2):
+            self.assertIn("tools.overnight.recover", recover.pending_recovery_reason(self.run))
+            self.assertEqual(before, {path: path.read_bytes() for path in paths})
+        self.reconcile()
+        self.assertIsNone(recover.pending_recovery_reason(self.run))
+
+    def test_resume_guard_fails_closed_on_invalid_or_unreadable_journal(self):
+        self.reconcile()
+        path = self.run / recover.JOURNAL_NAME
+        complete = read_json(path)
+        cases = [b"{", b"[]", b"{}"]
+        for changes in ({"status": "PREPARED"}, {"status": "UNKNOWN"}, {"version": 2},
+                        {"version": True}, {"run_id": "another-run"}, {"before_scope": None},
+                        {"before_state": {}}, {"before_ledger": []}, {"evidence": {}}):
+            atomic_json(path, dict(complete, **changes))
+            cases.append(path.read_bytes())
+        for payload in cases:
+            with self.subTest(payload=payload):
+                path.write_bytes(payload)
+                self.assertIn("ordinary resume", recover.pending_recovery_reason(self.run))
+                self.assertEqual(path.read_bytes(), payload)
+        atomic_json(path, complete)
+        with patch("tools.overnight.recover.read_json", side_effect=PermissionError("synthetic unreadable journal")):
+            self.assertIn("ordinary resume", recover.pending_recovery_reason(self.run))
+        self.assertEqual(read_json(path), complete)
+
+    def test_completed_guard_does_not_reset_or_reject_later_usage(self):
+        self.reconcile()
+        ledger = self.ledger.snapshot()
+        self.ledger.begin_call("develop-0-attempt-2", "06a", expected_revision=ledger["revision"])
+        before = self.ledger.snapshot()
+        self.assertIsNone(recover.pending_recovery_reason(self.run))
+        self.assertEqual(self.ledger.snapshot(), before)
+
     def test_restarts_after_state_cas_before_ledger_cas(self):
         original = recover._cas_change
         def crash(store, before, after, event):

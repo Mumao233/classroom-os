@@ -8,6 +8,7 @@ from unittest.mock import patch
 from tools.overnight.controller import validate_config, validate_request, commit_candidate, Pilot, review_with_test_evidence
 from tools.overnight.state import StateError
 from tools.overnight.budget import SubscriptionLimits
+from tools.overnight.tests.test_asr_gate import evidence
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -15,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[3]
 class ControllerTests(unittest.TestCase):
     def test_reviewer_receives_exact_candidate_test_evidence(self):
         binding = {"head_sha": "a" * 40, "patch_sha256": "b" * 64}
-        prompt = review_with_test_evidence("Review defects", {"passed": True, "candidate_binding": binding},
+        prompt = review_with_test_evidence("Review defects", evidence(),
                                           binding, "", "Ran 9 tests\nOK")
         self.assertIn("a" * 40, prompt)
         self.assertIn("Ran 9 tests", prompt)

@@ -129,6 +129,30 @@ frozen-contract static checks, scope validation and independent read-only model
 review. The reviewer receives the passing harness result and logs bound to the
 exact candidate SHA and patch hash. Missing packages in the review shell are
 recorded as a rerun limitation, while real defects still block acceptance.
+
+Tests and review now use fresh independent repositories materialized directly
+from the validated commit's regular Git blobs. They never execute in the worker
+directory. Checkout filters, ignored files and a dirty worker index cannot enter
+these copies. The controller verifies the complete source manifest, Git identity
+and absence of extra files before and after execution; the local sandbox grants
+read-only source and a separate writable scratch directory.
+
+Validation dependencies must be disjoint from the worker/run/control roots and
+must not contain `classroom_web`, links or reparse points. Their complete content
+manifest is fixed in `dependencies.json` and checked again after execution.
+The trusted gate verifies the simulator's actual import origin in the snapshot.
+Candidate discovery and controller-owned ASR/schema acceptance assertions run in
+separate processes. Both must provide one complete structured session result,
+with every discovered test completed and zero failures/errors/skips. A process
+exit of zero alone, missing/truncated result or early `os._exit(0)` fails the gate.
+These receipts are not a proof against arbitrary malicious Python in the same
+interpreter; the independent trusted phase never imports candidate test modules.
+The hosted explicit ASR gate applies the same parent-side completion validation.
+
+Before initialization or generic failure reporting, ordinary resume checks for
+an incomplete/invalid `prelaunch-recovery.json`. It exits without changing state,
+ledger, scope, journal or report, and directs the operator to finish the dedicated
+recovery on the same run ID. Completed journals remain historical evidence.
 GitHub additionally runs original Windows Python/Node/DPAPI gates and
 the original PostgreSQL backend suite on Linux/Python3.12/PG17. These are distinct
 evidence sets. A local pass is not a remote CI pass, and mock guards do not prove

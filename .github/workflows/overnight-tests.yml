@@ -132,7 +132,7 @@ jobs:
           PYTHONPATH: ${{ github.workspace }}/web/backend
         run: |
           python - <<'PY' 2>&1 | tee outputs/overnight/asr-sim-tests.log
-          import json, os, unittest
+          import json, os, subprocess, sys
           from pathlib import Path
           test_dir = Path("web/backend/tests/asr_sim")
           requested = any(os.environ.get(name, "").startswith("feature/web-pr06a-")
@@ -140,14 +140,12 @@ jobs:
           present = test_dir.exists() or Path("web/backend/classroom_web/asr_sim").exists()
           report = {"scope": "Explicit PR-06a simulation gate; no real Provider or quality acceptance"}
           if requested or present:
-              suite = unittest.defaultTestLoader.discover(str(test_dir), pattern="test_*.py")
-              if not suite.countTestCases():
-                  raise SystemExit("PR-06a cannot pass without independently discovered tests")
-              result = unittest.TextTestRunner(verbosity=2).run(suite)
-              passed = result.wasSuccessful() and result.testsRun > 0 and not result.skipped
-              report.update(status="passed" if passed else "failed", passed=passed,
-                            tests_run=result.testsRun, failures=len(result.failures),
-                            errors=len(result.errors), skipped=len(result.skipped))
+              code = subprocess.call([sys.executable, "-B", "tools/overnight/ci_asr.py",
+                                      "--output", "outputs/overnight/asr-sim.json"])
+              if code != 0:
+                  raise SystemExit(code)
+              report = json.loads(Path("outputs/overnight/asr-sim.json").read_text(encoding="utf-8"))
+              passed = report.get("passed") is True
           else:
               passed = True
               report.update(status="not_run", passed=False, reason="PR-06a is absent from this infrastructure checkout")

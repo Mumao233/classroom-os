@@ -1,16 +1,20 @@
 """Controller crash/recovery regressions with real state stores and no model calls."""
 from __future__ import annotations
 
-from contextlib import ExitStack, contextmanager
+from contextlib import ExitStack, contextmanager, redirect_stdout
+import hashlib
+import io
 import json
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
 
-from tools.overnight import controller
-from tools.overnight.state import StateError, dependency_fingerprint, load_dag, read_json
+from tools.overnight import controller, recover
+from tools.overnight.state import StateError, atomic_json, dependency_fingerprint, load_dag, process_lock, read_json
+from tools.overnight.tests import test_recover
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -150,7 +154,8 @@ class ControllerRecoveryTests(unittest.TestCase):
         self.pilot.workspace.mkdir()
         failure = "FAIL: synthetic invariant\nTraceback:\nAssertionError: expected durable final\n"
 
-        def fail_tests(codex, workspace, command, output, timeout, **kwargs):
+        def fail_tests(round_number):
+            output = self.pilot.root / ("tests-" + str(round_number))
             output.mkdir(parents=True)
             (output / "stderr.log").write_text(failure, encoding="utf-8")
             return {"passed": False, "exit_code": 1}
@@ -163,7 +168,7 @@ class ControllerRecoveryTests(unittest.TestCase):
                 patch.object(self.pilot, "verify_candidate", return_value={"head_sha": "a" * 40, "patch_sha256": "c" * 64}), \
                 patch.object(self.pilot, "model", return_value=({"passed": True}, self.pilot.root)) as model, \
                 patch.object(controller, "commit_candidate", side_effect=fake_candidate), \
-                patch.object(controller, "run_sandbox_command", side_effect=fail_tests) as tests, \
+                patch.object(self.pilot, "run_candidate_tests", side_effect=fail_tests) as tests, \
                 patch.object(controller, "git", return_value=""):
             self.assertFalse(self.pilot.execute())
         task = self.pilot.state.snapshot()["tasks"]["06a"]
@@ -202,6 +207,143 @@ class ControllerRecoveryTests(unittest.TestCase):
         self.assertNotEqual(head, base)
         self.assertEqual(len(report["files"]), 3)
         self.assertEqual(controller.git(workspace, "status", "--porcelain"), "")
+
+
+class PrelaunchRecoveryInterleavingTests(unittest.TestCase):
+    @contextmanager
+    def recovery_case(self):
+        case = test_recover.RecoverTests(methodName="test_repeat_is_idempotent_and_never_refunds_the_call")
+        case.setUp()
+        try:
+            yield case
+        finally:
+            case.tearDown()
+
+    def pilot_for(self, case):
+        pilot = object.__new__(controller.Pilot)
+        pilot.source, pilot.root, pilot.workspace = case.source, case.run, case.workspace
+        pilot.base, pilot.base_ref = test_recover.NEW, test_recover.BASE_REF
+        pilot.run_id, pilot.branch = case.run.name, "feature/web-pr06a-" + case.run.name
+        pilot.state, pilot.limits = case.state, case.ledger
+        pilot.config_sha = hashlib.sha256(case.config.read_bytes()).hexdigest()
+        pilot.config = {"max_repairs": 3, "limits": case.ledger.snapshot()["limits"]}
+        pilot.codex, pilot.deps, pilot.publish = "never-executed-codex", case.source, False
+        return pilot
+
+    def ordinary_resume(self, case, *, unrelated_failure=False):
+        pilot = self.pilot_for(case)
+        output, calls = io.StringIO(), {}
+        with ExitStack() as stack:
+            if unrelated_failure:
+                stack.enter_context(patch.object(pilot, "execute", side_effect=RuntimeError("synthetic unrelated failure")))
+            stack.enter_context(patch.object(controller, "Pilot", return_value=pilot))
+            stack.enter_context(patch.object(controller, "git", side_effect=lambda repo, *args, **kwargs:
+                case.git(repo, case.run / "recovery-empty-hooks", *args)))
+            for name in ("run_codex", "run_sandbox_command", "authentication_status", "sandbox_probe", "prepare_workspace"):
+                calls[name] = stack.enter_context(patch.object(controller, name,
+                    side_effect=AssertionError("No external execution allowed: " + name)))
+            stack.enter_context(patch.object(sys, "argv", ["synthetic-resume", "--source", str(case.source),
+                "--base", test_recover.NEW, "--base-ref", test_recover.BASE_REF,
+                "--run-id", case.run.name, "--deps", str(case.source), "--codex", pilot.codex]))
+            with redirect_stdout(output):
+                exit_code = controller.main()
+        self.assertEqual(exit_code, 1)
+        self.assertIn("tools.overnight.recover", json.loads(output.getvalue())["error"])
+        for call in calls.values():
+            call.assert_not_called()
+
+    def interrupt_after(self, case, stage):
+        original_write, original_cas = recover.atomic_json, recover._cas_change
+
+        def write(path, value):
+            original_write(path, value)
+            if ((stage == "journal" and path.name == recover.JOURNAL_NAME and value["status"] == "PREPARED")
+                    or (stage == "complete" and path.name == recover.JOURNAL_NAME and value["status"] == "COMPLETE")
+                    or (stage == "scope" and path.name == "scope.json")):
+                raise RuntimeError("synthetic interruption after " + stage)
+
+        def cas(store, before, after, event):
+            original_cas(store, before, after, event)
+            if (stage, store.path.name) in {("state", "state.json"), ("ledger", "subscription.json")}:
+                raise RuntimeError("synthetic interruption after " + stage)
+
+        def git(repo, hooks, *args):
+            result = case.git(repo, hooks, *args)
+            if stage == "workspace" and args[0] == "checkout":
+                raise RuntimeError("synthetic interruption after workspace")
+            return result
+
+        with patch.object(recover, "atomic_json", side_effect=write), \
+                patch.object(recover, "_cas_change", side_effect=cas), \
+                patch.object(recover, "_git", side_effect=git), \
+                self.assertRaisesRegex(RuntimeError, "synthetic interruption"):
+            case.reconcile()
+
+    def checkpoint(self, case):
+        paths = [case.state.path, case.ledger.path, case.run / "scope.json", case.run / recover.JOURNAL_NAME,
+                 case.run / "report.json", *(case.run / "develop-0").iterdir()]
+        return {str(path.relative_to(case.run)): path.read_bytes() for path in paths}
+
+    def test_each_interrupted_write_survives_ordinary_resume_then_dedicated_recovery(self):
+        for stage in ("journal", "workspace", "state", "ledger", "scope"):
+            with self.subTest(stage=stage), self.recovery_case() as case:
+                before_ledger = case.ledger.snapshot()
+                original_logs = {p.name: p.read_bytes() for p in (case.run / "develop-0").iterdir()}
+                self.interrupt_after(case, stage)
+                self.assertEqual(read_json(case.run / recover.JOURNAL_NAME)["status"], "PREPARED")
+                atomic_json(case.run / "report.json", {"synthetic": "existing report must remain unchanged"})
+                checkpoint, head = self.checkpoint(case), case.workspace_head
+                self.ordinary_resume(case)
+                self.assertEqual(self.checkpoint(case), checkpoint)
+                self.assertEqual(case.workspace_head, head)
+                result = case.reconcile()
+                self.assertEqual(result["status"], "reconciled")
+                self.assertEqual(case.state.snapshot()["tasks"]["06a"]["state"], "AUDIT")
+                self.assertEqual(case.state.snapshot()["base_sha"], test_recover.NEW)
+                self.assertEqual(read_json(case.run / "scope.json")["base_sha"], test_recover.NEW)
+                self.assertEqual(read_json(case.run / recover.JOURNAL_NAME)["status"], "COMPLETE")
+                after_ledger = case.ledger.snapshot()
+                self.assertEqual(after_ledger["status"], "READY")
+                for key in ("calls", "limits", "started_at_ms", "last_seen_ms", "task_started_at_ms", "repairs"):
+                    self.assertEqual(after_ledger[key], before_ledger[key])
+                self.assertEqual({p.name: p.read_bytes() for p in (case.run / "develop-0").iterdir()}, original_logs)
+                self.assertEqual(case.reconcile()["status"], "already_reconciled")
+
+    def test_exception_guard_preserves_pending_checkpoint_even_for_unrelated_failure(self):
+        with self.recovery_case() as case:
+            self.interrupt_after(case, "state")
+            atomic_json(case.run / "report.json", {"synthetic": "unchanged"})
+            before = self.checkpoint(case)
+            self.ordinary_resume(case, unrelated_failure=True)
+            self.assertEqual(self.checkpoint(case), before)
+            self.assertEqual(case.reconcile()["status"], "reconciled")
+
+    def test_complete_marker_allows_resume_and_recovery_cannot_reset_later_attempt(self):
+        with self.recovery_case() as case:
+            self.interrupt_after(case, "complete")
+            self.assertIsNone(recover.pending_recovery_reason(case.run))
+            before_ledger = case.ledger.snapshot()
+            pilot = self.pilot_for(case)
+            dag = {"00": {"depends_on": []}, "01": {"depends_on": ["00"]},
+                   "06a": {"depends_on": ["01"], "gates": ["explicit paid scope"], "paid_depends_on": ["11a"]}}
+            with process_lock(case.run.parent / "controller.lock", timeout_seconds=1), \
+                    patch.object(controller, "git", side_effect=lambda repo, *args, **kwargs:
+                        case.git(repo, case.run / "recovery-empty-hooks", *args)), \
+                    patch.object(controller, "authentication_status", return_value={"ready": True}), \
+                    patch.object(controller, "sandbox_probe", return_value={"passed": True}), \
+                    patch.object(controller.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)), \
+                    patch.object(controller, "load_dag", return_value=dag), \
+                    patch.object(controller, "run_codex", side_effect=AssertionError("No model call allowed")) as model:
+                pilot.initialize()
+                model.assert_not_called()
+            state = case.state.snapshot()
+            self.assertEqual(state["tasks"]["06a"]["state"], "DEVELOPING")
+            self.assertEqual(state["tasks"]["06a"]["attempt_count"], 2)
+            self.assertEqual(case.ledger.snapshot(), before_ledger)
+            with self.assertRaisesRegex(StateError, "checkpoint drifted"):
+                case.reconcile()
+            self.assertEqual(case.state.snapshot(), state)
+            self.assertEqual(case.ledger.snapshot(), before_ledger)
 
 
 if __name__ == "__main__":

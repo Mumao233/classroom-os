@@ -23,7 +23,56 @@ from .state import StateError, StateStore, atomic_json, process_lock, read_json,
 REMOTE = "https://github.com/Mumao233/classroom-os.git"
 KNOWN_ERROR = b'Error loading config.toml: invalid transport\nin `mcp_servers."codex_app"`\n\n'
 JOURNAL_NAME = "prelaunch-recovery.json"
+JOURNAL_FIELDS = {"version", "status", "run_id", "old_base", "new_base", "base_ref", "config_sha",
+                  "branch", "before_state", "before_ledger", "before_scope", "evidence"}
 SHA = re.compile(r"[0-9a-f]{40}\Z")
+
+
+def pending_recovery_reason(run_root):
+    """Read-only resume guard; callers hold the shared controller lock.
+
+    A prepared or unreadable journal is never ordinary initialization authority.
+    Completed journals remain as evidence while later normal work progresses, so
+    this guard checks their identity and format, not their historical after-image.
+    """
+    run_root = Path(run_root)
+    path = run_root / JOURNAL_NAME
+    reason = ("prelaunch recovery journal is incomplete or invalid; complete "
+              "tools.overnight.recover for this same run before ordinary resume")
+    try:
+        if path.is_symlink():
+            return reason
+        if not path.exists():
+            return None
+        if not path.is_file():
+            return reason
+        journal = read_json(path)
+        require_keys(journal, JOURNAL_FIELDS)
+        if (type(journal["version"]) is not int or journal["version"] != 1
+                or journal["status"] != "COMPLETE" or journal["run_id"] != run_root.name):
+            return reason
+        if (not all(isinstance(journal[name], str) and SHA.fullmatch(journal[name])
+                    for name in ("old_base", "new_base"))
+                or journal["old_base"] == journal["new_base"]
+                or not isinstance(journal["config_sha"], str)
+                or re.fullmatch(r"[0-9a-f]{64}", journal["config_sha"]) is None
+                or not isinstance(journal["base_ref"], str)
+                or re.fullmatch(r"feature/overnight-[a-z0-9-]+", journal["base_ref"]) is None
+                or journal["branch"] != "feature/web-pr06a-" + run_root.name):
+            return reason
+        StateStore(run_root / "state.json").validate(journal["before_state"])
+        SubscriptionLimits(run_root / "subscription.json").validate(journal["before_ledger"])
+        _validate_original(journal["before_state"], journal["before_ledger"], journal["before_scope"],
+                           run_root.name, journal["base_ref"], journal["config_sha"])
+        if journal["before_state"]["base_sha"] != journal["old_base"]:
+            return reason
+        require_keys(journal["evidence"], {"stdout.jsonl", "stderr.log", "process.json", "result.json", "receipt.json"})
+        if any(not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None
+               for value in journal["evidence"].values()):
+            return reason
+        return None
+    except (OSError, StateError, TypeError, KeyError, AttributeError):
+        return reason
 
 
 def _git(repo, hooks, *args):
@@ -157,8 +206,7 @@ def reconcile_prelaunch(source, run_root, new_base, base_ref):
         evidence = _evidence(run_root)
         if journal_path.exists():
             journal = read_json(journal_path)
-            require_keys(journal, {"version", "status", "run_id", "old_base", "new_base", "base_ref", "config_sha",
-                "branch", "before_state", "before_ledger", "before_scope", "evidence"})
+            require_keys(journal, JOURNAL_FIELDS)
             if (type(journal["version"]) is not int or journal["version"] != 1
                     or journal["status"] not in {"PREPARED", "COMPLETE"}
                     or journal["run_id"] != run_id or journal["new_base"] != new_base or journal["base_ref"] != base_ref

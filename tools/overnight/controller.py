@@ -11,12 +11,16 @@ import shutil
 import subprocess
 import sys
 import time
+import uuid
 
 from .budget import SubscriptionLimits, DEFAULT_LIMITS
 from .executor import authentication_status, sandbox_probe, run_codex, run_sandbox_command
 from .state import (StateStore, StateError, atomic_json, read_json, process_lock,
                     load_dag, dependency_fingerprint)
 from .validation import validate_candidate
+from .verification import create_checkout, verify_checkout, dependency_manifest
+from .asr_gate import parse_summary, require_evidence
+from .recover import pending_recovery_reason
 
 REPOSITORY = "https://github.com/Mumao233/classroom-os.git"
 AUTHOR_NAME = "Mumao233"
@@ -94,20 +98,13 @@ def commit_candidate(workspace, base, round_number):
     return head, report
 
 
-def test_bootstrap(deps):
-    return ("import sys,unittest; "
-            "sys.path[:0]=" + repr([str(deps), "web/backend"]) + "; "
-            "suite=unittest.defaultTestLoader.discover('web/backend/tests/asr_sim',pattern='test_*.py'); "
-            "count=suite.countTestCases(); "
-            "result=unittest.TextTestRunner(verbosity=2).run(suite); "
-            "sys.exit(0 if count>0 and result.wasSuccessful() and not result.skipped else 1)")
-
-
 def review_with_test_evidence(prompt, result, binding, stdout, stderr):
-    if result.get("passed") is not True or result.get("candidate_binding") != binding:
-        raise StateError("review requires passing tests bound to this exact candidate")
+    try:
+        require_evidence(result, binding)
+    except ValueError as error:
+        raise StateError(str(error)) from error
     evidence = {"producer": "trusted local controller", "candidate_binding": binding,
-                "test_command": "unittest discover -s web/backend/tests/asr_sim -p test_*.py -v",
+                "test_command": "isolated candidate unittest discovery + independent controller-owned ASR assertions",
                 "environment": "Python " + sys.version.split()[0] + " with isolated validation dependencies including jsonschema",
                 "result": result, "stdout": stdout[-20000:], "stderr": stderr[-20000:]}
     return (prompt + "\n\nThe trusted controller has already run the complete mandatory tests on the exact "
@@ -146,6 +143,9 @@ class Pilot:
             attempt_id=task["attempt_id"], dependency_fingerprint=task["dependency_fingerprint"], **kwargs)
 
     def initialize(self):
+        pending = pending_recovery_reason(self.root)
+        if pending:
+            raise StateError(pending)
         if git(self.source, "rev-parse", "HEAD") != self.base:
             raise StateError("control checkout HEAD differs from pinned base")
         if git(self.source, "status", "--porcelain", "--untracked-files=all"):
@@ -212,7 +212,7 @@ class Pilot:
         self.state.begin_attempt("06a", self.run_id + "-attempt-" + str(attempt), expected_revision=doc["revision"],
             event_id="begin-attempt-" + str(attempt), dependency_fingerprint=dependency_fingerprint(doc, "06a"))
 
-    def model(self, kind, round_number, prompt, readonly=False, schema=None, binding=None, attempt=1):
+    def model(self, kind, round_number, prompt, readonly=False, schema=None, binding=None, attempt=1, workspace=None):
         call_id = call_name(kind, round_number, attempt)
         output = self.root / call_id
         receipt = output / "receipt.json"
@@ -230,7 +230,7 @@ class Pilot:
         timeout = min(self.config["call_timeout_seconds"],
                       max(1, int((ledger["calls"][call_id]["deadline_ms"] / 1000) - time.time())))
         try:
-            result = run_codex(self.codex, self.workspace, output, prompt, timeout,
+            result = run_codex(self.codex, workspace or self.workspace, output, prompt, timeout,
                                model=self.config["model"], readonly=readonly, schema=schema)
             result["candidate_binding"] = binding
             atomic_json(receipt, result)
@@ -262,6 +262,70 @@ class Pilot:
                 or git(self.workspace, "status", "--porcelain", "--untracked-files=all")):
             raise StateError("candidate changed since validation")
         return {"head_sha": saved["head_sha"], "patch_sha256": saved["patch_sha256"]}
+
+    def verification_checkout(self, purpose, binding):
+        # A fresh tracked-object copy, never the worker's possibly ignored files.
+        checkout = self.root / "verification" / (purpose + "-" + uuid.uuid4().hex)
+        checkout.parent.mkdir(parents=True, exist_ok=True)
+        manifest = create_checkout(self.workspace, binding["head_sha"], checkout)
+        verify_checkout(checkout, manifest)
+        atomic_json(checkout.with_suffix(".manifest.json"), manifest)
+        return checkout, manifest
+
+    def dependencies(self):
+        manifest = dependency_manifest(self.deps, [self.root, self.source / "web/backend",
+            self.source / "tools/overnight", self.source / "automation"])
+        receipt = self.root / "dependencies.json"
+        if receipt.exists():
+            if read_json(receipt) != manifest:
+                raise StateError("trusted validation dependencies changed during this run")
+        else:
+            atomic_json(receipt, manifest)
+        return manifest
+
+    def run_candidate_tests(self, round_number):
+        dependencies = self.dependencies()
+        binding = self.verify_candidate()
+        checkout, manifest = self.verification_checkout("tests", binding)
+        output = self.root / ("tests-" + str(round_number))
+        if output.exists():
+            raise StateError("test output already exists; preserve evidence and reconcile before retry")
+        output.mkdir()
+        result = {"passed": False, "candidate_binding": binding, "verified_checkout": manifest,
+                  "dependencies_sha256": hashlib.sha256(json.dumps(dependencies, sort_keys=True).encode()).hexdigest(),
+                  "sessions": {}}
+        for stage in ("candidate", "trusted"):
+            nonce = uuid.uuid4().hex
+            stage_output = output / stage
+            session = run_sandbox_command(self.codex, checkout,
+                [sys.executable, "-I", "-B", str(self.source / "tools/overnight/asr_gate.py"),
+                 "--stage", stage, "--workspace", str(checkout), "--deps", str(self.deps),
+                 "--nonce", nonce, "--head", binding["head_sha"], "--patch", binding["patch_sha256"]],
+                stage_output, 180, readonly=True, read_roots=[self.deps, self.source / "tools/overnight"])
+            try:
+                if session.get("passed") is not True or session.get("exit_code") != 0:
+                    raise ValueError("test process failed")
+                stdout = (stage_output / "stdout.jsonl").read_text(encoding="utf-8")
+                session["summary"] = parse_summary(stdout, stage=stage, nonce=nonce, binding=binding)
+            except (ValueError, OSError) as error:
+                session["passed"] = False
+                session["gate_error"] = str(error)
+            result["sessions"][stage] = session
+            # Check bytes and extras as well as immutable Git identity, even on failure.
+            verify_checkout(checkout, manifest)
+            if self.dependencies() != dependencies:
+                raise StateError("validation dependencies changed")
+        for name in ("stdout.jsonl", "stderr.log"):
+            (output / name).write_text("\n".join(
+                (output / stage / name).read_text(encoding="utf-8", errors="replace")
+                for stage in ("candidate", "trusted") if (output / stage / name).exists()), encoding="utf-8")
+        if self.verify_candidate() != binding:
+            raise StateError("candidate changed during verification")
+        result["passed"] = all(session["passed"] for session in result["sessions"].values())
+        if result["passed"]:
+            require_evidence(result, binding)
+        atomic_json(self.root / "tests.json", result)
+        return result
 
     def repair(self, reason):
         doc = self.state.snapshot()
@@ -300,14 +364,7 @@ class Pilot:
                 if not candidate["valid"]:
                     self.transition("FAILED", reason="Candidate violated immutable scope: " + "; ".join(candidate["errors"])[:800])
                     break
-                test = run_sandbox_command(self.codex, self.workspace,
-                    [sys.executable, "-B", "-c", test_bootstrap(self.deps)], self.root / ("tests-" + str(round_number)),
-                    180, read_roots=[self.deps])
-                test["candidate_binding"] = self.verify_candidate()
-                atomic_json(self.root / "tests.json", test)
-                if git(self.workspace, "status", "--porcelain", "--untracked-files=all"):
-                    self.transition("FAILED", reason="Test execution modified candidate content")
-                    break
+                test = self.run_candidate_tests(round_number)
                 if not test["passed"]:
                     testdir = self.root / ("tests-" + str(round_number))
                     detail = "\n".join((testdir / name).read_text(encoding="utf-8", errors="replace")
@@ -320,15 +377,19 @@ class Pilot:
             task = self.state.snapshot()["tasks"]["06a"]
             if task["state"] == "REVIEWING":
                 binding = self.verify_candidate()
+                self.dependencies()
                 test_result = read_json(self.root / "tests.json")
                 review_prompt = (self.source / "automation/prompts/review.md").read_text(encoding="utf-8")
                 testdir = self.root / ("tests-" + str(round_number))
                 review_prompt = review_with_test_evidence(review_prompt, test_result, binding,
                     (testdir / "stdout.jsonl").read_text(encoding="utf-8", errors="replace"),
                     (testdir / "stderr.log").read_text(encoding="utf-8", errors="replace"))
+                review_checkout, review_manifest = self.verification_checkout("review", binding)
                 _, output = self.model("review", round_number, review_prompt, readonly=True,
                                        schema=self.source / "automation/review.schema.json", binding=binding,
-                                       attempt=task["attempt_count"])
+                                       attempt=task["attempt_count"], workspace=review_checkout)
+                verify_checkout(review_checkout, review_manifest)
+                self.dependencies()
                 review = read_json(output / "final.json")
                 if (not isinstance(review, dict) or set(review) != {"verdict", "findings", "limitations"}
                         or review["verdict"] not in {"approve", "request_changes"}
@@ -373,6 +434,7 @@ class Pilot:
         doc = self.state.snapshot()
         task = doc["tasks"]["06a"]
         candidate = read_json(self.root / "candidate.json")
+        require_evidence(read_json(self.root / "tests.json"), binding)
         review_receipt = read_json(self.root / call_name("review", task["repairs"], task["attempt_count"]) / "receipt.json")
         if (read_json(self.root / "tests.json").get("candidate_binding") != binding
                 or review_receipt.get("candidate_binding") != binding):
@@ -423,6 +485,10 @@ def main():
         try:
             passed = pilot.execute()
         except Exception as error:
+            pending = pending_recovery_reason(pilot.root)
+            if pending:
+                print(json.dumps({"passed": False, "error": pending}))
+                return 1
             if pilot.state.path.exists():
                 state = pilot.state.snapshot()["tasks"]["06a"]["state"]
                 if state in {"AUDIT", "READY", "DEVELOPING", "TESTING", "REVIEWING"}:
