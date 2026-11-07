@@ -21,8 +21,13 @@ implement authentication, consent capture, durable storage or a budget ledger.
 `byte_length`, and lowercase `sha256`. Ranges are half-open and contiguous within
 each stream; the first range may start after a gap. All integer fields reject
 booleans. Bytes must be nonempty, even, correctly hashed and exactly twice the
-sample count. RIFF/RIFX/RF64 containers are rejected. This validates a declared
-format; it cannot detect a caller falsely declaring an arbitrary raw waveform.
+sample count. Complete RIFF/RIFX/RF64 WAVE containers are rejected only when
+their declared total length, chunk boundaries, format/data chunks and RF64
+extended sizes are self-consistent. Four-byte magic and incomplete or malformed
+headers alone are accepted as arbitrary raw sample bytes when the ordinary
+frame checks pass. This validates a declared format; it cannot prove the actual
+format of an arbitrary raw waveform or distinguish raw samples that happen to
+form an entire valid container.
 
 `finish()` only enters draining and refuses new frames. `events()` returns a
 bounded batch of actual frozen-schema wire payloads. It advances the injected
@@ -31,9 +36,12 @@ waits for draining. There is no success until the terminal action is consumed
 after all earlier finals have committed in the synthetic memory model.
 Success also requires at least one committed final and a committed revision at
 least as new as every observed partial for each segment. A partial-only segment
-or a newer unresolved partial keeps the stream draining. Terminal-only silent
-audio/no-transcript outcomes are unsupported; this POC does not invent proof of
-silence. Such incomplete evidence cannot complete a stream.
+or a newer unresolved partial at terminal enters `unknown`, releases pending
+byte accounting, and retains committed finals and sent-range evidence for
+`query`. Terminal-only silent audio/no-transcript outcomes likewise enter
+unknown; this POC does not invent proof of silence. Without terminal, or while
+an earlier final commit remains queued for retry, the stream stays draining.
+Incomplete terminal evidence never completes a stream or triggers a resend.
 
 Script transcript actions use `kind` (`partial` or `final`), UUID `segment_id`,
 positive `revision`, nonnegative `sequence`, `start_sample`, `end_sample`, `text`;
@@ -50,7 +58,9 @@ evidence; `lost` represents a sent/outcome-lost fault and enters unknown.
 `commit_failures=N` fails the next N synthetic final commits without publishing
 them. `events()` retries the same queued final, preserving UUID5 stable IDs.
 Deduplication uses stream/segment/revision, never text. Higher revisions advance;
-older partial and final revisions cannot regress. Same-revision final conflicts are quarantined as
+older partial and final revisions cannot regress. A partial at the same revision
+as an already committed final is discarded without advancing connection sequence,
+including repeated or conflicting transient text. Same-revision final conflicts are quarantined as
 identity tuples, retaining the original committed result. Quarantine is exposed
 as a read-only snapshot. Finals carry event/cursor/version identifiers; partials
 carry only connection sequence. Timestamps use a fixed synthetic UTC instant;
