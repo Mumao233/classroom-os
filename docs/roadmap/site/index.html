@@ -1,0 +1,1060 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Classroom OS 阶段进度</title>
+<meta name="robots" content="noindex">
+<script>
+  // 部署设置（放到网站上时按需修改）
+  //   dataUrl   进度数据的位置：相对这个页面的路径，或允许跨域的完整链接
+  //   editable  false = 访客只能看、不能改（也可以在网址后加 ?readonly）
+  window.ROADMAP_CONFIG = { dataUrl: 'phases.json', editable: true };
+</script>
+<style>
+  :root { --bg:#fafaf9; --fg:#1c1917; --muted:#78716c; --line:#e7e5e4; --panel:#ffffff; --soft:#f5f5f4; --acc:#1c1917; --accfg:#fff; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#1c1917; --fg:#f5f5f4; --muted:#a8a29e; --line:#44403c; --panel:#292524; --soft:#1f1d1b; --acc:#f5f5f4; --accfg:#1c1917; }
+  }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--fg);
+    font-family: -apple-system, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif; }
+  header { background:var(--panel); border-bottom:1px solid var(--line); position:relative; z-index:4; }
+  .row { display:flex; flex-wrap:wrap; gap:8px 14px; align-items:center; padding:8px 14px; }
+  .row + .row { border-top:1px solid var(--line); padding-top:7px; padding-bottom:7px; }
+  h1 { font-size:15px; font-weight:600; margin:0; white-space:nowrap; }
+  .progress { display:flex; align-items:center; gap:8px; font-size:13px; }
+  .track { width:140px; height:8px; border-radius:4px; background:var(--soft); border:1px solid var(--line); overflow:hidden; }
+  .fill { height:100%; background:#16a34a; width:0; transition:width .3s; }
+  .chips { display:flex; gap:5px; flex-wrap:wrap; font-size:12px; }
+  .chip { display:inline-flex; align-items:center; gap:5px; padding:2px 8px; border-radius:999px; border:1px solid var(--line); color:var(--muted); }
+  .dot { width:10px; height:10px; border-radius:3px; border:1.5px solid; flex:none; display:inline-block; }
+  .spacer { flex:1; }
+  .src { font-size:11px; color:var(--muted); display:inline-flex; gap:6px; align-items:center; flex-wrap:wrap; }
+  .src .warn { color:#b45309; }
+  .src button { font-size:11px; padding:2px 7px; }
+  .search { position:relative; }
+  .search input { font:inherit; font-size:12px; width:200px; padding:5px 9px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--fg); }
+  .search span { position:absolute; right:8px; top:6px; font-size:11px; color:var(--muted); pointer-events:none; }
+  button, .btn { font:inherit; font-size:12px; padding:5px 10px; border:1px solid var(--line); border-radius:6px;
+    background:var(--bg); color:var(--fg); cursor:pointer; white-space:nowrap; line-height:1.3; }
+  button:hover, .btn:hover { border-color:var(--muted); }
+  .btn input { display:none; }
+  .group { display:flex; align-items:center; gap:4px; font-size:12px; }
+  .group > b { font-weight:500; color:var(--muted); margin-right:2px; }
+  .seg { display:inline-flex; border:1px solid var(--line); border-radius:7px; overflow:hidden; }
+  .seg button { border:0; border-radius:0; border-right:1px solid var(--line); background:transparent; }
+  .seg button:last-child { border-right:0; }
+  .seg button.on, button.tog.on { background:var(--acc); color:var(--accfg); border-color:var(--acc); }
+  .hint { font-size:11px; color:var(--muted); }
+  main { position:absolute; top:var(--top,96px); left:0; right:0; bottom:0; display:flex; }
+  #left { position:relative; flex:1; overflow:hidden; }
+  body.board .g-only { display:none !important; }
+  body:not(.board) .b-only { display:none !important; }
+  .tabs button { font-weight:600; padding:5px 14px; }
+  #board { position:absolute; inset:0; overflow:auto; background:var(--bg); padding:16px; display:none; }
+  body.board #board { display:grid; grid-template-columns:repeat(auto-fill, minmax(270px, 1fr)); grid-auto-rows:max-content; gap:12px; align-content:start; }
+  .group.b-only { min-width:0; max-width:100%; }
+  #filters { overflow-x:auto; max-width:calc(100vw - 72px); scrollbar-width:none; }
+  #filters button { flex:none; }
+  .mod { background:var(--panel); border:1px solid var(--line); border-radius:12px; overflow:hidden; display:flex; flex-direction:column; }
+  .mod-h { padding:10px 12px 9px; border-bottom:1px solid var(--line); }
+  .mod-h .row1 { display:flex; align-items:baseline; gap:8px; }
+  .mod-h .n { font-size:12px; font-weight:700; color:var(--muted); letter-spacing:.04em; }
+  .mod-h .t { font-weight:600; font-size:14px; flex:1; }
+  .mod-h .pg { font-size:11px; color:var(--muted); white-space:nowrap; }
+  .mbar { height:4px; background:var(--soft); border-radius:2px; margin-top:8px; overflow:hidden; }
+  .mbar i { display:block; height:100%; background:#16a34a; transition:width .3s; }
+  .cards { padding:8px; display:flex; flex-direction:column; gap:7px; }
+  .card { display:block; width:100%; text-align:left; border:1.5px solid; border-radius:9px; padding:9px 10px 8px; cursor:pointer; font:inherit; transition:transform .12s, box-shadow .12s; }
+  .card:hover { transform:translateY(-1px); box-shadow:0 4px 12px rgba(0,0,0,.10); }
+  .card.on { outline:2.5px solid var(--fg); outline-offset:1.5px; }
+  .card .top { display:flex; justify-content:space-between; gap:6px; font-size:11px; font-weight:700; }
+  .card .tt { font-size:13px; font-weight:600; margin:3px 0 6px; line-height:1.35; }
+  .card .meta { display:flex; flex-wrap:wrap; gap:4px; }
+  .card .pill { font-size:10.5px; font-weight:500; padding:1px 6px; border-radius:5px; background:rgba(255,255,255,.6); border:1px solid rgba(0,0,0,.10); white-space:nowrap; max-width:100%; overflow:hidden; text-overflow:ellipsis; }
+  .card .pill.hot { background:#fee2e2; border-color:#fca5a5; color:#991b1b; }
+  .board-empty { grid-column:1/-1; color:var(--muted); padding:40px; text-align:center; }
+  .seg button .c { opacity:.6; margin-left:3px; font-size:11px; }
+  #stage { position:absolute; inset:0; overflow:hidden; cursor:grab; touch-action:none; user-select:none; -webkit-user-select:none; }
+  #stage.dragging { cursor:grabbing; }
+  #canvas { transform-origin:0 0; position:absolute; top:0; left:0; }
+  #canvas svg { max-width:none !important; display:block; }
+  #canvas .node { cursor:pointer; }
+  #canvas .node, #canvas .flowchart-link, #canvas .edgeLabel { transition:opacity .15s; }
+  aside { width:320px; border-left:1px solid var(--line); background:var(--panel); overflow:auto; padding:14px 16px 48px; font-size:13px; }
+  aside h2 { font-size:12px; font-weight:600; margin:16px 0 6px; display:flex; align-items:center; gap:6px; }
+  aside h2:first-child { margin-top:0; }
+  aside ul { list-style:none; margin:0; padding:0; }
+  aside li { padding:4px 6px; border-radius:6px; line-height:1.4; display:flex; gap:6px; align-items:baseline; }
+  aside li.link { cursor:pointer; }
+  aside li.link:hover { background:var(--soft); }
+  aside li .sub { display:block; font-size:11px; color:var(--muted); }
+  aside .empty { color:var(--muted); font-size:12px; padding:2px 6px; }
+  aside .muted { color:var(--muted); font-size:12px; }
+  aside .title { font-size:16px; font-weight:600; margin:0 0 4px; display:flex; gap:8px; align-items:flex-start; }
+  aside .title span { flex:1; }
+  aside .x { padding:1px 8px; }
+  .tags { display:flex; flex-wrap:wrap; gap:5px; margin:6px 0 10px; }
+  .tag { font-size:11px; padding:2px 7px; border-radius:999px; background:var(--soft); border:1px solid var(--line); }
+  .tag.hot { background:#fee2e2; border-color:#fca5a5; color:#991b1b; }
+  .tag.ok { background:#dcfce7; border-color:#86efac; color:#166534; }
+  .stbtns { display:grid; grid-template-columns:repeat(5,1fr); gap:4px; }
+  .stbtns button { padding:5px 2px; display:flex; flex-direction:column; align-items:center; gap:3px; font-size:11px; }
+  .stbtns button.on { border-color:var(--fg); font-weight:600; box-shadow:inset 0 0 0 1px var(--fg); }
+  .field { margin-top:12px; }
+  .field label { display:block; font-size:11px; color:var(--muted); margin-bottom:4px; }
+  .field input, .field textarea { width:100%; font:inherit; font-size:12px; padding:6px 8px; border:1px solid var(--line);
+    border-radius:6px; background:var(--bg); color:var(--fg); }
+  .field textarea { min-height:54px; resize:vertical; }
+  .inline { display:flex; gap:6px; }
+  .inline input { flex:1; }
+  .prs a { color:#2563eb; text-decoration:none; word-break:break-all; }
+  .prs a:hover { text-decoration:underline; }
+  .rm { margin-left:auto; padding:0 6px; font-size:11px; color:var(--muted); }
+  .mark { width:14px; flex:none; text-align:center; font-size:11px; }
+  .legend { display:flex; flex-direction:column; gap:4px; font-size:12px; }
+  .legend div { display:flex; align-items:center; gap:7px; }
+  .scale { display:flex; height:10px; border-radius:3px; overflow:hidden; border:1px solid var(--line); margin:4px 0 2px; }
+  .scale i { flex:1; }
+  .lines { font-size:11px; color:var(--muted); line-height:1.75; margin-top:16px; border-top:1px solid var(--line); padding-top:10px; }
+  #chart svg { width:100%; height:auto; display:block; }
+  #panelToggle { display:none; }
+  @media (max-width: 900px) {
+    aside { position:absolute; right:0; top:0; bottom:0; z-index:3; box-shadow:-8px 0 24px rgba(0,0,0,.14); display:none; width:min(340px,92vw); }
+    aside.open { display:block; }
+    #panelToggle { display:inline-block; }
+    .track { width:80px; } .search input { width:140px; } .hint { display:none; }
+  }
+  #tip { position:fixed; z-index:9; pointer-events:none; background:var(--panel); border:1px solid var(--line); border-radius:8px;
+    box-shadow:0 8px 24px rgba(0,0,0,.16); padding:8px 10px; font-size:12px; max-width:280px; display:none; line-height:1.5; }
+  #tip b { font-size:13px; }
+  #tip .m { color:var(--muted); }
+  #modal { position:fixed; inset:0; background:rgba(0,0,0,.35); z-index:20; display:none; align-items:center; justify-content:center; padding:16px; }
+  #modal .box { background:var(--panel); border-radius:12px; padding:16px; width:min(720px,100%); }
+  #modal h3 { margin:0 0 8px; font-size:14px; display:flex; gap:10px; align-items:center; }
+  #modal p { margin:8px 0; font-size:12px; color:var(--muted); }
+  #modal textarea { width:100%; height:220px; font:12px ui-monospace, Menlo, Consolas, monospace; padding:8px;
+    border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--fg); resize:vertical; }
+  #modal .act { display:flex; gap:8px; justify-content:flex-end; margin-top:10px; align-items:center; }
+  #modal .act span { font-size:12px; color:var(--muted); margin-right:auto; }
+  #msg { padding:24px; color:var(--muted); font-size:13px; }
+  #toast { position:fixed; left:50%; bottom:18px; transform:translateX(-50%); background:var(--fg); color:var(--bg);
+    padding:7px 14px; border-radius:8px; font-size:12px; opacity:0; transition:opacity .2s; pointer-events:none; z-index:30; }
+</style>
+</head>
+<body>
+<header id="hdr">
+  <div class="row">
+    <h1>Classroom OS 阶段进度</h1>
+    <div class="progress"><div class="track"><div class="fill" id="fill"></div></div><b id="pct">0 / 0</b></div>
+    <div class="chips" id="chips"></div>
+    <span class="src" id="src"></span>
+    <div class="spacer"></div>
+    <div class="search"><input id="q" placeholder="搜索编号或关键词，回车定位" autocomplete="off"><span id="qn"></span></div>
+    <label class="btn" id="importBtn" title="读入一份 phases.json">导入<input type="file" id="file" accept=".json,application/json"></label>
+    <button id="export" title="复制命令或 phases.json，同步回仓库">导出</button>
+    <button id="panelToggle">面板</button>
+  </div>
+  <div class="row">
+    <div class="seg tabs" id="tabs"><button data-tab="graph">依赖图</button><button data-tab="board">看板</button></div>
+    <div class="group b-only"><b>筛选</b><div class="seg" id="filters"></div></div>
+    <span class="hint b-only">按模块分区 · 点卡片看详情，切回依赖图会继续高亮它的上下游</span>
+    <div class="group g-only"><b>视图</b><div class="seg" id="views"></div></div>
+    <div class="group g-only"><b>叠加</b><button class="tog" id="crit">关键路径</button><button class="tog" id="fade">淡化已完成</button></div>
+    <div class="group g-only"><b>线</b><button class="tog on" data-kind="hard">硬依赖</button><button class="tog on" data-kind="integration">完整联调</button><button class="tog on" data-kind="paid">付费前置</button></div>
+    <div class="group g-only"><b>选中时</b><div class="seg" id="chain"><button data-c="direct">直接上下游</button><button data-c="all">整条链</button></div></div>
+    <div class="group g-only"><button id="dir">横向</button><button id="fit">适应窗口</button></div>
+    <span class="hint g-only">点节点看详情 · Shift+点另一个节点看两者间路径 · Esc 取消</span>
+  </div>
+</header>
+<main>
+  <div id="left">
+    <div id="stage"><div id="canvas"><div id="msg">正在渲染…</div></div></div>
+    <div id="board"></div>
+  </div>
+  <aside id="panel"></aside>
+</main>
+<div id="tip"></div>
+<div id="modal"><div class="box">
+  <h3>导出 <div class="seg" id="exTabs"><button data-t="cmd" class="on">命令</button><button data-t="json">phases.json</button></div></h3>
+  <textarea id="exText" readonly></textarea>
+  <p id="exHelp"></p>
+  <div class="act"><span id="copyState"></span><button id="close">关闭</button><button id="copy">复制</button></div>
+</div></div>
+<div id="toast"></div>
+
+<script id="default-data" type="application/json">
+{
+  "groups": {
+    "00": "工程基线",
+    "01": "架构契约",
+    "02": "数据库与任务",
+    "03": "身份与权限",
+    "04": "存储与删除",
+    "05": "采集与恢复",
+    "06": "ASR 语音识别",
+    "07": "AI 问答与总结",
+    "08": "离线与同步",
+    "09": "Web 界面",
+    "10": "课堂与复习",
+    "11": "运营与费用",
+    "12": "测试与发布"
+  },
+  "phases": [
+    {"id": "00", "title": "工程基线", "status": "done", "history": [{"date": "2026-11-07", "status": "done"}], "note": "工程基线已获人工验收并进入 main；Windows/Node 工程门禁已远端验证，不代表完整 Web 或生产验收。", "owner": "Codex"},
+    {"id": "01", "title": "整体架构与契约", "status": "done", "history": [{"date": "2026-11-07", "status": "done"}], "note": "整体架构、ADR、HTTP/WS 契约及实施映射已原则批准并进入 main；11 项 TBD 仍开放，架构批准不代表业务实现完成。", "owner": "Astra"},
+    {"id": "02a", "title": "PostgreSQL 实体与迁移", "status": "done", "history": [{"date": "2026-11-07", "status": "done"}], "note": "PostgreSQL 实体、迁移、RLS、Repository 及撤权竞态修复已获批准并整合到 main；不代表生产迁移、真实身份或完整 HTTP 联调已完成。", "owner": "Codex"},
+    {"id": "02b", "title": "持久任务与事件", "status": "done", "history": [{"date": "2026-11-07", "status": "done"}], "note": "持久 Task/Attempt、Receipt、Outbox、租约与恢复已获批准并整合到 main；同键 reconcile 与迟到结果语义、多 Attempt 终态覆盖两项 P3 仍开放。", "owner": "Codex"},
+    {"id": "03a", "title": "邀请验证与资源归属", "status": "done", "history": [{"date": "2026-11-07", "status": "done"}], "note": "邀请激活、资源归属及权限/来源恢复整改已获批准并整合到 main；0006 仅支持可信 bootstrap，P3-01 与非超级用户成功升级仍未关闭；真实邮件和完整认证未验收。", "owner": "Codex"},
+    {"id": "03b", "title": "会话、MFA 与恢复", "status": "blocked", "history": [{"date": "2026-11-07", "status": "blocked"}], "note": "S1、S2、S3 Batch 1 已通过，Batch 2 诊断修订已获独审接受；本机监听状态观察不一致，真实 PostgreSQL 归属/握手未验证，数据库执行权仍关闭，完整 Cookie/MFA/恢复未交付。", "owner": "Codex"},
+    {"id": "04a", "title": "私有对象存储与密钥边界", "status": "todo"},
+    {"id": "04b", "title": "数据删除与备份恢复", "status": "todo"},
+    {"id": "05a", "title": "缓存密钥安全 POC", "status": "todo", "note": "当前工作流仅保留关闭的未来模板，尚未启用或实施安全 POC。"},
+    {"id": "05b", "title": "采集恢复与租约", "status": "todo"},
+    {"id": "06a", "title": "ASR 协议与模拟 POC", "status": "doing", "history": [{"date": "2026-11-07", "status": "doing"}], "note": "模拟协议 POC 已验收并通过 GitHub #4 整合到 main，原模拟 PR 为 #3；模拟候选 24 项及可信断言 4 项通过。PR-06a 的真实接口验证尚未执行，须专项授权及原付费前置门禁；本状态不授权继续调用真实 API。", "owner": "Codex", "prs": ["https://github.com/Mumao233/classroom-os/pull/3", "https://github.com/Mumao233/classroom-os/pull/4"]},
+    {"id": "06b", "title": "实时 ASR 与恢复", "status": "todo"},
+    {"id": "06c", "title": "Filetrans 与候选采用", "status": "todo"},
+    {"id": "07a", "title": "问答与来源快照", "status": "todo"},
+    {"id": "07b", "title": "总结卡片与版本", "status": "todo"},
+    {"id": "08a", "title": "可信加密缓存", "status": "todo"},
+    {"id": "08b", "title": "离线同步与冲突", "status": "todo"},
+    {"id": "08c", "title": "导入导出兼容", "status": "todo"},
+    {"id": "09a", "title": "Aurora 与 Web 壳", "status": "done", "history": [{"date": "2026-11-07", "status": "done"}], "note": "Aurora 导航、主题、响应式 Web 壳与 Mock 工作台已获批准并整合到 main；仅 Mock 范围，跨课堂合成实体 ID P3 仍开放，不代表真实课堂、认证、音频或 ASR 联调完成。", "owner": "Claude Code"},
+    {"id": "09b", "title": "Dashboard、课程与设置", "status": "todo"},
+    {"id": "10a", "title": "Classroom 与课后页", "status": "todo"},
+    {"id": "10b", "title": "Review、来源与采用", "status": "todo"},
+    {"id": "11a", "title": "费用预留与开关前置", "status": "todo"},
+    {"id": "11b", "title": "运营后台", "status": "todo"},
+    {"id": "11c", "title": "搜索、通知与反馈", "status": "todo"},
+    {"id": "12a", "title": "集成、安全与恢复验收", "status": "todo"},
+    {"id": "12b", "title": "真机、质量与长时验证", "status": "todo"},
+    {"id": "12c", "title": "发布与回退材料", "status": "todo"}
+  ],
+  "edges": {
+    "hard": [
+      ["00", "01"],
+      ["01", "02a"],
+      ["01", "03a"],
+      ["01", "05a"],
+      ["01", "06a"],
+      ["01", "09a"],
+      ["02a", "02b"],
+      ["02a", "03a"],
+      ["02a", "09b"],
+      ["02b", "04a"],
+      ["02b", "06b"],
+      ["02b", "07a"],
+      ["02b", "08b"],
+      ["02b", "11a"],
+      ["03a", "03b"],
+      ["03b", "04a"],
+      ["03b", "05b"],
+      ["03b", "07a"],
+      ["03b", "08a"],
+      ["03b", "09b"],
+      ["03b", "11a"],
+      ["03b", "11b"],
+      ["03b", "11c"],
+      ["04a", "04b"],
+      ["04a", "05b"],
+      ["04a", "07a"],
+      ["04b", "05b"],
+      ["04b", "06c"],
+      ["04b", "08a"],
+      ["04b", "08c"],
+      ["04b", "11b"],
+      ["05a", "05b"],
+      ["05a", "08a"],
+      ["05b", "06b"],
+      ["05b", "10a"],
+      ["06a", "06b"],
+      ["06b", "06c"],
+      ["06b", "10a"],
+      ["06c", "12a"],
+      ["07a", "07b"],
+      ["07a", "08a"],
+      ["07a", "10a"],
+      ["07b", "08b"],
+      ["07b", "08c"],
+      ["07b", "10b"],
+      ["07b", "11b"],
+      ["07b", "11c"],
+      ["08a", "08b"],
+      ["08a", "10b"],
+      ["08b", "08c"],
+      ["08b", "10a"],
+      ["08b", "10b"],
+      ["08b", "11c"],
+      ["08c", "10b"],
+      ["08c", "12a"],
+      ["09a", "09b"],
+      ["09b", "10a"],
+      ["09b", "10b"],
+      ["09b", "11c"],
+      ["10a", "10b"],
+      ["10a", "11b"],
+      ["10a", "11c"],
+      ["10b", "11b"],
+      ["10b", "11c"],
+      ["10b", "12a"],
+      ["11a", "06b"],
+      ["11a", "06c"],
+      ["11a", "07a"],
+      ["11a", "11b"],
+      ["11a", "11c"],
+      ["11b", "12a"],
+      ["11c", "12a"],
+      ["12a", "12b"],
+      ["12a", "12c"],
+      ["12b", "12c"]
+    ],
+    "integration": [
+      ["03b", "05a"],
+      ["06b", "07b"],
+      ["08a", "09b"],
+      ["08b", "09b"]
+    ],
+    "paid": [
+      ["03b", "06a"],
+      ["04a", "06a"],
+      ["05b", "06a"],
+      ["11a", "06a"]
+    ]
+  }
+}
+</script>
+
+<script src="vendor/mermaid.min.js"></script>
+<script>
+(function () {
+'use strict';
+const STATUSES = ['todo','doing','review','done','blocked'];
+const LABEL = { todo:'未开始', doing:'进行中', review:'待验收', done:'完成', blocked:'受阻', ready:'可开工' };
+const STYLE = {
+  done:   { fill:'#bbf7d0', stroke:'#15803d', color:'#14532d', w:1.5 },
+  review: { fill:'#e9d5ff', stroke:'#7e22ce', color:'#3b0764', w:1.5 },
+  doing:  { fill:'#bfdbfe', stroke:'#1d4ed8', color:'#1e3a8a', w:2 },
+  ready:  { fill:'#fef3c7', stroke:'#d97706', color:'#78350f', w:3 },
+  blocked:{ fill:'#fecaca', stroke:'#b91c1c', color:'#7f1d1d', w:2 },
+  todo:   { fill:'#f5f5f4', stroke:'#a8a29e', color:'#57534e', w:1 },
+};
+const ORDER = ['done','review','doing','ready','todo','blocked'];
+const VIEWS = [['status','状态'],['heat','瓶颈'],['waves','波次'],['module','模块'],['owner','负责人']];
+const KIND_LABEL = { hard:'硬依赖', integration:'完整联调', paid:'真实付费接入' };
+const C = { up:'#2563eb', down:'#ea580c', path:'#7c3aed', crit:'#dc2626', ok:'#16a34a', paid:'#ea580c' };
+const HEAT = ['#f5f5f4','#fde68a','#fdba74','#f97316','#c2410c'];
+const OWNER_PAL = [['#bfdbfe','#1d4ed8'],['#fde68a','#b45309'],['#c7d2fe','#4338ca'],['#fbcfe8','#be185d'],['#a7f3d0','#047857'],['#fed7aa','#c2410c'],['#ddd6fe','#6d28d9'],['#bae6fd','#0369a1'],['#fecdd3','#be123c'],['#d9f99d','#4d7c0f']];
+const KEY = 'classroom-os-roadmap-v2';
+const dark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+const GRAY = dark ? '#57534e' : '#a8a29e';
+const $ = id => document.getElementById(id);
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const today = () => { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0'); };
+const days = (a, b) => Math.round((Date.parse(b) - Date.parse(a)) / 86400000);
+
+// ---------------- state ----------------
+const EMBEDDED = JSON.parse($('default-data').textContent);
+const params = new URLSearchParams(location.search);
+const CFG = Object.assign({ dataUrl:'phases.json', editable:true }, window.ROADMAP_CONFIG || {});
+const DATA_URL = params.get('data') || CFG.dataUrl;
+const EDIT = CFG.editable !== false && !params.has('readonly');
+let base = clone(EMBEDDED), baseFrom = 'loading', baseHash = '', data = clone(EMBEDDED), stale = null, loadError = '';
+let ui = { view:'status', crit:false, fade:false, kinds:{ hard:true, integration:true, paid:true }, chain:'direct', dir:'TD', tab:'graph', filter:'all' };
+let saved = null;
+try {
+  saved = JSON.parse(localStorage.getItem(KEY));
+  if (saved && saved.ui) ui = Object.assign(ui, saved.ui, { kinds: Object.assign(ui.kinds, saved.ui.kinds || {}) });
+} catch (e) {}
+let sel = null, pathTo = null, query = '';
+function hash(t) { let h = 2166136261; for (let i = 0; i < t.length; i++) { h ^= t.charCodeAt(i); h = Math.imul(h, 16777619); } return (h >>> 0).toString(36); }
+const dirty = () => JSON.stringify(data) !== JSON.stringify(base);
+async function loadData() {
+  baseFrom = 'embedded';
+  if (DATA_URL) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 12000);
+    try {
+      const r = await fetch(DATA_URL, { cache:'no-store', signal:controller.signal });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const d = await r.json();
+      if (!valid(d)) throw new Error('数据格式不正确');
+      base = d; baseFrom = 'remote';
+    } catch (e) {
+      loadError = e.name === 'AbortError' ? '读取超时' : (e.message || '读取失败');
+    } finally { clearTimeout(timeout); }
+  }
+  baseHash = hash(JSON.stringify(base));
+  stale = saved && valid(saved.stale) ? saved.stale : null;
+  const mine = saved && valid(saved.data) ? saved.data : null;
+  if (mine && EDIT && JSON.stringify(mine) !== JSON.stringify(base)) {
+    if (saved.base === baseHash) data = mine;           // 本地改动，基于当前数据
+    else { data = clone(base); stale = mine; }           // 数据源已更新，旧改动先放一边
+  } else data = clone(base);
+}
+
+function clone(x) { return JSON.parse(JSON.stringify(x)); }
+function valid(d) {
+  if (!d || !Array.isArray(d.phases) || !d.phases.length || !d.edges || !Array.isArray(d.edges.hard) ||
+      (d.groups != null && (typeof d.groups !== 'object' || Array.isArray(d.groups)))) return false;
+  if (!d.phases.every(p => p && typeof p.id === 'string' && /^\d{2}[a-z]?$/.test(p.id) && typeof p.title === 'string' &&
+      p.title.trim() && STATUSES.includes(p.status) && (p.prs == null || (Array.isArray(p.prs) && p.prs.every(u => typeof u === 'string'))))) return false;
+  const ids = new Set(d.phases.map(p => p.id));
+  return ids.size === d.phases.length && Object.entries(d.edges).every(([kind, edges]) =>
+    ['hard','integration','paid'].includes(kind) && Array.isArray(edges) &&
+    edges.every(e => Array.isArray(e) && e.length === 2 && ids.has(e[0]) && ids.has(e[1]) && e[0] !== e[1]));
+}
+function persist() { try { localStorage.setItem(KEY, JSON.stringify({ data: dirty() ? data : null, base: baseHash, stale, ui })); } catch (e) {} }
+
+// ---------------- graph model ----------------
+let byId, order, deps, succ, A = {};
+function index() {
+  byId = {}; order = {};
+  data.edges.integration = data.edges.integration || []; data.edges.paid = data.edges.paid || [];
+  data.phases.forEach((p, i) => { if (!STATUSES.includes(p.status)) p.status = 'todo'; byId[p.id] = p; order[p.id] = i; });
+  deps = {}; succ = {};
+  for (const k of Object.keys(data.edges)) {
+    deps[k] = {}; succ[k] = {};
+    data.edges[k].forEach(([a, b]) => { (deps[k][b] = deps[k][b] || []).push(a); (succ[k][a] = succ[k][a] || []).push(b); });
+  }
+  analyze();
+}
+const st = id => byId[id] ? byId[id].status : 'todo';
+const D = (k, id) => (deps[k] && deps[k][id]) || [];
+const S = (k, id) => (succ[k] && succ[k][id]) || [];
+const missing = (id, k = 'hard') => D(k, id).filter(d => st(d) !== 'done');
+const shown = id => st(id) === 'todo' && !missing(id).length ? 'ready' : st(id);
+const nodeName = id => 'P' + id.toUpperCase();
+const title = id => id + ' ' + (byId[id] ? byId[id].title : '');
+const groupName = g => (data.groups && data.groups[g]) || '';
+function gates(id) {
+  const b = []; let m = missing(id, 'integration'); if (m.length) b.push('完整联调还差 ' + m.join(', '));
+  m = missing(id, 'paid'); if (m.length) b.push('真实付费接入还差 ' + m.join(', ')); return b.join('；');
+}
+function topo() {
+  const indeg = {}; data.phases.forEach(p => indeg[p.id] = D('hard', p.id).length);
+  const q = data.phases.filter(p => !indeg[p.id]).map(p => p.id), out = [];
+  while (q.length) { const u = q.shift(); out.push(u); S('hard', u).forEach(v => { if (--indeg[v] === 0) q.push(v); }); }
+  return out;
+}
+function analyze() {
+  const t = topo();
+  A.topo = t; A.acyclic = t.length === data.phases.length;
+  { // order over all edge kinds, for listing paths
+    const indeg = {}; data.phases.forEach(p => indeg[p.id] = 0);
+    const out = {}; Object.values(data.edges).forEach(es => es.forEach(([a, b]) => { indeg[b]++; (out[a] = out[a] || []).push(b); }));
+    const q = data.phases.filter(p => !indeg[p.id]).map(p => p.id), r = [];
+    while (q.length) { const u = q.shift(); r.push(u); (out[u] || []).forEach(v => { if (--indeg[v] === 0) q.push(v); }); }
+    A.topoAll = r.length === data.phases.length ? r : t;
+  }
+  // blocked downstream (transitive, not done)
+  A.bd = {}; A.desc = {};
+  data.phases.forEach(p => {
+    const seen = new Set(), stack = [...S('hard', p.id)];
+    while (stack.length) { const v = stack.pop(); if (!seen.has(v)) { seen.add(v); stack.push(...S('hard', v)); } }
+    A.desc[p.id] = seen; A.bd[p.id] = [...seen].filter(v => st(v) !== 'done').length;
+  });
+  A.maxbd = Math.max(1, ...Object.values(A.bd));
+  // remaining waves
+  A.wave = {}; t.forEach(u => { A.wave[u] = st(u) === 'done' ? 0 : 1 + Math.max(0, ...D('hard', u).map(d => A.wave[d] || 0)); });
+  A.maxw = Math.max(0, ...Object.values(A.wave));
+  // critical path
+  const dist = {}, nxt = {};
+  [...t].reverse().forEach(u => { let best = 0, bn = null; S('hard', u).forEach(v => { if (dist[v] > best) { best = dist[v]; bn = v; } });
+    dist[u] = (st(u) === 'done' ? 0 : 1) + best; nxt[u] = bn; });
+  const cands = data.phases.map(p => p.id).filter(id => st(id) !== 'done');
+  A.cp = [];
+  if (cands.length && A.acyclic) {
+    let s = cands.reduce((a, b) => (dist[b] > dist[a] ? b : a));
+    while (s) { if (st(s) !== 'done') A.cp.push(s); s = nxt[s]; }
+  }
+  A.cpSet = new Set(A.cp);
+  A.cpEdges = new Set(A.cp.slice(1).map((b, i) => A.cp[i] + '>' + b));
+  // owners
+  A.owners = [...new Set(data.phases.map(p => p.owner).filter(Boolean))].sort();
+}
+function started(p) { const h = (p.history || []).find(x => ['doing','review','done'].includes(x.status)); return h ? h.date : ''; }
+function finished(p) { if (p.status !== 'done') return ''; const h = [...(p.history || [])].reverse().find(x => x.status === 'done'); return h ? h.date : ''; }
+function warnings() {
+  return data.phases.filter(p => ['doing','review','done'].includes(p.status) && missing(p.id).length)
+    .map(p => ({ id:p.id, text:`${p.id} 已是「${LABEL[p.status]}」，但 ${missing(p.id).join(', ')} 还没完成` }));
+}
+const visKinds = () => Object.keys(ui.kinds).filter(k => ui.kinds[k]);
+
+// traversal over visible edge kinds: returns {depth: Map(id->d), edges:Set('a>b|kind')}
+function walk(start, dir, maxDepth) {
+  const depth = new Map(), edges = new Set(); let frontier = [start]; let d = 0;
+  while (frontier.length && d < maxDepth) {
+    d++; const next = [];
+    frontier.forEach(u => visKinds().forEach(k => (dir === 'up' ? D(k, u) : S(k, u)).forEach(v => {
+      edges.add(dir === 'up' ? `${v}>${u}|${k}` : `${u}>${v}|${k}`);
+      if (v !== start && !depth.has(v)) { depth.set(v, d); next.push(v); }
+    })));
+    frontier = next;
+  }
+  return { depth, edges };
+}
+function reach(start, dir) { return walk(start, dir, 999).depth; }
+function pathBetween(a, b) {
+  const tryDir = (x, y) => {
+    const dx = reach(x, 'down'), ay = reach(y, 'up');
+    const set = new Set([x, y]); dx.forEach((_, k) => { if (ay.has(k)) set.add(k); });
+    if (!dx.has(y)) return null;
+    const edges = new Set();
+    visKinds().forEach(k => data.edges[k].forEach(([u, v]) => { if (set.has(u) && set.has(v) && (u === x || dx.has(u)) && (v === y || ay.has(v))) edges.add(`${u}>${v}|${k}`); }));
+    return { from:x, to:y, nodes:set, edges };
+  };
+  return tryDir(a, b) || tryDir(b, a);
+}
+
+// ---------------- colors per view ----------------
+function hsl(h, s, l) { return `hsl(${h} ${s}% ${l}%)`; }
+function nodeLook(id) {
+  const s = shown(id);
+  if (ui.view === 'status') return Object.assign({ badge:'' }, STYLE[s]);
+  if (st(id) === 'done' && ui.view !== 'module' && ui.view !== 'owner')
+    return { fill:'#dcfce7', stroke:'#86efac', color:'#166534', w:1, badge:'✓' };
+  if (ui.view === 'heat') {
+    const n = A.bd[id], t = n / A.maxbd, i = n === 0 ? 0 : Math.min(4, 1 + Math.floor(t * 3.999));
+    return { fill:HEAT[i], stroke: i ? '#9a3412' : '#a8a29e', color: i >= 3 ? '#fff' : '#431407', w: s === 'doing' || s === 'review' ? 2.5 : 1, badge: n ? String(n) : '' };
+  }
+  if (ui.view === 'waves') {
+    const k = A.wave[id], h = 170 + (A.maxw > 1 ? (k - 1) * 150 / (A.maxw - 1) : 0);
+    return { fill:hsl(h, 70, 88), stroke:hsl(h, 55, 40), color:hsl(h, 60, 20), w: k === 1 ? 2.5 : 1.2, badge:'W' + k };
+  }
+  if (ui.view === 'module') {
+    const groups = [...new Set(data.phases.map(p => p.id.slice(0, 2)))], gi = groups.indexOf(id.slice(0, 2));
+    const h = Math.round(gi * 360 / groups.length);
+    return { fill:hsl(h, 70, 87), stroke:hsl(h, 50, 40), color:hsl(h, 60, 20), w:1.5, badge:'' };
+  }
+  if (ui.view === 'owner') {
+    const o = byId[id].owner; if (!o) return { fill:'#f5f5f4', stroke:'#d6d3d1', color:'#78716c', w:1, badge:'' };
+    const [f, k] = OWNER_PAL[A.owners.indexOf(o) % OWNER_PAL.length];
+    return { fill:f, stroke:k, color:'#1c1917', w:2, badge:'' };
+  }
+}
+function edgeBase(e) {
+  const ok = st(e.a) === 'done';
+  if (e.kind === 'paid') return { c: ok ? C.ok : C.paid, w:3 };
+  if (e.kind === 'integration') return { c: ok ? C.ok : (dark ? '#a8a29e' : '#78716c'), w:1.3 };
+  return { c: ok ? C.ok : GRAY, w: ok ? 2 : 1.2 };
+}
+
+// ---------------- svg index & paint ----------------
+let svg, nodeEl = {}, edgeEl = [], markerBase = null, markers = {};
+function indexSvg() {
+  svg = canvas.querySelector('svg'); nodeEl = {}; edgeEl = []; markers = {};
+  const vb = svg.viewBox && svg.viewBox.baseVal;
+  if (vb && vb.width) { svg.setAttribute('width', vb.width); svg.setAttribute('height', vb.height); svg.style.maxWidth = 'none'; }
+  svg.querySelectorAll('g.node').forEach(g => {
+    const m = /flowchart-(P[0-9A-Z]+)-\d+$/.exec(g.id || ''); if (!m) return;
+    const id = m[1].slice(1).toLowerCase(); if (!byId[id]) return;
+    const shapes = [...g.querySelectorAll('rect, polygon, path')].filter(x => !x.closest('.rm-badge'));
+    const labels = [...g.querySelectorAll('.nodeLabel, .nodeLabel *, span, p')];
+    // badge
+    const r = shapes[0] && shapes[0].getBBox ? shapes[0].getBBox() : { x:0, y:0, width:0, height:0 };
+    const NS = 'http://www.w3.org/2000/svg';
+    const bg = document.createElementNS(NS, 'g'); bg.setAttribute('class', 'rm-badge'); bg.style.pointerEvents = 'none';
+    const br = document.createElementNS(NS, 'rect'); br.setAttribute('rx', 8); br.setAttribute('height', 16);
+    const bt = document.createElementNS(NS, 'text'); bt.setAttribute('font-size', 10.5); bt.setAttribute('font-weight', 600);
+    bt.setAttribute('text-anchor', 'middle'); bt.setAttribute('dominant-baseline', 'central');
+    bg.append(br, bt); g.appendChild(bg);
+    nodeEl[id] = { g, shapes, labels, badge:{ g:bg, r:br, t:bt, x:r.x + r.width, y:r.y } };
+  });
+  const seen = {};
+  const kindOf = {}; // pair -> list of kinds in definition order
+  for (const k of ['hard','integration','paid']) data.edges[k].forEach(([a, b]) => { (kindOf[a + '>' + b] = kindOf[a + '>' + b] || []).push(k); });
+  svg.querySelectorAll('path.flowchart-link').forEach(p => {
+    const m = /L_(P[0-9A-Z]+)_(P[0-9A-Z]+)_(\d+)$/.exec(p.id || ''); if (!m) return;
+    const a = m[1].slice(1).toLowerCase(), b = m[2].slice(1).toLowerCase(), key = a + '>' + b;
+    const n = seen[key] = (seen[key] || 0); seen[key]++;
+    const kind = (kindOf[key] || [])[n] || 'hard';
+    const lab = svg.querySelector(`.edgeLabel [data-id="${p.id.slice(p.id.indexOf('L_'))}"]`);
+    edgeEl.push({ a, b, kind, path:p, label: lab ? lab.closest('g.edgeLabel') : null });
+  });
+  markerBase = svg.querySelector('marker[id$="flowchart-v2-pointEnd"]');
+}
+function marker(color) {
+  if (markers[color]) return markers[color];
+  if (!markerBase) return null;
+  const m = markerBase.cloneNode(true), id = 'rm-arrow-' + Object.keys(markers).length;
+  m.id = id; m.querySelectorAll('path').forEach(p => { p.style.fill = color; p.style.stroke = color; });
+  markerBase.parentNode.appendChild(m);
+  return (markers[color] = `url(#${id})`);
+}
+function paint() {
+  if (!svg) return;
+  // context sets
+  let rel = null; // {up:Map, down:Map, edgesUp:Set, edgesDown:Set}
+  let path = null;
+  if (sel && pathTo) path = pathBetween(sel, pathTo);
+  if (sel && !path) {
+    const md = ui.chain === 'all' ? 999 : 1, u = walk(sel, 'up', md), d = walk(sel, 'down', md);
+    rel = { up:u.depth, down:d.depth, eu:u.edges, ed:d.edges };
+  }
+  const q = query.trim().toLowerCase();
+  const matches = q ? new Set(data.phases.filter(p => textOf(p).includes(q)).map(p => p.id)) : null;
+  const critOn = ui.crit && !sel && !matches;
+
+  for (const id in nodeEl) {
+    const el = nodeEl[id], look = nodeLook(id);
+    let stroke = look.stroke, w = look.w, op = 1;
+    if (path) {
+      if (path.nodes.has(id)) { stroke = C.path; w = id === path.from || id === path.to ? 4 : 3; } else op = .14;
+    } else if (rel) {
+      if (id === sel) { stroke = dark ? '#fafaf9' : '#0c0a09'; w = 4.5; }
+      else if (rel.up.has(id)) { stroke = C.up; w = 3; op = ui.chain === 'all' ? Math.max(.55, 1 - (rel.up.get(id) - 1) * .12) : 1; }
+      else if (rel.down.has(id)) { stroke = C.down; w = 3; op = ui.chain === 'all' ? Math.max(.55, 1 - (rel.down.get(id) - 1) * .12) : 1; }
+      else op = .14;
+    } else if (matches) { if (!matches.has(id)) op = .18; else { w = Math.max(w, 3); } }
+    else if (critOn) { if (A.cpSet.has(id)) { stroke = C.crit; w = 3.5; } else op = .45; }
+    if (!path && !rel && !matches && ui.fade && st(id) === 'done') op = Math.min(op, .3);
+    el.shapes.forEach(s => { s.style.fill = look.fill; s.style.stroke = stroke; s.style.strokeWidth = w + 'px'; });
+    el.labels.forEach(l => { l.style.color = look.color; l.style.fill = look.color; });
+    el.g.style.opacity = op;
+    // badge
+    let badge = look.badge;
+    if (rel && id !== sel && ui.chain === 'all' && (rel.up.has(id) || rel.down.has(id))) badge = (rel.up.has(id) ? '↑' : '↓') + (rel.up.get(id) || rel.down.get(id));
+    const b = el.badge;
+    if (badge) {
+      b.t.textContent = badge; const wpx = Math.max(18, 7 * badge.length + 10);
+      b.r.setAttribute('width', wpx); b.r.setAttribute('x', b.x - wpx + 6); b.r.setAttribute('y', b.y - 9);
+      b.t.setAttribute('x', b.x - wpx / 2 + 6); b.t.setAttribute('y', b.y - 1);
+      b.r.style.fill = dark ? '#292524' : '#fff'; b.r.style.stroke = look.stroke; b.t.style.fill = dark ? '#f5f5f4' : '#1c1917';
+      b.g.style.display = '';
+    } else b.g.style.display = 'none';
+  }
+  edgeEl.forEach(e => {
+    const visible = ui.kinds[e.kind];
+    e.path.style.display = visible ? '' : 'none'; if (e.label) e.label.style.display = visible ? '' : 'none';
+    if (!visible) return;
+    const key = `${e.a}>${e.b}|${e.kind}`, base = edgeBase(e);
+    let c = base.c, w = base.w, op = 1;
+    if (path) { if (path.edges.has(key)) { c = C.path; w = 3.5; } else op = .07; }
+    else if (rel) {
+      if (rel.eu.has(key) && (e.b === sel || rel.up.has(e.b)) && (rel.up.has(e.a))) { c = C.up; w = e.b === sel ? 3.5 : 2.5; }
+      else if (rel.ed.has(key) && (e.a === sel || rel.down.has(e.a)) && rel.down.has(e.b)) { c = C.down; w = e.a === sel ? 3.5 : 2.5; }
+      else op = .07;
+    } else if (matches) { if (!(matches.has(e.a) || matches.has(e.b))) op = .12; }
+    else if (critOn) { if (e.kind === 'hard' && A.cpEdges.has(e.a + '>' + e.b)) { c = C.crit; w = 3.5; } else op = .3; }
+    if (!path && !rel && !matches && ui.fade && st(e.a) === 'done' && st(e.b) === 'done') op = Math.min(op, .2);
+    e.path.style.stroke = c; e.path.style.strokeWidth = w + 'px'; e.path.style.opacity = op;
+    const mk = marker(c); if (mk) e.path.setAttribute('marker-end', mk);
+    if (e.label) e.label.style.opacity = op < 1 ? Math.max(op, .15) : 1;
+  });
+}
+
+// ---------------- render svg ----------------
+function mermaidSrc() {
+  const L = ['flowchart ' + ui.dir];
+  data.phases.forEach(p => L.push(`    ${nodeName(p.id)}["${p.id} ${p.title.replace(/"/g, "'")}"]`));
+  data.edges.hard.forEach(([a, b]) => L.push(`    ${nodeName(a)} --> ${nodeName(b)}`));
+  data.edges.integration.forEach(([a, b]) => L.push(`    ${nodeName(a)} -. 完整联调 .-> ${nodeName(b)}`));
+  data.edges.paid.forEach(([a, b]) => L.push(`    ${nodeName(a)} ==>|真实付费接入| ${nodeName(b)}`));
+  return L.join('\n');
+}
+const stage = $('stage'), canvas = $('canvas');
+let s = 1, tx = 0, ty = 0, seq = 0;
+async function renderSvg(refit) {
+  if (!window.mermaid) { canvas.innerHTML = '<div id="msg">Mermaid 渲染库没有加载成功，请检查网络后刷新。</div>'; return; }
+  const my = ++seq;
+  try {
+    const out = await mermaid.render('rm' + my, mermaidSrc());
+    if (my !== seq) return;
+    canvas.innerHTML = out.svg; indexSvg(); paint();
+    if (refit) { s = 1; tx = 0; ty = 0; apply(); requestAnimationFrame(fit); }
+  } catch (e) { canvas.innerHTML = '<div id="msg">渲染出错：' + esc(e && e.message || e) + '</div>'; }
+}
+function refresh() { index(); renderChrome(); renderPanel(); paint(); renderBoard(); persist(); }
+
+// ---------------- header ----------------
+function renderChrome() {
+  const total = data.phases.length, c = {};
+  data.phases.forEach(p => { const k = shown(p.id); c[k] = (c[k] || 0) + 1; });
+  $('fill').style.width = (total ? 100 * (c.done || 0) / total : 0) + '%';
+  $('pct').textContent = `${c.done || 0} / ${total}`;
+  $('chips').innerHTML = ORDER.map(k => `<span class="chip"><i class="dot" style="background:${STYLE[k].fill};border-color:${STYLE[k].stroke}"></i>${LABEL[k]} ${c[k] || 0}</span>`).join('');
+  document.body.classList.toggle('board', ui.tab === 'board');
+  document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === ui.tab));
+  $('filters').innerHTML = FILTERS.map(([k, n]) => `<button data-f="${k}" class="${ui.filter === k ? 'on' : ''}">${n}<span class="c">${data.phases.filter(p => FILTER_FN[k](p.id)).length}</span></button>`).join('');
+  $('views').innerHTML = VIEWS.map(([k, n]) => `<button data-v="${k}" class="${ui.view === k ? 'on' : ''}">${n}</button>`).join('');
+  $('crit').classList.toggle('on', ui.crit); $('fade').classList.toggle('on', ui.fade);
+  document.querySelectorAll('[data-kind]').forEach(b => b.classList.toggle('on', !!ui.kinds[b.dataset.kind]));
+  document.querySelectorAll('#chain button').forEach(b => b.classList.toggle('on', b.dataset.c === ui.chain));
+  $('dir').textContent = ui.dir === 'TD' ? '横向' : '纵向';
+  const bits = [];
+  if (!EDIT) bits.push('<span>只读</span>');
+  if (baseFrom === 'loading') bits.push('<span role="status">正在读取进度数据…</span>');
+  else if (baseFrom === 'remote') bits.push(`<span title="${esc(DATA_URL)}">数据：${esc(DATA_URL.split('/').pop() || DATA_URL)}</span>`);
+  else bits.push(`<span class="warn" role="status" title="${esc(loadError)}">${DATA_URL ? '未能读取最新进度；' : ''}当前显示内置快照</span>`);
+  if (EDIT && dirty()) bits.push('<span class="warn">● 本地有改动，未同步</span><button data-src="discard">撤销改动</button>');
+  if (EDIT && stale) bits.push('<span class="warn">数据源已更新，你之前的本地改动没有套用</span><button data-src="restore">恢复旧改动</button><button data-src="drop">丢弃</button>');
+  $('src').innerHTML = bits.join('');
+  $('importBtn').style.display = EDIT ? '' : 'none';
+  layoutTop();
+}
+function layoutTop() { document.documentElement.style.setProperty('--top', $('hdr').offsetHeight + 'px'); }
+
+// ---------------- board ----------------
+const FILTERS = [['all','全部'],['ready','可开工'],['waiting','等前置'],['active','进行中'],['blocked','受阻'],['done','已完成']];
+const FILTER_FN = {
+  all: () => true,
+  ready: id => shown(id) === 'ready',
+  waiting: id => st(id) === 'todo' && missing(id).length > 0,
+  active: id => ['doing','review'].includes(st(id)),
+  blocked: id => st(id) === 'blocked',
+  done: id => st(id) === 'done',
+};
+const textOf = p => (p.id + ' ' + p.title + ' ' + (p.owner || '') + ' ' + groupName(p.id.slice(0, 2))).toLowerCase();
+function renderBoard() {
+  if (ui.tab !== 'board') return;
+  const q = query.trim().toLowerCase(), f = FILTER_FN[ui.filter] || FILTER_FN.all;
+  const mods = [];
+  data.phases.forEach(p => { const g = p.id.slice(0, 2); if (!mods.length || mods[mods.length - 1].g !== g) mods.push({ g, ids:[] }); mods[mods.length - 1].ids.push(p.id); });
+  let html = '';
+  mods.forEach(m => {
+    const vis = m.ids.filter(id => f(id) && (!q || textOf(byId[id]).includes(q)));
+    if (!vis.length) return;
+    const dn = m.ids.filter(id => st(id) === 'done').length;
+    html += `<section class="mod"><div class="mod-h"><div class="row1"><span class="n">${esc(m.g)}</span><span class="t">${esc(groupName(m.g) || '模块 ' + m.g)}</span><span class="pg">${dn}/${m.ids.length} 完成</span></div><div class="mbar"><i style="width:${100 * dn / m.ids.length}%"></i></div></div><div class="cards">${vis.map(card).join('')}</div></section>`;
+  });
+  $('board').innerHTML = html || '<div class="board-empty">没有符合条件的阶段。换个筛选或清空搜索。</div>';
+}
+function card(id) {
+  const p = byId[id], sh = shown(id), k = STYLE[sh], miss = missing(id), pills = [];
+  if (st(id) === 'todo' && miss.length) pills.push(`<span class="pill" title="还差的硬依赖：${esc(miss.join(', '))}">缺 ${miss.length}：${esc(miss.slice(0, 3).join(' '))}${miss.length > 3 ? ' …' : ''}</span>`);
+  if (A.cpSet.has(id)) pills.push('<span class="pill hot">关键路径</span>');
+  if (st(id) !== 'done' && A.bd[id] >= 8) pills.push(`<span class="pill">卡住 ${A.bd[id]} 个下游</span>`);
+  if (p.owner) pills.push(`<span class="pill">@${esc(p.owner)}</span>`);
+  if ((p.prs || []).length) pills.push(`<span class="pill">PR ×${p.prs.length}</span>`);
+  const g = gates(id); if (g && st(id) !== 'done') pills.push(`<span class="pill" title="${esc(g)}">${missing(id, 'paid').length ? '付费前置未齐' : '联调前置未齐'}</span>`);
+  if (p.note) pills.push(`<span class="pill" title="${esc(p.note)}">📝 ${esc(p.note.length > 16 ? p.note.slice(0, 16) + '…' : p.note)}</span>`);
+  return `<button class="card${sel === id ? ' on' : ''}" data-go="${esc(id)}" style="background:${k.fill};border-color:${k.stroke};color:${k.color}">
+    <div class="top"><span>${esc(id)}</span><span>${LABEL[sh]}</span></div><div class="tt">${esc(p.title)}</div>${pills.length ? `<div class="meta">${pills.join('')}</div>` : ''}</button>`;
+}
+function scrollCard(id) { const c = document.querySelector(`#board .card[data-go="${CSS.escape(id)}"]`); if (c) c.scrollIntoView({ block:'nearest', behavior:'smooth' }); }
+function setTab(t) {
+  if (t !== 'graph' && t !== 'board') return;
+  ui.tab = t; renderChrome(); renderBoard(); persist(); hideTip();
+  if (location.hash.slice(1) !== t) { try { history.replaceState(null, '', '#' + t); } catch (e) { location.hash = t; } }
+}
+$('tabs').addEventListener('click', e => { const b = e.target.closest('[data-tab]'); if (b) setTab(b.dataset.tab); });
+$('filters').addEventListener('click', e => { const b = e.target.closest('[data-f]'); if (!b) return; ui.filter = b.dataset.f; renderChrome(); renderBoard(); persist(); });
+$('board').addEventListener('click', e => { const c = e.target.closest('[data-go]'); if (!c) return; const id = c.dataset.go; select(id === sel && !pathTo ? null : id); });
+window.addEventListener('hashchange', () => { const h = location.hash.slice(1); if ((h === 'graph' || h === 'board') && h !== ui.tab) setTab(h); });
+
+// ---------------- panel ----------------
+const dotFor = id => { const k = STYLE[shown(id)]; return `<i class="dot" style="background:${k.fill};border-color:${k.stroke}"></i>`; };
+function item(id, sub, mark) {
+  return `<li class="link" data-go="${esc(id)}">${mark != null ? `<span class="mark">${mark}</span>` : dotFor(id)}<div>${esc(title(id))}${sub ? `<span class="sub">${esc(sub)}</span>` : ''}</div></li>`;
+}
+function renderPanel() {
+  const P = $('panel');
+  if (sel && byId[sel]) {
+    if (pathTo) { const pth = pathBetween(sel, pathTo); if (pth) return P.innerHTML = panelPath(pth); }
+    P.innerHTML = panelDetail(sel); if (EDIT) bindDetail(sel); return;
+  }
+  P.innerHTML = panelOverview();
+}
+function panelOverview() {
+  let h = '';
+  h += `<h2>进度曲线</h2><div id="chart">${chartSvg()}</div>`;
+  h += `<h2>当前视图：${VIEWS.find(v => v[0] === ui.view)[1]}</h2>` + legend();
+  if (A.cp.length) h += `<h2 style="color:${C.crit}">关键路径（剩 ${A.cp.length} 个阶段）</h2><div class="muted" style="margin-bottom:4px">未完成部分最长的硬依赖链，决定最快什么时候能全部做完。顶部「关键路径」可在图上高亮。</div><ul>${A.cp.map((id, i) => item(id, '', i + 1)).join('')}</ul>`;
+  const top = data.phases.map(p => p.id).filter(id => st(id) !== 'done' && A.bd[id]).sort((a, b) => A.bd[b] - A.bd[a] || order[a] - order[b]).slice(0, 5);
+  if (top.length) h += `<h2>瓶颈 Top ${top.length}</h2><ul>${top.map(id => item(id, `卡住 ${A.bd[id]} 个未完成的下游 · ${LABEL[shown(id)]}`)).join('')}</ul>`;
+  const sec = (k, t) => { const rows = data.phases.filter(p => shown(p.id) === k);
+    return `<h2><i class="dot" style="background:${STYLE[k].fill};border-color:${STYLE[k].stroke}"></i>${t}（${rows.length}）</h2>` +
+      (rows.length ? '<ul>' + rows.map(p => item(p.id, [gates(p.id), p.owner && '@' + p.owner, p.note].filter(Boolean).join(' · '))).join('') + '</ul>' : '<div class="empty">暂无</div>'); };
+  h += sec('ready', '可开工') + sec('doing', '进行中') + sec('review', '待验收') + sec('blocked', '受阻');
+  const w = warnings();
+  if (w.length) h += `<h2>⚠️ 状态与依赖不一致（${w.length}）</h2><ul>${w.map(x => `<li class="link" data-go="${esc(x.id)}">${esc(x.text)}</li>`).join('')}</ul>`;
+  h += `<div class="lines">${EDIT ? '' : '这是只读页面。<br>'}点节点：右侧显示详情，图上蓝色是它依赖的阶段，橙色是依赖它的阶段，其余淡化。「整条链」显示全部上下游，角标 ↑2 / ↓3 是隔了几层。<br>Shift + 点第二个节点：紫色显示两者之间的所有依赖路径。<br>实线＝硬依赖，虚线＝完整联调，粗线＝真实付费接入前置；连线变绿＝前置已满足。${EDIT ? '<br>页面读取 phases.json；你在这里的改动只存在这个浏览器里，用「导出」同步回仓库。' : ''}</div>`;
+  return h;
+}
+function legend() {
+  if (ui.view === 'status') return `<div class="legend">${ORDER.map(k => `<div><i class="dot" style="background:${STYLE[k].fill};border-color:${STYLE[k].stroke}"></i>${LABEL[k]}${k === 'ready' ? '（前置都完成，自动计算）' : ''}</div>`).join('')}</div>`;
+  if (ui.view === 'heat') return `<div class="muted">颜色越深，卡住的未完成下游越多；角标是数量。浅绿＝已完成。</div><div class="scale">${HEAT.map(c => `<i style="background:${c}"></i>`).join('')}</div><div class="muted" style="display:flex;justify-content:space-between"><span>0</span><span>${A.maxbd}</span></div>`;
+  if (ui.view === 'waves') return `<div class="muted">按剩余依赖分层：W1 现在就能开工（或在做），W2 要等 W1 里的前置做完……同一波可以并行。剩 ${A.maxw} 波。</div><div class="legend" style="margin-top:6px">${Array.from({ length: A.maxw }, (_, i) => { const h = 170 + (A.maxw > 1 ? i * 150 / (A.maxw - 1) : 0); const ids = data.phases.filter(p => A.wave[p.id] === i + 1).map(p => p.id); return `<div><i class="dot" style="background:${hsl(h,70,88)};border-color:${hsl(h,55,40)}"></i>W${i + 1}：${ids.join('、')}</div>`; }).join('')}</div>`;
+  if (ui.view === 'module') { const groups = [...new Set(data.phases.map(p => p.id.slice(0, 2)))];
+    return `<div class="legend">${groups.map((g, i) => { const h = Math.round(i * 360 / groups.length); const ps = data.phases.filter(p => p.id.slice(0, 2) === g); const dn = ps.filter(p => p.status === 'done').length; return `<div><i class="dot" style="background:${hsl(h,70,87)};border-color:${hsl(h,50,40)}"></i>${g} ${esc(groupName(g))}　${dn}/${ps.length} 完成</div>`; }).join('')}</div>`; }
+  if (ui.view === 'owner') { if (!A.owners.length) return '<div class="muted">还没有填负责人。点一个节点，在右侧填写。</div>';
+    return `<div class="legend">${A.owners.map((o, i) => { const [f, k] = OWNER_PAL[i % OWNER_PAL.length]; const ps = data.phases.filter(p => p.owner === o); return `<div><i class="dot" style="background:${f};border-color:${k}"></i>${esc(o)}　${ps.filter(p => p.status === 'done').length}/${ps.length} 完成，${ps.filter(p => ['doing','review'].includes(p.status)).length} 在做</div>`; }).join('')}<div><i class="dot" style="background:#f5f5f4;border-color:#d6d3d1"></i>未分配 ${data.phases.filter(p => !p.owner).length}</div></div>`; }
+  return '';
+}
+function chartSvg() {
+  const evts = [];
+  data.phases.forEach(p => (p.history || []).forEach(h => evts.push(h.date)));
+  const dates = [...new Set(evts)].filter(Boolean).sort();
+  if (!dates.length) return '<div class="muted">还没有日期记录。在页面或用脚本改状态时会自动记下日期，之后这里会画出累计完成数。</div>';
+  const doneAt = d => data.phases.filter(p => { const hs = (p.history || []).filter(h => h.date <= d); return hs.length && hs[hs.length - 1].status === 'done'; }).length;
+  const activeAt = d => data.phases.filter(p => { const hs = (p.history || []).filter(h => h.date <= d); return hs.length && ['doing','review'].includes(hs[hs.length - 1].status); }).length;
+  const end = dates[dates.length - 1] < today() ? today() : dates[dates.length - 1];
+  const all = dates.includes(end) ? dates : [...dates, end];
+  const W = 288, H = 120, padL = 24, padB = 18, padT = 8, total = data.phases.length;
+  const t0 = Date.parse(all[0]), t1 = Math.max(Date.parse(end), t0 + 86400000);
+  const X = d => padL + (W - padL - 6) * (Date.parse(d) - t0) / (t1 - t0), Y = v => padT + (H - padT - padB) * (1 - v / total);
+  const step = f => { let s = ''; all.forEach((d, i) => { const v = f(d); s += (i ? ` L${X(d).toFixed(1)},${Y(f(all[i - 1])).toFixed(1)}` : `M${X(d).toFixed(1)},${Y(v).toFixed(1)}`) + ` L${X(d).toFixed(1)},${Y(v).toFixed(1)}`; }); return s; };
+  const last = doneAt(end);
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="累计完成数随时间变化">
+    <line x1="${padL}" y1="${Y(total)}" x2="${W - 6}" y2="${Y(total)}" stroke="currentColor" stroke-opacity=".2" stroke-dasharray="3 3"/>
+    <line x1="${padL}" y1="${Y(0)}" x2="${W - 6}" y2="${Y(0)}" stroke="currentColor" stroke-opacity=".3"/>
+    <text x="${padL - 4}" y="${Y(total) + 4}" font-size="10" text-anchor="end" fill="currentColor" opacity=".6">${total}</text>
+    <text x="${padL - 4}" y="${Y(0) + 4}" font-size="10" text-anchor="end" fill="currentColor" opacity=".6">0</text>
+    <path d="${step(activeAt)}" fill="none" stroke="#1d4ed8" stroke-width="1.5" stroke-dasharray="4 3"/>
+    <path d="${step(doneAt)}" fill="none" stroke="#16a34a" stroke-width="2.2"/>
+    <text x="${padL}" y="${H - 4}" font-size="10" fill="currentColor" opacity=".6">${all[0].slice(5)}</text>
+    <text x="${W - 6}" y="${H - 4}" font-size="10" text-anchor="end" fill="currentColor" opacity=".6">${end.slice(5)}</text>
+  </svg><div class="muted"><span style="color:#16a34a">━</span> 累计完成 ${last}/${total}　<span style="color:#1d4ed8">┅</span> 进行中＋待验收</div>`;
+}
+function panelDetail(id) {
+  const p = byId[id], sh = shown(id);
+  const tags = [];
+  if (sh === 'ready') tags.push('<span class="tag ok">可开工</span>');
+  if (A.cpSet.has(id)) tags.push('<span class="tag hot">在关键路径上</span>');
+  if (st(id) !== 'done') tags.push(`<span class="tag">第 ${A.wave[id]} 波</span>`);
+  tags.push(`<span class="tag${A.bd[id] >= 10 ? ' hot' : ''}">卡住 ${A.bd[id]} 个下游</span>`);
+  const unlocks = S('hard', id).filter(v => st(v) === 'todo' && missing(v).length === 1 && missing(v)[0] === id && st(id) !== 'done');
+  let h = `<div class="title"><span>${esc(title(id))}</span><button class="x" id="dx" title="关闭（Esc）">×</button></div>`;
+  h += `<div class="tags">${tags.join('')}</div>`;
+  const prList = (p.prs || []).map((u, i) => `<li>${/^https?:\/\//.test(u) ? `<a href="${esc(u)}" target="_blank" rel="noopener">${esc(prLabel(u))}</a>` : esc(u)}${EDIT ? `<button class="rm" data-rm="${i}">移除</button>` : ''}</li>`).join('') || '<li class="muted">还没有</li>';
+  if (EDIT) {
+    h += `<div class="stbtns">${STATUSES.map(k => `<button data-s="${k}" class="${p.status === k ? 'on' : ''}"><i class="dot" style="background:${STYLE[k].fill};border-color:${STYLE[k].stroke}"></i>${LABEL[k]}</button>`).join('')}</div>`;
+    const dl = A.owners.map(o => `<option value="${esc(o)}">`).join('');
+    h += `<div class="field"><label>负责人</label><input id="fOwner" list="owners" placeholder="Claude / Codex / 组员" value="${esc(p.owner || '')}"><datalist id="owners">${dl}<option value="Claude"><option value="Codex"></datalist></div>`;
+    h += `<div class="field"><label>PR</label><ul class="prs">${prList}</ul>
+      <div class="inline" style="margin-top:4px"><input id="fPr" placeholder="粘贴 PR 链接，回车添加"><button id="addPr">添加</button></div></div>`;
+    h += `<div class="field"><label>备注</label><textarea id="fNote" placeholder="阻塞原因、验收要点…">${esc(p.note || '')}</textarea></div>`;
+  } else {
+    h += `<div class="field"><label>状态</label>${dotFor(id)} ${LABEL[sh]}</div>`;
+    h += `<div class="field"><label>负责人</label>${esc(p.owner || '—')}</div>`;
+    h += `<div class="field"><label>PR</label><ul class="prs">${prList}</ul></div>`;
+    if (p.note) h += `<div class="field"><label>备注</label>${esc(p.note)}</div>`;
+  }
+  const depBlock = (k) => { const ds = D(k, id); if (!ds.length) return '';
+    return `<h2>${KIND_LABEL[k]}前置（${ds.length - missing(id, k).length}/${ds.length} 完成）</h2><ul>${ds.map(d => item(d, LABEL[shown(d)], st(d) === 'done' ? '✓' : null)).join('')}</ul>`; };
+  h += depBlock('hard') || '<h2>前置</h2><div class="empty">没有硬依赖</div>';
+  h += depBlock('integration') + depBlock('paid');
+  const after = (k) => { const ss = S(k, id); if (!ss.length) return '';
+    return `<h2>${k === 'hard' ? '直接后续' : '作为' + KIND_LABEL[k] + '前置'}（${ss.length}）</h2><ul>${ss.map(v => item(v, LABEL[shown(v)])).join('')}</ul>`; };
+  if (unlocks.length) h += `<h2 style="color:${C.ok}">做完它会解锁（${unlocks.length}）</h2><div class="muted">这些阶段只差它一个硬依赖。</div><ul>${unlocks.map(v => item(v, LABEL[shown(v)])).join('')}</ul>`;
+  h += after('hard') + after('integration') + after('paid');
+  const hs = p.history || [];
+  h += `<h2>时间</h2>`;
+  const s0 = started(p), f0 = finished(p);
+  h += `<div class="muted">${s0 ? `开始 ${s0}` : '还没开始'}${f0 ? ` · 完成 ${f0} · 用时 ${days(s0 || f0, f0)} 天` : s0 ? ` · 已进行 ${days(s0, today())} 天` : ''}</div>`;
+  if (hs.length) h += `<ul style="margin-top:4px">${[...hs].reverse().map(x => `<li><i class="dot" style="background:${STYLE[x.status].fill};border-color:${STYLE[x.status].stroke}"></i>${esc(x.date)}　${LABEL[x.status]}</li>`).join('')}</ul>`;
+  h += `<div class="lines">Shift + 点另一个节点，查看两者之间的依赖路径。</div>`;
+  return h;
+}
+function prLabel(u) { const m = /github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/.exec(u); return m ? `${m[1]} #${m[2]}` : u; }
+function panelPath(pth) {
+  const ids = A.topoAll.filter(x => pth.nodes.has(x));
+  return `<div class="title"><span>路径：${esc(pth.from)} → ${esc(pth.to)}</span><button class="x" id="dx">×</button></div>
+    <div class="muted" style="margin-bottom:8px">${esc(title(pth.to))} 通过 ${pth.edges.size} 条依赖、经过 ${ids.length - 2} 个中间阶段依赖于 ${esc(title(pth.from))}（按当前显示的线类型计算）。</div>
+    <ul>${ids.map(x => item(x, LABEL[shown(x)])).join('')}</ul>
+    <div class="lines">再 Shift + 点别的节点换终点；点空白处或 Esc 退出。</div>`;
+}
+function setStatus(id, s0) {
+  const p = byId[id]; if (p.status === s0) return;
+  p.status = s0; p.history = p.history || [];
+  const t = today(), last = p.history[p.history.length - 1];
+  if (last && last.date === t) {
+    last.status = s0; const prev = p.history[p.history.length - 2];
+    if (prev && prev.status === s0) p.history.pop();
+    else if (!prev && s0 === 'todo') p.history.pop();
+  } else p.history.push({ date:t, status:s0 });
+  if (!p.history.length) delete p.history;
+}
+function bindDetail(id) {
+  const p = byId[id];
+  $('dx').onclick = () => select(null);
+  document.querySelectorAll('.stbtns [data-s]').forEach(b => b.onclick = () => { setStatus(id, b.dataset.s); refresh(); });
+  const owner = $('fOwner'); owner.onchange = () => { const v = owner.value.trim(); if (v) p.owner = v; else delete p.owner; refresh(); };
+  const note = $('fNote'); note.onchange = () => { const v = note.value.trim(); if (v) p.note = v; else delete p.note; persist(); renderChrome(); };
+  const add = () => { const v = $('fPr').value.trim(); if (!v) return; p.prs = p.prs || []; if (!p.prs.includes(v)) p.prs.push(v); refresh(); };
+  $('addPr').onclick = add; $('fPr').onkeydown = e => { if (e.key === 'Enter') add(); };
+  document.querySelectorAll('[data-rm]').forEach(b => b.onclick = () => { p.prs.splice(+b.dataset.rm, 1); if (!p.prs.length) delete p.prs; refresh(); });
+}
+
+// ---------------- selection & focus ----------------
+function select(id, opts = {}) {
+  if (opts.path && sel && id && id !== sel) { pathTo = id; if (!pathBetween(sel, id)) { toast(`${sel} 和 ${id} 之间没有依赖路径`); pathTo = null; } }
+  else { sel = id; pathTo = null; }
+  renderPanel(); paint(); renderBoard();
+  if (id && window.innerWidth <= 900) $('panel').classList.add('open');
+}
+function focusNode(id) {
+  const el = nodeEl[id]; if (!el) return;
+  const sr = stage.getBoundingClientRect();
+  if (s < .75) { const r = el.g.getBoundingClientRect(); zoomAt(.9 / s, r.left + r.width / 2 - sr.left, r.top + r.height / 2 - sr.top); }
+  const r = el.g.getBoundingClientRect();
+  tx += sr.width / 2 - (r.left + r.width / 2 - sr.left); ty += sr.height / 2 - (r.top + r.height / 2 - sr.top); apply();
+}
+$('panel').addEventListener('click', e => {
+  const li = e.target.closest('[data-go]'); if (!li) return;
+  const id = li.dataset.go; select(id); if (ui.tab === 'board') scrollCard(id); else focusNode(id);
+});
+
+// ---------------- pan / zoom / tap / hover ----------------
+function apply() { canvas.style.transform = `translate(${tx}px,${ty}px) scale(${s})`; }
+function fit() {
+  if (!svg) return;
+  const w = +svg.getAttribute('width') || svg.getBBox().width, h = +svg.getAttribute('height') || svg.getBBox().height;
+  const W = stage.clientWidth, H = stage.clientHeight, pad = 20;
+  s = Math.min((W - pad * 2) / w, (H - pad * 2) / h, 1.4);
+  tx = (W - w * s) / 2; ty = Math.max(pad, (H - h * s) / 2); apply();
+}
+function zoomAt(f, cx, cy) { const ns = Math.min(4, Math.max(.1, s * f)); f = ns / s; tx = cx - (cx - tx) * f; ty = cy - (cy - ty) * f; s = ns; apply(); }
+function nodeAt(x, y) {
+  const el = document.elementFromPoint(x, y), g = el && el.closest && el.closest('#canvas g.node'); if (!g) return null;
+  for (const id in nodeEl) if (nodeEl[id].g === g) return id; return null;
+}
+const pts = new Map(); let drag = null, pinch = null, down = null;
+stage.addEventListener('pointerdown', e => {
+  if (e.shiftKey) e.preventDefault();
+  pts.set(e.pointerId, { x:e.clientX, y:e.clientY });
+  if (pts.size === 1) { drag = { x:e.clientX - tx, y:e.clientY - ty }; down = { x:e.clientX, y:e.clientY, shift:e.shiftKey }; }
+  if (pts.size === 2) { const [a, b] = [...pts.values()]; pinch = Math.hypot(a.x - b.x, a.y - b.y); drag = null; down = null; }
+  hideTip();
+});
+window.addEventListener('pointermove', e => {
+  if (!pts.has(e.pointerId)) { if (e.pointerType === 'mouse' && stage.contains(e.target)) hover(e); return; }
+  pts.set(e.pointerId, { x:e.clientX, y:e.clientY });
+  if (pts.size === 2 && pinch) { const [a, b] = [...pts.values()], d = Math.hypot(a.x - b.x, a.y - b.y), r = stage.getBoundingClientRect();
+    zoomAt(d / pinch, (a.x + b.x) / 2 - r.left, (a.y + b.y) / 2 - r.top); pinch = d; }
+  else if (drag) {
+    if (down && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 5) { down = null; stage.classList.add('dragging'); }
+    if (!down) { tx = e.clientX - drag.x; ty = e.clientY - drag.y; apply(); }
+  }
+});
+function end(e) {
+  if (!pts.has(e.pointerId)) return;
+  if (down && pts.size === 1 && e.type === 'pointerup') { const id = nodeAt(e.clientX, e.clientY);
+    if (id) { if ((down.shift || e.shiftKey) && sel) select(id, { path:true }); else select(id === sel && !pathTo ? null : id); }
+    else select(null); }
+  pts.delete(e.pointerId); if (pts.size < 2) pinch = null;
+  if (!pts.size) { drag = null; down = null; stage.classList.remove('dragging'); }
+}
+window.addEventListener('pointerup', end); window.addEventListener('pointercancel', end);
+stage.addEventListener('wheel', e => { e.preventDefault(); const r = stage.getBoundingClientRect(); zoomAt(Math.exp(-e.deltaY * .0015), e.clientX - r.left, e.clientY - r.top); hideTip(); }, { passive:false });
+stage.addEventListener('pointerleave', hideTip);
+const tip = $('tip'); let tipId = null;
+function hover(e) {
+  const id = nodeAt(e.clientX, e.clientY);
+  if (!id) return hideTip();
+  if (id !== tipId) {
+    tipId = id; const p = byId[id], miss = missing(id), g = gates(id);
+    tip.innerHTML = `<b>${esc(title(id))}</b><br>${dotFor(id)} ${LABEL[shown(id)]}${p.owner ? ' · @' + esc(p.owner) : ''}${(p.prs || []).length ? ` · ${p.prs.length} 个 PR` : ''}` +
+      `<br><span class="m">${miss.length ? '还差硬依赖：' + esc(miss.join(', ')) : D('hard', id).length ? '硬依赖都已完成' : '没有硬依赖'}</span>` +
+      (g ? `<br><span class="m">${esc(g)}</span>` : '') +
+      `<br><span class="m">卡住 ${A.bd[id]} 个下游${st(id) !== 'done' ? ` · 第 ${A.wave[id]} 波` : ''}${A.cpSet.has(id) ? ' · 关键路径' : ''}</span>` +
+      (p.note ? `<br>${esc(p.note)}` : '');
+  }
+  tip.style.display = 'block';
+  const W = window.innerWidth, H = window.innerHeight, r = tip.getBoundingClientRect();
+  tip.style.left = Math.min(e.clientX + 14, W - r.width - 8) + 'px'; tip.style.top = Math.min(e.clientY + 14, H - r.height - 8) + 'px';
+}
+function hideTip() { tip.style.display = 'none'; tipId = null; }
+
+// ---------------- controls ----------------
+function toast(t) { const el = $('toast'); el.textContent = t; el.style.opacity = 1; clearTimeout(toast.t); toast.t = setTimeout(() => el.style.opacity = 0, 2400); }
+$('views').addEventListener('click', e => { const b = e.target.closest('[data-v]'); if (!b) return; ui.view = b.dataset.v; renderChrome(); renderPanel(); paint(); persist(); });
+$('crit').onclick = () => { ui.crit = !ui.crit; if (ui.crit) { sel = null; pathTo = null; } renderChrome(); renderPanel(); paint(); persist(); };
+$('fade').onclick = () => { ui.fade = !ui.fade; renderChrome(); paint(); persist(); };
+document.querySelectorAll('[data-kind]').forEach(b => b.onclick = () => { ui.kinds[b.dataset.kind] = !ui.kinds[b.dataset.kind]; renderChrome(); renderPanel(); paint(); persist(); });
+$('chain').addEventListener('click', e => { const b = e.target.closest('[data-c]'); if (!b) return; ui.chain = b.dataset.c; renderChrome(); paint(); persist(); });
+$('dir').onclick = () => { ui.dir = ui.dir === 'TD' ? 'LR' : 'TD'; renderChrome(); persist(); renderSvg(true); };
+$('fit').onclick = fit;
+$('panelToggle').onclick = () => $('panel').classList.toggle('open');
+const qi = $('q');
+qi.addEventListener('input', () => { query = qi.value; const q = query.trim().toLowerCase();
+  const n = q ? data.phases.filter(p => textOf(p).includes(q)).length : 0;
+  $('qn').textContent = q ? n : ''; if (q && sel && ui.tab === 'graph') { sel = null; pathTo = null; renderPanel(); } paint(); renderBoard(); });
+qi.addEventListener('keydown', e => {
+  if (e.key === 'Enter') { const q = query.trim().toLowerCase(); if (!q) return;
+    const exact = data.phases.find(p => p.id === q), hit = exact || data.phases.find(p => textOf(p).includes(q));
+    if (hit) { query = ''; qi.value = ''; $('qn').textContent = ''; select(hit.id); if (ui.tab === 'board') scrollCard(hit.id); else focusNode(hit.id); qi.blur(); } else toast('没有匹配的阶段'); }
+  if (e.key === 'Escape') { qi.value = ''; query = ''; $('qn').textContent = ''; paint(); renderBoard(); qi.blur(); }
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && document.activeElement.tagName !== 'INPUT' && document.activeElement.tagName !== 'TEXTAREA') {
+    if ($('modal').style.display === 'flex') $('modal').style.display = 'none'; else select(null); }
+  if (e.key === '/' && !/INPUT|TEXTAREA/.test(document.activeElement.tagName)) { e.preventDefault(); qi.focus(); }
+});
+$('src').addEventListener('click', e => {
+  const b = e.target.closest('[data-src]'); if (!b) return;
+  const act = b.dataset.src;
+  if (act === 'discard') { if (b.dataset.arm) { data = clone(base); toast('已撤销本地改动'); } else { b.dataset.arm = 1; b.textContent = '再点一次确认'; setTimeout(() => { if (b.isConnected) { delete b.dataset.arm; b.textContent = '撤销改动'; } }, 3000); return; } }
+  if (act === 'restore') { data = stale; stale = null; toast('已恢复旧的本地改动'); }
+  if (act === 'drop') { stale = null; }
+  sel = null; pathTo = null; index(); renderChrome(); renderPanel(); renderBoard(); persist(); renderSvg(false);
+});
+$('file').onchange = e => {
+  const f = e.target.files && e.target.files[0]; if (!f) return;
+  const rd = new FileReader();
+  rd.onload = () => { try { const d = JSON.parse(rd.result); if (!valid(d)) throw new Error('不是 phases.json 的格式');
+      const prev = data; data = d; index(); if (!A.acyclic) { data = prev; index(); throw new Error('硬依赖出现环'); }
+      sel = null; pathTo = null;
+      renderChrome(); renderPanel(); renderBoard(); persist(); renderSvg(true); toast(`已导入 ${d.phases.length} 个阶段`);
+    } catch (err) { toast('导入失败：' + err.message); } e.target.value = ''; };
+  rd.readAsText(f);
+};
+// export
+function pyJson(x) { // matches Python json.dumps(ensure_ascii=False) separators
+  if (Array.isArray(x)) return '[' + x.map(pyJson).join(', ') + ']';
+  if (x && typeof x === 'object') return '{' + Object.keys(x).map(k => JSON.stringify(k) + ': ' + pyJson(x[k])).join(', ') + '}';
+  return JSON.stringify(x);
+}
+function exportJson() {
+  const L = ['{'];
+  if (data.groups && Object.keys(data.groups).length) L.push('  "groups": {', Object.keys(data.groups).sort().map(k => `    ${JSON.stringify(k)}: ${JSON.stringify(data.groups[k])}`).join(',\n'), '  },');
+  L.push('  "phases": [', data.phases.map(p => '    ' + pyJson(p)).join(',\n'), '  ],', '  "edges": {');
+  L.push(Object.keys(data.edges).map(k => `    "${k}": [\n` + data.edges[k].map(e => '      ' + pyJson(e)).join(',\n') + '\n    ]').join(',\n'));
+  L.push('  }', '}'); return L.join('\n') + '\n';
+}
+const shq = t => "'" + String(t).replace(/'/g, "'\\''") + "'";
+function exportCmd() {
+  let c = 'python scripts/roadmap.py set ' + data.phases.map(p => `${p.id} ${p.status}`).join(' ');
+  data.phases.forEach(p => { if (p.owner) c += ` --owner ${p.id} ${shq(p.owner)}`; if (p.note) c += ` --note ${p.id} ${shq(p.note)}`; (p.prs || []).forEach(u => c += ` --pr ${p.id} ${shq(u)}`); });
+  return c;
+}
+let exTab = 'cmd';
+function showExport() {
+  $('exText').value = exTab === 'cmd' ? exportCmd() : exportJson();
+  $('exHelp').textContent = exTab === 'cmd'
+    ? '在仓库根目录运行（macOS / Linux / PowerShell）。会同步状态、负责人、备注和新增的 PR；状态变化按运行当天记日期。要原样保留页面上的日期历史，用 phases.json。'
+    : '整份覆盖仓库里的 docs/roadmap/phases.json，然后运行 python scripts/roadmap.py render。这会原样保留页面上的日期历史。';
+  document.querySelectorAll('#exTabs button').forEach(b => b.classList.toggle('on', b.dataset.t === exTab));
+  $('copyState').textContent = '';
+}
+$('export').onclick = () => { showExport(); $('modal').style.display = 'flex'; };
+$('exTabs').addEventListener('click', e => { const b = e.target.closest('[data-t]'); if (b) { exTab = b.dataset.t; showExport(); } });
+$('close').onclick = () => $('modal').style.display = 'none';
+$('modal').onclick = e => { if (e.target === $('modal')) $('modal').style.display = 'none'; };
+$('copy').onclick = async () => { const t = $('exText');
+  try { await navigator.clipboard.writeText(t.value); $('copyState').textContent = '已复制'; }
+  catch (e) { t.focus(); t.select(); $('copyState').textContent = '浏览器不允许自动复制，已全选，请按 Ctrl/⌘+C'; } };
+window.addEventListener('resize', layoutTop);
+
+// ---------------- boot ----------------
+function ensureMermaid() {
+  if (window.mermaid) return Promise.resolve();
+  return new Promise(res => { const sc = document.createElement('script');
+    sc.src = 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js'; sc.onload = sc.onerror = () => res(); document.head.appendChild(sc); });
+}
+(async () => {
+  { const h = location.hash.slice(1); if (h === 'graph' || h === 'board') ui.tab = h; }
+  index(); renderChrome(); renderPanel(); renderBoard();
+  await loadData();
+  index(); renderChrome(); renderPanel(); renderBoard(); persist();
+  if (baseFrom !== 'remote' && DATA_URL && location.protocol !== 'about:') toast('没有读到 ' + DATA_URL + '，显示的是页面内置的数据');
+  await ensureMermaid();
+  if (window.mermaid) mermaid.initialize({ startOnLoad:false, theme: dark ? 'dark' : 'neutral', securityLevel:'strict',
+    flowchart:{ curve:'basis', nodeSpacing:36, rankSpacing:62, htmlLabels:true } });
+  renderSvg(true);
+})();
+})();
+</script>
+</body>
+</html>
