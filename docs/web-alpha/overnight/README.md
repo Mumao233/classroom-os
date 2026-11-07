@@ -64,11 +64,11 @@ Raw model logs remain local and are not published automatically.
 
 ## Bootstrap and operation
 
-First review the infrastructure Draft PR. The pilot can stack its Draft on the
-infrastructure branch without merging it. GitHub schedules and workflow_dispatch
-normally require the workflow on the default branch; **this change does not
-merge or activate a default-branch nightly schedule**. A push to the infrastructure
-branch produces the initial request and tests. The local queue checks successful
+The request workflow has **no schedule trigger**, including when it is merged
+into the default branch. Manual dispatch or an infrastructure feature-branch
+push produces a data-only request; neither starts a local consumer or model.
+The two test workflows can be dispatched separately on `main` for verification
+without dispatching this queue. The local queue checks successful
 run SHA, workflow path, event, repository, owner actor and strict request schema.
 
 Use an approved, clean infrastructure checkout at a full commit SHA. Replace
