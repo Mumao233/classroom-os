@@ -1,9 +1,7 @@
-name: Overnight request queue (no model credentials)
+name: Manual workflow request queue (no model credentials)
 
 on:
   workflow_dispatch:
-  push:
-    branches: ['feature/overnight-*']
 
 permissions:
   contents: read
@@ -14,23 +12,44 @@ concurrency:
 
 jobs:
   request:
-    if: github.repository == 'Mumao233/classroom-os'
+    if: github.repository == 'Mumao233/classroom-os' && github.event_name == 'workflow_dispatch' && github.actor == 'Mumao233' && github.triggering_actor == 'Mumao233'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Emit data-only pinned request
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Emit data-only request from the pinned plan
         env:
           REQUEST_SHA: ${{ github.sha }}
           REQUEST_RUN_ID: ${{ github.run_id }}
         run: |
-          python - <<'PY'
-          import json, os, pathlib
+          python -I -B - <<'PY'
+          import hashlib, json, os, pathlib, re
+          def unique(pairs):
+              result = {}
+              for key, value in pairs:
+                  if key in result:
+                      raise ValueError('duplicate plan field')
+                  result[key] = value
+              return result
+          path = 'automation/workflow.json'
+          plan = json.loads(pathlib.Path(path).read_text(encoding='utf-8'), object_pairs_hook=unique)
+          if type(plan) is not dict or type(plan.get('version')) is not int or plan['version'] != 2:
+              raise ValueError('unsupported plan')
+          if plan.get('repository') != 'Mumao233/classroom-os':
+              raise ValueError('unexpected repository')
+          if not isinstance(plan.get('authorization_id'), str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9-]{0,79}', plan['authorization_id']):
+              raise ValueError('invalid authorization identity')
+          canonical = json.dumps(plan, ensure_ascii=False, allow_nan=False, sort_keys=True, separators=(',', ':')).encode('utf-8')
           pathlib.Path('request.json').write_text(json.dumps({
-              'version': 1, 'task': '06a', 'simulation_only': True,
-              'repository': 'Mumao233/classroom-os',
-              'base_sha': os.environ['REQUEST_SHA'],
-              'request_id': os.environ['REQUEST_RUN_ID'],
-          }) + '\n')
+              'version': 2, 'repository': plan['repository'],
+              'control_sha': os.environ['REQUEST_SHA'],
+              'request_id': os.environ['REQUEST_RUN_ID'], 'plan_path': path,
+              'config_sha': hashlib.sha256(canonical).hexdigest(),
+              'authorization_id': plan['authorization_id'],
+          }, ensure_ascii=False, allow_nan=False) + '\n', encoding='utf-8')
           PY
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

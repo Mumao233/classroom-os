@@ -1,0 +1,326 @@
+{
+  "version": 2,
+  "authorization_id": "workflow-acceptance-20261106",
+  "repository": "Mumao233/classroom-os",
+  "author_login": "Mumao233",
+  "dag_path": "docs/web-alpha/architecture/contracts/pr-dependencies.json",
+  "enabled_tasks": [
+    "06a"
+  ],
+  "limits": {
+    "extra_api_spend_usd": 0,
+    "batch_wall_seconds": 14400,
+    "task_wall_seconds": 7200,
+    "batch_max_calls": 20,
+    "task_max_calls": 8,
+    "batch_max_turns": 20,
+    "task_max_turns": 8,
+    "batch_max_input_tokens": null,
+    "batch_max_output_tokens": null,
+    "task_max_input_tokens": null,
+    "task_max_output_tokens": null,
+    "max_repairs": 3
+  },
+  "baselines": {
+    "00": {
+      "status": "COMPLETE",
+      "head_sha": "b71e08db53aed6d75b68e0d7fae100734872a49c",
+      "tree_sha": "f9c93afa16670de024985b0d3f82043a1f099de8",
+      "evidence": [
+        {
+          "path": "docs/web-alpha/overnight/evidence/workflow-baselines.json",
+          "sha256": "cd1fe12505895b9895f6c91604759d79d0a2d30130f70de371ec8afb49e99ab7"
+        }
+      ],
+      "reason": "Accepted integrated engineering baseline, retained in explicitly approved main.",
+      "approved": true
+    },
+    "01": {
+      "status": "COMPLETE",
+      "head_sha": "b71e08db53aed6d75b68e0d7fae100734872a49c",
+      "tree_sha": "f9c93afa16670de024985b0d3f82043a1f099de8",
+      "evidence": [
+        {
+          "path": "docs/web-alpha/overnight/evidence/workflow-baselines.json",
+          "sha256": "cd1fe12505895b9895f6c91604759d79d0a2d30130f70de371ec8afb49e99ab7"
+        }
+      ],
+      "reason": "Accepted architecture/contracts design baseline retained in explicitly approved main; product/TBD/enablement approvals are not inferred.",
+      "approved": true
+    }
+  },
+  "tasks": {
+    "06a": {
+      "goal": "Audit and skip the existing accepted simulated ASR protocol POC; do not rerun development models.",
+      "acceptance": [
+        "Preserve frozen contracts and original product files.",
+        "Produce exact-SHA passing candidate and independent trusted test evidence."
+      ],
+      "review_criteria": [
+        "No real provider, microphone, production data or extra API billing.",
+        "Missing evidence or unresolved human gates must remain explicit."
+      ],
+      "phase": "poc",
+      "base": {
+        "ref": "main",
+        "sha": "b71e08db53aed6d75b68e0d7fae100734872a49c",
+        "confirmed": true,
+        "dependency_heads": {
+          "01": "b71e08db53aed6d75b68e0d7fae100734872a49c"
+        }
+      },
+      "branch": "feature/workflow-06a-acceptance-20261106",
+      "title": "PR-06a scoped simulation workflow",
+      "depends_on": [
+        "01"
+      ],
+      "integration_depends_on": [],
+      "paid_depends_on": [
+        "03b",
+        "04a",
+        "05b",
+        "11a"
+      ],
+      "gates": {
+        "development": [],
+        "enablement": [],
+        "paid": [
+          "explicit paid scope",
+          "TBD-01",
+          "TBD-02"
+        ]
+      },
+      "scope": {
+        "add_prefixes": [
+          "web/backend/classroom_web/asr_sim/",
+          "web/backend/tests/asr_sim/",
+          "tools/pr06a/",
+          "docs/web-alpha/pr06a/"
+        ],
+        "modify_files": [],
+        "delete_files": [],
+        "deny_prefixes": [],
+        "max_files": 30,
+        "max_bytes": 500000
+      },
+      "model": {
+        "name": "gpt-6.1-sol",
+        "reasoning": "high"
+      },
+      "review_model": {
+        "name": "gpt-6.1-sol",
+        "reasoning": "high"
+      },
+      "limits": {
+        "wall_seconds": 7200,
+        "max_calls": 8,
+        "max_repairs": 3,
+        "call_timeout_seconds": 1200
+      },
+      "tests": [
+        {
+          "id": "candidate",
+          "kind": "candidate",
+          "command": [
+            "{python}",
+            "-I",
+            "-B",
+            "{control}/tools/overnight/asr_gate.py",
+            "--stage",
+            "candidate",
+            "--workspace",
+            "{workspace}",
+            "--deps",
+            "{deps}",
+            "--nonce",
+            "{nonce}",
+            "--head",
+            "{head_sha}",
+            "--patch",
+            "{patch_sha256}"
+          ],
+          "timeout_seconds": 180,
+          "completion": {
+            "marker": "OVERNIGHT_TEST_RESULT ",
+            "stage": "candidate",
+            "min_tests": 1
+          }
+        },
+        {
+          "id": "trusted",
+          "kind": "trusted",
+          "command": [
+            "{python}",
+            "-I",
+            "-B",
+            "{control}/tools/overnight/asr_gate.py",
+            "--stage",
+            "trusted",
+            "--workspace",
+            "{workspace}",
+            "--deps",
+            "{deps}",
+            "--nonce",
+            "{nonce}",
+            "--head",
+            "{head_sha}",
+            "--patch",
+            "{patch_sha256}"
+          ],
+          "timeout_seconds": 180,
+          "completion": {
+            "marker": "OVERNIGHT_TEST_RESULT ",
+            "stage": "trusted",
+            "min_tests": 4
+          }
+        }
+      ],
+      "audit": {
+        "status": "COMPLETE",
+        "head_sha": "b71e08db53aed6d75b68e0d7fae100734872a49c",
+        "tree_sha": "f9c93afa16670de024985b0d3f82043a1f099de8",
+        "evidence": [
+          {
+            "path": "docs/web-alpha/overnight/evidence/workflow-baselines.json",
+            "sha256": "cd1fe12505895b9895f6c91604759d79d0a2d30130f70de371ec8afb49e99ab7"
+          }
+        ],
+        "reason": "COMPLETE only for the existing simulated POC at observed main; real SDK, quality, paid and device gates remain unapproved."
+      }
+    },
+    "05a": {
+      "goal": "DISABLED template for a future separately authorized synthetic cache-key security POC; implementation has not started.",
+      "acceptance": [
+        "Preserve frozen contracts and original product files.",
+        "Produce exact-SHA passing candidate and independent trusted test evidence."
+      ],
+      "review_criteria": [
+        "No real provider, microphone, production data or extra API billing.",
+        "Missing evidence or unresolved human gates must remain explicit."
+      ],
+      "phase": "poc",
+      "base": {
+        "ref": "main",
+        "sha": null,
+        "confirmed": false,
+        "dependency_heads": {}
+      },
+      "branch": "feature/workflow-05a-acceptance-20261106",
+      "title": "PR-05a scoped simulation workflow",
+      "depends_on": [
+        "01"
+      ],
+      "integration_depends_on": [
+        "03b"
+      ],
+      "paid_depends_on": [],
+      "gates": {
+        "development": [],
+        "enablement": [
+          "TBD-03 before enablement"
+        ],
+        "paid": []
+      },
+      "scope": {
+        "add_prefixes": [
+          "web/backend/classroom_web/cache_security_poc/",
+          "web/backend/tests/security_poc/",
+          "tools/pr05a/",
+          "docs/web-alpha/pr05a/"
+        ],
+        "modify_files": [],
+        "delete_files": [],
+        "deny_prefixes": [],
+        "max_files": 30,
+        "max_bytes": 500000
+      },
+      "model": {
+        "name": "gpt-6.1-sol",
+        "reasoning": "high"
+      },
+      "review_model": {
+        "name": "gpt-6.1-sol",
+        "reasoning": "high"
+      },
+      "limits": {
+        "wall_seconds": 7200,
+        "max_calls": 8,
+        "max_repairs": 3,
+        "call_timeout_seconds": 1200
+      },
+      "tests": [
+        {
+          "id": "candidate",
+          "kind": "candidate",
+          "command": [
+            "{python}",
+            "-I",
+            "-B",
+            "{control}/tools/overnight/workflow_gate.py",
+            "--stage",
+            "candidate",
+            "--workspace",
+            "{workspace}",
+            "--deps",
+            "{deps}",
+            "--nonce",
+            "{nonce}",
+            "--head",
+            "{head_sha}",
+            "--patch",
+            "{patch_sha256}",
+            "--start",
+            "{workspace}/web/backend/tests/security_poc",
+            "--pattern",
+            "test_*.py"
+          ],
+          "timeout_seconds": 180,
+          "completion": {
+            "marker": "OVERNIGHT_TEST_RESULT ",
+            "stage": "candidate",
+            "min_tests": 1
+          }
+        },
+        {
+          "id": "trusted",
+          "kind": "trusted",
+          "command": [
+            "{python}",
+            "-I",
+            "-B",
+            "{control}/tools/overnight/workflow_gate.py",
+            "--stage",
+            "trusted",
+            "--workspace",
+            "{workspace}",
+            "--deps",
+            "{deps}",
+            "--nonce",
+            "{nonce}",
+            "--head",
+            "{head_sha}",
+            "--patch",
+            "{patch_sha256}",
+            "--start",
+            "{control}/tools/overnight/acceptance/05a",
+            "--pattern",
+            "test_*.py"
+          ],
+          "timeout_seconds": 180,
+          "completion": {
+            "marker": "OVERNIGHT_TEST_RESULT ",
+            "stage": "trusted",
+            "min_tests": 1
+          }
+        }
+      ],
+      "audit": {
+        "status": "NOT_STARTED",
+        "head_sha": null,
+        "tree_sha": null,
+        "evidence": [],
+        "reason": "DISABLED template only; no implementation or model run is authorized by this default plan."
+      }
+    }
+  }
+}
