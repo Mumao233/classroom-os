@@ -9,7 +9,7 @@
   python scripts/roadmap.py next                 # 终端里看进度、可开工、关键路径、瓶颈
   python scripts/roadmap.py set 03a doing        # 改状态（自动记一条带日期的历史），并重新生成
   python scripts/roadmap.py set 02a done 03a review --date 2026-11-06
-  python scripts/roadmap.py set --owner 03a Codex --pr 03a https://github.com/o/r/pull/42
+  python scripts/roadmap.py set --owner 03a 林珈诚 --pr 03a https://github.com/o/r/pull/42
   python scripts/roadmap.py set --note 05b "等租约方案"   # 空字符串 "" 表示清除
   python scripts/roadmap.py set --unpr 03a https://github.com/o/r/pull/42
   python scripts/roadmap.py check                # CI 用：数据有误或 ROADMAP.md 过期时退出码 1

@@ -70,3 +70,10 @@ The latest user decision supersedes historical plans to merge Web work into the 
 - Control/configuration/schema, approval records and trusted acceptance entrypoints are pinned and outside worker write authority. Automatic review or Draft publication cannot supply human acceptance, enablement gates or a common merged base.
 - Keep the v1 pilot and all previous ledgers/review/integration evidence unchanged. Do not clear cumulative reservations, reset repair limits, change authorization identity on resume, or rerun a real model trial merely to validate the new workflow.
 - Current delivery may use a feature branch, Mumao233 commits/push and a Draft PR under the existing infrastructure authorization. It does not authorize merging this new change into main, scheduling, deployment, release, real data/microphone/provider work, or starting 05a. See [v2 operation and recovery](docs/web-alpha/overnight/WORKFLOW.md).
+
+## 本机发布的 PR 负责人（2026-11-07）
+
+- 用户本人为 **林珈诚**，对应 GitHub 账号 **Mumao233**。以后从这台电脑发布的 PR，路线图 `owner` 与 PR 说明中的负责人统一填写「林珈诚」；需要设置 GitHub assignee 时使用 `Mumao233`。
+- Codex、Claude Code、Astra 等是技术执行或审查协作角色，不作为本机发布工作的默认负责人。原技术分工、审查署名和既有验收证据保持各自含义。
+- 此约定只涉及项目负责人展示与 PR 归属，不修改业务鉴权 `owner_id`、Git 历史、权限或架构。新提交的 author/committer 继续使用已有的 `Mumao233 <325669781+Mumao233@users.noreply.github.com>`，不添加 agent coauthor。
+- 更新 roadmap 时按 [SPEC](docs/roadmap/SPEC.md) 显式使用 `--owner <id> 林珈诚`，并同步生成报告。
