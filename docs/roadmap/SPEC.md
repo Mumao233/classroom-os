@@ -51,7 +51,7 @@
 | `id` | 是 | string | 两位数字加可选的一个小写字母：`00`、`06c`。全局唯一，**定下后不改**（PR、历史和依赖都靠它） |
 | `title` | 是 | string | 非空、单行、不含英文双引号 `"`；建议 20 个汉字以内（图上放得下） |
 | `status` | 是 | string | `todo` / `doing` / `review` / `done` / `blocked` 之一（见第 4 节） |
-| `owner` | 否 | string | 负责人，如 `Codex`、`Claude`、组员名。没有就**删掉字段**，不要写空字符串 |
+| `owner` | 否 | string | 项目负责人姓名；本机发布的 PR 填 `林珈诚`。没有就**删掉字段**，不要写空字符串 |
 | `prs` | 否 | string[] | 完整的 http(s) PR 链接，不重复；不要写 `#12` 这种简写。没有就删掉字段 |
 | `note` | 否 | string | 阻塞原因、验收要点等。没有就删掉字段 |
 | `history` | 否 | object[] | 状态变更记录，由 `set` 自动追加（见第 5 节） |
@@ -59,7 +59,7 @@
 示例：
 
 ```json
-{"id": "03a", "title": "邀请验证与资源归属", "status": "review", "history": [{"date": "2026-11-04", "status": "doing"}, {"date": "2026-11-07", "status": "review"}], "owner": "Codex", "prs": ["https://github.com/<org>/<repo>/pull/42"]}
+{"id": "03a", "title": "邀请验证与资源归属", "status": "review", "history": [{"date": "2026-11-04", "status": "doing"}, {"date": "2026-11-07", "status": "review"}], "owner": "林珈诚", "prs": ["https://github.com/<org>/<repo>/pull/42"]}
 ```
 
 ## 4. 状态
@@ -76,7 +76,7 @@
 
 agent 的工作约定：
 1. 开工前运行 `next`，只领「可开工」或明确分配给你的阶段；前置没完成就开工，`next` 会报「状态与依赖不一致」。
-2. 开工：`set <id> doing --owner <id> <你的名字>`。
+2. 开工：本机发布的工作使用 `set <id> doing --owner <id> 林珈诚`，不要把执行 agent 的名字填作负责人。
 3. 提交 PR 且测试通过：`set <id> review --pr <id> <PR 链接>`，roadmap 的改动放进这个 PR。
 4. 卡住：`set <id> blocked --note <id> "原因"`；解决后设回 `doing`，并用 `--note <id> ""` 清掉备注。
 

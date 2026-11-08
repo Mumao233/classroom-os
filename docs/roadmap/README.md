@@ -27,7 +27,7 @@ python scripts/roadmap.py set 03a doing             # 开始一个阶段（自�
 python scripts/roadmap.py set 03a review --pr 03a https://github.com/<org>/<repo>/pull/42
 python scripts/roadmap.py set 03a done 03b doing    # 一次改多个
 python scripts/roadmap.py set 02a done --date 2026-11-03   # 补记过去的日期
-python scripts/roadmap.py set --owner 03b Codex     # 只改负责人；"" 表示清除
+python scripts/roadmap.py set --owner 03b 林珈诚   # 只改负责人；"" 表示清除
 python scripts/roadmap.py set 05b blocked --note 05b "等对象存储租约方案定稿"
 python scripts/roadmap.py set --unpr 03a https://github.com/<org>/<repo>/pull/42
 python scripts/roadmap.py check                     # CI：数据有误或 ROADMAP.md 过期则失败
@@ -41,7 +41,7 @@ python scripts/roadmap.py check                     # CI：数据有误或 ROADM
 
 > 改 roadmap 前先读 `docs/roadmap/SPEC.md`，改完必须通过 `python scripts/roadmap.py check`。
 > 开始一个阶段前运行 `python scripts/roadmap.py next`，只领「可开工」或已分配给你的阶段。
-> 开工时 `set <id> doing --owner <id> <你的名字>`；PR 提交、测试通过后 `set <id> review --pr <id> <PR 链接>`，并把 `phases.json` 和 `ROADMAP.md` 的改动放进同一个 PR。
+> 本机发布的 PR 负责人为林珈诚（GitHub 账号 Mumao233）。开工时 `set <id> doing --owner <id> 林珈诚`；PR 提交、测试通过后 `set <id> review --pr <id> <PR 链接>`，并把 `phases.json` 和 `ROADMAP.md` 的改动放进同一个 PR。执行与审查 agent 是协作角色，不替代项目负责人。
 > 不要自己把阶段设为 `done`，`done` 由人验收后设置。遇到阻塞用 `set <id> blocked --note <id> "原因"`。
 > 不要手改 `ROADMAP.md`；要调整阶段或依赖，改 `phases.json` 后运行 `python scripts/roadmap.py render`。
 
