@@ -41,11 +41,14 @@ async function sha(value: string) { return crypto.subtle.digest('SHA-256', bytes
 /** Cookies remain HttpOnly. CSRF, pending seeds, codes and private keys are memory-only. */
 export class AuthClient {
   csrf = '';
+  /** The server is still in automatic-recovery scope, but this page no longer holds the
+   * memory-only receiver key (for example after a reload), so the flow cannot continue here. */
+  orphanedRecovery = false;
   private generation = 0;
   private receiver?: CryptoKeyPair;
   private recovery?: Recovery;
   constructor(private transport: typeof fetch = fetch) {}
-  clear() { this.generation++; this.csrf = ''; this.receiver = undefined; this.recovery = undefined; }
+  clear() { this.generation++; this.csrf = ''; this.receiver = undefined; this.recovery = undefined; this.orphanedRecovery = false; }
   private async checkRejectedContext(generation: number, sentCsrf: string) {
     // Probe the cookie/CSRF context only; matching CSRF does not establish that
     // an MFA challenge is still valid. Never replay the rejected write.
@@ -101,6 +104,8 @@ export class AuthClient {
     const value = await this.request<S['CsrfBootstrap']>('/auth/csrf');
     if (!token(value.csrf_token)) throw new AuthError('OUTPUT_INVALID');
     this.csrf = value.csrf_token;
+    // Only a recovery-scoped context carries a receiver challenge.
+    this.orphanedRecovery = !this.recovery && !!value.receiver_challenge;
     if (this.recovery && value.receiver_challenge) this.recovery = {...this.recovery, receiver_challenge: value.receiver_challenge};
     return value;
   }

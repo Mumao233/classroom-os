@@ -6,7 +6,7 @@ import styles from './AuthWorkbench.module.css';
 
 type S = components['schemas'];
 type Challenge = Extract<S['LoginResult'], {state:'mfa_required'}>;
-type Screen = 'loading'|'unavailable'|'login'|'mfa'|'recovery'|'account';
+type Screen = 'loading'|'unavailable'|'login'|'mfa'|'recovery'|'orphan'|'account';
 const messages: Record<string,string> = {
   UNAUTHENTICATED:'凭据无效或已过期。验证码使用后不能再次使用，请等待下一组验证码。',
   FORBIDDEN:'当前操作未获授权，请刷新页面后重试。', RATE_LIMITED:'尝试过于频繁，请稍后再试。',
@@ -35,7 +35,7 @@ export default function AuthWorkbench() {
     const token=new URLSearchParams(location.hash.slice(1)).get('token');
     if(mailMode&&token){history.replaceState(null,'',location.pathname);if(/^[A-Za-z0-9_-]{43}$/.test(token))setMailIntent({mode:mailMode,token});}
     const client=new AuthClient();api.current=client;let active=true;
-    void client.bootstrap().then(value=>{if(active){setSession(value);setScreen(value?'account':'login');}})
+    void client.bootstrap().then(value=>{if(active){setSession(value);setScreen(value?'account':client.orphanedRecovery?'orphan':'login');}})
       .catch(()=>{if(active)setScreen('unavailable');});
     return ()=>{active=false;client.clear();};
   },[reload]);
@@ -63,9 +63,10 @@ export default function AuthWorkbench() {
     await client().refreshCsrf();setScreen('login');
   }
   async function restartLogin() {
-    if(screen==='recovery') {
+    if(screen==='recovery'||screen==='orphan') {
       // The recovery cookie is HttpOnly, so only the server can end the flow. Without this
       // the next bootstrap stays in recovery scope and every login is refused until it expires.
+      // It is never done automatically: another tab may still hold the key for this flow.
       setBusy(true);
       try{await client().logout();}catch{/* already expired or unreachable: the bootstrap below decides */}
       finally{setBusy(false);}
@@ -127,8 +128,10 @@ export default function AuthWorkbench() {
             {session.user.mfa_enabled&&session.user.role==='student'&&<Button disabled={busy||!password} variant="danger" onClick={()=>void run(async()=>{await sensitive('disableMfa',{},'/auth/mfa/disable');await loggedOut();})}>关闭双重验证</Button>}</div>}
         </div>
       </>:<>
-        <h1>{screen==='mfa'?'验证登录':screen==='recovery'?'更换验证器':mode==='register'?'使用邀请注册':mode==='forgot'?'找回密码':mode==='reset'?'重置密码':mode==='verify'?'验证邮箱':mode==='confirm_email'?'确认新邮箱':'登录课间'}</h1>
-        <form className={styles.form} onSubmit={submit}>
+        <h1>{screen==='orphan'?'有未完成的验证器更换':screen==='mfa'?'验证登录':screen==='recovery'?'更换验证器':mode==='register'?'使用邀请注册':mode==='forgot'?'找回密码':mode==='reset'?'重置密码':mode==='verify'?'验证邮箱':mode==='confirm_email'?'确认新邮箱':'登录课间'}</h1>
+        {screen==='orphan'&&<><p>此浏览器有一个未完成的验证器更换流程，但页面已重新加载，无法在这里继续。如果另一个标签页仍在进行，请回到那里完成。放弃后可以重新登录；已使用的恢复码不会恢复。</p>
+          <Button disabled={busy} onClick={()=>{void restartLogin();}}>放弃并重新登录</Button></>}
+        {screen!=='orphan'&&<form className={styles.form} onSubmit={submit}>
           {screen==='login'&&<>
             {mode!=='reset'&&mode!=='verify'&&mode!=='confirm_email'&&<Input label="邮箱" type="email" autoComplete="username" required value={email} onChange={e=>setEmail(e.target.value)} maxLength={254}/>}
             {mode!=='forgot'&&mode!=='verify'&&mode!=='confirm_email'&&<Input label={mode==='reset'?'新密码':'密码'} type="password" autoComplete={mode==='login'?'current-password':'new-password'} required value={password} onChange={e=>setPassword(e.target.value)} maxLength={2048}/>}
@@ -140,7 +143,7 @@ export default function AuthWorkbench() {
           {screen==='recovery'&&<><p>此流程只用于更换验证器。完成后需重新登录。</p><Input label="再次验证当前密码" type="password" autoComplete="current-password" required value={password} onChange={e=>setPassword(e.target.value)} maxLength={2048}/>
             {seed&&<><code className={styles.secret}>{seed.otpauth_uri}</code><Input label="新验证器验证码" autoComplete="one-time-code" required value={newCode} onChange={e=>setNewCode(e.target.value)} maxLength={6}/></>}</>}
           <Button type="submit" disabled={busy}>{busy?'正在处理…':screen==='recovery'?(seed?'确认更换':'生成新验证器'):screen==='mfa'?'验证':'继续'}</Button>
-        </form>
+        </form>}
         {(screen==='mfa'||screen==='recovery')&&<><p>验证码输错后可以重试。若流程已过期或账户发生更改，请重新开始登录；当前验证器和恢复码不会因此重置。</p>
           <Button variant="ghost" disabled={busy} onClick={()=>{void restartLogin();}}>重新开始登录</Button></>}
         {screen==='login'&&<nav className={styles.links} aria-label="账户入口">{([['login','登录'],['register','邀请注册'],['forgot','忘记密码'],['reset','重置密码'],['verify','验证邮箱']] as const).filter(([value])=>value!==mode).map(([value,label])=><Button variant="ghost" key={value} disabled={busy} onClick={()=>{setMailIntent(null);setMode(value);setPassword('');setLinkToken('');setMessage('');}}>{label}</Button>)}</nav>}

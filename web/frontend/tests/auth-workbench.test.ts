@@ -29,6 +29,24 @@ describe('authentication UI context recovery',()=>{
     else {await screen.findByText('当前操作未获授权，请刷新页面后重试。');expect(screen.getByRole('heading',{name:user.email})).toBeDefined();}
     expect(writes).toBe(1);expect(probes).toBe(missing?2:1);
   });
+  it('offers to abandon a recovery flow whose receiver key was lost on reload',async()=>{
+    const recoveryCsrf='r'.repeat(43);const abandoned:string[]=[];let logins=0;
+    vi.stubGlobal('fetch',vi.fn(async(url:RequestInfo|URL,options?:RequestInit)=>{
+      const path=String(url);
+      if(path.endsWith('/auth/session'))return unauthenticated();
+      // A fresh page: the HttpOnly recovery cookie survives, the memory-only key does not.
+      if(path.endsWith('/auth/csrf'))return abandoned.length?bootstrap():Response.json({csrf_token:recoveryCsrf,expires_at:'2026-11-12T00:00:00Z',receiver_challenge:'b'.repeat(43)});
+      if(path.endsWith('/auth/logout')){abandoned.push(new Headers(options?.headers).get('X-CSRF-Token')??'');return Response.json({});}
+      if(path.endsWith('/auth/login')){logins++;return Response.json({error:{code:'FORBIDDEN'}},{status:403});}
+      throw new Error('unexpected route');
+    }));
+    render(createElement(AuthWorkbench));await screen.findByRole('heading',{name:'有未完成的验证器更换'});
+    // No login form is offered while every login would be refused, and nothing is abandoned unasked.
+    expect(screen.queryByLabelText('密码')).toBeNull();expect(abandoned).toEqual([]);
+    fireEvent.click(screen.getByRole('button',{name:'放弃并重新登录'}));
+    await screen.findByRole('heading',{name:'登录课间'});
+    expect(abandoned).toEqual([recoveryCsrf]);expect(logins).toBe(0);expect(screen.getByLabelText('密码')).toBeDefined();
+  });
   it.each(['mfa','recovery'] as const)('can explicitly restart a rejected %s flow even when preauth CSRF stays valid',async(mode)=>{
     vi.stubGlobal('crypto',webcrypto);
     let logins=0,mfaWrites=0;const first=crypto.randomUUID(),second=crypto.randomUUID();
