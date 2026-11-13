@@ -267,8 +267,8 @@ class AuthService:
         return AuthReply(dict(flow_id=body['flow_id'],enrollment_id=value['enrollment_id'],expires_at=value['expires_at'],receiver_challenge=nonce,
                               otpauth_uri=pyotp.TOTP(seed).provisioning_uri('Account',issuer_name='Classroom OS')))
 
-    def list_contexts(self,ctx,kind):
-        return AuthReply(self._need(self._call('list_security_context',dict(token_hash=digest('session',ctx.session),kind=kind))))
+    def list_contexts(self,ctx,kind,cursor=None,limit=None):
+        return AuthReply(self._need(self._call('list_security_context',dict(token_hash=digest('session',ctx.session),kind=kind,cursor=cursor,limit=limit))))
 
     def ws_ticket(self,ctx,body):
         self.require_csrf(ctx,'session');token=random_token()

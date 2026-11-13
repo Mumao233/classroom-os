@@ -28,6 +28,7 @@ export default function AuthWorkbench() {
   const [seed,setSeed]=useState<S['MfaEnrollment']|S['RecoveryReceiverEnrollment']|null>(null),[newCode,setNewCode]=useState('');
   const [codes,setCodes]=useState<string[]>([]),[sessions,setSessions]=useState<S['DeviceSession'][]>([]);
   const [devices,setDevices]=useState<S['TrustedDevice'][]>([]),[newEmail,setNewEmail]=useState('');
+  const [more,setMore]=useState<{sessions:string|null;devices:string|null}>({sessions:null,devices:null});
   const [mode,setMode]=useState<'login'|'register'|'forgot'|'reset'|'verify'|'confirm_email'>('login'),[linkToken,setLinkToken]=useState('');
   const [mailIntent,setMailIntent]=useState<{mode:'reset'|'verify'|'confirm_email';token:string}|null>(null);
   useEffect(()=>{
@@ -119,10 +120,12 @@ export default function AuthWorkbench() {
         <p className={styles.eyebrow}>账户与安全</p><h1>{session.user.nickname||session.user.email}</h1><p>{session.user.role==='admin'?'管理员':'学生'} · {session.user.mfa_enabled?'已启用双重验证':'尚未启用双重验证'}</p>
         {mailIntent&&<p role="status">检测到邮件验证请求。请先退出当前会话，再继续验证。</p>}
         <div className={styles.actions}><Button disabled={busy} variant="secondary" onClick={()=>void run(async()=>{await client().logout();await loggedOut();})}>退出当前会话</Button>
-          <Button disabled={busy} variant="ghost" onClick={()=>void run(async()=>{const page=await client().request<S['DeviceSessionPage']>('/me/sessions');setSessions(page.items);})}>查看登录会话</Button>
-          <Button disabled={busy} variant="ghost" onClick={()=>void run(async()=>{const page=await client().request<S['TrustedDevicePage']>('/me/devices');setDevices(page.items);})}>查看设备</Button></div>
+          <Button disabled={busy} variant="ghost" onClick={()=>void run(async()=>{const page=await client().request<S['DeviceSessionPage']>('/me/sessions');setSessions(page.items);setMore(m=>({...m,sessions:page.next_cursor}));})}>查看登录会话</Button>
+          <Button disabled={busy} variant="ghost" onClick={()=>void run(async()=>{const page=await client().request<S['TrustedDevicePage']>('/me/devices');setDevices(page.items);setMore(m=>({...m,devices:page.next_cursor}));})}>查看设备</Button></div>
         {!!sessions.length&&<ul className={styles.list}>{sessions.map(s=><li key={s.id}><span>{s.device_name} · {s.is_current?'当前会话':s.revoked_at?'已撤销':'其他会话'}</span>{!s.is_current&&!s.revoked_at&&<Button disabled={busy} variant="ghost" onClick={()=>void run(async()=>{await sensitive('revokeSession',{},'/me/sessions/'+s.id+'/revoke',s.id);setSessions([]);setMessage('已撤销该会话。');})}>撤销</Button>}</li>)}</ul>}
+        {!!sessions.length&&more.sessions&&<Button disabled={busy} variant="ghost" onClick={()=>void run(async()=>{const page=await client().request<S['DeviceSessionPage']>('/me/sessions?cursor='+encodeURIComponent(more.sessions??''));setSessions(v=>[...v,...page.items.filter(i=>!v.some(o=>o.id===i.id))]);setMore(m=>({...m,sessions:page.next_cursor}));})}>加载更多会话</Button>}
         {!!devices.length&&<ul className={styles.list}>{devices.map(d=><li key={d.id}><span>{d.device_name} · {d.id===session.device_id?'当前设备':d.revoked_at?'已撤销':'其他设备'}</span>{!d.revoked_at&&<Button disabled={busy} variant="ghost" onClick={()=>void run(async()=>{await sensitive('revokeDevice',{},'/me/devices/'+d.id+'/revoke',d.id);setDevices([]);if(d.id===session.device_id)await loggedOut();else setMessage('已撤销该设备。');})}>撤销设备</Button>}</li>)}</ul>}
+        {!!devices.length&&more.devices&&<Button disabled={busy} variant="ghost" onClick={()=>void run(async()=>{const page=await client().request<S['TrustedDevicePage']>('/me/devices?cursor='+encodeURIComponent(more.devices??''));setDevices(v=>[...v,...page.items.filter(i=>!v.some(o=>o.id===i.id))]);setMore(m=>({...m,devices:page.next_cursor}));})}>加载更多设备</Button>}
         <div className={styles.section}><h2>验证敏感操作</h2><p>每次操作都绑定本次提交内容。已使用的验证码不能重复用于下一项操作。</p>{controls}
           <Input label="新密码" type="password" autoComplete="new-password" value={newPassword} onChange={e=>setNewPassword(e.target.value)} maxLength={2048}/>
           <div className={styles.actions}><Button disabled={busy||!password||!newPassword} onClick={()=>void run(async()=>{await sensitive('changePassword',{new_password:newPassword},'/auth/password/change');await loggedOut();setMessage('密码已更改，请重新登录。');})}>更改密码</Button>

@@ -63,6 +63,20 @@ def test_session_and_device_lists_stay_within_the_contract_cap(auth):
     devices=a.client.get(BASE+'/me/devices');assert devices.status_code==200,devices.text
     items=devices.json()['items'];assert len(items)==100
     assert current['device_id'] in {item['id'] for item in items}
+    # The remaining entries stay reachable: follow the cursor until it ends, in pages of the requested size.
+    for kind,total in (('sessions',121),('devices',121)):
+        seen=[];cursor=None;pages=0
+        while True:
+            page=a.client.get(BASE+'/me/'+kind,params=dict(limit=50,**({'cursor':cursor} if cursor else {})));assert page.status_code==200,page.text
+            body=page.json();assert 1<=len(body['items'])<=50;seen+=[item['id'] for item in body['items']];pages+=1;cursor=body['next_cursor']
+            if cursor is None:break
+            assert len(body['items'])==50 and pages<10
+        assert len(seen)==len(set(seen))==total and pages==3
+        assert seen[0]==(current['device_id'] if kind=='devices' else next(i['id'] for i in sessions.json()['items'] if i['is_current']))
+    # The default page announces that more exist, and malformed paging input is refused rather than ignored.
+    assert sessions.json()['next_cursor'] is not None and devices.json()['next_cursor'] is not None
+    for query in ('limit=0','limit=101','limit=x','cursor=not-a-cursor','limit=5&limit=6','offset=3'):
+        assert a.client.get(BASE+'/me/sessions?'+query).status_code==422,query
 
 
 def test_pending_automatic_recovery_can_be_abandoned_so_login_can_restart(auth):

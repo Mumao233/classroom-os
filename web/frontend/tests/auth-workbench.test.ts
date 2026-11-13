@@ -129,6 +129,25 @@ describe('authentication UI outcomes that must not be lost or misreported',()=>{
     await screen.findByText(/提交结果暂不确定/);
     expect(screen.queryByText(/服务暂不可用/)).toBeNull();expect(changes).toBe(1);
   });
+  it('loads further pages of sessions through the server cursor',async()=>{
+    const cursor='1.1794500000000000.'+crypto.randomUUID();const asked:string[]=[];
+    const item=(name:string,current:boolean)=>({id:crypto.randomUUID(),revision:1,created_at:'2026-11-10T00:00:00Z',updated_at:'2026-11-10T00:00:00Z',device_id:crypto.randomUUID(),
+      device_name:name,last_active_at:'2026-11-10T00:00:00Z',expires_at:'2026-11-12T00:00:00Z',is_current:current,revoked_at:null});
+    vi.stubGlobal('fetch',vi.fn(async(url:RequestInfo|URL)=>{
+      const path=String(url);
+      if(path.endsWith('/auth/session'))return Response.json(session);
+      if(path.includes('/me/sessions')){
+        asked.push(path.split('/me/sessions')[1]);
+        return Response.json(asked.length===1?{items:[item('first page device',true)],next_cursor:cursor}:{items:[item('second page device',false)],next_cursor:null});
+      }
+      throw new Error('unexpected route');
+    }));
+    render(createElement(AuthWorkbench));await screen.findByRole('heading',{name:user.email});
+    fireEvent.click(screen.getByRole('button',{name:'查看登录会话'}));await screen.findByText(/first page device/);
+    fireEvent.click(screen.getByRole('button',{name:'加载更多会话'}));await screen.findByText(/second page device/);
+    expect(screen.getByText(/first page device/)).toBeDefined();expect(screen.queryByRole('button',{name:'加载更多会话'})).toBeNull();
+    expect(asked).toEqual(['','?cursor='+encodeURIComponent(cursor)]);
+  });
   it('keeps the email-link token after a rejected new password so it can be corrected',async()=>{
     const link='t'.repeat(43);const sent:{token:string;new_password:string}[]=[];
     history.replaceState(null,'','/reset-password#token='+link);

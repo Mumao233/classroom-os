@@ -23,6 +23,8 @@ from ..domain.identity import IdentityRejected
 from ..infrastructure.auth_deadlines import DEADLINE,remaining
 
 PREFIX='/api/web/v1'
+# Opaque to clients: rank, creation time in microseconds and row id of the last item served.
+PAGE_CURSOR=re.compile(r'[012]\.[0-9]{1,18}\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}')
 COOKIES={'session':'__Host-classroom_session','preauth':'__Host-classroom_preauth','recovery':'__Host-classroom_recovery'}
 
 
@@ -101,11 +103,12 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
 
     changes={'/auth/logout-all':'logoutAll','/auth/password/change':'changePassword','/auth/email/change':'requestEmailChange',
              '/auth/mfa/enroll':'enrollMfa','/auth/mfa/confirm':'confirmMfa','/auth/mfa/disable':'disableMfa','/auth/mfa/recovery-codes':'rotateRecoveryCodes'}
-    reads={'/auth/csrf':lambda c:auth.csrf(c),'/auth/session':lambda c:auth.session(c),
-           '/me/sessions':lambda c:auth.list_contexts(c,'sessions'),'/me/devices':lambda c:auth.list_contexts(c,'devices')}
+    reads={'/auth/csrf':lambda c,p:auth.csrf(c),'/auth/session':lambda c,p:auth.session(c),
+           '/me/sessions':lambda c,p:auth.list_contexts(c,'sessions',p.get('cursor'),p.get('limit')),
+           '/me/devices':lambda c,p:auth.list_contexts(c,'devices',p.get('cursor'),p.get('limit'))}
 
     def dispatch(path,ctx,body,key,params):
-        if path in reads:return reads[path](ctx)
+        if path in reads:return reads[path](ctx,params)
         if path=='/auth/login':return auth.login(ctx,body)
         if path=='/auth/login/mfa':return auth.login_mfa(ctx,body,key)
         if path=='/auth/logout':return auth.logout(ctx)
@@ -153,6 +156,16 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
                     if pairs:
                         if len(pairs)!=1 or pairs[0][0]!='revision' or not pairs[0][1].isascii() or not pairs[0][1].isdecimal() or not 1<=int(pairs[0][1])<=9007199254740991:raise AuthRejected('VALIDATION_FAILED',422)
                         params['revision']=int(pairs[0][1])
+                if path in ('/me/sessions','/me/devices'):
+                    pairs=list(request.query_params.multi_items())
+                    if len({name for name,_ in pairs})!=len(pairs) or any(name not in ('cursor','limit') for name,_ in pairs):raise AuthRejected('VALIDATION_FAILED',422)
+                    for name,value in pairs:
+                        if name=='cursor':
+                            if not PAGE_CURSOR.fullmatch(value):raise AuthRejected('VALIDATION_FAILED',422)
+                            params['cursor']=value
+                        else:
+                            if not value.isascii() or not value.isdecimal() or len(value)>3 or not 1<=int(value)<=100:raise AuthRejected('VALIDATION_FAILED',422)
+                            params['limit']=int(value)
                 if method!='get':
                     if request.url.query:raise AuthRejected('VALIDATION_FAILED',422)
                     key=request.headers.get('idempotency-key')

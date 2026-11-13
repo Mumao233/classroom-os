@@ -449,25 +449,43 @@ END $f$;
 
 CREATE FUNCTION identity_api.list_security_context(p jsonb) RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,identity_control,public,pg_temp AS $f$
-DECLARE s jsonb;rows jsonb;
+DECLARE s jsonb;rows jsonb;page jsonb;lim integer;cr integer;ct bigint;ci uuid;nxt text;parts text[];
 BEGIN
   s:=identity_api.validate_session(p);IF s IS NULL THEN RETURN NULL;END IF;
+  -- The contract caps a page at 100 items and continues with an opaque cursor. Every login
+  -- adds a row, so the order is: the current entry, then usable ones, then history, each
+  -- newest first. The cursor is the (rank, creation microseconds, id) of the last item
+  -- served; the HTTP layer has already validated its shape.
+  lim:=least(greatest(coalesce((p->>'limit')::integer,100),1),100);
+  IF p->>'cursor' IS NOT NULL THEN
+    parts:=string_to_array(p->>'cursor','.');cr:=parts[1]::integer;ct:=parts[2]::bigint;ci:=parts[3]::uuid;
+  END IF;
   IF p->>'kind'='sessions' THEN
-    -- The contract caps each list at 100 items. Every login adds a row, so bound the
-    -- result: the current session first, then usable ones, then the most recent history.
-    SELECT coalesce(jsonb_agg(x.item ORDER BY x.created_at DESC),'[]') INTO rows FROM (
-      SELECT jsonb_build_object('id',a.id,'revision',a.revision,'created_at',a.created_at,'updated_at',a.updated_at,'device_id',a.device_id,
-        'device_name',d.device_name,'last_active_at',a.updated_at,'expires_at',least(a.idle_deadline,a.absolute_deadline),'is_current',a.id=(s->>'session_id')::uuid,'revoked_at',a.revoked_at) AS item,a.created_at
-      FROM public.auth_sessions a JOIN public.devices d ON d.owner_id=a.owner_id AND d.id=a.device_id WHERE a.owner_id=(s->>'owner_id')::uuid
-      ORDER BY (a.id=(s->>'session_id')::uuid) DESC,(a.revoked_at IS NULL AND least(a.idle_deadline,a.absolute_deadline)>clock_timestamp()) DESC,a.created_at DESC,a.id LIMIT 100) x;
+    SELECT coalesce(jsonb_agg(jsonb_build_object('item',x.item,'rk',x.rk,'ts',x.ts,'id',x.id) ORDER BY x.rk,x.ts DESC,x.id),'[]') INTO page FROM (
+      SELECT y.* FROM (
+        SELECT jsonb_build_object('id',a.id,'revision',a.revision,'created_at',a.created_at,'updated_at',a.updated_at,'device_id',a.device_id,
+          'device_name',d.device_name,'last_active_at',a.updated_at,'expires_at',least(a.idle_deadline,a.absolute_deadline),'is_current',a.id=(s->>'session_id')::uuid,'revoked_at',a.revoked_at) AS item,
+          CASE WHEN a.id=(s->>'session_id')::uuid THEN 0 WHEN a.revoked_at IS NULL AND least(a.idle_deadline,a.absolute_deadline)>clock_timestamp() THEN 1 ELSE 2 END AS rk,
+          (extract(epoch FROM a.created_at)*1000000)::bigint AS ts,a.id
+        FROM public.auth_sessions a JOIN public.devices d ON d.owner_id=a.owner_id AND d.id=a.device_id WHERE a.owner_id=(s->>'owner_id')::uuid) y
+      WHERE cr IS NULL OR y.rk>cr OR (y.rk=cr AND (y.ts<ct OR (y.ts=ct AND y.id>ci)))
+      ORDER BY y.rk,y.ts DESC,y.id LIMIT lim+1) x;
   ELSIF p->>'kind'='devices' THEN
-    SELECT coalesce(jsonb_agg(x.item ORDER BY x.created_at DESC),'[]') INTO rows FROM (
-      SELECT jsonb_build_object('id',d.id,'revision',d.revision,'created_at',d.created_at,'updated_at',d.updated_at,'device_name',d.device_name,
-        'trusted',d.trusted,'revoked_at',d.revoked_at,'key_epoch',d.key_epoch) AS item,d.created_at
-      FROM public.devices d WHERE d.owner_id=(s->>'owner_id')::uuid
-      ORDER BY (d.id=(s->>'device_id')::uuid) DESC,(d.revoked_at IS NULL) DESC,d.created_at DESC,d.id LIMIT 100) x;
+    SELECT coalesce(jsonb_agg(jsonb_build_object('item',x.item,'rk',x.rk,'ts',x.ts,'id',x.id) ORDER BY x.rk,x.ts DESC,x.id),'[]') INTO page FROM (
+      SELECT y.* FROM (
+        SELECT jsonb_build_object('id',d.id,'revision',d.revision,'created_at',d.created_at,'updated_at',d.updated_at,'device_name',d.device_name,
+          'trusted',d.trusted,'revoked_at',d.revoked_at,'key_epoch',d.key_epoch) AS item,
+          CASE WHEN d.id=(s->>'device_id')::uuid THEN 0 WHEN d.revoked_at IS NULL THEN 1 ELSE 2 END AS rk,
+          (extract(epoch FROM d.created_at)*1000000)::bigint AS ts,d.id
+        FROM public.devices d WHERE d.owner_id=(s->>'owner_id')::uuid) y
+      WHERE cr IS NULL OR y.rk>cr OR (y.rk=cr AND (y.ts<ct OR (y.ts=ct AND y.id>ci)))
+      ORDER BY y.rk,y.ts DESC,y.id LIMIT lim+1) x;
   ELSE RETURN NULL;END IF;
-  RETURN jsonb_build_object('items',rows,'next_cursor',NULL);
+  IF jsonb_array_length(page)>lim THEN
+    nxt:=format('%s.%s.%s',page->(lim-1)->>'rk',page->(lim-1)->>'ts',page->(lim-1)->>'id');
+  END IF;
+  SELECT coalesce(jsonb_agg(t.e->'item' ORDER BY t.o),'[]') INTO rows FROM jsonb_array_elements(page) WITH ORDINALITY t(e,o) WHERE t.o<=lim;
+  RETURN jsonb_build_object('items',rows,'next_cursor',nxt);
 END $f$;
 
 CREATE FUNCTION identity_api.redeem_auto_recovery(p jsonb) RETURNS jsonb
