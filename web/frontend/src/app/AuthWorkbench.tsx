@@ -62,7 +62,14 @@ export default function AuthWorkbench() {
     client().clear();setSession(null);setChallenge(null);setSeed(null);setCodes([]);setSessions([]);setDevices([]);
     await client().refreshCsrf();setScreen('login');
   }
-  function restartLogin() {
+  async function restartLogin() {
+    if(screen==='recovery') {
+      // The recovery cookie is HttpOnly, so only the server can end the flow. Without this
+      // the next bootstrap stays in recovery scope and every login is refused until it expires.
+      setBusy(true);
+      try{await client().logout();}catch{/* already expired or unreachable: the bootstrap below decides */}
+      finally{setBusy(false);}
+    }
     client().clear();setSession(null);setChallenge(null);setSeed(null);setCodes([]);setSessions([]);setDevices([]);
     setPassword('');setCode('');setNewPassword('');setNewCode('');setLinkToken('');setRecoveryCode(false);
     setMailIntent(null);setMode('login');setMessage('请重新输入密码开始登录。');
@@ -135,7 +142,7 @@ export default function AuthWorkbench() {
           <Button type="submit" disabled={busy}>{busy?'正在处理…':screen==='recovery'?(seed?'确认更换':'生成新验证器'):screen==='mfa'?'验证':'继续'}</Button>
         </form>
         {(screen==='mfa'||screen==='recovery')&&<><p>验证码输错后可以重试。若流程已过期或账户发生更改，请重新开始登录；当前验证器和恢复码不会因此重置。</p>
-          <Button variant="ghost" disabled={busy} onClick={restartLogin}>重新开始登录</Button></>}
+          <Button variant="ghost" disabled={busy} onClick={()=>{void restartLogin();}}>重新开始登录</Button></>}
         {screen==='login'&&<nav className={styles.links} aria-label="账户入口">{([['login','登录'],['register','邀请注册'],['forgot','忘记密码'],['reset','重置密码'],['verify','验证邮箱']] as const).filter(([value])=>value!==mode).map(([value,label])=><Button variant="ghost" key={value} disabled={busy} onClick={()=>{setMailIntent(null);setMode(value);setPassword('');setLinkToken('');setMessage('');}}>{label}</Button>)}</nav>}
       </>}
       {!!codes.length&&<aside className={styles.section}><h2>恢复码只展示这一次</h2><p>请保存在你自己的安全位置。关闭页面后无法重新查看，下一次轮换会废弃旧码。</p><div className={styles.codes}>{codes.map(value=><code key={value}>{value}</code>)}</div><Button variant="secondary" onClick={()=>setCodes([])}>我已妥善保存</Button></aside>}

@@ -32,16 +32,18 @@ describe('authentication UI context recovery',()=>{
   it.each(['mfa','recovery'] as const)('can explicitly restart a rejected %s flow even when preauth CSRF stays valid',async(mode)=>{
     vi.stubGlobal('crypto',webcrypto);
     let logins=0,mfaWrites=0;const first=crypto.randomUUID(),second=crypto.randomUUID();
-    const challenges:string[]=[];
+    const challenges:string[]=[];const abandoned:string[]=[];const recoveryCsrf='r'.repeat(43);
     vi.stubGlobal('fetch',vi.fn(async(url:RequestInfo|URL,options?:RequestInit)=>{
       const path=String(url);
       if(path.endsWith('/auth/session'))return unauthenticated();
-      if(path.endsWith('/auth/csrf'))return bootstrap();
+      // Until the server abandons the flow, the HttpOnly recovery cookie keeps bootstrap in recovery scope.
+      if(path.endsWith('/auth/csrf'))return bootstrap(mode==='recovery'&&mfaWrites>0&&!abandoned.length?recoveryCsrf:anonymous);
+      if(path.endsWith('/auth/logout')){abandoned.push(new Headers(options?.headers).get('X-CSRF-Token')??'');return Response.json({});}
       if(path.endsWith('/auth/login')){logins++;return Response.json({state:'mfa_required',challenge_id:logins===1?first:second,user:null,device_id:null,csrf_token:null,receiver_challenge:'b'.repeat(43)});}
       if(path.endsWith('/auth/login/mfa')){
         mfaWrites++;challenges.push(JSON.parse(String(options?.body)).challenge_id);
         if(mode==='mfa')return unauthenticated();
-        return Response.json({state:'recovery_required',challenge_id:null,user:null,device_id:null,csrf_token:null,recovery:{flow_id:crypto.randomUUID(),scope:'mfa_rebind',state:'pending',expires_at:'2026-11-12T00:00:00Z',csrf_token:anonymous,receiver_challenge:'b'.repeat(43)}});
+        return Response.json({state:'recovery_required',challenge_id:null,user:null,device_id:null,csrf_token:null,recovery:{flow_id:crypto.randomUUID(),scope:'mfa_rebind',state:'pending',expires_at:'2026-11-12T00:00:00Z',csrf_token:recoveryCsrf,receiver_challenge:'b'.repeat(43)}});
       }
       if(path.endsWith('/auth/recovery/enroll'))return unauthenticated();
       throw new Error('unexpected route');
@@ -60,6 +62,8 @@ describe('authentication UI context recovery',()=>{
     expect(mfaWrites).toBe(1);expect(challenges).toEqual([first]);
     fireEvent.click(screen.getByRole('button',{name:'重新开始登录'}));
     await screen.findByRole('heading',{name:'登录课间'});expect((screen.getByLabelText('密码') as HTMLInputElement).value).toBe('');
+    // Leaving recovery must end the server-side flow with the recovery-scoped CSRF; plain MFA has nothing to abandon.
+    expect(abandoned).toEqual(mode==='recovery'?[recoveryCsrf]:[]);
     await login();expect(logins).toBe(2);expect(mfaWrites).toBe(1);
     expect(screen.queryByRole('heading',{name:'更换验证器'})).toBeNull();
     // A second explicit submission must use the newly issued challenge.

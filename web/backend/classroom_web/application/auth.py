@@ -1,5 +1,6 @@
 """PR-03b server use cases. Secrets never enter a generic success receipt."""
 from datetime import datetime,timezone
+from contextlib import contextmanager
 from dataclasses import replace
 import hmac
 from uuid import UUID,uuid4
@@ -39,11 +40,39 @@ class AuthService:
         if self.hash_gate is None:raise AuthRejected('SERVICE_DISABLED',503)
         return self.hash_gate(lambda:self.crypto.hash(password))
 
+    @contextmanager
+    def failure_budget(self,*budgets):
+        """Count a credential attempt against each (kind, value) budget before verifying it.
+
+        A check that precedes verification and an increment that follows it let every
+        concurrent attempt pass the check. Reserving first closes that gap. The reservation
+        is kept when the attempt fails as UNAUTHENTICATED and returned otherwise, so a
+        success or an unrelated rejection leaves the count where it was. If the process
+        dies in between, the reservation stays counted until the window expires.
+        """
+        held=[]
+        def release():
+            for kind,key,window in held:
+                try:self._call('authentication_budget',dict(kind=kind,key=key,release=True,window=window))
+                except Exception:pass
+        try:
+            for kind,value in budgets:
+                key=self.crypto.commitment('budget:'+kind,value)
+                reply=self._need(self._call('authentication_budget',dict(kind=kind,key=key,increment=True)))
+                if not reply['allowed']:raise AuthRejected('RATE_LIMITED',429)
+                held.append((kind,key,reply['window']))
+            yield
+        except AuthRejected as error:
+            if error.code!='UNAUTHENTICATED':release()
+            raise
+        except BaseException:
+            release();raise
+        else:release()
+
     def check_current_password(self,row,password,source,*,account_reference=None):
         reference=account_reference if account_reference is not None else row['owner_id']
-        self.budget('account_fail',reference);self.budget('source_fail',source)
-        if not self._verify_password(row,password):
-            self.budget('account_fail',reference,True);self.budget('source_fail',source,True);raise AuthRejected()
+        with self.failure_budget(('account_fail',reference),('source_fail',source)):
+            if not self._verify_password(row,password):raise AuthRejected()
 
     def context(self,ctx,*,touch=False):
         if ctx.session is None:raise AuthRejected()
@@ -120,8 +149,7 @@ class AuthService:
     def login_mfa(self,ctx,body,key):
         self.require_csrf(ctx,'preauth')
         row=self._need(self._call('locate_auth',dict(lookup='login_mfa',challenge_id=body['challenge_id'],preauth_hash=digest('preauth',ctx.preauth)),verifier=True))
-        self.budget('mfa_fail',row['owner_id'])
-        try:
+        with self.failure_budget(('mfa_fail',row['owner_id'])):
             if body['factor_type']=='totp':
                 proof,_=self._attest(row,'login_mfa',code=body['code'])
                 return self._establish(ctx,row['scope'],proof,body['challenge_id'])
@@ -133,15 +161,18 @@ class AuthService:
                 next_nonce=nonce,receiver=body['receiver_public_key'],audit_id=str(uuid4()))))
             recovery=dict(flow_id=value['flow_id'],scope='mfa_rebind',state='pending',expires_at=value['expires_at'],csrf_token=self.crypto.csrf('recovery',token),receiver_challenge=nonce)
             return AuthReply(dict(state='recovery_required',challenge_id=None,user=None,device_id=None,csrf_token=None,recovery=recovery),recovery=token)
-        except AuthRejected as error:
-            if error.code=='UNAUTHENTICATED':self.budget('mfa_fail',row['owner_id'],True)
-            raise
 
     def session(self,ctx):
         s=self.context(ctx)
         return AuthReply(dict(user=s['user'],device_id=s['device_id'],session_id=s['session_id'],csrf_token=self.crypto.csrf('session',ctx.session)))
 
     def logout(self,ctx):
+        if ctx.session is None and ctx.recovery is not None:
+            # Leaving a pending automatic recovery: without this the HttpOnly recovery
+            # cookie keeps the browser in recovery scope until the flow expires.
+            self.require_csrf(ctx,'recovery')
+            self._need(self._call('protocol_context',dict(action='abandon',kind='auto_recovery',token_hash=digest('recovery',ctx.recovery))))
+            return AuthReply({},clear_recovery=True)
         self.require_csrf(ctx,'session')
         self._need(self._call('revoke_session',dict(token_hash=digest('session',ctx.session),audit_id=str(uuid4()))))
         return AuthReply({},clear_session=True)
@@ -154,12 +185,8 @@ class AuthService:
         self.check_current_password(row,body['password'],ctx.source)
         commitment=self.crypto.commitment('operation',operation)
         needs_mfa=bool(row['factor_id'] or row['role']=='admin')
-        if needs_mfa:self.budget('mfa_fail',row['owner_id'])
-        try:
+        with self.failure_budget(*([('mfa_fail',row['owner_id'])] if needs_mfa else [])):
             proof,_=self._attest(row,'reauth',binding=commitment,code=body.get('mfa_code'))
-        except AuthRejected as error:
-            if needs_mfa and error.code=='UNAUTHENTICATED':self.budget('mfa_fail',row['owner_id'],True)
-            raise
         if purpose.startswith('student_recovery_'):
             token=random_token();value=self._need(self._call('issue_control_reauth',dict(token_hash=digest('session',ctx.session),proof_hash=proof,id=str(uuid4()),
                 reauth_hash=digest('reauth',token),purpose=purpose,case_id=operation['target']['id'],deployment_id=self.control_deployment_id,commitment=commitment,

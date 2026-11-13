@@ -54,22 +54,28 @@ class AuthMailDispatcher:
     def __init__(self,repository,cipher,transport):self.repository=repository;self.cipher=cipher;self.transport=transport;self.faults=deque(maxlen=16)
 
     def dispatch_once(self):
-        claim=digest('auth_mail_lease',random_token());items=self.repository.call('claim_auth_mail',dict(claim_hash=claim)) or []
-        result=dict(claimed=len(items),sent=0,discarded=0,failed=0)
-        for item in items:
-            p=dict(id=item,claim_hash=claim)
-            stage='read'
-            try:
-                delivery=self.repository.call('read_auth_mail_delivery',p)
-                if delivery is None:
-                    self.repository.call('finish_auth_mail',{**p,'result':'discarded'});result['discarded']+=1;continue
-                stage='decrypt';value=self.cipher.open(item,delivery['encrypted_payload'])
-                # No PG transaction or user/job lock survives this network call.
-                stage='send';self.transport.send_action(value['email'],value['token'],value['purpose'],item)
-                stage='finish'
-                if self.repository.call('finish_auth_mail',{**p,'result':'sent'}):result['sent']+=1
-                else:result['failed']+=1
-            except Exception as error:self.faults.append(dict(stage=stage,kind=type(error).__name__));result['failed']+=1
+        result=dict(claimed=0,sent=0,discarded=0,failed=0)
+        # Sending is sequential, and a claim spends a delivery attempt and starts a 30 second
+        # lease. Claim one job immediately before sending it, so jobs waiting behind a slow
+        # SMTP exchange are not expired, re-claimed and discarded without ever being sent.
+        for _ in range(32):
+            claim=digest('auth_mail_lease',random_token());items=self.repository.call('claim_auth_mail',dict(claim_hash=claim,limit=1)) or []
+            if not items:break
+            result['claimed']+=len(items)
+            for item in items:
+                p=dict(id=item,claim_hash=claim)
+                stage='read'
+                try:
+                    delivery=self.repository.call('read_auth_mail_delivery',p)
+                    if delivery is None:
+                        self.repository.call('finish_auth_mail',{**p,'result':'discarded'});result['discarded']+=1;continue
+                    stage='decrypt';value=self.cipher.open(item,delivery['encrypted_payload'])
+                    # No PG transaction or user/job lock survives this network call.
+                    stage='send';self.transport.send_action(value['email'],value['token'],value['purpose'],item)
+                    stage='finish'
+                    if self.repository.call('finish_auth_mail',{**p,'result':'sent'}):result['sent']+=1
+                    else:result['failed']+=1
+                except Exception as error:self.faults.append(dict(stage=stage,kind=type(error).__name__));result['failed']+=1
         return result
 
 

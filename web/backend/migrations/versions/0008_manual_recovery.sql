@@ -675,16 +675,20 @@ END $f$;
 
 CREATE FUNCTION identity_api.claim_auth_mail(p jsonb) RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,identity_control,pg_temp AS $f$
-DECLARE item record;n timestamptz:=clock_timestamp();items jsonb:='[]';
+DECLARE item record;n timestamptz:=clock_timestamp();items jsonb:='[]';lim integer;
 BEGIN
   IF p->>'claim_hash' IS NULL OR p->>'claim_hash' !~ '^[0-9a-f]{64}$' THEN RETURN NULL;END IF;
-  FOR item IN SELECT id,expires_at,attempts FROM identity_control.authentication_mail_jobs WHERE state IN('queued','sending') AND (claim_until IS NULL OR claim_until<=n) ORDER BY created_at,id LIMIT 32 FOR UPDATE SKIP LOCKED LOOP
-    IF item.expires_at<=n OR item.attempts>=3 THEN
-      UPDATE identity_control.authentication_mail_jobs SET state='discarded',encrypted_payload=NULL,finished_at=n,claim_until=NULL,claim_hash=NULL WHERE id=item.id;
-    ELSE
-      UPDATE identity_control.authentication_mail_jobs SET state='sending',attempts=attempts+1,claim_hash=p->>'claim_hash',claim_until=n+interval '30 seconds' WHERE id=item.id;
-      items:=items||jsonb_build_array(item.id);
-    END IF;
+  lim:=least(greatest(coalesce((p->>'limit')::integer,32),1),32);
+  -- Retire expired or exhausted jobs first so they never hide deliverable ones behind a small limit.
+  UPDATE identity_control.authentication_mail_jobs SET state='discarded',encrypted_payload=NULL,finished_at=n,claim_until=NULL,claim_hash=NULL
+    WHERE id IN (SELECT id FROM identity_control.authentication_mail_jobs WHERE state IN('queued','sending') AND (claim_until IS NULL OR claim_until<=n)
+      AND (expires_at<=n OR attempts>=3) ORDER BY created_at,id LIMIT 32 FOR UPDATE SKIP LOCKED);
+  -- A claim spends a delivery attempt and starts a 30 second lease. The dispatcher sends
+  -- sequentially, so it claims one job at a time (limit=1) immediately before sending.
+  FOR item IN SELECT id FROM identity_control.authentication_mail_jobs WHERE state IN('queued','sending') AND (claim_until IS NULL OR claim_until<=n)
+      AND expires_at>n AND attempts<3 ORDER BY created_at,id LIMIT lim FOR UPDATE SKIP LOCKED LOOP
+    UPDATE identity_control.authentication_mail_jobs SET state='sending',attempts=attempts+1,claim_hash=p->>'claim_hash',claim_until=n+interval '30 seconds' WHERE id=item.id;
+    items:=items||jsonb_build_array(item.id);
   END LOOP;
   RETURN items;
 END $f$;

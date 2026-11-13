@@ -263,6 +263,13 @@ BEGIN
   n:=clock_timestamp();
   IF c.id IS NULL OR c.consumed_at IS NOT NULL OR n>=c.expires_at THEN RETURN NULL;END IF;
   IF c.owner_id IS NOT NULL AND NOT EXISTS(SELECT FROM public.users WHERE id=c.owner_id AND state='active' AND deleted_at IS NULL AND security_epoch=c.security_epoch) THEN RETURN NULL;END IF;
+  -- Lets the holder of a pending automatic-recovery context give it up, so the browser
+  -- is not pinned to a flow whose receiver key it has discarded.
+  IF p->>'action'='abandon' THEN
+    IF c.kind<>'auto_recovery' THEN RETURN NULL;END IF;
+    UPDATE public.auth_challenges SET consumed_at=n WHERE id=c.id;
+    RETURN jsonb_build_object('id',c.id);
+  END IF;
   RETURN jsonb_build_object('expires_at',c.expires_at,'id',c.id,'scope',c.scope);
 END $f$;
 
@@ -446,12 +453,19 @@ DECLARE s jsonb;rows jsonb;
 BEGIN
   s:=identity_api.validate_session(p);IF s IS NULL THEN RETURN NULL;END IF;
   IF p->>'kind'='sessions' THEN
-    SELECT coalesce(jsonb_agg(jsonb_build_object('id',a.id,'revision',a.revision,'created_at',a.created_at,'updated_at',a.updated_at,'device_id',a.device_id,
-      'device_name',d.device_name,'last_active_at',a.updated_at,'expires_at',least(a.idle_deadline,a.absolute_deadline),'is_current',a.id=(s->>'session_id')::uuid,'revoked_at',a.revoked_at) ORDER BY a.created_at DESC),'[]') INTO rows
-      FROM public.auth_sessions a JOIN public.devices d ON d.owner_id=a.owner_id AND d.id=a.device_id WHERE a.owner_id=(s->>'owner_id')::uuid;
+    -- The contract caps each list at 100 items. Every login adds a row, so bound the
+    -- result: the current session first, then usable ones, then the most recent history.
+    SELECT coalesce(jsonb_agg(x.item ORDER BY x.created_at DESC),'[]') INTO rows FROM (
+      SELECT jsonb_build_object('id',a.id,'revision',a.revision,'created_at',a.created_at,'updated_at',a.updated_at,'device_id',a.device_id,
+        'device_name',d.device_name,'last_active_at',a.updated_at,'expires_at',least(a.idle_deadline,a.absolute_deadline),'is_current',a.id=(s->>'session_id')::uuid,'revoked_at',a.revoked_at) AS item,a.created_at
+      FROM public.auth_sessions a JOIN public.devices d ON d.owner_id=a.owner_id AND d.id=a.device_id WHERE a.owner_id=(s->>'owner_id')::uuid
+      ORDER BY (a.id=(s->>'session_id')::uuid) DESC,(a.revoked_at IS NULL AND least(a.idle_deadline,a.absolute_deadline)>clock_timestamp()) DESC,a.created_at DESC,a.id LIMIT 100) x;
   ELSIF p->>'kind'='devices' THEN
-    SELECT coalesce(jsonb_agg(jsonb_build_object('id',d.id,'revision',d.revision,'created_at',d.created_at,'updated_at',d.updated_at,'device_name',d.device_name,
-      'trusted',d.trusted,'revoked_at',d.revoked_at,'key_epoch',d.key_epoch) ORDER BY d.created_at DESC),'[]') INTO rows FROM public.devices d WHERE owner_id=(s->>'owner_id')::uuid;
+    SELECT coalesce(jsonb_agg(x.item ORDER BY x.created_at DESC),'[]') INTO rows FROM (
+      SELECT jsonb_build_object('id',d.id,'revision',d.revision,'created_at',d.created_at,'updated_at',d.updated_at,'device_name',d.device_name,
+        'trusted',d.trusted,'revoked_at',d.revoked_at,'key_epoch',d.key_epoch) AS item,d.created_at
+      FROM public.devices d WHERE d.owner_id=(s->>'owner_id')::uuid
+      ORDER BY (d.id=(s->>'device_id')::uuid) DESC,(d.revoked_at IS NULL) DESC,d.created_at DESC,d.id LIMIT 100) x;
   ELSE RETURN NULL;END IF;
   RETURN jsonb_build_object('items',rows,'next_cursor',NULL);
 END $f$;
@@ -553,11 +567,21 @@ BEGIN
   INSERT INTO identity_control.authentication_budgets(budget_key,window_start,n) VALUES(p->>'key',at_time,0) ON CONFLICT DO NOTHING;
   SELECT * INTO r FROM identity_control.authentication_budgets WHERE budget_key=p->>'key' FOR UPDATE;
   IF at_time>=r.window_start+make_interval(secs=>seconds) THEN
-    UPDATE identity_control.authentication_budgets SET n=0,window_start=at_time WHERE budget_key=r.budget_key;r.n:=0;
+    UPDATE identity_control.authentication_budgets SET n=0,window_start=at_time WHERE budget_key=r.budget_key;r.n:=0;r.window_start:=at_time;
+  END IF;
+  -- Returns one reservation taken by an earlier increment in the same window.
+  -- Callers reserve before verifying a credential and release only when the
+  -- attempt was not a credential failure, so concurrent attempts cannot all pass
+  -- a check that precedes their increments.
+  IF coalesce((p->>'release')::boolean,false) THEN
+    IF r.n>0 AND p->>'window' IS NOT NULL AND r.window_start=(p->>'window')::timestamptz THEN
+      UPDATE identity_control.authentication_budgets SET n=r.n-1 WHERE budget_key=r.budget_key;
+    END IF;
+    RETURN jsonb_build_object('allowed',true);
   END IF;
   IF r.n>=lim THEN RETURN jsonb_build_object('allowed',false);END IF;
   IF coalesce((p->>'increment')::boolean,false) THEN UPDATE identity_control.authentication_budgets SET n=r.n+1 WHERE budget_key=r.budget_key;END IF;
-  RETURN jsonb_build_object('allowed',true);
+  RETURN jsonb_build_object('allowed',true,'window',r.window_start);
 END $f$;
 
 CREATE FUNCTION public.classroom_web_session_valid(uid uuid,sid uuid,did uuid,epoch bigint,expected_role text) RETURNS boolean
