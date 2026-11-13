@@ -7,7 +7,7 @@ sys.path.insert(0,str(R/'web/backend'))
 from classroom_web.test_support import validate_test_database_target,SYNTHETIC_PASSWORD
 import psycopg
 
-assert len(sys.argv)==2 and sys.argv[1] in ('auth','full','unit','browser')
+assert len(sys.argv)==2 and sys.argv[1] in ('auth','full','unit','browser','parity','review')
 mode=sys.argv[1];tag=uuid.uuid4().hex;folder=W/('pg-'+tag);folder.mkdir()
 pgbin=R/'work/pr03b/toolchains/pg17.11-win64-53b5364a5a04e8ec/runtime/Library/bin'
 assert (pgbin/'postgres.exe').is_file() and not (folder/'data').exists()
@@ -41,7 +41,7 @@ try:
     url=validate_test_database_target(f'postgresql+psycopg://{admin}@127.0.0.1:{port}/pr02a_control',environ=env)
     env['PR02A_TEST_ADMIN_URL']=url.render_as_string(hide_password=False)
     env['PR03A_THIRD_ROUND_PG_LOG']=str(pg_log)
-    selected=['tests/integration/test_authentication.py','tests/integration/test_manual_recovery.py','tests/integration/test_auth_mail.py'] if mode=='auth' else ['tests/unit'] if mode=='unit' else ['tests/integration/test_auth_browser.py'] if mode=='browser' else ['tests']
+    selected=['tests/integration/test_authentication.py','tests/integration/test_manual_recovery.py','tests/integration/test_auth_mail.py'] if mode=='auth' else ['tests/unit'] if mode=='unit' else ['tests/integration/test_auth_browser.py'] if mode=='browser' else ['tests/integration/test_enumeration_parity.py','-rP'] if mode=='parity' else ['tests/integration/test_auth_review_fixes.py','tests/integration/test_auth_mail.py'] if mode=='review' else ['tests']
     test=call([sys.executable,'-B','-m','pytest',*selected,'-q','--basetemp='+str(folder/'pytest'),'-o','cache_dir='+str(W/'cache/pytest'),
                '--junitxml='+str(O/('backend-'+tag+'.xml'))],cwd=R/'web/backend',timeout=900)
 finally:
