@@ -15,11 +15,12 @@ const ajv = new Ajv2020({ strict: false, allErrors: true });
 addFormats(ajv);
 ajv.addSchema({ $id: 'https://classroom.invalid/openapi', components: openapi.components });
 ajv.addSchema(events, 'https://classroom.invalid/events');
+ajv.addSchema(read('identity-control.schema.json'), 'https://classroom.invalid/identity-control');
 
 describe('approved PR-01 contract examples', () => {
   for (const item of cases) {
     it(item.name, () => {
-      const base = item.schema_file === 'openapi.json' ? 'https://classroom.invalid/openapi' : 'https://classroom.invalid/events';
+      const base = item.schema_file === 'openapi.json' ? 'https://classroom.invalid/openapi' : item.schema_file === 'identity-control.schema.json' ? 'https://classroom.invalid/identity-control' : 'https://classroom.invalid/events';
       const validate = ajv.compile({ $ref: base + item.schema_pointer });
       expect(validate(item.value), JSON.stringify(validate.errors)).toBe(item.expected_valid);
     });

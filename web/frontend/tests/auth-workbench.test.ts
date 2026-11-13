@@ -1,0 +1,69 @@
+// @vitest-environment jsdom
+import {createElement} from 'react';
+import {webcrypto} from 'node:crypto';
+import {afterEach,describe,expect,it,vi} from 'vitest';
+import {render,screen,fireEvent,waitFor,cleanup} from '@testing-library/react';
+import AuthWorkbench from '../src/app/AuthWorkbench';
+
+const csrf='c'.repeat(43), anonymous='e'.repeat(43);
+const user={id:crypto.randomUUID(),revision:1,created_at:'2026-11-10T00:00:00Z',updated_at:'2026-11-10T00:00:00Z',email:'synthetic@example.test',nickname:'',school:'',major:'',role:'student',status:'active',mfa_enabled:false};
+const session={user,session_id:crypto.randomUUID(),device_id:crypto.randomUUID(),csrf_token:csrf};
+const unauthenticated=()=>Response.json({error:{code:'UNAUTHENTICATED'}},{status:401});
+const bootstrap=(value=anonymous)=>Response.json({csrf_token:value,expires_at:'2026-11-12T00:00:00Z'});
+const enter=(label:string,value:string)=>fireEvent.change(screen.getByLabelText(label,{exact:true}),{target:{value}});
+afterEach(()=>{cleanup();vi.unstubAllGlobals();});
+
+describe('authentication UI context recovery',()=>{
+  it.each([false,true])('checks a sensitive 403, cookie missing=%s',async(missing)=>{
+    let sessionReads=0,writes=0,probes=0;
+    vi.stubGlobal('fetch',vi.fn(async(url:RequestInfo|URL)=>{
+      const path=String(url);
+      if(path.endsWith('/auth/session'))return ++sessionReads===1||!missing?Response.json(session):unauthenticated();
+      if(path.endsWith('/auth/csrf')){probes++;return bootstrap(missing?anonymous:csrf);}
+      writes++;return Response.json({error:{code:'FORBIDDEN'}},{status:403});
+    }));
+    render(createElement(AuthWorkbench));await screen.findByRole('heading',{name:user.email});
+    enter('当前密码','synthetic-password');enter('新密码','synthetic-new-password');
+    fireEvent.click(screen.getByRole('button',{name:'更改密码',exact:true}));
+    if(missing){await screen.findByRole('heading',{name:'登录课间'});expect(screen.queryByRole('heading',{name:user.email})).toBeNull();}
+    else {await screen.findByText('当前操作未获授权，请刷新页面后重试。');expect(screen.getByRole('heading',{name:user.email})).toBeDefined();}
+    expect(writes).toBe(1);expect(probes).toBe(missing?2:1);
+  });
+  it.each(['mfa','recovery'] as const)('can explicitly restart a rejected %s flow even when preauth CSRF stays valid',async(mode)=>{
+    vi.stubGlobal('crypto',webcrypto);
+    let logins=0,mfaWrites=0;const first=crypto.randomUUID(),second=crypto.randomUUID();
+    const challenges:string[]=[];
+    vi.stubGlobal('fetch',vi.fn(async(url:RequestInfo|URL,options?:RequestInit)=>{
+      const path=String(url);
+      if(path.endsWith('/auth/session'))return unauthenticated();
+      if(path.endsWith('/auth/csrf'))return bootstrap();
+      if(path.endsWith('/auth/login')){logins++;return Response.json({state:'mfa_required',challenge_id:logins===1?first:second,user:null,device_id:null,csrf_token:null,receiver_challenge:'b'.repeat(43)});}
+      if(path.endsWith('/auth/login/mfa')){
+        mfaWrites++;challenges.push(JSON.parse(String(options?.body)).challenge_id);
+        if(mode==='mfa')return unauthenticated();
+        return Response.json({state:'recovery_required',challenge_id:null,user:null,device_id:null,csrf_token:null,recovery:{flow_id:crypto.randomUUID(),scope:'mfa_rebind',state:'pending',expires_at:'2026-11-12T00:00:00Z',csrf_token:anonymous,receiver_challenge:'b'.repeat(43)}});
+      }
+      if(path.endsWith('/auth/recovery/enroll'))return unauthenticated();
+      throw new Error('unexpected route');
+    }));
+    render(createElement(AuthWorkbench));await screen.findByRole('heading',{name:'登录课间'});
+    const login=async()=>{enter('邮箱',user.email);enter('密码','synthetic-password');fireEvent.click(screen.getByRole('button',{name:'继续',exact:true}));await screen.findByRole('heading',{name:'验证登录'});};
+    await login();
+    if(mode==='recovery')fireEvent.click(screen.getByLabelText('使用恢复码'));
+    enter(mode==='recovery'?'恢复码':'验证器验证码',mode==='recovery'?'synthetic-recovery':'123456');
+    fireEvent.click(screen.getByRole('button',{name:'验证',exact:true}));
+    if(mode==='recovery'){
+      await screen.findByRole('heading',{name:'更换验证器'});enter('再次验证当前密码','synthetic-password');
+      fireEvent.click(screen.getByRole('button',{name:'生成新验证器'}));
+    }
+    await screen.findByText(/凭据无效或已过期/);
+    expect(mfaWrites).toBe(1);expect(challenges).toEqual([first]);
+    fireEvent.click(screen.getByRole('button',{name:'重新开始登录'}));
+    await screen.findByRole('heading',{name:'登录课间'});expect((screen.getByLabelText('密码') as HTMLInputElement).value).toBe('');
+    await login();expect(logins).toBe(2);expect(mfaWrites).toBe(1);
+    expect(screen.queryByRole('heading',{name:'更换验证器'})).toBeNull();
+    // A second explicit submission must use the newly issued challenge.
+    enter('验证器验证码','234567');fireEvent.click(screen.getByRole('button',{name:'验证',exact:true}));
+    await waitFor(()=>expect(challenges).toEqual([first,second]));
+  });
+});
