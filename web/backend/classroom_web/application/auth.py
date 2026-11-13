@@ -91,6 +91,11 @@ class AuthService:
         if kind=='session':return self.context(ctx)
         return self._need(self._call('protocol_context',dict(action='read',kind='auto_recovery' if kind=='recovery' else 'preauth',token_hash=digest(kind,token))))
 
+    def preauth_receipt(self,ctx,operation,key,body):
+        """Idempotency scope for a pre-authentication write: this context, operation, key and body."""
+        return dict(context_hash=digest('preauth',ctx.preauth),operation=operation,operation_key=key,
+                    commitment=self.crypto.commitment('operation',dict(purpose=operation,body=body)))
+
     def csrf(self,ctx):
         clear_session=False;clear_recovery=False
         if ctx.recovery:

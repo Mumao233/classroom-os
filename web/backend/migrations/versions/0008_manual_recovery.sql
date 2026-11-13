@@ -688,6 +688,27 @@ BEGIN
   RETURN '{}'::jsonb;
 END $f$;
 
+-- Idempotency receipt for the invitation routes (register, verify, resend), which commit
+-- through the separate identity login. It runs inside that caller's transaction, so the
+-- receipt is stored exactly when the mutation commits and vanishes when it is rejected.
+-- Returns 'recorded' for a first use, 'replayed' for the same key and body, 'mismatch' for
+-- the same key with another body, and NULL for malformed input.
+CREATE FUNCTION identity_api.preauth_receipt(p jsonb) RETURNS text
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,public,pg_temp AS $f$
+DECLARE prior text;
+BEGIN
+  IF coalesce(p->>'context_hash','') !~ '^[0-9a-f]{64}$' OR coalesce(p->>'commitment','') !~ '^[0-9a-f]{64}$'
+      OR coalesce(p->>'operation','') NOT IN('register','verifyEmail','resendVerification')
+      OR coalesce(p->>'operation_key','') !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN RETURN NULL;END IF;
+  -- Serializes concurrent submissions of one key, so the second one sees the first receipt.
+  PERFORM pg_advisory_xact_lock(hashtextextended((p->>'context_hash')||':'||(p->>'operation')||':'||(p->>'operation_key'),7303003));
+  SELECT commitment INTO prior FROM public.preauth_receipts WHERE context_hash=p->>'context_hash' AND operation=p->>'operation' AND operation_key=(p->>'operation_key')::uuid;
+  IF FOUND THEN RETURN CASE WHEN prior=p->>'commitment' THEN 'replayed' ELSE 'mismatch' END;END IF;
+  INSERT INTO public.preauth_receipts(context_hash,operation,operation_key,commitment,result)
+    VALUES(p->>'context_hash',p->>'operation',(p->>'operation_key')::uuid,p->>'commitment','{}'::jsonb);
+  RETURN 'recorded';
+END $f$;
+
 CREATE FUNCTION identity_api.claim_auth_mail(p jsonb) RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,identity_control,pg_temp AS $f$
 DECLARE item record;n timestamptz:=clock_timestamp();items jsonb:='[]';lim integer;
@@ -734,6 +755,7 @@ END $f$;
 -- FINAL CONTROL PRIVILEGES: keep this section after all control definitions.
 GRANT CREATE ON SCHEMA identity_api TO classroom_web_session_writer;
 ALTER FUNCTION identity_api.queue_auth_mail(jsonb) OWNER TO classroom_web_session_writer;
+ALTER FUNCTION identity_api.preauth_receipt(jsonb) OWNER TO classroom_web_session_writer;
 REVOKE CREATE ON SCHEMA identity_api FROM classroom_web_session_writer;
 GRANT CREATE ON SCHEMA identity_api TO classroom_web_auth_mail_writer;
 ALTER FUNCTION identity_api.claim_auth_mail(jsonb) OWNER TO classroom_web_auth_mail_writer;
@@ -774,3 +796,6 @@ ALTER FUNCTION identity_api.verify_control_bridge(jsonb) OWNER TO classroom_web_
 REVOKE CREATE ON SCHEMA identity_api FROM classroom_web_session_writer;
 GRANT EXECUTE ON FUNCTION identity_api.control_guard(jsonb),identity_api.control_executor(jsonb) TO classroom_web_manual_status_reader;
 REVOKE ALL ON ALL FUNCTIONS IN SCHEMA identity_api FROM PUBLIC;
+-- The identity control-plane role gets exactly one function here: the receipt check above.
+GRANT USAGE ON SCHEMA identity_api TO classroom_web_identity;
+GRANT EXECUTE ON FUNCTION identity_api.preauth_receipt(jsonb) TO classroom_web_identity;

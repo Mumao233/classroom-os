@@ -41,7 +41,7 @@ class IdentityService:
             raise IdentityRejected("INVALID_INPUT")
         return self.repository.set_capacity(admin, capacity, self.admin_window)
 
-    def register(self, email, password, invitation_token, nickname=None, *, password_approval=None):
+    def register(self, email, password, invitation_token, nickname=None, *, password_approval=None, receipt=None):
         email = normalize_email(email)
         if nickname is not None and (not isinstance(nickname, str) or len(nickname) > 100):
             raise IdentityRejected("INVALID_INPUT")
@@ -59,11 +59,16 @@ class IdentityService:
         return self.repository.register(email, hashed, invite_digest,
                                         token_digest(secrets.token_urlsafe(32)),
                                         {} if nickname is None else {"nickname": nickname},
-                                        before_commit=lambda: self.password_policy.current(approval))
+                                        before_commit=lambda: self.password_policy.current(approval),
+                                        **({} if receipt is None else {"receipt": receipt}))
 
-    def resend(self, email, invitation_token=None):
+    def resend(self, email, invitation_token=None, *, receipt=None):
         self.repository.resend(normalize_email(email), token_digest(invitation_token) if invitation_token is not None else None,
-                               token_digest(secrets.token_urlsafe(32)), self.resend_interval)
+                               token_digest(secrets.token_urlsafe(32)), self.resend_interval,
+                               **({} if receipt is None else {"receipt": receipt}))
+
+    def record_receipt(self, receipt):
+        self.repository.record_receipt(receipt)
 
     def dispatch_mail(self, adapter: VerificationMail) -> bool:
         token = secrets.token_urlsafe(32)
@@ -77,5 +82,5 @@ class IdentityService:
         self.repository.complete_mail(claim, digest)
         return True
 
-    def activate(self, token):
-        return self.repository.activate(token_digest(token))
+    def activate(self, token, *, receipt=None):
+        return self.repository.activate(token_digest(token), **({} if receipt is None else {"receipt": receipt}))

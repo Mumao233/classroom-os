@@ -153,3 +153,58 @@ def test_an_unknown_outcome_is_never_advertised_as_retryable():
     # The write may already have committed; the contract forbids a blind retry.
     assert flag('RESULT_UNKNOWN',503) is False
     assert flag('STORAGE_UNAVAILABLE',503) is True and flag('RATE_LIMITED',429) is True and flag('UNAUTHENTICATED',401) is False
+
+
+def test_invitation_routes_replay_one_idempotency_key_without_applying_it_twice(auth):
+    import json,secrets
+    from datetime import timedelta
+    from pathlib import Path
+    from classroom_web.application.identity import IdentityService
+    from classroom_web.entrypoints.http import create_app
+    from classroom_web.infrastructure.identity_passwords import Argon2PasswordHasher
+    from classroom_web.infrastructure.identity_repository import PgIdentityRepository
+    a=auth;role='pr02a_identity_login_'+uuid4().hex;invitation=secrets.token_urlsafe(32);email=uuid4().hex+'@example.test'
+    with a.pg.admin.begin() as sql:
+        sql.exec_driver_sql(f'CREATE ROLE "{role}" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS');sql.exec_driver_sql(f'GRANT classroom_web_identity TO "{role}"')
+        sql.execute(sa.text("INSERT INTO invitations(id,token_hash,status,expires_at,created_by) VALUES(:i,:h,'open',clock_timestamp()+interval '1 day',:u)"),
+                    dict(i=uuid4(),h=hashlib.sha256(invitation.encode()).digest(),u=a.uid))
+    repository=PgIdentityRepository(a.pg.admin_url.set(username=role).render_as_string(hide_password=False))
+    # A 60 second resend interval, as deployed: an immediate resend changes nothing.
+    service=IdentityService(repository,Argon2PasswordHasher(),admin_reauthentication_window=timedelta(minutes=5),resend_interval=timedelta(seconds=60),password_policy=a.policy)
+    contract=json.loads((Path(__file__).resolve().parents[4]/'docs/web-alpha/architecture/contracts/openapi.json').read_text(encoding='utf8'))
+    def counts():
+        with a.pg.admin.connect() as sql:
+            return (sql.scalar(sa.text('SELECT count(*) FROM pending_registrations WHERE normalized_email=:e'),dict(e=email)),
+                    sql.scalar(sa.text('SELECT count(*) FROM identity_mail_intents m JOIN pending_registrations p ON p.id=m.pending_registration_id WHERE p.normalized_email=:e'),dict(e=email)))
+    try:
+        with TestClient(create_app(auth=a.service,contract=contract,origin='https://testserver',identity=service),base_url='https://testserver') as client:
+            csrf=client.get(BASE+'/auth/csrf').json()['csrf_token']
+            def send(path,body,key):return client.post(BASE+path,json=body,headers={**HEADERS,'X-CSRF-Token':csrf,'Idempotency-Key':key})
+            body=dict(email=email,password='synthetic-registration-password',invitation_token=invitation);key=str(uuid4())
+            first=send('/auth/register',body,key);assert first.status_code in (200,201,202) and first.json()['accepted'],first.text
+            # The acknowledgement was lost. Without the receipt the repeat is refused as an existing pending registration.
+            again=send('/auth/register',body,key);assert again.status_code==first.status_code and again.json()['accepted'],again.text
+            assert counts()==(1,1)
+            changed=send('/auth/register',dict(body,password='another-synthetic-password'),key)
+            assert changed.status_code==409 and changed.json()['error']['code']=='IDEMPOTENCY_MISMATCH',changed.text
+            # A new key is a new request and gets the ordinary rejection; it leaves no receipt, so it stays rejected.
+            other=str(uuid4())
+            for _ in range(2):assert send('/auth/register',body,other).status_code==422
+            assert counts()==(1,1)
+            # Resend inside the interval changes nothing but is acknowledged. Repeating that key once the
+            # interval has passed must still change nothing, while a new request then does resend.
+            resend=str(uuid4());assert send('/auth/resend-verification',dict(email=email),resend).status_code==first.status_code
+            assert counts()==(1,1)
+            with a.pg.admin.begin() as sql:
+                sql.execute(sa.text("UPDATE identity_mail_intents SET created_at=created_at-interval '5 minutes' WHERE pending_registration_id IN (SELECT id FROM pending_registrations WHERE normalized_email=:e)"),dict(e=email))
+            assert send('/auth/resend-verification',dict(email=email),resend).status_code==first.status_code
+            assert counts()==(1,1)
+            fresh=str(uuid4())
+            for _ in range(3):assert send('/auth/resend-verification',dict(email=email),fresh).status_code==first.status_code
+            assert counts()==(1,2)
+            mismatch=send('/auth/resend-verification',dict(email=uuid4().hex+'@example.test'),fresh)
+            assert mismatch.status_code==409 and mismatch.json()['error']['code']=='IDEMPOTENCY_MISMATCH',mismatch.text
+    finally:
+        repository.dispose()
+        with a.pg.admin.begin() as sql:
+            sql.exec_driver_sql(f'DROP OWNED BY "{role}"');sql.exec_driver_sql(f'DROP ROLE "{role}"')

@@ -125,16 +125,23 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
         if path in ('/auth/register','/auth/verify-email','/auth/resend-verification'):
             if identity is None:raise AuthRejected('SERVICE_DISABLED',503)
             auth.require_csrf(ctx,'preauth')
+            # The same context, key and body is answered with the first acknowledgement and is
+            # not applied again; the receipt commits in the same transaction as the change.
+            receipt=auth.preauth_receipt(ctx,{'/auth/register':'register','/auth/verify-email':'verifyEmail'}.get(path,'resendVerification'),key,body)
             if path=='/auth/register':
                 approval=auth.password_policy.validate(body['password'],'student')
                 if auth.hash_gate is None:raise AuthRejected('SERVICE_DISABLED',503)
-                auth.hash_gate(lambda:identity.register(body['email'],body['password'],body['invitation_token'],body.get('nickname'),password_approval=approval))
-            elif path=='/auth/verify-email':identity.activate(body['token'])
+                auth.hash_gate(lambda:identity.register(body['email'],body['password'],body['invitation_token'],body.get('nickname'),password_approval=approval,receipt=receipt))
+            elif path=='/auth/verify-email':identity.activate(body['token'],receipt=receipt)
             else:
                 # Eligible pending registration, missing recipient, stale
                 # invitation and resend interval all have one public receipt.
-                try:identity.resend(body['email'])
-                except IdentityRejected:pass
+                try:identity.resend(body['email'],receipt=receipt)
+                except IdentityRejected as error:
+                    if error.code=='IDEMPOTENCY_MISMATCH':raise
+                    # Nothing changed. Keep the acknowledgement, so repeating this key after
+                    # the resend interval does not start sending mail.
+                    identity.record_receipt(receipt)
             return AuthReply({})
         raise AuthRejected('SERVICE_DISABLED',503)
 
@@ -198,7 +205,7 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
                 return response
             except AuthRejected as error:return failure(error,request_id)
             except TimeoutError:return failure(AuthRejected('RESULT_UNKNOWN' if dispatched else 'RATE_LIMITED',503 if dispatched else 429),request_id)
-            except IdentityRejected:return failure(AuthRejected('VALIDATION_FAILED',422),request_id)
+            except IdentityRejected as error:return failure(AuthRejected('IDEMPOTENCY_MISMATCH',409) if error.code=='IDEMPOTENCY_MISMATCH' else AuthRejected('VALIDATION_FAILED',422),request_id)
             except Exception as error:
                 app.state.errors.append({'kind':type(error).__name__,'frames':[{'function':f.name,'line':f.lineno} for f in traceback.extract_tb(error.__traceback__)[-5:]]})
                 return failure(AuthRejected('STORAGE_UNAVAILABLE',503),request_id)

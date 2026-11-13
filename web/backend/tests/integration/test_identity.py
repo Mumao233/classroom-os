@@ -493,3 +493,30 @@ def test_identity_and_learning_database_roles_cannot_read_each_others_data(ident
                 connection.execute(sa.select(tables["courses"]))
     finally:
         identity_engine.dispose()
+
+
+def test_verification_replayed_with_one_idempotency_key_activates_once(identity):
+    """The receipt is checked by the identity login itself, inside the activating transaction."""
+    invite, pending, token = queued(identity)
+    digest = hashlib.sha256(token.encode()).digest()
+    receipt = dict(context_hash="a" * 64, operation="verifyEmail", operation_key=str(uuid4()), commitment="b" * 64)
+    user_id = identity.repository.activate(digest, receipt=receipt)
+    assert user_id is not None
+    # The acknowledgement was lost and the browser repeats the request: acknowledged, not applied again
+    # (without the receipt this second call is rejected, because the token is already consumed).
+    assert identity.repository.activate(digest, receipt=receipt) is None
+    with identity.admin.connect() as connection:
+        assert connection.scalar(sa.text("SELECT count(*) FROM users WHERE role='student'")) == 1
+    with pytest.raises(IdentityRejected) as error:
+        identity.repository.activate(digest, receipt=dict(receipt, commitment="c" * 64))
+    assert error.value.code == "IDEMPOTENCY_MISMATCH"
+    # A rejected attempt leaves no receipt behind, so it is evaluated again rather than acknowledged.
+    stale = dict(receipt, operation_key=str(uuid4()))
+    for _ in range(2):
+        with pytest.raises(IdentityRejected) as error:
+            identity.repository.activate(digest, receipt=stale)
+        assert error.value.code == "VERIFICATION_INVALID"
+    with pytest.raises(IdentityRejected):
+        identity.repository.record_receipt(dict(receipt, operation="somethingElse"))
+    with identity.admin.connect() as connection:
+        assert connection.scalar(sa.text("SELECT count(*) FROM preauth_receipts")) == 1

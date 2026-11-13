@@ -2,11 +2,13 @@
 from contextlib import contextmanager
 from datetime import timedelta
 import hashlib
+import json
 from uuid import uuid4
 
 import sqlalchemy as sa
 from sqlalchemy.engine import make_url
 
+from ..domain.auth import AuthRejected
 from ..domain.identity import AuthorizationDenied, IdentityRejected, Principal
 from .identity_schema import tables
 from .schema import users
@@ -25,6 +27,7 @@ class PgIdentityRepository:
 
     @contextmanager
     def _transaction(self):
+        phase = "executing"
         try:
             with self.engine.begin() as connection:
                 safe = connection.scalar(sa.text("""
@@ -43,8 +46,34 @@ class PgIdentityRepository:
                 connection.execute(sa.text("SET LOCAL statement_timeout='15s'"))
                 connection.execute(sa.text("SET LOCAL lock_timeout='5s'"))
                 yield connection
+                phase = "committing"
         except sa.exc.IntegrityError:
             raise IdentityRejected() from None
+        except sa.exc.DBAPIError as error:
+            # A connection lost while COMMIT was in flight may or may not have committed the
+            # registration or consumed the token: that is unknown, never an ordinary retry.
+            state = getattr(error.orig, "sqlstate", None)
+            if phase == "committing" and (error.connection_invalidated or state is None or state.startswith("08")):
+                raise AuthRejected("RESULT_UNKNOWN", 503) from None
+            raise
+
+    @staticmethod
+    def _replayed(connection, receipt):
+        """True when this exact request already committed under the same idempotency key."""
+        if receipt is None:
+            return False
+        outcome = connection.scalar(sa.text("SELECT identity_api.preauth_receipt(CAST(:p AS jsonb))"),
+                                    {"p": json.dumps(receipt, separators=(",", ":"))})
+        if outcome == "mismatch":
+            raise IdentityRejected("IDEMPOTENCY_MISMATCH")
+        if outcome not in ("recorded", "replayed"):
+            raise IdentityRejected()
+        return outcome == "replayed"
+
+    def record_receipt(self, receipt):
+        """Remember an acknowledgement for a request that changed nothing."""
+        with self._transaction() as connection:
+            self._replayed(connection, receipt)
 
     @staticmethod
     def _now(connection):
@@ -122,9 +151,11 @@ class PgIdentityRepository:
                 invite["email_binding"] is not None and invite["email_binding"] != email):
             raise IdentityRejected("INVITATION_UNAVAILABLE")
 
-    def register(self, email, password_hash, invite_digest, proof_digest, profile, *, before_commit=None):
+    def register(self, email, password_hash, invite_digest, proof_digest, profile, *, before_commit=None, receipt=None):
         pending, mail = tables["pending_registrations"], tables["identity_mail_intents"]
         with self._transaction() as connection:
+            if self._replayed(connection, receipt):
+                return None
             control = self._control(connection)
             if not control["registration_enabled"]:
                 raise IdentityRejected()
@@ -148,9 +179,11 @@ class PgIdentityRepository:
                 before_commit()
             return uid
 
-    def resend(self, email, invite_digest, invalid_digest, interval):
+    def resend(self, email, invite_digest, invalid_digest, interval, *, receipt=None):
         pending, mail = tables["pending_registrations"], tables["identity_mail_intents"]
         with self._transaction() as connection:
+            if self._replayed(connection, receipt):
+                return
             self._control(connection)
             if invite_digest is None:
                 invitations = tables["invitations"]
@@ -232,9 +265,11 @@ class PgIdentityRepository:
             connection.execute(mail.update().where(mail.c.id == claim["id"], mail.c.state == "sending",
                 mail.c.lease_until == claim["lease_until"]).values(state="sent", sent_at=self._now(connection), lease_until=None))
 
-    def activate(self, proof_digest):
+    def activate(self, proof_digest, *, receipt=None):
         pending, invite = tables["pending_registrations"], tables["invitations"]
         with self._transaction() as connection:
+            if self._replayed(connection, receipt):
+                return None
             control = self._control(connection)
             hint = connection.execute(sa.select(pending.c.id, pending.c.invitation_id).where(
                 pending.c.email_proof_hash == proof_digest)).mappings().one_or_none()
