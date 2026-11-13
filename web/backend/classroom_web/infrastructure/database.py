@@ -68,8 +68,9 @@ class Database:
                 raise PermissionError("runtime must not be superuser, BYPASSRLS or table owner")
             connection.execute(text("SET LOCAL search_path = public, pg_temp"))
             connection.execute(text("SET LOCAL timezone = 'UTC'"))
-            connection.execute(text("SET LOCAL statement_timeout = '15s'"))
-            connection.execute(text("SET LOCAL lock_timeout = '5s'"))
+            from .auth_deadlines import remaining
+            left=remaining();ms=15000 if left is None else max(1,min(15000,int(left*1000)))
+            connection.execute(text("SELECT set_config('statement_timeout',:statement,true),set_config('lock_timeout',:lock,true)"),{'statement':str(ms),'lock':str(min(5000,ms))})
             connection.execute(text("SELECT set_config('app.owner_id', :owner, true)"),
                                {"owner": str(context.owner_id)})
             if not connection.scalar(text("SELECT classroom_web_owner_active()")):
@@ -89,12 +90,13 @@ class Database:
             yield UnitOfWork(connection, catalog, PgTombstoneRepository(catalog),
                              PgTaskRepository(connection, context.owner_id, catalog, events, receipts),
                              events, receipts)
+            remaining()
 
     def dispose(self):
         self.engine.dispose()
 
     @contextmanager
-    def authorized_transaction(self, principal, *, isolation_level='READ COMMITTED'):
+    def authorized_transaction(self, principal, *, isolation_level='READ COMMITTED',activity=False):
         """Web authorization port. PR-03b must supply verified session evidence.
 
         Activation does not return a Principal. Worker/internal OwnerContext UoW
@@ -110,6 +112,12 @@ class Database:
                 if principal.expires_at <= now or not tx.connection.scalar(text(
                         'SELECT classroom_web_principal_valid(:uid,:epoch,:role)'),
                         {'uid': principal.user_id, 'epoch': principal.security_epoch, 'role': principal.role}):
+                    raise AuthorizationDenied()
+                check='classroom_web_touch_session' if activity else 'classroom_web_session_valid'
+                if not tx.connection.scalar(text(
+                        f'SELECT {check}(:uid,:sid,:did,:epoch,:role)'),
+                        {'uid':principal.user_id,'sid':principal.session_id,'did':principal.device_id,
+                         'epoch':principal.security_epoch,'role':principal.role}):
                     raise AuthorizationDenied()
                 yield tx
         except InactiveOwner:

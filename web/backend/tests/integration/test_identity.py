@@ -38,8 +38,25 @@ def principal(user_id, role="student", epoch=1):
                      reauthenticated_at=now, expires_at=now + timedelta(minutes=30))
 
 
+def provision_internal_session(admin, user):
+    """Extend the existing trusted test adapter with required PG session facts.
+
+    This is migrator-only synthetic setup, never an HTTP credential issuer.
+    Formal password/TOTP issuance is tested independently in test_authentication.
+    """
+    with admin.begin() as c:
+        factor=c.scalar(sa.text("SELECT id FROM mfa_credentials WHERE owner_id=:u AND state='active'"),dict(u=user.user_id))
+        if factor is None and user.mfa_level=='totp':
+            factor=uuid4()
+            c.execute(sa.text("INSERT INTO mfa_credentials(id,owner_id,state,encrypted_seed,confirmed_at) VALUES(:id,:u,'active','synthetic-internal-adapter-not-a-real-seed',clock_timestamp())"),dict(id=factor,u=user.user_id))
+        c.execute(sa.text("INSERT INTO devices(id,owner_id,device_name) VALUES(:d,:u,'Synthetic trusted test adapter')"),dict(d=user.device_id,u=user.user_id))
+        c.execute(sa.text("INSERT INTO auth_sessions(id,owner_id,device_id,token_hash,logical_session_id,security_epoch,role,mfa_level,factor_id,idle_deadline,absolute_deadline) VALUES(:s,:u,:d,:h,:s,:e,:r,:m,:f,:until,:until)"),
+                  dict(s=user.session_id,u=user.user_id,d=user.device_id,h=hashlib.sha256(str(user.session_id).encode()).hexdigest(),e=user.security_epoch,r=user.role,m=user.mfa_level,f=factor,until=user.expires_at))
+    return user
+
+
 @pytest.fixture
-def identity(pg):
+def identity(pg,password_policy):
     marker = uuid4().hex
     name, ilogin, rlogin = ("pr02a_identity_" + marker,
                             "pr02a_identity_login_" + marker,
@@ -77,9 +94,10 @@ def identity(pg):
         runtime = Database(rurl.render_as_string(hide_password=False))
         service = IdentityService(repository, Argon2PasswordHasher(),
                                   admin_reauthentication_window=timedelta(minutes=5),
-                                  resend_interval=timedelta(0))
+                                  resend_interval=timedelta(0),password_policy=password_policy)
+        admin_principal=provision_internal_session(admin,principal(admin_id,"admin"))
         yield SimpleNamespace(admin=admin, repository=repository, service=service,
-                              runtime=runtime, admin_principal=principal(admin_id, "admin"),
+                              runtime=runtime, admin_principal=admin_principal,
                               admin_id=admin_id, iurl=iurl, rurl=rurl, cfg=cfg)
     finally:
         if repository is not None:
@@ -110,7 +128,7 @@ def queued(identity, email="synthetic-student@example.test", invite=None):
 def activated(identity, email="synthetic-student@example.test"):
     invite, pending, token = queued(identity, email)
     user_id = identity.service.activate(token)
-    return principal(user_id), invite, pending, token
+    return provision_internal_session(identity.admin,principal(user_id)), invite, pending, token
 
 
 def rows(identity, name):

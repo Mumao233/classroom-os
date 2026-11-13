@@ -16,13 +16,14 @@ def token_digest(token: str) -> bytes:
 class IdentityService:
     def __init__(self, repository: IdentityRepository, hasher: PasswordHasher, *,
                  admin_reauthentication_window: timedelta,
-                 resend_interval: timedelta = timedelta(seconds=60)):
+                 resend_interval: timedelta = timedelta(seconds=60), password_policy=None):
         if admin_reauthentication_window <= timedelta(0) or resend_interval < timedelta(0):
             raise ValueError("explicit positive admin window and nonnegative resend interval required")
         self.repository = repository
         self.hasher = hasher
         self.admin_window = admin_reauthentication_window
         self.resend_interval = resend_interval
+        self.password_policy = password_policy
 
     def create_invitation(self, admin, *, kind="single_use", email=None):
         if kind not in ("single_use", "email_bound") or (kind == "email_bound") != (email is not None):
@@ -40,17 +41,25 @@ class IdentityService:
             raise IdentityRejected("INVALID_INPUT")
         return self.repository.set_capacity(admin, capacity, self.admin_window)
 
-    def register(self, email, password, invitation_token, nickname=None):
+    def register(self, email, password, invitation_token, nickname=None, *, password_approval=None):
         email = normalize_email(email)
         if nickname is not None and (not isinstance(nickname, str) or len(nickname) > 100):
             raise IdentityRejected("INVALID_INPUT")
         # Validation remains in the use case even with a substituted hasher.
-        if not isinstance(password, str) or not 12 <= len(password) <= 1024:
+        if not isinstance(password, str) or not 6 <= len(password) <= 1024 or any(0xD800 <= ord(c) <= 0xDFFF for c in password):
             raise IdentityRejected("INVALID_INPUT")
+        from ..domain.auth import AuthRejected
+        if self.password_policy is None:
+            raise AuthRejected('SERVICE_DISABLED',503)
+        approval = self.password_policy.validate(password, 'student')
+        if password_approval is not None and password_approval != approval:
+            raise AuthRejected('SERVICE_DISABLED',503)
         invite_digest = token_digest(invitation_token)
-        return self.repository.register(email, self.hasher.hash(password), invite_digest,
+        hashed = self.hasher.hash(password, role='student')
+        return self.repository.register(email, hashed, invite_digest,
                                         token_digest(secrets.token_urlsafe(32)),
-                                        {} if nickname is None else {"nickname": nickname})
+                                        {} if nickname is None else {"nickname": nickname},
+                                        before_commit=lambda: self.password_policy.current(approval))
 
     def resend(self, email, invitation_token=None):
         self.repository.resend(normalize_email(email), token_digest(invitation_token) if invitation_token is not None else None,

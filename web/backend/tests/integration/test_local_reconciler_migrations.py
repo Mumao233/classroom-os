@@ -187,7 +187,7 @@ def test_0005_incremental_upgrade_preserves_19_ledgers_and_security_repeats(depl
     owners = assert_restricted_owners(database)
     security = security_snapshot(database)
     upgrade(database, CURRENT)
-    upgrade(database, "head")
+    upgrade(database, CURRENT)
     assert version(database) == CURRENT
     assert snapshot(database, TABLES) == before
     assert security_snapshot(database) == security
@@ -284,7 +284,7 @@ def test_0006_downgrade_refuses_to_erase_evidence(deployed_reconciler):
     assert security_snapshot(database) == security
 
 
-def test_empty_database_upgrades_entire_history_to_unique_0006_head(pg):
+def test_empty_database_upgrades_entire_history_to_0006_baseline(pg):
     name = "pr02a_empty_" + uuid4().hex
     url = validate_test_database_target(pg.admin_url.set(database=name).render_as_string(hide_password=False))
     control = sa.create_engine(pg.admin_url, isolation_level="AUTOCOMMIT", poolclass=sa.pool.NullPool,
@@ -296,12 +296,12 @@ def test_empty_database_upgrades_entire_history_to_unique_0006_head(pg):
         engine = sa.create_engine(url, poolclass=sa.pool.NullPool, connect_args=synthetic_connect_args())
         database = SimpleNamespace(url=url, engine=engine)
         assert not sa.inspect(engine).get_table_names()
-        upgrade(database, "head")
+        upgrade(database, CURRENT)
         assert version(database) == CURRENT
         assert set(sa.inspect(engine).get_table_names()) == set(TABLES) | {"alembic_version"}
         owners = assert_restricted_owners(database)
         security = security_snapshot(database)
-        upgrade(database, "head")
+        upgrade(database, CURRENT)
         assert security_snapshot(database) == security
         evidence("empty-database-head", {"version": CURRENT, "owners": owners,
                                          "table_count": len(TABLES), "repeat_unchanged": True})

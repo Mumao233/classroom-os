@@ -12,6 +12,17 @@ from alembic.config import Config
 import pytest
 import sqlalchemy as sa
 
+
+@pytest.fixture
+def password_policy(tmp_path):
+    """Explicit synthetic approval for new-password regression fixtures only."""
+    import hashlib
+    from datetime import datetime,timedelta,timezone
+    from classroom_web.infrastructure.auth_crypto import LocalPasswordPolicy,ListApproval
+    path=tmp_path/'synthetic-approved-password-list.txt'
+    path.write_text(hashlib.sha256(b'synthetic-blocked-password').hexdigest()+'\n',encoding='ascii')
+    return LocalPasswordPolicy(path,ListApproval(hashlib.sha256(path.read_bytes()).hexdigest(),datetime.now(timezone.utc)+timedelta(hours=1)))
+
 from classroom_web.domain.data import OwnerContext
 from classroom_web.infrastructure.database import Database
 from classroom_web.infrastructure.schema import tables

@@ -122,7 +122,7 @@ class PgIdentityRepository:
                 invite["email_binding"] is not None and invite["email_binding"] != email):
             raise IdentityRejected("INVITATION_UNAVAILABLE")
 
-    def register(self, email, password_hash, invite_digest, proof_digest, profile):
+    def register(self, email, password_hash, invite_digest, proof_digest, profile, *, before_commit=None):
         pending, mail = tables["pending_registrations"], tables["identity_mail_intents"]
         with self._transaction() as connection:
             control = self._control(connection)
@@ -144,6 +144,8 @@ class PgIdentityRepository:
                 email_proof_hash=proof_digest, profile=profile))
             connection.execute(mail.insert().values(id=uuid4(), pending_registration_id=uid, generation=1))
             self._audit(connection, "registration_pending", target=uid)
+            if before_commit is not None:
+                before_commit()
             return uid
 
     def resend(self, email, invite_digest, invalid_digest, interval):

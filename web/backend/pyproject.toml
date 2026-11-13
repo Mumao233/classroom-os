@@ -12,10 +12,21 @@ dependencies = [
   "alembic==1.18.4",
   "psycopg[binary]==3.3.3",
   "argon2-cffi==25.1.0",
+  "fastapi==0.162.4",
+  "starlette==1.10.0",
+  "uvicorn==0.54.0",
+  "websockets==17.4",
+  "cryptography==50.0.2",
+  "pyotp==2.9.0",
+  "rfc8785==0.1.4",
+  "jsonschema==4.26.0",
 ]
 
 [project.optional-dependencies]
-test = ["pytest==9.2.0"]
+test = ["pytest==9.2.0", "httpx==0.28.1"]
+
+[project.scripts]
+classroom-recovery = "classroom_web.entrypoints.recovery_cli:main"
 
 [tool.setuptools.packages.find]
 include = ["classroom_web*"]
