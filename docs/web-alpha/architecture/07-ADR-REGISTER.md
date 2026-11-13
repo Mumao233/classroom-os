@@ -91,3 +91,14 @@ F：本地安全持久后上传、云对象+PG确认后才durable，再送ASR；
 设计变更先记录 `contracts/CHANGELOG.md` 的版本/影响，再更新OpenAPI/事件/schema/fixtures/数据映射/前端mock；破坏性变更附兼容窗口与受影响PR。产品政策变更另有需求ID与用户明确确认。发布审批不同于技术评审。
 
 参考技术规范（用于实施查阅，未声称本PR在线逐页核验或安装最新版本）：[OpenAPI3.1](https://spec.openapis.org/oas/v3.1.0)、[JSON Schema2020-12](https://json-schema.org/draft/2020-12)、[PostgreSQL行安全](https://www.postgresql.org/docs/17/ddl-rowsecurity.html)、[PG显式锁](https://www.postgresql.org/docs/17/explicit-locking.html)、[Web Audio](https://www.w3.org/TR/webaudio/)、[OWASP会话](https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html)、[WCAG2.2](https://www.w3.org/TR/WCAG22/)。供应商协议以PRD附录链接与授权POC锁定版本为准。
+
+
+## PR-03b S2 · 2026-11-06：ADR-05 身份增量交审
+
+来源：精确e485322的APPROVE DESIGN及S1最小整改独立APPROVE，用户本轮明确授权S2正式契约修改和实现门禁定义。0.2.0包与独立identity-control版本1均为待独审的规范候选，不表示部署、机制或发布获准。[S2兼容与交接](../pr03b/s2/COMPATIBILITY-AND-HANDOFF.md)列生产者/消费者和回退门禁；原ADR、PRD、历史失败证据保持。
+
+本轮选择：应用内不透明会话/Python3.12/PG17架构不变；只增加必要身份逻辑对象及独立本机恢复协议，不增身份平台/CA/运营后门。清单根与变更权来自D0既存授权，单受监督broker掌握窄控制角色，以admission gate和PG deployment_guard保持当前高水位与变更串行化；真实资产未建立。低熵参数指纹使用服务器用途隔离HMAC，浏览器临时P-256 key只用于绑定接收端PoP；独立维护/恢复签名仍分用途。
+
+S1 raw auth body16KiB是逐路由待核的实验输入；S2因reauth一次携旧密码及绑定的新密码，在该路由单独提出32KiB候选，其余auth保16KiB。无需新增prepare API或缩短合法1024 code point输入；此选择须独审、schema正反例及后续资源边界验证。所有其他S1阈值仍是获审实验计划，哈希成本/负载结果未实测，不升为生产承诺。
+
+学生6/MFA可选、Admin12/MFA强制/15分钟8小时非持久Cookie、remember_me、R1/R2/R3和人工恢复职责均已确认，不再投票。TBD-08仅产品及S1方案层有决定，仍OPEN；条件风险须补偿全部实测后仅10–30邀请Alpha生效。U01真实平台/成本、U02核验渠道与留存、U03实测容量冲突、U04各阶段执行授权保持原触发节点；未决真实留存不冻结。0006 bootstrap-only/P3-01及PR02b/09a原关口不由S2关闭。

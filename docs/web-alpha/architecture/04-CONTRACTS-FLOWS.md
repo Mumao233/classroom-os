@@ -315,3 +315,18 @@ PR-01 的结构检验使用 examples.json 正反例；它能证明字段约束�
 Claude 可据 `contracts/openapi.json` 生成 TypeScript DTO/client，依据 events.schema.json 判别事件；合成 fixtures 与 MSW handler 仅在 Web 开发环境模拟这些契约。前端实现不导入 Python ORM、内部任务状态或供应商 SDK；内部字段调整不能迫使组件重写。统一业务状态由 adapter 转成展示模型，视觉组件只接 props 与显式事件。
 
 fixtures 至少包含：新用户空态、durable前后、partial/final、已结束但有待上传、unknown收费、首稿候选未采用、409版本冲突、删除失败但访问已撤、离线未解锁、预算阻断。examples.json 提供机器校验的基础样例，MSW 再按这些字段扩展交互；mock通过不能标记后端、ASR、浏览器或费用验证通过。契约变更必须同时更新schema/fixture/前端适配器，并在PR描述标明兼容性。本PR不启动Claude页面开发或PR-09。
+
+
+## PR-03b S2 · 2026-11-06：0.2.0 身份契约交审增量
+
+状态：S1 已独立 APPROVE；用户授权本轮修改正式契约以交审，**0.2.0 为 S2 独审候选，尚未批准实现/启用**。上方 0.1.0 内容保留历史；身份差异以本节及 [S2 HTTP契约](../pr03b/s2/HTTP-SESSION-CONTRACT.md)、[独立恢复协议](../pr03b/s2/RECOVERY-CONTROL.md)、[实现门禁](../pr03b/s2/DATA-LOCKS-AND-IMPLEMENTATION-GATES.md) 为增量。非身份领域、原五流、发送/unknown/秘密回执不变量不改。
+
+OpenAPI包升0.2.0但API前缀仍/api/web/v1；独立本机identity-control协议版本1不等于公开HTTP API版本。三个新设密码字段公开结构接收6–1024 code points，服务端注册只能Student，reset/change从可信token/session确定角色，Admin仍至少12；login/reauth验证历史凭据不套新设最小值。不trim/截断/规范化。名单无有效版本暂停register/change/reset且不误消费证明，正常login继续。条件风险仍待全部补偿实测，不能从schema接收集合扩大推断已开放。
+
+Reauth将目的、目标和候选参数与当前actor/session/device/security_epoch绑定，由服务端对敏感候选参数作受保护HMAC承诺，不持久化新密码或公开低熵裸摘要；R3具体操作单次≤120秒。敏感参数与当前密码可能同时出现，S2仅对/auth/reauth提出32KiB raw-body候选上限，其余auth仍16KiB：两份1024补充平面code point密码经JSON转义最坏约24KiB，故按S1要求逐路由核完整字段。此为技术候选调整，须S2独审及后续资源/边界验证，不改已定密码长度或更新S1原样材料。
+
+LoginResult严格区分authenticated、mfa_required、recovery_required；受限状态不给普通user/device/CSRF/Principal。自动密码+恢复码仅获绑定接收端的受限cookie，独立自动重绑enroll/confirm路由不承担manual命令；新因子证明后只撤旧授权并要求完整重登，不发普通session或新码。manual接收端仅pending-confirmed，最终仍原执行者fresh手动complete。人工issue/complete/status/登记维护没有公开Admin HTTP端点。
+
+人工status由原稳定actor/authority的当前资格独立授权，仅本人case/op最小持久事实，target升epoch/cap消费不妨碍该路径；撤权拒绝。not_committed需同锁读取线性化证据，缺行/PG故障/不足保持unknown；不消费恢复nonce、重签、finalize或回码，亦不授权自动重做。N02所有manual final只废旧恢复码，完整重登后复用既有rotateRecoveryCodes显式首次生成/轮换，SECRET_ALREADY_ISSUED与一次展示规则保留。
+
+安全控制面只写独立identity内部撤销记录，不竞争业务counter/Outbox、不增加公开WS枚举。N01的全显式/FK/UNIQUE/trigger锁图、生产/领取/投递/清理协议和A45双连接仍是S3实测门禁；不得降低user锁以掩盖环。既有通用operation_receipts不存秘密或身份控制证明；随机高熵凭据摘要与密码/OTP低熵材料分开处理。

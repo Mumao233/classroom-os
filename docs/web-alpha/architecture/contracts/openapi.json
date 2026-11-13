@@ -3,8 +3,8 @@
   "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
   "info": {
     "title": "Classroom OS Web Alpha API",
-    "version": "0.1.0",
-    "description": "PR-01 normative design contract; not implemented service. All private reads no-store. Every write requires CSRF + idempotency. Product parameters and security POC gates remain in ADR/TBD register."
+    "version": "0.2.0",
+    "description": "PR-03b S2 review candidate; not an implemented or approved service. API prefix remains /api/web/v1. S1 approves experimental inputs only; production parameters, implementation, real enrollment and deployment remain gated. Private and secret responses are no-store; business ownership, unknown-charge and existing idempotency/secret-replay semantics remain in force."
   },
   "servers": [
     {
@@ -73,7 +73,7 @@
         "tags": [
           "auth"
         ],
-        "description": "Creates/refreshes random preauth-session cookie and bound CSRF token; same-origin no-store; Origin/Fetch-Metadata checked. Authenticated callers obtain token bound to current session. Secret-bearing response is never stored in operation_receipts. Recheck identity, authorization, epochs and expiry before reissuing; never replay old key/cookie/ticket.",
+        "description": "Creates/refreshes random preauth-session cookie and bound CSRF token; same-origin no-store; Origin/Fetch-Metadata checked. Authenticated callers obtain token bound to current session. Secret-bearing response is never stored in operation_receipts. Recheck identity, authorization, epochs and expiry before reissuing; never replay old key/cookie/ticket. A valid automatic recovery cookie selects only its own restricted CSRF/receiver challenge; ordinary session, preauth and recovery material cannot substitute. Expired/consumed recovery cookie is not a terminal-status credential.",
         "responses": {
           "200": {
             "description": "Success",
@@ -123,7 +123,7 @@
         "tags": [
           "auth"
         ],
-        "description": "Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics.",
+        "description": "Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. New password uses Student min 6/Admin min 12 from trusted server role and Unicode code-point rules; local approved list mandatory. If none valid, 503 SERVICE_DISABLED retryable true without reset/reauth consumption or success receipt; do not disable normal login or send password plaintext to a provider.",
         "responses": {
           "202": {
             "description": "Success",
@@ -181,7 +181,15 @@
               }
             }
           }
-        }
+        },
+        "x-auth-raw-json-bytes-s2-candidate": 16384,
+        "x-browser-write-guards": [
+          "exact HTTPS Origin",
+          "route-context-bound X-CSRF-Token",
+          "Fetch Metadata",
+          "strict JSON/no duplicate members",
+          "cheap admission and local body budget before expensive verification"
+        ]
       }
     },
     "/auth/verify-email": {
@@ -249,7 +257,15 @@
               }
             }
           }
-        }
+        },
+        "x-auth-raw-json-bytes-s2-candidate": 16384,
+        "x-browser-write-guards": [
+          "exact HTTPS Origin",
+          "route-context-bound X-CSRF-Token",
+          "Fetch Metadata",
+          "strict JSON/no duplicate members",
+          "cheap admission and local body budget before expensive verification"
+        ]
       }
     },
     "/auth/resend-verification": {
@@ -317,7 +333,15 @@
               }
             }
           }
-        }
+        },
+        "x-auth-raw-json-bytes-s2-candidate": 16384,
+        "x-browser-write-guards": [
+          "exact HTTPS Origin",
+          "route-context-bound X-CSRF-Token",
+          "Fetch Metadata",
+          "strict JSON/no duplicate members",
+          "cheap admission and local body budget before expensive verification"
+        ]
       }
     },
     "/auth/login": {
@@ -327,7 +351,7 @@
         "tags": [
           "auth"
         ],
-        "description": "Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Secret-bearing response is never stored in operation_receipts. Recheck identity, authorization, epochs and expiry before reissuing; never replay old key/cookie/ticket.",
+        "description": "Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Secret-bearing response is never stored in operation_receipts. Recheck identity, authorization, epochs and expiry before reissuing; never replay old key/cookie/ticket. Local password-list failure does not block normal existing-password login. Admin MFA is mandatory; Student MFA is required when enrolled. Only authenticated establishes full cookie/user/device/CSRF; mfa_required and recovery_required are strictly disjoint restricted results. remember_me only changes Student cookie persistence.",
         "responses": {
           "200": {
             "description": "Success",
@@ -386,7 +410,15 @@
             }
           }
         },
-        "x-replay-policy": "reauthorize-and-reissue"
+        "x-replay-policy": "reauthorize-and-reissue",
+        "x-auth-raw-json-bytes-s2-candidate": 16384,
+        "x-browser-write-guards": [
+          "exact HTTPS Origin",
+          "route-context-bound X-CSRF-Token",
+          "Fetch Metadata",
+          "strict JSON/no duplicate members",
+          "cheap admission and local body budget before expensive verification"
+        ]
       }
     },
     "/auth/session": {
@@ -396,7 +428,7 @@
         "tags": [
           "auth"
         ],
-        "description": "Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Secret-bearing response is never stored in operation_receipts. Recheck identity, authorization, epochs and expiry before reissuing; never replay old key/cookie/ticket.",
+        "description": "Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Secret-bearing response is never stored in operation_receipts. Recheck identity, authorization, epochs and expiry before reissuing; never replay old key/cookie/ticket. Full session only; recovery/preauth cookies return no User or normal context. Use current PG user/session/device/epoch, server role/factor and strict idle/absolute deadlines; no cached Principal fallback.",
         "responses": {
           "200": {
             "description": "Success",
@@ -445,7 +477,7 @@
         "tags": [
           "auth"
         ],
-        "description": "Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Secret-bearing response is never stored in operation_receipts. Recheck identity, authorization, epochs and expiry before reissuing; never replay old key/cookie/ticket.",
+        "description": "Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Secret-bearing response is never stored in operation_receipts. Recheck identity, authorization, epochs and expiry before reissuing; never replay old key/cookie/ticket. factor_type is mandatory. totp can complete full authentication; recovery_code must verify receiver PoP, consume one code and return recovery_required only. Its password challenge, account/credential epoch and budgets must remain valid; if a consumed recovery-code request loses its secret response, never blindly consume another code or replay a cap; require separately reviewed fresh authorization.",
         "responses": {
           "200": {
             "description": "Success",
@@ -504,7 +536,15 @@
             }
           }
         },
-        "x-replay-policy": "reauthorize-and-reissue"
+        "x-replay-policy": "reauthorize-and-reissue",
+        "x-auth-raw-json-bytes-s2-candidate": 16384,
+        "x-browser-write-guards": [
+          "exact HTTPS Origin",
+          "route-context-bound X-CSRF-Token",
+          "Fetch Metadata",
+          "strict JSON/no duplicate members",
+          "cheap admission and local body budget before expensive verification"
+        ]
       }
     },
     "/auth/logout": {
@@ -514,7 +554,7 @@
         "tags": [
           "auth"
         ],
-        "description": "Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics.",
+        "description": "Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Current-session logout never requires additional reauth; revoke server session and clear matching cookie attributes.",
         "responses": {
           "200": {
             "description": "Success",
@@ -571,7 +611,22 @@
               }
             }
           }
-        }
+        },
+        "x-reauth-policy": {
+          "risk": "R0",
+          "purpose": null,
+          "source": "PR-03b S2 review candidate; confirmed windows retained, additional route mappings require independent S2 approval",
+          "server_factors": "Current password plus current TOTP for Admin/enrolled Student; no recovery-code substitute.",
+          "binding": "Exact purpose, owner/target, future Idempotency-Key and strict body; server-keyed commitment, current epoch/session/device; R3 single-use, lock-wait recheck."
+        },
+        "x-auth-raw-json-bytes-s2-candidate": 16384,
+        "x-browser-write-guards": [
+          "exact HTTPS Origin",
+          "route-context-bound X-CSRF-Token",
+          "Fetch Metadata",
+          "strict JSON/no duplicate members",
+          "cheap admission and local body budget before expensive verification"
+        ]
       }
     },
     "/auth/logout-all": {
@@ -581,7 +636,7 @@
         "tags": [
           "auth"
         ],
-        "description": "Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics.",
+        "description": "Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. S2 route-mapping candidate: Student 600s/Admin 300s, exact account/body/key binding.",
         "responses": {
           "200": {
             "description": "Success",
@@ -642,7 +697,22 @@
               }
             }
           }
-        }
+        },
+        "x-reauth-policy": {
+          "risk": "R1",
+          "purpose": "logoutAll",
+          "source": "PR-03b S2 review candidate; confirmed windows retained, additional route mappings require independent S2 approval",
+          "server_factors": "Current password plus current TOTP for Admin/enrolled Student; no recovery-code substitute.",
+          "binding": "Exact purpose, owner/target, future Idempotency-Key and strict body; server-keyed commitment, current epoch/session/device; R3 single-use, lock-wait recheck."
+        },
+        "x-auth-raw-json-bytes-s2-candidate": 16384,
+        "x-browser-write-guards": [
+          "exact HTTPS Origin",
+          "route-context-bound X-CSRF-Token",
+          "Fetch Metadata",
+          "strict JSON/no duplicate members",
+          "cheap admission and local body budget before expensive verification"
+        ]
       }
     },
     "/auth/reauth": {
@@ -652,7 +722,7 @@
         "tags": [
           "auth"
         ],
-        "description": "Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Secret-bearing response is never stored in operation_receipts. Recheck identity, authorization, epochs and expiry before reissuing; never replay old key/cookie/ticket.",
+        "description": "Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Secret-bearing response is never stored in operation_receipts. Recheck identity, authorization, epochs and expiry before reissuing; never replay old key/cookie/ticket. Strict operation binding is mandatory; server derives risk and authorization, verifies current factors, computes an internal keyed canonical-parameter commitment, and never returns or logs low-entropy password SHA/candidate body. Student recovery purposes merely bridge a proof to an independently authorized local broker, never execute public issue/complete/status. The raw-body S2 candidate is 32 KiB here only because current and candidate passwords can both be present.",
         "responses": {
           "200": {
             "description": "Success",
@@ -710,7 +780,15 @@
             }
           }
         },
-        "x-replay-policy": "reauthorize-and-reissue"
+        "x-replay-policy": "reauthorize-and-reissue",
+        "x-auth-raw-json-bytes-s2-candidate": 32768,
+        "x-browser-write-guards": [
+          "exact HTTPS Origin",
+          "route-context-bound X-CSRF-Token",
+          "Fetch Metadata",
+          "strict JSON/no duplicate members",
+          "cheap admission and local body budget before expensive verification"
+        ]
       }
     },
     "/auth/password/forgot": {
@@ -778,7 +856,15 @@
               }
             }
           }
-        }
+        },
+        "x-auth-raw-json-bytes-s2-candidate": 16384,
+        "x-browser-write-guards": [
+          "exact HTTPS Origin",
+          "route-context-bound X-CSRF-Token",
+          "Fetch Metadata",
+          "strict JSON/no duplicate members",
+          "cheap admission and local body budget before expensive verification"
+        ]
       }
     },
     "/auth/password/reset": {
@@ -788,7 +874,7 @@
         "tags": [
           "auth"
         ],
-        "description": "Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics.",
+        "description": "Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. New password uses Student min 6/Admin min 12 from trusted server role and Unicode code-point rules; local approved list mandatory. If none valid, 503 SERVICE_DISABLED retryable true without reset/reauth consumption or success receipt; do not disable normal login or send password plaintext to a provider. Password change/reset never clears MFA or logs in; atomically increase security_epoch and revoke old derived authorizations.",
         "responses": {
           "200": {
             "description": "Success",
@@ -846,7 +932,15 @@
               }
             }
           }
-        }
+        },
+        "x-auth-raw-json-bytes-s2-candidate": 16384,
+        "x-browser-write-guards": [
+          "exact HTTPS Origin",
+          "route-context-bound X-CSRF-Token",
+          "Fetch Metadata",
+          "strict JSON/no duplicate members",
+          "cheap admission and local body budget before expensive verification"
+        ]
       }
     },
     "/auth/password/change": {
@@ -856,7 +950,7 @@
         "tags": [
           "auth"
         ],
-        "description": "Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics.",
+        "description": "Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Maximum 300s; server role and local list rechecked before consuming proof or success receipt; atomic password/epoch/full revocation. New password uses Student min 6/Admin min 12 from trusted server role and Unicode code-point rules; local approved list mandatory. If none valid, 503 SERVICE_DISABLED retryable true without reset/reauth consumption or success receipt; do not disable normal login or send password plaintext to a provider. Password change/reset never clears MFA or logs in; atomically increase security_epoch and revoke old derived authorizations.",
         "responses": {
           "200": {
             "description": "Success",
@@ -917,7 +1011,22 @@
               }
             }
           }
-        }
+        },
+        "x-reauth-policy": {
+          "risk": "R2",
+          "purpose": "changePassword",
+          "source": "PR-03b S2 review candidate; confirmed windows retained, additional route mappings require independent S2 approval",
+          "server_factors": "Current password plus current TOTP for Admin/enrolled Student; no recovery-code substitute.",
+          "binding": "Exact purpose, owner/target, future Idempotency-Key and strict body; server-keyed commitment, current epoch/session/device; R3 single-use, lock-wait recheck."
+        },
+        "x-auth-raw-json-bytes-s2-candidate": 16384,
+        "x-browser-write-guards": [
+          "exact HTTPS Origin",
+          "route-context-bound X-CSRF-Token",
+          "Fetch Metadata",
+          "strict JSON/no duplicate members",
+          "cheap admission and local body budget before expensive verification"
+        ]
       }
     },
     "/auth/email/change": {
@@ -927,7 +1036,7 @@
         "tags": [
           "auth"
         ],
-        "description": "Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics.",
+        "description": "Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Maximum 300s; binds exact new email; verified new-email proof required before login identity changes.",
         "responses": {
           "202": {
             "description": "Success",
@@ -988,7 +1097,22 @@
               }
             }
           }
-        }
+        },
+        "x-reauth-policy": {
+          "risk": "R2",
+          "purpose": "requestEmailChange",
+          "source": "PR-03b S2 review candidate; confirmed windows retained, additional route mappings require independent S2 approval",
+          "server_factors": "Current password plus current TOTP for Admin/enrolled Student; no recovery-code substitute.",
+          "binding": "Exact purpose, owner/target, future Idempotency-Key and strict body; server-keyed commitment, current epoch/session/device; R3 single-use, lock-wait recheck."
+        },
+        "x-auth-raw-json-bytes-s2-candidate": 16384,
+        "x-browser-write-guards": [
+          "exact HTTPS Origin",
+          "route-context-bound X-CSRF-Token",
+          "Fetch Metadata",
+          "strict JSON/no duplicate members",
+          "cheap admission and local body budget before expensive verification"
+        ]
       }
     },
     "/auth/email/confirm": {
@@ -1056,7 +1180,15 @@
               }
             }
           }
-        }
+        },
+        "x-auth-raw-json-bytes-s2-candidate": 16384,
+        "x-browser-write-guards": [
+          "exact HTTPS Origin",
+          "route-context-bound X-CSRF-Token",
+          "Fetch Metadata",
+          "strict JSON/no duplicate members",
+          "cheap admission and local body budget before expensive verification"
+        ]
       }
     },
     "/auth/mfa/enroll": {
@@ -1066,7 +1198,7 @@
         "tags": [
           "auth"
         ],
-        "description": "Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Secret-bearing response is never stored in operation_receipts. Recheck identity, authorization, epochs and expiry before reissuing; never replay old key/cookie/ticket.",
+        "description": "Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Secret-bearing response is never stored in operation_receipts. Recheck identity, authorization, epochs and expiry before reissuing; never replay old key/cookie/ticket. First optional Student factor: R2; replacing an existing factor: R3. No ordinary Admin session without MFA and no public first-Admin bootstrap.",
         "responses": {
           "200": {
             "description": "Success",
@@ -1128,7 +1260,22 @@
             }
           }
         },
-        "x-replay-policy": "reauthorize-and-reissue"
+        "x-replay-policy": "reauthorize-and-reissue",
+        "x-reauth-policy": {
+          "risk": "R2-or-R3",
+          "purpose": "enrollMfa",
+          "source": "PR-03b S2 review candidate; confirmed windows retained, additional route mappings require independent S2 approval",
+          "server_factors": "Current password plus current TOTP for Admin/enrolled Student; no recovery-code substitute.",
+          "binding": "Exact purpose, owner/target, future Idempotency-Key and strict body; server-keyed commitment, current epoch/session/device; R3 single-use, lock-wait recheck."
+        },
+        "x-auth-raw-json-bytes-s2-candidate": 16384,
+        "x-browser-write-guards": [
+          "exact HTTPS Origin",
+          "route-context-bound X-CSRF-Token",
+          "Fetch Metadata",
+          "strict JSON/no duplicate members",
+          "cheap admission and local body budget before expensive verification"
+        ]
       }
     },
     "/auth/mfa/confirm": {
@@ -1138,7 +1285,7 @@
         "tags": [
           "auth"
         ],
-        "description": "Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Secret is displayed only in first response, never saved in generic receipts. Lost-response retry returns 409 SECRET_ALREADY_ISSUED; reauthenticate then explicitly rotate/reissue with new operation, invalidating old secret.",
+        "description": "Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Secret is displayed only in first response, never saved in generic receipts. Lost-response retry returns 409 SECRET_ALREADY_ISSUED; reauthenticate then explicitly rotate/reissue with new operation, invalidating old secret. Separate proof bound to enrollment and code/body; first Student enrollment R2, existing-factor replacement R3. Ordinary enrollment only; never manual/automatic recovery final. Its existing RecoveryCodes first-response contract applies to ordinary enrollment only; it must reject recovery cookies and manual receiver contexts rather than act as recovery finalize.",
         "responses": {
           "200": {
             "description": "Success",
@@ -1200,7 +1347,22 @@
             }
           }
         },
-        "x-replay-policy": "non-secret-status"
+        "x-replay-policy": "non-secret-status",
+        "x-reauth-policy": {
+          "risk": "R2-or-R3",
+          "purpose": "confirmMfa",
+          "source": "PR-03b S2 review candidate; confirmed windows retained, additional route mappings require independent S2 approval",
+          "server_factors": "Current password plus current TOTP for Admin/enrolled Student; no recovery-code substitute.",
+          "binding": "Exact purpose, owner/target, future Idempotency-Key and strict body; server-keyed commitment, current epoch/session/device; R3 single-use, lock-wait recheck."
+        },
+        "x-auth-raw-json-bytes-s2-candidate": 16384,
+        "x-browser-write-guards": [
+          "exact HTTPS Origin",
+          "route-context-bound X-CSRF-Token",
+          "Fetch Metadata",
+          "strict JSON/no duplicate members",
+          "cheap admission and local body budget before expensive verification"
+        ]
       }
     },
     "/auth/mfa/disable": {
@@ -1210,7 +1372,7 @@
         "tags": [
           "auth"
         ],
-        "description": "Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics.",
+        "description": "Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Single-use maximum 120s; Admin disable is forbidden, regardless of a valid proof; Student current factor required if enrolled.",
         "responses": {
           "200": {
             "description": "Success",
@@ -1271,7 +1433,22 @@
               }
             }
           }
-        }
+        },
+        "x-reauth-policy": {
+          "risk": "R3",
+          "purpose": "disableMfa",
+          "source": "PR-03b S2 review candidate; confirmed windows retained, additional route mappings require independent S2 approval",
+          "server_factors": "Current password plus current TOTP for Admin/enrolled Student; no recovery-code substitute.",
+          "binding": "Exact purpose, owner/target, future Idempotency-Key and strict body; server-keyed commitment, current epoch/session/device; R3 single-use, lock-wait recheck."
+        },
+        "x-auth-raw-json-bytes-s2-candidate": 16384,
+        "x-browser-write-guards": [
+          "exact HTTPS Origin",
+          "route-context-bound X-CSRF-Token",
+          "Fetch Metadata",
+          "strict JSON/no duplicate members",
+          "cheap admission and local body budget before expensive verification"
+        ]
       }
     },
     "/auth/mfa/recovery-codes": {
@@ -1281,7 +1458,7 @@
         "tags": [
           "auth"
         ],
-        "description": "Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Secret is displayed only in first response, never saved in generic receipts. Lost-response retry returns 409 SECRET_ALREADY_ISSUED; reauthenticate then explicitly rotate/reissue with new operation, invalidating old secret.",
+        "description": "Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Secret is displayed only in first response, never saved in generic receipts. Lost-response retry returns 409 SECRET_ALREADY_ISSUED; reauthenticate then explicitly rotate/reissue with new operation, invalidating old secret. S2 route-mapping candidate: single-use maximum 120s; full login plus current factor required; explicit first generation or whole-group rotation, one display only. Keep operationId rotateRecoveryCodes. After full password/new-MFA login this is also the explicit first-group generation when recovery final left no group. No flow cookie, old cap, CLI or status may call it; same-key lost-response retry remains 409 SECRET_ALREADY_ISSUED.",
         "responses": {
           "200": {
             "description": "Success",
@@ -1343,7 +1520,22 @@
             }
           }
         },
-        "x-replay-policy": "non-secret-status"
+        "x-replay-policy": "non-secret-status",
+        "x-reauth-policy": {
+          "risk": "R3",
+          "purpose": "rotateRecoveryCodes",
+          "source": "PR-03b S2 review candidate; confirmed windows retained, additional route mappings require independent S2 approval",
+          "server_factors": "Current password plus current TOTP for Admin/enrolled Student; no recovery-code substitute.",
+          "binding": "Exact purpose, owner/target, future Idempotency-Key and strict body; server-keyed commitment, current epoch/session/device; R3 single-use, lock-wait recheck."
+        },
+        "x-auth-raw-json-bytes-s2-candidate": 16384,
+        "x-browser-write-guards": [
+          "exact HTTPS Origin",
+          "route-context-bound X-CSRF-Token",
+          "Fetch Metadata",
+          "strict JSON/no duplicate members",
+          "cheap admission and local body budget before expensive verification"
+        ]
       }
     },
     "/me": {
@@ -1776,7 +1968,7 @@
         "tags": [
           "me"
         ],
-        "description": "Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics.",
+        "description": "Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Owned other session only; use logout for the current session without extra reauth. Student 600s/Admin 300s.",
         "responses": {
           "200": {
             "description": "Success",
@@ -1846,6 +2038,13 @@
               }
             }
           }
+        },
+        "x-reauth-policy": {
+          "risk": "R1",
+          "purpose": "revokeSession",
+          "source": "PR-03b S2 review candidate; confirmed windows retained, additional route mappings require independent S2 approval",
+          "server_factors": "Current password plus current TOTP for Admin/enrolled Student; no recovery-code substitute.",
+          "binding": "Exact purpose, owner/target, future Idempotency-Key and strict body; server-keyed commitment, current epoch/session/device; R3 single-use, lock-wait recheck."
         }
       }
     },
@@ -1925,7 +2124,7 @@
         "tags": [
           "me"
         ],
-        "description": "Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics.",
+        "description": "Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. S2 route-mapping candidate; binds current device and exact consent/body. Existing PR-05a trust/cache security POC gate remains; no recording consent coercion.",
         "responses": {
           "201": {
             "description": "Success",
@@ -1986,6 +2185,13 @@
               }
             }
           }
+        },
+        "x-reauth-policy": {
+          "risk": "R1",
+          "purpose": "trustDevice",
+          "source": "PR-03b S2 review candidate; confirmed windows retained, additional route mappings require independent S2 approval",
+          "server_factors": "Current password plus current TOTP for Admin/enrolled Student; no recovery-code substitute.",
+          "binding": "Exact purpose, owner/target, future Idempotency-Key and strict body; server-keyed commitment, current epoch/session/device; R3 single-use, lock-wait recheck."
         }
       }
     },
@@ -1996,7 +2202,7 @@
         "tags": [
           "me"
         ],
-        "description": "Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics.",
+        "description": "Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Owned device and derived sessions/grants; Student 600s/Admin 300s, exact target/body/key.",
         "responses": {
           "200": {
             "description": "Success",
@@ -2066,6 +2272,13 @@
               }
             }
           }
+        },
+        "x-reauth-policy": {
+          "risk": "R1",
+          "purpose": "revokeDevice",
+          "source": "PR-03b S2 review candidate; confirmed windows retained, additional route mappings require independent S2 approval",
+          "server_factors": "Current password plus current TOTP for Admin/enrolled Student; no recovery-code substitute.",
+          "binding": "Exact purpose, owner/target, future Idempotency-Key and strict body; server-keyed commitment, current epoch/session/device; R3 single-use, lock-wait recheck."
         }
       }
     },
@@ -2192,7 +2405,7 @@
         "tags": [
           "me"
         ],
-        "description": "Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics.",
+        "description": "Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Single-use maximum 120s and exact confirmation/body/key; preserve tombstones/receipts/raw/unknown charge risk and existing deletion semantics.",
         "responses": {
           "202": {
             "description": "Success",
@@ -2253,6 +2466,13 @@
               }
             }
           }
+        },
+        "x-reauth-policy": {
+          "risk": "R3",
+          "purpose": "deleteAccount",
+          "source": "PR-03b S2 review candidate; confirmed windows retained, additional route mappings require independent S2 approval",
+          "server_factors": "Current password plus current TOTP for Admin/enrolled Student; no recovery-code substitute.",
+          "binding": "Exact purpose, owner/target, future Idempotency-Key and strict body; server-keyed commitment, current epoch/session/device; R3 single-use, lock-wait recheck."
         }
       }
     },
@@ -9361,7 +9581,7 @@
         "tags": [
           "ws-tickets"
         ],
-        "description": "Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Secret-bearing response is never stored in operation_receipts. Recheck identity, authorization, epochs and expiry before reissuing; never replay old key/cookie/ticket.",
+        "description": "Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Secret-bearing response is never stored in operation_receipts. Recheck identity, authorization, epochs and expiry before reissuing; never replay old key/cookie/ticket. Full current session only, CSRF and exact Origin; recovery context is rejected. Ticket is purpose/owner/session/device/security_epoch/channel/class/fence bound and single-use. TLS upgrade independently checks Cookie+Origin; first authenticate frame must meet BOTH ticket expiry and a distinct upgrade-relative deadline. S1 experimental inputs 30s ticket/5s first frame are not frozen production values. No ticket in URL/subprotocol/log; authenticated messages recheck PG revocation.",
         "responses": {
           "201": {
             "description": "Success",
@@ -9419,7 +9639,17 @@
             }
           }
         },
-        "x-replay-policy": "reauthorize-and-reissue"
+        "x-replay-policy": "reauthorize-and-reissue",
+        "x-ws-auth-deadlines": {
+          "ticket_expiry": "server fixed on issue, intersect parent session and scope expiry",
+          "first_frame_deadline": "server upgrade time plus separately reviewed bounded timeout",
+          "accept": "clock_timestamp strictly before both deadlines; activity/garbage frames never extend either",
+          "s1_experimental_inputs_seconds": {
+            "ticket": 30,
+            "first_frame": 5
+          },
+          "production_frozen": false
+        }
       }
     },
     "/review-revisions/{revision_id}": {
@@ -9480,6 +9710,173 @@
           }
         ]
       }
+    },
+    "/auth/recovery/enroll": {
+      "post": {
+        "operationId": "enrollRecoveryMfa",
+        "summary": "enrollRecoveryMfa",
+        "tags": [
+          "auth"
+        ],
+        "description": "Valid automatic flow cookie + its bound CSRF + exact Origin + current password + fresh receiver P-256 PoP. Enroll/reissue each record actual server verified_at and fix an exact operation deadline at most 120s later, intersecting current flow/qualification expiry; recheck clock_timestamp after all locks. Create or independently reissue a pending new seed to that receiver; never change the active factor, extend original flow expiry or replay old seed from a receipt. Fresh challenge may be obtained as protocol material from getCsrf while the flow remains valid; reissue rotates pending generation and invalidates the old pending seed. No normal session/device/user or manual control authority; reject manual flows.",
+        "security": [
+          {
+            "recoveryCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecoveryReceiverRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Automatic restricted recovery only; never ordinary authentication.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecoveryReceiverEnrollment"
+                }
+              }
+            },
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Typed generic failure; no private data or secrets; consumed cookie never authorizes terminal-status read.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            }
+          }
+        },
+        "x-idempotency-scope": "automatic recovery flow + receiver key + operationId + Idempotency-Key; no generic secret receipt",
+        "x-replay-policy": "reauthorize-and-reissue",
+        "x-auth-raw-json-bytes-s2-candidate": 16384,
+        "x-requires-receiver-proof": true,
+        "x-manual-recovery": "forbidden; manual case receiver is only the separate local-broker tool protocol",
+        "x-browser-write-guards": [
+          "exact HTTPS Origin",
+          "route-context-bound X-CSRF-Token",
+          "Fetch Metadata",
+          "strict JSON/no duplicate members",
+          "cheap admission and local body budget before expensive verification"
+        ]
+      }
+    },
+    "/auth/recovery/confirm": {
+      "post": {
+        "operationId": "confirmRecoveryMfa",
+        "summary": "confirmRecoveryMfa",
+        "tags": [
+          "auth"
+        ],
+        "description": "Automatic recovery only: reverify current password, fresh receiver PoP and current pending new TOTP; record actual server verified_at and fix operation deadline at most 120s later, intersecting flow/current qualification expiry. Recheck clock_timestamp, target epoch, flow, credential versions and all deadlines after all locks; atomically consume cap/challenge, activate new factor, invalidate old factor and old recovery-code group, increment sole security_epoch, revoke all old sessions/derived grants, and write mandatory audit/independent identity notification. Return completion fact only, clear restricted cookie; never issue normal session or new recovery codes. Full password+new-MFA login then an explicit rotateRecoveryCodes operation is required. PG/KEK/audit failure rolls back. Unknown COMMIT outcome is not a retry grant: old cap/old target epoch cannot query terminal status or blindly repeat final; use full login or separately reviewed fresh authorization. No public manual finalize/status.",
+        "security": [
+          {
+            "recoveryCookie": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/CsrfToken"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecoveryReceiverConfirm"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Automatic restricted recovery only; never ordinary authentication.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecoveryCompleted"
+                }
+              }
+            },
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Typed generic failure; no private data or secrets; consumed cookie never authorizes terminal-status read.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            }
+          }
+        },
+        "x-idempotency-scope": "automatic recovery flow + receiver key + operationId + Idempotency-Key; no generic secret receipt",
+        "x-replay-policy": "non-secret-status",
+        "x-auth-raw-json-bytes-s2-candidate": 16384,
+        "x-requires-receiver-proof": true,
+        "x-manual-recovery": "forbidden; manual case receiver is only the separate local-broker tool protocol",
+        "x-replay-authorization": "This label forbids secret replay; it does not grant status via a consumed recovery cookie. Any known receipt replay still requires independently current authorization. Unknown outcome remains unknown; no public recovery status endpoint is added.",
+        "x-browser-write-guards": [
+          "exact HTTPS Origin",
+          "route-context-bound X-CSRF-Token",
+          "Fetch Metadata",
+          "strict JSON/no duplicate members",
+          "cheap admission and local body budget before expensive verification"
+        ]
+      }
     }
   },
   "components": {
@@ -9487,7 +9884,14 @@
       "sessionCookie": {
         "type": "apiKey",
         "in": "cookie",
-        "name": "__Host-classroom_session"
+        "name": "__Host-classroom_session",
+        "description": "Full server-validated session only; preauth and restricted recovery cookies are not accepted here. Secure; HttpOnly; Path=/; SameSite=Lax; no Domain. Recheck current user/session/device/epoch and idle/absolute expiry. Token producer uses at least 32 random bytes encoded canonical unpadded base64url, 43..256 characters, accepted unchanged by control ActorSessionEvidence.Secret; decoder rejects noncanonical or insufficient-byte values."
+      },
+      "recoveryCookie": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "__Host-classroom_recovery",
+        "description": "Independent opaque HttpOnly/Secure/Path=/;SameSite=Lax cookie with no Domain. Only an automatic recovery flow, current target epoch and pre-registered receiver P-256 key; never a sessionCookie or manual control credential. Digest only in PG; no terminal-status or secret-replay authority."
       }
     },
     "parameters": {
@@ -9508,7 +9912,7 @@
           "type": "string",
           "maxLength": 256
         },
-        "description": "Bound to session or public preauth session; Origin/Fetch-Metadata also checked."
+        "description": "Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata."
       },
       "ReauthToken": {
         "name": "X-Reauth-Token",
@@ -9516,8 +9920,11 @@
         "required": true,
         "schema": {
           "type": "string",
-          "maxLength": 256
-        }
+          "minLength": 43,
+          "maxLength": 256,
+          "pattern": "^[A-Za-z0-9_-]+$"
+        },
+        "description": "Existing X-Reauth-Token header, carrying an opaque server-issued proof for the exact purpose, target, candidate parameters and future Idempotency-Key. R3 at most 120 seconds from real verified_at and single-use; R1/R2 use the documented role window. Recheck current session/device/epoch and deadline after all locks. This header cannot grant ordinary admin permissions or authorize an unreviewed operation. Producer generates at least 32 random bytes, canonical unpadded base64url, 43..256 characters; parser decodes/re-encodes and rejects noncanonical or insufficient-byte values. Same token is accepted by control StudentExecutorEvidence via its Secret envelope; shape alone does not prove entropy or authorization."
       }
     },
     "schemas": {
@@ -9675,7 +10082,7 @@
             "maxLength": 64
           },
           "contract_version": {
-            "const": "0.1.0"
+            "const": "0.2.0"
           },
           "server_time": {
             "type": "string",
@@ -9766,7 +10173,8 @@
           "password": {
             "type": "string",
             "maxLength": 1024,
-            "minLength": 12
+            "minLength": 6,
+            "description": "New password: 6-1024 Unicode code points for Student; server-derived Admin role requires at least 12. No composition requirement, trimming, normalization or truncation. Local approved password list required. Public schema minimum 6 never authorizes an Admin short password."
           },
           "invitation_token": {
             "type": "string",
@@ -9783,7 +10191,8 @@
           "password",
           "invitation_token"
         ],
-        "additionalProperties": false
+        "additionalProperties": false,
+        "description": "Invitation-only Student registration; no client role field. Local password policy/list and PR-03a capacity/invitation atomicity remain server-authoritative."
       },
       "EmailRequest": {
         "type": "object",
@@ -9823,13 +10232,20 @@
           "expires_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "receiver_challenge": {
+            "type": "string",
+            "minLength": 43,
+            "maxLength": 43,
+            "pattern": "^[A-Za-z0-9_-]{43}$"
           }
         },
         "required": [
           "csrf_token",
           "expires_at"
         ],
-        "additionalProperties": false
+        "additionalProperties": false,
+        "description": "Protocol defense material only. With a valid automatic recovery cookie, csrf_token belongs only to that flow and receiver_challenge is present; no full-session or terminal-status grant. Ordinary/preauth responses omit receiver_challenge. Refreshing protocol material never extends session/proof/flow deadlines or performs recovery business changes."
       },
       "LoginRequest": {
         "type": "object",
@@ -9841,10 +10257,12 @@
           },
           "password": {
             "type": "string",
-            "maxLength": 1024
+            "maxLength": 1024,
+            "description": "Verify existing PHC; do not apply new-password minimum. Local-list unavailability does not disable normal login."
           },
           "remember_me": {
-            "type": "boolean"
+            "type": "boolean",
+            "description": "Student: true persistent cookie, false session cookie; both retain server 14-day idle/30-day absolute. Admin: always non-persistent and server 15-minute idle/8-hour absolute."
           },
           "device_name": {
             "type": "string",
@@ -9860,67 +10278,111 @@
         "additionalProperties": false
       },
       "LoginResult": {
-        "type": "object",
-        "properties": {
-          "state": {
-            "type": "string",
-            "enum": [
-              "authenticated",
-              "mfa_required"
-            ]
-          },
-          "challenge_id": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "uuid"
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "state": {
+                "const": "authenticated"
               },
-              {
+              "challenge_id": {
                 "type": "null"
-              }
-            ]
-          },
-          "user": {
-            "anyOf": [
-              {
+              },
+              "user": {
                 "$ref": "#/components/schemas/User"
               },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "device_id": {
-            "anyOf": [
-              {
+              "device_id": {
                 "type": "string",
                 "format": "uuid"
               },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "csrf_token": {
-            "anyOf": [
-              {
+              "csrf_token": {
                 "type": "string",
+                "minLength": 1,
                 "maxLength": 256
-              },
-              {
-                "type": "null"
               }
-            ]
+            },
+            "required": [
+              "state",
+              "challenge_id",
+              "user",
+              "device_id",
+              "csrf_token"
+            ],
+            "additionalProperties": false,
+            "description": "Only after full required password/MFA validation; returns a new full-session cookie and untrusted device context."
+          },
+          {
+            "type": "object",
+            "properties": {
+              "state": {
+                "const": "mfa_required"
+              },
+              "challenge_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "user": {
+                "type": "null"
+              },
+              "device_id": {
+                "type": "null"
+              },
+              "csrf_token": {
+                "type": "null"
+              },
+              "receiver_challenge": {
+                "type": "string",
+                "minLength": 43,
+                "maxLength": 43,
+                "pattern": "^[A-Za-z0-9_-]{43}$"
+              }
+            },
+            "required": [
+              "state",
+              "challenge_id",
+              "user",
+              "device_id",
+              "csrf_token",
+              "receiver_challenge"
+            ],
+            "additionalProperties": false,
+            "description": "No full-session cookie or business principal. receiver_challenge permits proof of the recovery receiver key if a recovery code is chosen; it is not authentication."
+          },
+          {
+            "type": "object",
+            "properties": {
+              "state": {
+                "const": "recovery_required"
+              },
+              "challenge_id": {
+                "type": "null"
+              },
+              "user": {
+                "type": "null"
+              },
+              "device_id": {
+                "type": "null"
+              },
+              "csrf_token": {
+                "type": "null"
+              },
+              "recovery": {
+                "$ref": "#/components/schemas/AutomaticRecoveryContext"
+              }
+            },
+            "required": [
+              "state",
+              "challenge_id",
+              "user",
+              "device_id",
+              "csrf_token",
+              "recovery"
+            ],
+            "additionalProperties": false,
+            "description": "Password plus single-use recovery code only; ordinary fields stay null. Old clients must reject this unknown state, never coerce it to authenticated."
           }
-        },
-        "required": [
-          "state",
-          "challenge_id",
-          "user",
-          "device_id",
-          "csrf_token"
         ],
-        "additionalProperties": false
+        "description": "Disjoint strict results. mfa_required/recovery_required cannot carry a User, device or ordinary CSRF. Only authenticated establishes a normal session. Unknown states fail closed in all clients."
       },
       "SessionContext": {
         "type": "object",
@@ -9950,47 +10412,99 @@
         "additionalProperties": false
       },
       "MfaChallengeRequest": {
-        "type": "object",
-        "properties": {
-          "challenge_id": {
-            "type": "string",
-            "format": "uuid"
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "factor_type": {
+                "const": "totp"
+              },
+              "challenge_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "code": {
+                "type": "string",
+                "minLength": 6,
+                "maxLength": 6,
+                "pattern": "^[0-9]{6}$"
+              }
+            },
+            "required": [
+              "factor_type",
+              "challenge_id",
+              "code"
+            ],
+            "additionalProperties": false,
+            "description": "Current TOTP only; no recovery-code fallback under this discriminator."
           },
-          "code": {
-            "type": "string",
-            "maxLength": 128,
-            "minLength": 6
+          {
+            "type": "object",
+            "properties": {
+              "factor_type": {
+                "const": "recovery_code"
+              },
+              "challenge_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "code": {
+                "type": "string",
+                "minLength": 6,
+                "maxLength": 128
+              },
+              "receiver_public_key": {
+                "$ref": "#/components/schemas/ReceiverPublicKey"
+              },
+              "receiver_proof": {
+                "$ref": "#/components/schemas/ReceiverProof"
+              }
+            },
+            "required": [
+              "factor_type",
+              "challenge_id",
+              "code",
+              "receiver_public_key",
+              "receiver_proof"
+            ],
+            "additionalProperties": false,
+            "description": "Explicit recovery code and receiver-key proof; atomically consume one code and create only an automatic rebind flow. Never issue a normal session or admin principal."
           }
-        },
-        "required": [
-          "challenge_id",
-          "code"
-        ],
-        "additionalProperties": false
+        ]
       },
       "ReauthRequest": {
         "type": "object",
         "properties": {
           "password": {
             "type": "string",
+            "minLength": 0,
             "maxLength": 1024
           },
           "mfa_code": {
             "type": "string",
-            "maxLength": 128
+            "minLength": 6,
+            "maxLength": 6,
+            "pattern": "^[0-9]{6}$"
+          },
+          "operation": {
+            "$ref": "#/components/schemas/ReauthOperation"
           }
         },
         "required": [
-          "password"
+          "password",
+          "operation"
         ],
-        "additionalProperties": false
+        "additionalProperties": false,
+        "description": "Password is always current verification, not a new-password policy check. mfa_code may be omitted only by a Student without an enrolled factor; Admin/enrolled Student must prove current TOTP. Recovery code is not an ordinary reauth factor. Candidate new password is TLS input for server commitment only and must not enter logs/receipts."
       },
       "ReauthResult": {
         "type": "object",
         "properties": {
           "reauth_token": {
             "type": "string",
-            "maxLength": 256
+            "minLength": 43,
+            "maxLength": 256,
+            "pattern": "^[A-Za-z0-9_-]+$"
           },
           "expires_at": {
             "type": "string",
@@ -10001,7 +10515,8 @@
           "reauth_token",
           "expires_at"
         ],
-        "additionalProperties": false
+        "additionalProperties": false,
+        "description": "Opaque proof plus fixed server expiry only; no plaintext candidate parameters or public password fingerprint. R1 max Student 600s/Admin 300s; R2 max 300s; R3 and Student-recovery bridge max 120s from actual factor verified_at, then intersect proof/session/device/permission deadlines. R3 and recovery writes single-use; recovery_status read-only proof reusable only while valid, never consumes recovery nonce/cap. Token encoding is canonical unpadded base64url from at least 32 random bytes, 43..256 characters, identical to X-Reauth-Token and the control bridge; decoder enforces canonical encoding and byte minimum."
       },
       "PasswordResetRequest": {
         "type": "object",
@@ -10014,14 +10529,16 @@
           "new_password": {
             "type": "string",
             "maxLength": 1024,
-            "minLength": 12
+            "minLength": 6,
+            "description": "New password: 6-1024 Unicode code points for Student; server-derived Admin role requires at least 12. No composition requirement, trimming, normalization or truncation. Local approved password list required. Public schema minimum 6 never authorizes an Admin short password."
           }
         },
         "required": [
           "token",
           "new_password"
         ],
-        "additionalProperties": false
+        "additionalProperties": false,
+        "description": "Server derives role from the valid one-time token; no valid local list means safe pause without consuming token. Reset revokes sessions/derived grants and increases the sole security_epoch, never clears MFA or logs in."
       },
       "PasswordChangeRequest": {
         "type": "object",
@@ -10029,13 +10546,15 @@
           "new_password": {
             "type": "string",
             "maxLength": 1024,
-            "minLength": 12
+            "minLength": 6,
+            "description": "New password: 6-1024 Unicode code points for Student; server-derived Admin role requires at least 12. No composition requirement, trimming, normalization or truncation. Local approved password list required. Public schema minimum 6 never authorizes an Admin short password."
           }
         },
         "required": [
           "new_password"
         ],
-        "additionalProperties": false
+        "additionalProperties": false,
+        "description": "Server derives role from current validated account. Candidate password must match the server-keyed reauth commitment; no valid local list pauses before proof consumption or success receipt."
       },
       "EmailChangeRequest": {
         "type": "object",
@@ -10102,7 +10621,9 @@
               "type": "string",
               "maxLength": 128
             },
-            "maxItems": 20
+            "maxItems": 20,
+            "minItems": 1,
+            "uniqueItems": true
           },
           "shown_once": {
             "const": true
@@ -10112,7 +10633,8 @@
           "codes",
           "shown_once"
         ],
-        "additionalProperties": false
+        "additionalProperties": false,
+        "description": "One display, no-store, digest storage only. Existing rotateRecoveryCodes route explicitly creates a first group after full login or rotates an existing group; manual/automatic recovery final and status never return this model. Lost first response: 409 SECRET_ALREADY_ISSUED; fresh reauth and a new explicit operation rotate/invalidate the old group, never replay plaintext."
       },
       "User": {
         "type": "object",
@@ -16210,7 +16732,1072 @@
           "next_cursor"
         ],
         "additionalProperties": false
+      },
+      "ReceiverPublicKey": {
+        "type": "object",
+        "properties": {
+          "kty": {
+            "const": "EC"
+          },
+          "crv": {
+            "const": "P-256"
+          },
+          "x": {
+            "type": "string",
+            "minLength": 43,
+            "maxLength": 43,
+            "pattern": "^[A-Za-z0-9_-]{43}$"
+          },
+          "y": {
+            "type": "string",
+            "minLength": 43,
+            "maxLength": 43,
+            "pattern": "^[A-Za-z0-9_-]{43}$"
+          }
+        },
+        "required": [
+          "kty",
+          "crv",
+          "x",
+          "y"
+        ],
+        "additionalProperties": false,
+        "description": "Public JWK only. Reject private/extra fields; mature crypto must verify canonical base64url coordinates and an on-curve public point. No hardware quantity is mandated."
+      },
+      "ReceiverProof": {
+        "type": "object",
+        "properties": {
+          "challenge": {
+            "type": "string",
+            "minLength": 43,
+            "maxLength": 43,
+            "pattern": "^[A-Za-z0-9_-]{43}$"
+          },
+          "signature": {
+            "type": "string",
+            "minLength": 86,
+            "maxLength": 86,
+            "pattern": "^[A-Za-z0-9_-]{86}$"
+          }
+        },
+        "required": [
+          "challenge",
+          "signature"
+        ],
+        "additionalProperties": false,
+        "description": "P-256 ECDSA SHA-256 with 64-byte IEEE-P1363 r||s signature encoded as canonical unpadded base64url. Sign the domain-separated method/path/Idempotency-Key/flow-or-login-challenge/receiver-thumbprint/challenge/body commitment defined in HTTP-SESSION-CONTRACT.md; all request fields except receiver_proof are covered. Challenge is server-issued, current, bound to the login/recovery receiver context and single-use; the signature binds the exact action/path. Client time is not authority."
+      },
+      "AutomaticRecoveryContext": {
+        "type": "object",
+        "properties": {
+          "flow_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "scope": {
+            "const": "mfa_rebind"
+          },
+          "state": {
+            "const": "pending"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "csrf_token": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "receiver_challenge": {
+            "type": "string",
+            "minLength": 43,
+            "maxLength": 43,
+            "pattern": "^[A-Za-z0-9_-]{43}$"
+          }
+        },
+        "required": [
+          "flow_id",
+          "scope",
+          "state",
+          "expires_at",
+          "csrf_token",
+          "receiver_challenge"
+        ],
+        "additionalProperties": false,
+        "description": "Only the automatic recovery receiver context: distinct CSRF/key proof and cookie, no ordinary user/device/session authority. Flow expiry is bounded and never extended by challenge refresh."
+      },
+      "ReauthOperation": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "purpose": {
+                "const": "logoutAll"
+              },
+              "target": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "account"
+                  },
+                  "id": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "id"
+                ],
+                "additionalProperties": false,
+                "description": "Locator only; server verifies current ownership and required role. An account target must equal the authenticated user."
+              },
+              "candidate_parameters": {
+                "type": "object",
+                "properties": {
+                  "idempotency_key": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "body": {
+                    "$ref": "#/components/schemas/Empty"
+                  }
+                },
+                "required": [
+                  "idempotency_key",
+                  "body"
+                ],
+                "additionalProperties": false,
+                "description": "Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned."
+              }
+            },
+            "required": [
+              "purpose",
+              "target",
+              "candidate_parameters"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "purpose": {
+                "const": "revokeSession"
+              },
+              "target": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "session"
+                  },
+                  "id": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "id"
+                ],
+                "additionalProperties": false,
+                "description": "Locator only; server verifies current ownership and required role. An account target must equal the authenticated user."
+              },
+              "candidate_parameters": {
+                "type": "object",
+                "properties": {
+                  "idempotency_key": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "body": {
+                    "$ref": "#/components/schemas/Empty"
+                  }
+                },
+                "required": [
+                  "idempotency_key",
+                  "body"
+                ],
+                "additionalProperties": false,
+                "description": "Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned."
+              }
+            },
+            "required": [
+              "purpose",
+              "target",
+              "candidate_parameters"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "purpose": {
+                "const": "revokeDevice"
+              },
+              "target": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "device"
+                  },
+                  "id": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "id"
+                ],
+                "additionalProperties": false,
+                "description": "Locator only; server verifies current ownership and required role. An account target must equal the authenticated user."
+              },
+              "candidate_parameters": {
+                "type": "object",
+                "properties": {
+                  "idempotency_key": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "body": {
+                    "$ref": "#/components/schemas/Empty"
+                  }
+                },
+                "required": [
+                  "idempotency_key",
+                  "body"
+                ],
+                "additionalProperties": false,
+                "description": "Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned."
+              }
+            },
+            "required": [
+              "purpose",
+              "target",
+              "candidate_parameters"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "purpose": {
+                "const": "trustDevice"
+              },
+              "target": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "device"
+                  },
+                  "id": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "id"
+                ],
+                "additionalProperties": false,
+                "description": "Locator only; server verifies current ownership and required role. An account target must equal the authenticated user."
+              },
+              "candidate_parameters": {
+                "type": "object",
+                "properties": {
+                  "idempotency_key": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "body": {
+                    "$ref": "#/components/schemas/TrustDeviceRequest"
+                  }
+                },
+                "required": [
+                  "idempotency_key",
+                  "body"
+                ],
+                "additionalProperties": false,
+                "description": "Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned."
+              }
+            },
+            "required": [
+              "purpose",
+              "target",
+              "candidate_parameters"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "purpose": {
+                "const": "changePassword"
+              },
+              "target": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "account"
+                  },
+                  "id": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "id"
+                ],
+                "additionalProperties": false,
+                "description": "Locator only; server verifies current ownership and required role. An account target must equal the authenticated user."
+              },
+              "candidate_parameters": {
+                "type": "object",
+                "properties": {
+                  "idempotency_key": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "body": {
+                    "$ref": "#/components/schemas/PasswordChangeRequest"
+                  }
+                },
+                "required": [
+                  "idempotency_key",
+                  "body"
+                ],
+                "additionalProperties": false,
+                "description": "Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned."
+              }
+            },
+            "required": [
+              "purpose",
+              "target",
+              "candidate_parameters"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "purpose": {
+                "const": "requestEmailChange"
+              },
+              "target": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "account"
+                  },
+                  "id": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "id"
+                ],
+                "additionalProperties": false,
+                "description": "Locator only; server verifies current ownership and required role. An account target must equal the authenticated user."
+              },
+              "candidate_parameters": {
+                "type": "object",
+                "properties": {
+                  "idempotency_key": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "body": {
+                    "$ref": "#/components/schemas/EmailChangeRequest"
+                  }
+                },
+                "required": [
+                  "idempotency_key",
+                  "body"
+                ],
+                "additionalProperties": false,
+                "description": "Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned."
+              }
+            },
+            "required": [
+              "purpose",
+              "target",
+              "candidate_parameters"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "purpose": {
+                "const": "enrollMfa"
+              },
+              "target": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "account"
+                  },
+                  "id": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "id"
+                ],
+                "additionalProperties": false,
+                "description": "Locator only; server verifies current ownership and required role. An account target must equal the authenticated user."
+              },
+              "candidate_parameters": {
+                "type": "object",
+                "properties": {
+                  "idempotency_key": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "body": {
+                    "$ref": "#/components/schemas/Empty"
+                  }
+                },
+                "required": [
+                  "idempotency_key",
+                  "body"
+                ],
+                "additionalProperties": false,
+                "description": "Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned."
+              }
+            },
+            "required": [
+              "purpose",
+              "target",
+              "candidate_parameters"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "purpose": {
+                "const": "confirmMfa"
+              },
+              "target": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "mfa_enrollment"
+                  },
+                  "id": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "id"
+                ],
+                "additionalProperties": false,
+                "description": "Locator only; server verifies current ownership and required role. An account target must equal the authenticated user."
+              },
+              "candidate_parameters": {
+                "type": "object",
+                "properties": {
+                  "idempotency_key": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "body": {
+                    "$ref": "#/components/schemas/MfaEnrollmentConfirm"
+                  }
+                },
+                "required": [
+                  "idempotency_key",
+                  "body"
+                ],
+                "additionalProperties": false,
+                "description": "Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned."
+              }
+            },
+            "required": [
+              "purpose",
+              "target",
+              "candidate_parameters"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "purpose": {
+                "const": "disableMfa"
+              },
+              "target": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "account"
+                  },
+                  "id": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "id"
+                ],
+                "additionalProperties": false,
+                "description": "Locator only; server verifies current ownership and required role. An account target must equal the authenticated user."
+              },
+              "candidate_parameters": {
+                "type": "object",
+                "properties": {
+                  "idempotency_key": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "body": {
+                    "$ref": "#/components/schemas/Empty"
+                  }
+                },
+                "required": [
+                  "idempotency_key",
+                  "body"
+                ],
+                "additionalProperties": false,
+                "description": "Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned."
+              }
+            },
+            "required": [
+              "purpose",
+              "target",
+              "candidate_parameters"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "purpose": {
+                "const": "rotateRecoveryCodes"
+              },
+              "target": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "account"
+                  },
+                  "id": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "id"
+                ],
+                "additionalProperties": false,
+                "description": "Locator only; server verifies current ownership and required role. An account target must equal the authenticated user."
+              },
+              "candidate_parameters": {
+                "type": "object",
+                "properties": {
+                  "idempotency_key": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "body": {
+                    "$ref": "#/components/schemas/Empty"
+                  }
+                },
+                "required": [
+                  "idempotency_key",
+                  "body"
+                ],
+                "additionalProperties": false,
+                "description": "Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned."
+              }
+            },
+            "required": [
+              "purpose",
+              "target",
+              "candidate_parameters"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "purpose": {
+                "const": "deleteAccount"
+              },
+              "target": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "account"
+                  },
+                  "id": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "id"
+                ],
+                "additionalProperties": false,
+                "description": "Locator only; server verifies current ownership and required role. An account target must equal the authenticated user."
+              },
+              "candidate_parameters": {
+                "type": "object",
+                "properties": {
+                  "idempotency_key": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "body": {
+                    "$ref": "#/components/schemas/DeletionSubmit"
+                  }
+                },
+                "required": [
+                  "idempotency_key",
+                  "body"
+                ],
+                "additionalProperties": false,
+                "description": "Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned."
+              }
+            },
+            "required": [
+              "purpose",
+              "target",
+              "candidate_parameters"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "purpose": {
+                "const": "student_recovery_issue"
+              },
+              "target": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "recovery_case"
+                  },
+                  "id": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "id"
+                ],
+                "additionalProperties": false,
+                "description": "Locator only; server verifies current ownership and required role. An account target must equal the authenticated user."
+              },
+              "candidate_parameters": {
+                "type": "object",
+                "properties": {
+                  "op_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "plan_hash": {
+                    "type": "string",
+                    "minLength": 64,
+                    "maxLength": 64,
+                    "pattern": "^[0-9a-f]{64}$"
+                  }
+                },
+                "required": [
+                  "op_id",
+                  "plan_hash"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "purpose",
+              "target",
+              "candidate_parameters"
+            ],
+            "additionalProperties": false,
+            "description": "Narrow proof for an authorized Student-recovery Admin only. Local broker independently rechecks current Admin/MFA/session/device/epoch, dedicated permission, case/op/plan and target Student role. No public manual action is executed here."
+          },
+          {
+            "type": "object",
+            "properties": {
+              "purpose": {
+                "const": "student_recovery_reissue"
+              },
+              "target": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "recovery_case"
+                  },
+                  "id": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "id"
+                ],
+                "additionalProperties": false,
+                "description": "Locator only; server verifies current ownership and required role. An account target must equal the authenticated user."
+              },
+              "candidate_parameters": {
+                "type": "object",
+                "properties": {
+                  "op_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "plan_hash": {
+                    "type": "string",
+                    "minLength": 64,
+                    "maxLength": 64,
+                    "pattern": "^[0-9a-f]{64}$"
+                  }
+                },
+                "required": [
+                  "op_id",
+                  "plan_hash"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "purpose",
+              "target",
+              "candidate_parameters"
+            ],
+            "additionalProperties": false,
+            "description": "Narrow proof for an authorized Student-recovery Admin only. Local broker independently rechecks current Admin/MFA/session/device/epoch, dedicated permission, case/op/plan and target Student role. No public manual action is executed here."
+          },
+          {
+            "type": "object",
+            "properties": {
+              "purpose": {
+                "const": "student_recovery_complete"
+              },
+              "target": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "recovery_case"
+                  },
+                  "id": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "id"
+                ],
+                "additionalProperties": false,
+                "description": "Locator only; server verifies current ownership and required role. An account target must equal the authenticated user."
+              },
+              "candidate_parameters": {
+                "type": "object",
+                "properties": {
+                  "op_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "plan_hash": {
+                    "type": "string",
+                    "minLength": 64,
+                    "maxLength": 64,
+                    "pattern": "^[0-9a-f]{64}$"
+                  }
+                },
+                "required": [
+                  "op_id",
+                  "plan_hash"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "purpose",
+              "target",
+              "candidate_parameters"
+            ],
+            "additionalProperties": false,
+            "description": "Narrow proof for an authorized Student-recovery Admin only. Local broker independently rechecks current Admin/MFA/session/device/epoch, dedicated permission, case/op/plan and target Student role. No public manual action is executed here."
+          },
+          {
+            "type": "object",
+            "properties": {
+              "purpose": {
+                "const": "student_recovery_status"
+              },
+              "target": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "recovery_case"
+                  },
+                  "id": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "id"
+                ],
+                "additionalProperties": false,
+                "description": "Locator only; server verifies current ownership and required role. An account target must equal the authenticated user."
+              },
+              "candidate_parameters": {
+                "type": "object",
+                "properties": {
+                  "op_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "plan_hash": {
+                    "type": "string",
+                    "minLength": 64,
+                    "maxLength": 64,
+                    "pattern": "^[0-9a-f]{64}$"
+                  }
+                },
+                "required": [
+                  "op_id",
+                  "plan_hash"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "purpose",
+              "target",
+              "candidate_parameters"
+            ],
+            "additionalProperties": false,
+            "description": "Independent read-only proof for the original stable executor only. Local broker rechecks current Admin/MFA/session/device/epoch and dedicated permission, stored executor, own case/op, StatusPlan and durable operation facts. It does not require the target current role/epoch, old issue proof or verification details already minimized under policy. Insufficient durable facts remain unknown. No public manual action or recovery write is executed here."
+          }
+        ],
+        "description": "Closed reviewed purpose set; no arbitrary operation/role/risk or parameters. Target and candidate body are strict. No generic proof for admin/cache/unreviewed routes. Stored server HMAC covers exact validated typed parameters plus current subject/session/device/epoch and operation identity; do not echo a low-entropy password fingerprint."
+      },
+      "RecoveryReceiverRequest": {
+        "type": "object",
+        "properties": {
+          "flow_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "password": {
+            "type": "string",
+            "minLength": 0,
+            "maxLength": 1024
+          },
+          "receiver_proof": {
+            "$ref": "#/components/schemas/ReceiverProof"
+          }
+        },
+        "required": [
+          "flow_id",
+          "password",
+          "receiver_proof"
+        ],
+        "additionalProperties": false,
+        "description": "Only automatic flow. Valid restricted cookie, its CSRF, exact Origin, current target epoch/flow, current password verification and fresh receiver-key PoP are all required. Server records actual verified_at and an operation-specific deadline at most verified_at+120s, intersecting flow/current qualification expiry; recheck after all locks. No new-password minimum, lost old MFA, second recovery-code consumption or flow-TTL extension. Not a manual receiver protocol."
+      },
+      "RecoveryReceiverEnrollment": {
+        "type": "object",
+        "properties": {
+          "flow_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "enrollment_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "otpauth_uri": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "receiver_challenge": {
+            "type": "string",
+            "minLength": 43,
+            "maxLength": 43,
+            "pattern": "^[A-Za-z0-9_-]{43}$"
+          }
+        },
+        "required": [
+          "flow_id",
+          "enrollment_id",
+          "otpauth_uri",
+          "expires_at",
+          "receiver_challenge"
+        ],
+        "additionalProperties": false,
+        "description": "Pending seed to the bound automatic receiver once, no-store. Old factor remains active. A separately authorized fresh PoP reissue rotates pending seed/generation without extending original flow expiry; never replay old URI from generic receipt."
+      },
+      "RecoveryReceiverConfirm": {
+        "type": "object",
+        "properties": {
+          "flow_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "enrollment_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "password": {
+            "type": "string",
+            "minLength": 0,
+            "maxLength": 1024
+          },
+          "code": {
+            "type": "string",
+            "minLength": 6,
+            "maxLength": 6,
+            "pattern": "^[0-9]{6}$"
+          },
+          "receiver_proof": {
+            "$ref": "#/components/schemas/ReceiverProof"
+          }
+        },
+        "required": [
+          "flow_id",
+          "enrollment_id",
+          "password",
+          "code",
+          "receiver_proof"
+        ],
+        "additionalProperties": false,
+        "description": "Reverify current password, fresh receiver PoP and new TOTP for the currently bound automatic flow/enrollment. Record actual verified_at and a fixed operation deadline at most verified_at+120s, intersect flow/current qualification expiry and recheck clock_timestamp after all locks. Consume challenge/cap atomically with final switch; no lost old MFA, second recovery-code consumption or flow-TTL extension. Manual cases are rejected even if identifiers resemble a flow."
+      },
+      "RecoveryCompleted": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "const": "completed"
+          },
+          "flow_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "requires_full_login": {
+            "const": true
+          },
+          "new_recovery_codes_issued": {
+            "const": false
+          }
+        },
+        "required": [
+          "state",
+          "flow_id",
+          "requires_full_login",
+          "new_recovery_codes_issued"
+        ],
+        "additionalProperties": false,
+        "description": "Non-secret completion fact only. Atomic factor replacement, old code-group invalidation, sole epoch increment and full derived-authorization revocation; no session, seed, codes or terminal-status capability. Clear recovery cookie. Full password plus new MFA login is required."
       }
     }
+  },
+  "x-pr03b-authentication": {
+    "status": "S2 review candidate; S1 APPROVE is not S2 or S3 approval",
+    "scope": "auth, personal session/device security and WS authentication only; no public manual recovery control API",
+    "server_principal": "Validate cookie digest, active user, server role, sole users.security_epoch, live session/device, factor level and both deadlines; never trust client owner/role/epoch or fall back to OwnerContext.",
+    "authorization_transaction": "Lock and recheck current authority in the same short transaction as the protected write; check clock_timestamp after all lock waits. Revocation notifications only accelerate invalidation.",
+    "cookie": {
+      "name": "__Host-classroom_session",
+      "secure": true,
+      "http_only": true,
+      "path": "/",
+      "same_site": "Lax",
+      "domain": "forbidden",
+      "contents": "opaque random token; server stores purpose-separated digest only"
+    },
+    "student": {
+      "new_password_min_code_points": 6,
+      "mfa": "optional; required after enrollment",
+      "idle_seconds": 1209600,
+      "absolute_seconds": 2592000,
+      "remember_me": "Only controls cookie persistence; never changes server deadlines."
+    },
+    "admin": {
+      "new_password_min_code_points": 12,
+      "mfa": "mandatory; recovery codes never grant ordinary admin access",
+      "idle_seconds": 900,
+      "absolute_seconds": 28800,
+      "remember_me": "Always a non-persistent cookie even when true."
+    },
+    "session_rotation": "Login, completed MFA and security elevation rotate token/CSRF. Rotation and activity never extend the original logical absolute deadline. Only full login starts a new logical session.",
+    "origin_csrf": "Browser writes require exact configured HTTPS Origin, bound CSRF and Fetch Metadata checks. Missing/null Origin is rejected; no wildcard credentials or suffix matching. Non-browser manual control is a separate local protocol, not a browser-auth exemption.",
+    "password_text": "Count Unicode scalar/code points, reject malformed UTF-8/unpaired surrogates/duplicate JSON member names; no trim, normalization or truncation. Login/reauth verify existing PHC without applying new-password minimum.",
+    "password_list": "Local-only screening on register/change/reset. No valid approved list: 503 SERVICE_DISABLED, retryable true, before reset/reauth proof consumption or success receipt; normal existing-password login continues with MFA and admission checks. Recheck approved list version at commit.",
+    "reauth_windows_seconds": {
+      "R1": {
+        "student": 600,
+        "admin": 300
+      },
+      "R2": 300,
+      "R3": 120
+    },
+    "reauth_binding": "Opaque server proof binds current user/session/device/security_epoch, verified factors and actual verified_at plus strict operation purpose/target, future Idempotency-Key and server-keyed canonical-parameter commitment. No public password SHA, last_seen substitution or client-selected risk level.",
+    "raw_json_budget_s2_candidate": {
+      "default_auth_bytes": 16384,
+      "reauth_bytes": 32768,
+      "reason": "reauth can contain both current and candidate 1024-code-point passwords; worst-case JSON escaping alone can exceed 24 KiB. This per-route S2 proposal does not change S1 source evidence or freeze production limits."
+    },
+    "manual_recovery": "No public issue/complete/status endpoint. Student executor reauth may bridge a bound proof through a restricted FD to the local broker; project-user admin recovery uses independent authority credentials, never lost Web MFA.",
+    "automatic_recovery": "Password plus one recovery code yields only a receiver-key/cookie-bound automatic MFA rebind flow. No normal principal, classroom, export, admin operation, WS ticket or cache key. Enroll/reissue/confirm each reverify current password plus fresh receiver PoP (confirm also new TOTP), fix actual server verified_at and deadline at most 120s, and recheck after all locks; flow TTL never substitutes for fresh write proof. No lost old MFA or second recovery-code consumption. New receiver endpoints cannot handle manual flows.",
+    "errors": {
+      "401": [
+        "UNAUTHENTICATED"
+      ],
+      "403": [
+        "FORBIDDEN",
+        "MFA_REQUIRED",
+        "REAUTH_REQUIRED"
+      ],
+      "409": [
+        "IDEMPOTENCY_MISMATCH",
+        "SECRET_ALREADY_ISSUED"
+      ],
+      "422": [
+        "VALIDATION_FAILED"
+      ],
+      "429": [
+        "RATE_LIMITED"
+      ],
+      "503": [
+        "SERVICE_DISABLED",
+        "STORAGE_UNAVAILABLE",
+        "RESULT_UNKNOWN"
+      ]
+    },
+    "error_semantics": "Generic authentication failures do not reveal account existence. RESULT_UNKNOWN never authorizes blind retry. Error code membership and HTTP status are checked together; no secret or private content in messages, logs or generic receipts.",
+    "s3_gates": [
+      "approved producer/consumer fixtures and generated types",
+      "real isolated PG/HTTPS/WS and secret-channel evidence",
+      "exact implementation SHA independent review",
+      "separate real-enablement approvals; TBD-08 remains OPEN"
+    ]
   }
 }
