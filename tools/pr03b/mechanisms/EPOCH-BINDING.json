@@ -1,0 +1,358 @@
+{
+  "schema_version": 1,
+  "kind": "authorized_current_boot_observation_binding",
+  "boot_utc": "2026-11-09T11:58:46.5000000Z",
+  "machine_binding": "210f9d961522ac5a7104c086fb210c698688da2242a2abceed5b970e6a0887b1",
+  "original_guard_sha256": "2a5535619651ac4835374c0777edff26f5759f9038de27c3edd4fcfc3d998a1c",
+  "original_plan_sha256": "a7b74277cf46156c43062e1d540a796162a898616d0695bb510cdfac28e4fa38",
+  "original_plan": {
+    "run_id": "run-7ecce1d9173448418087a4167a4413ce",
+    "machine_binding": "210f9d961522ac5a7104c086fb210c698688da2242a2abceed5b970e6a0887b1",
+    "loopback_index": 1,
+    "before": {
+      "time_utc": "2026-11-08T02:18:56.6601736Z",
+      "machine_binding": "210f9d961522ac5a7104c086fb210c698688da2242a2abceed5b970e6a0887b1",
+      "powershell": "5.1.26100.1",
+      "adapters": [
+        {
+          "guid": "c20f2416-002c-43a0-94c6-c6a1675b75b0",
+          "index": 6,
+          "name": "Ethernet (Kernel Debugger)",
+          "admin": 2,
+          "status": "Not Present",
+          "type": 6
+        },
+        {
+          "guid": "b64e18fe-219d-4c4a-a6d5-ff40cbd4f2b9",
+          "index": 5,
+          "name": "Ethernet0",
+          "admin": 1,
+          "status": "Up",
+          "type": 6
+        },
+        {
+          "guid": "93123211-9629-4e04-82f0-ea2e4f221468",
+          "index": 4,
+          "name": "Teredo Tunneling Pseudo-Interface",
+          "admin": 2,
+          "status": "Not Present",
+          "type": 131
+        },
+        {
+          "guid": "2ee2c70c-a092-4d88-a654-98c8d7645cd5",
+          "index": 3,
+          "name": "Microsoft IP-HTTPS Platform Interface",
+          "admin": 2,
+          "status": "Not Present",
+          "type": 131
+        },
+        {
+          "guid": "07374750-e68b-490e-9330-9fd785cd71b6",
+          "index": 2,
+          "name": "6to4 Adapter",
+          "admin": 2,
+          "status": "Not Present",
+          "type": 131
+        }
+      ],
+      "native_interfaces": [
+        {
+          "id": "{B64E18FE-219D-4C4A-A6D5-FF40CBD4F2B9}",
+          "type": 6,
+          "operational": 1,
+          "index4": 5,
+          "index6": 5
+        },
+        {
+          "id": "{31B6DC82-DAFF-11F1-80FF-806E6F6E6963}",
+          "type": 24,
+          "operational": 1,
+          "index4": 1,
+          "index6": 1
+        }
+      ],
+      "compartments": [
+        {
+          "id": 1,
+          "description": "Default Compartment"
+        }
+      ],
+      "interfaces": [
+        {
+          "index": 5,
+          "family": "IPv6",
+          "connected": 1
+        },
+        {
+          "index": 1,
+          "family": "IPv6",
+          "connected": 1
+        },
+        {
+          "index": 5,
+          "family": "IPv4",
+          "connected": 1
+        },
+        {
+          "index": 1,
+          "family": "IPv4",
+          "connected": 1
+        }
+      ],
+      "addresses": [
+        {
+          "index": 5,
+          "address": "fe80::9a7d:8638:e7da:cc79%5",
+          "family": "IPv6"
+        },
+        {
+          "index": 1,
+          "address": "::1",
+          "family": "IPv6"
+        },
+        {
+          "index": 5,
+          "address": "192.168.148.128",
+          "family": "IPv4"
+        },
+        {
+          "index": 1,
+          "address": "127.0.0.1",
+          "family": "IPv4"
+        }
+      ],
+      "routes": [
+        {
+          "index": 5,
+          "destination": "255.255.255.255/32",
+          "next_hop": "0.0.0.0"
+        },
+        {
+          "index": 1,
+          "destination": "255.255.255.255/32",
+          "next_hop": "0.0.0.0"
+        },
+        {
+          "index": 5,
+          "destination": "224.0.0.0/4",
+          "next_hop": "0.0.0.0"
+        },
+        {
+          "index": 1,
+          "destination": "224.0.0.0/4",
+          "next_hop": "0.0.0.0"
+        },
+        {
+          "index": 5,
+          "destination": "192.168.148.255/32",
+          "next_hop": "0.0.0.0"
+        },
+        {
+          "index": 5,
+          "destination": "192.168.148.128/32",
+          "next_hop": "0.0.0.0"
+        },
+        {
+          "index": 5,
+          "destination": "192.168.148.0/24",
+          "next_hop": "0.0.0.0"
+        },
+        {
+          "index": 1,
+          "destination": "127.255.255.255/32",
+          "next_hop": "0.0.0.0"
+        },
+        {
+          "index": 1,
+          "destination": "127.0.0.1/32",
+          "next_hop": "0.0.0.0"
+        },
+        {
+          "index": 1,
+          "destination": "127.0.0.0/8",
+          "next_hop": "0.0.0.0"
+        },
+        {
+          "index": 5,
+          "destination": "0.0.0.0/0",
+          "next_hop": "192.168.148.2"
+        },
+        {
+          "index": 5,
+          "destination": "ff00::/8",
+          "next_hop": "::"
+        },
+        {
+          "index": 1,
+          "destination": "ff00::/8",
+          "next_hop": "::"
+        },
+        {
+          "index": 5,
+          "destination": "fe80::9a7d:8638:e7da:cc79/128",
+          "next_hop": "::"
+        },
+        {
+          "index": 5,
+          "destination": "fe80::/64",
+          "next_hop": "::"
+        },
+        {
+          "index": 1,
+          "destination": "::1/128",
+          "next_hop": "::"
+        }
+      ]
+    },
+    "targets": [
+      {
+        "guid": "b64e18fe-219d-4c4a-a6d5-ff40cbd4f2b9",
+        "index": 5,
+        "name": "Ethernet0",
+        "admin": 1,
+        "status": "Up",
+        "type": 6
+      }
+    ],
+    "intent": "Disable guest adapters; keep isolated pending review",
+    "general_database_execution_allowed": false
+  },
+  "binding": {
+    "machine_binding": "210f9d961522ac5a7104c086fb210c698688da2242a2abceed5b970e6a0887b1",
+    "loopback_index": 1,
+    "before": {
+      "time_utc": "2026-11-09T12:21:14.7277021Z",
+      "machine_binding": "210f9d961522ac5a7104c086fb210c698688da2242a2abceed5b970e6a0887b1",
+      "powershell": "5.1.26100.1",
+      "adapters": [
+        {
+          "guid": "c20f2416-002c-43a0-94c6-c6a1675b75b0",
+          "index": 14,
+          "name": "Ethernet (Kernel Debugger)",
+          "admin": 2,
+          "status": "Not Present",
+          "type": 6
+        },
+        {
+          "guid": "b64e18fe-219d-4c4a-a6d5-ff40cbd4f2b9",
+          "index": 13,
+          "name": "Ethernet0",
+          "admin": 2,
+          "status": "Not Present",
+          "type": 6
+        },
+        {
+          "guid": "93123211-9629-4e04-82f0-ea2e4f221468",
+          "index": 11,
+          "name": "Teredo Tunneling Pseudo-Interface",
+          "admin": 2,
+          "status": "Not Present",
+          "type": 131
+        },
+        {
+          "guid": "2ee2c70c-a092-4d88-a654-98c8d7645cd5",
+          "index": 8,
+          "name": "Microsoft IP-HTTPS Platform Interface",
+          "admin": 2,
+          "status": "Not Present",
+          "type": 131
+        },
+        {
+          "guid": "07374750-e68b-490e-9330-9fd785cd71b6",
+          "index": 3,
+          "name": "6to4 Adapter",
+          "admin": 2,
+          "status": "Not Present",
+          "type": 131
+        }
+      ],
+      "native_interfaces": [
+        {
+          "id": "{31B6DC82-DAFF-11F1-80FF-806E6F6E6963}",
+          "type": 24,
+          "operational": 1,
+          "index4": 1,
+          "index6": 1
+        }
+      ],
+      "compartments": [
+        {
+          "id": 1,
+          "description": "Default Compartment"
+        }
+      ],
+      "interfaces": [
+        {
+          "index": 1,
+          "family": "IPv6",
+          "connected": 1
+        },
+        {
+          "index": 1,
+          "family": "IPv4",
+          "connected": 1
+        }
+      ],
+      "addresses": [
+        {
+          "index": 1,
+          "address": "::1",
+          "family": "IPv6"
+        },
+        {
+          "index": 1,
+          "address": "127.0.0.1",
+          "family": "IPv4"
+        }
+      ],
+      "routes": [
+        {
+          "index": 1,
+          "destination": "255.255.255.255/32",
+          "next_hop": "0.0.0.0"
+        },
+        {
+          "index": 1,
+          "destination": "224.0.0.0/4",
+          "next_hop": "0.0.0.0"
+        },
+        {
+          "index": 1,
+          "destination": "127.255.255.255/32",
+          "next_hop": "0.0.0.0"
+        },
+        {
+          "index": 1,
+          "destination": "127.0.0.1/32",
+          "next_hop": "0.0.0.0"
+        },
+        {
+          "index": 1,
+          "destination": "127.0.0.0/8",
+          "next_hop": "0.0.0.0"
+        },
+        {
+          "index": 1,
+          "destination": "ff00::/8",
+          "next_hop": "::"
+        },
+        {
+          "index": 1,
+          "destination": "::1/128",
+          "next_hop": "::"
+        }
+      ]
+    },
+    "targets": []
+  },
+  "authorization": "User authorized current boot isolation renewal and remaining fixed S3; no general DB execution",
+  "proposal_sha256": "c259bd876946da18863d087471e2f01df916befa8c6bcca19becfc5f28f94aee",
+  "RAS_maintenance_capture_sha256": "0a3a759201f028830fbf47d13a5a51aea58ce92e83cbb5ff88be039ec4e21613",
+  "network_adapter_changes_executed": 0,
+  "RAS_stops": [
+    "RasMan",
+    "SstpSvc"
+  ],
+  "database_execution_allowed": false,
+  "binding_is_observation_not_fabricated_change_plan": true
+}

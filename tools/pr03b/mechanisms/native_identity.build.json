@@ -1,0 +1,33 @@
+{
+  "kind": "S3_fixed_read_only_native_identity_build",
+  "compiler": "Zig0.15.2",
+  "source_url": "https://ziglang.org/download/0.15.2/zig-x86_64-windows-0.15.2.zip",
+  "published_archive_sha256": "3a0ed1e8799a2f8ce2a6e6290a9ff22e6906f8227865911fb7ddedc3cc14cb0c",
+  "source_sha256": "bd97671ff6ad682774e933ff61ad2f70616edf4d0bbbfbe9ea892b772e6fe476",
+  "artifact_sha256": "99d10eec9f526435b30dcc82397504c9d20d9d11ad9a335fd167979ae7c5aa57",
+  "arguments": [
+    "J:\\class-assistant\\worktrees\\web-pr03b-sessions\\work\\pr03b\\s3-r02-r04-20261110-01\\toolchains\\zig-x86_64-windows-0.15.2\\zig.exe",
+    "cc",
+    "-target",
+    "x86_64-windows-gnu",
+    "-shared",
+    "-O2",
+    "-ffreestanding",
+    "-fno-stack-protector",
+    "-nostdlib",
+    "-isystem",
+    "J:\\class-assistant\\worktrees\\web-pr03b-sessions\\work\\pr03b\\s3-r02-r04-20261110-01\\toolchains\\zig-x86_64-windows-0.15.2\\lib\\libc\\include\\any-windows-any",
+    "-Wl,--entry,DllMain",
+    "J:\\class-assistant\\worktrees\\web-pr03b-sessions\\tools\\pr03b\\mechanisms\\native_identity.c",
+    "-lkernel32",
+    "-lbcrypt",
+    "-o",
+    "J:\\class-assistant\\worktrees\\web-pr03b-sessions\\work\\pr03b\\s3-r02-r04-20261110-01\\native_identity-04.dll"
+  ],
+  "exit_code": 0,
+  "system_configuration_modified": false,
+  "cache_scope": "J:\\class-assistant\\worktrees\\web-pr03b-sessions\\work\\pr03b\\s3-r02-r04-20261110-01",
+  "target": "x86_64-windows-gnu",
+  "query_only": true,
+  "scope": "fixed readonly process/file metadata and complete source SHA256; no cached facts or decisions"
+}
