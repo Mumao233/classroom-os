@@ -24,9 +24,10 @@ class AuthPolicy:
     def __post_init__(self):
         if (self.student_idle!=timedelta(days=14) or self.student_absolute!=timedelta(days=30)
                 or self.admin_idle!=timedelta(minutes=15) or self.admin_absolute!=timedelta(hours=8)
-                or not timedelta(0)<self.challenge<=timedelta(minutes=5)
-                or not timedelta(0)<self.recovery_flow<=timedelta(minutes=10)
-                or not timedelta(0)<self.ws_ticket<=timedelta(seconds=30)
+                # These three lifetimes are fixed inside the database functions. Accepting a
+                # shorter value here would be silently ignored, so only the enforced ones pass.
+                or self.challenge!=timedelta(minutes=5) or self.recovery_flow!=timedelta(minutes=10)
+                or self.ws_ticket!=timedelta(seconds=30)
                 or not 0<self.ws_first_frame<=5):
             raise ValueError('invalid authentication policy')
 

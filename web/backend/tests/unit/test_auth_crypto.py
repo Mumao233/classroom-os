@@ -92,6 +92,10 @@ def test_receiver_signature_is_bound_to_exact_action_body_key_and_context():
 
 def test_unsafe_policy_and_diagnostic_repr():
     with pytest.raises(ValueError):AuthPolicy(admin_idle=timedelta(days=14))
+    # Lifetimes the database fixes cannot be configured shorter and then silently ignored.
+    for name,value in (('challenge',timedelta(minutes=1)),('recovery_flow',timedelta(minutes=5)),('ws_ticket',timedelta(seconds=5))):
+        with pytest.raises(ValueError):AuthPolicy(**{name:value})
+    assert AuthPolicy().ws_ticket==timedelta(seconds=30) and AuthPolicy(ws_first_frame=2.0).ws_first_frame==2.0
     c=BrowserContext(session='private-session',csrf='private-csrf',source='private-IP')
     assert 'private' not in repr(c)
 

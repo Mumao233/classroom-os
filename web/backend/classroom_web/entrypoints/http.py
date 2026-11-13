@@ -63,7 +63,7 @@ def request_context(request):
 
 def failure(error,request_id):
     return JSONResponse(status_code=error.status,content={'error':dict(code=error.code,message='Request could not be completed.',request_id=request_id,
-        retryable=error.status in (429,503),retry_after_seconds=None,current_revision=None,conflict_id=None,task_id=None)},
+        retryable=error.status in (429,503) and error.code!='RESULT_UNKNOWN',retry_after_seconds=None,current_revision=None,conflict_id=None,task_id=None)},
         headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'})
 
 

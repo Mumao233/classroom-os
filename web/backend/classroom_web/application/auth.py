@@ -167,7 +167,14 @@ class AuthService:
         return AuthReply(dict(user=s['user'],device_id=s['device_id'],session_id=s['session_id'],csrf_token=self.crypto.csrf('session',ctx.session)))
 
     def logout(self,ctx):
-        if ctx.session is None and ctx.recovery is not None:
+        recovery=ctx.recovery is not None and ctx.session is None
+        if ctx.recovery is not None and ctx.session is not None and ctx.csrf is not None:
+            # Both cookies can coexist (one tab began recovery while another finished a login).
+            # /auth/csrf then answers in recovery scope, so the presented CSRF token, not the
+            # mere presence of a session cookie, decides which context is being left.
+            try:recovery=hmac.compare_digest(self.crypto.csrf('recovery',ctx.recovery),ctx.csrf)
+            except AuthRejected:recovery=False
+        if recovery:
             # Leaving a pending automatic recovery: without this the HttpOnly recovery
             # cookie keeps the browser in recovery scope until the flow expires.
             self.require_csrf(ctx,'recovery')

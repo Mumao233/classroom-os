@@ -107,8 +107,13 @@ def test_pending_automatic_recovery_can_be_abandoned_so_login_can_restart(auth):
     assert post(a,'/auth/logout',{},csrf).status_code==403
     assert a.client.get(BASE+'/auth/csrf').json()['csrf_token']==flow['csrf_token']
 
+    # A session cookie may coexist (another tab finished a login). Bootstrap still answers in
+    # recovery scope, so the recovery CSRF token must select the recovery context for logout.
+    a.client.cookies.set('__Host-classroom_session',random_token())
+    assert a.client.get(BASE+'/auth/csrf').json()['csrf_token']==flow['csrf_token']
     r=post(a,'/auth/logout',{},flow['csrf_token']);assert r.status_code==200,r.text
     assert not a.client.cookies.get('__Host-classroom_recovery')
+    a.client.cookies.delete('__Host-classroom_session')
     fresh=a.client.get(BASE+'/auth/csrf').json()['csrf_token'];assert fresh!=flow['csrf_token']
     r=post(a,'/auth/login',credentials,fresh);assert r.status_code==200 and r.json()['state']=='mfa_required',r.text
     with a.pg.admin.connect() as c:
@@ -138,3 +143,13 @@ def test_resubmitted_forgot_password_returns_the_first_acknowledgement_without_n
     assert post(a,'/auth/password/forgot',dict(email=a.email),csrf).status_code==429
     assert post(a,'/auth/password/forgot',dict(email=a.email),csrf,**{'Idempotency-Key':key}).status_code==202
     assert jobs()==(3,3)
+
+
+def test_an_unknown_outcome_is_never_advertised_as_retryable():
+    import json
+    from classroom_web.domain.auth import AuthRejected
+    from classroom_web.entrypoints.http import failure
+    flag=lambda code,status:json.loads(failure(AuthRejected(code,status),str(uuid4())).body)['error']['retryable']
+    # The write may already have committed; the contract forbids a blind retry.
+    assert flag('RESULT_UNKNOWN',503) is False
+    assert flag('STORAGE_UNAVAILABLE',503) is True and flag('RATE_LIMITED',429) is True and flag('UNAUTHENTICATED',401) is False
