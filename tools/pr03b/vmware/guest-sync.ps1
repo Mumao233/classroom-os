@@ -31,7 +31,8 @@ if ($LASTEXITCODE -ge 8) { $failed.Add("root files exit=$LASTEXITCODE") }
 # Toolchains: additive copy.
 Sync "$W\venv" '/E' @('__pycache__')
 Sync 'work\pr03b\toolchains\pg17.11-win64-53b5364a5a04e8ec' '/E'
-Sync 'work\pr09a\dist' '/MIR'
+# work\pr09a\dist is not mirrored: the host copy may be stale. The guest builds it from the
+# synced sources (guest-frontend-checks.ps1), and the browser test serves that build.
 Sync 'work\pr03b\vmware-broker\payload' '/E'
 # The 53b5 PostgreSQL bundle lacks iconv.dll/charset.dll, which libxml2.dll imports; on the
 # host they were evidently picked up from the ambient PATH. Take them from the sibling

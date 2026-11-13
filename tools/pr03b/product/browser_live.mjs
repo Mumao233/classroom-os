@@ -7,19 +7,27 @@ const {chromium}=await import(pathToFileURL(cfg.playwrightModule).href);
 let stage='launch',browser,page,tlsDetails=null,loginPosts=0;const steps=[],responses=[],pageErrors=[];
 const mark=name=>{stage=name;steps.push(name);};
 try {
-  if(!cfg.strictLinuxTLS)throw new Error('strict_isolated_Chromium_trust_required');
-  browser=await chromium.launch({executablePath:cfg.chromium,headless:true,timeout:20000,args:['--disable-gpu','--disable-background-networking','--disable-sync','--no-first-run','--no-sandbox']});
+  // Two trust modes. Linux: a private NSS store holding only this run's CA, so the chain and
+  // the hostname are really validated. Windows guest (pinnedKey): Chromium has no per-profile
+  // trust store there and the OS store is left untouched, so exactly this run's server key
+  // is allow-listed. That mode cannot check the hostname or the chain and never claims to;
+  // its negative control is a second listener with a different key, which must be refused.
+  const pinned=cfg.tlsMode==='pinned_key';
+  if(!pinned&&!cfg.strictLinuxTLS)throw new Error('strict_isolated_Chromium_trust_required');
+  if(pinned&&!/^[A-Za-z0-9+/]{43}=$/.test(cfg.spki??''))throw new Error('pinned_key_required');
+  browser=await chromium.launch({...(cfg.chromium?{executablePath:cfg.chromium}:{}),headless:true,timeout:20000,
+    args:['--disable-gpu','--disable-background-networking','--disable-sync','--no-first-run','--no-sandbox',...(pinned?['--ignore-certificate-errors-spki-list='+cfg.spki]:[])]});
   mark('browser_launched');
   const context=await browser.newContext({viewport:{width:1440,height:1000},serviceWorkers:'block',acceptDownloads:false});
-  const wrongHost=cfg.origin.replace('127.0.0.1','localhost');
+  const wrongHost=pinned?cfg.unpinnedOrigin:cfg.origin.replace('127.0.0.1','localhost');
   await context.route('**/*',route=>route.request().url().startsWith(cfg.origin+'/')||route.request().url().startsWith(wrongHost+'/')?route.continue():route.abort());
   page=await context.newPage();
   page.on('response',r=>{if(responses.length<32)responses.push({path:new URL(r.url()).pathname,status:r.status()});});
   page.on('pageerror',e=>pageErrors.push({kind:e.name}));
   let rejected=false;
-  try{await page.goto(wrongHost+'/');}catch(error){rejected=error.message.includes('ERR_CERT_COMMON_NAME_INVALID');}
+  try{await page.goto(wrongHost+'/');}catch(error){rejected=error.message.includes(pinned?'ERR_CERT_AUTHORITY_INVALID':'ERR_CERT_COMMON_NAME_INVALID');}
   if(!rejected)throw new Error('certificate_hostname_must_be_rejected');
-  mark('TLS_invalid_hostname_rejected');
+  mark(pinned?'TLS_unpinned_key_rejected':'TLS_invalid_hostname_rejected');
   // Chromium finishes its error-document navigation asynchronously. A fresh
   // page keeps that negative control from interrupting the positive test.
   await page.close();page=await context.newPage();
@@ -30,7 +38,7 @@ try {
   const details=await navigation.securityDetails();
   tlsDetails=details;
   if(!details?.issuer?.includes('PR03b isolated root '))throw new Error('unexpected_certificate_chain');
-  mark('HTTPS_CA_chain_validated');
+  mark(pinned?'HTTPS_served_by_run_certificate':'HTTPS_CA_chain_validated');
   await page.getByRole('heading',{name:'登录课间',exact:true}).waitFor();mark('real_https_login_form');
   await page.getByLabel('邮箱',{exact:true}).fill(cfg.email);
   if(cfg.retryCredentials) {
