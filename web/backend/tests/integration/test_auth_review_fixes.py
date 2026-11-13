@@ -6,6 +6,7 @@ import sqlalchemy as sa
 from fastapi.testclient import TestClient
 
 from test_authentication import auth,post,login,install_factor,PASSWORD,BASE
+from test_auth_mail import mail
 
 WRONG='wrong-synthetic-password'
 HEADERS={'Origin':'https://testserver','Sec-Fetch-Site':'same-origin'}
@@ -98,3 +99,28 @@ def test_pending_automatic_recovery_can_be_abandoned_so_login_can_restart(auth):
     r=post(a,'/auth/login',credentials,fresh);assert r.status_code==200 and r.json()['state']=='mfa_required',r.text
     with a.pg.admin.connect() as c:
         assert c.scalar(sa.text("SELECT count(*) FROM auth_challenges WHERE kind='auto_recovery' AND consumed_at IS NULL"))==0
+
+
+def test_resubmitted_forgot_password_returns_the_first_acknowledgement_without_new_mail_or_quota(mail):
+    a,_,_=mail;csrf=a.client.get(BASE+'/auth/csrf').json()['csrf_token'];key=str(uuid4())
+    def jobs():
+        with a.pg.admin.connect() as sql:
+            return (sql.scalar(sa.text('SELECT count(*) FROM identity_control.authentication_mail_jobs WHERE owner_id=:u'),dict(u=a.uid)),
+                    sql.scalar(sa.text("SELECT count(*) FROM email_actions WHERE owner_id=:u AND purpose='reset'"),dict(u=a.uid)))
+    # The acknowledgement was lost four times: the hourly quota is three, and none of the repeats may spend it.
+    for _ in range(5):
+        r=post(a,'/auth/password/forgot',dict(email=a.email),csrf,**{'Idempotency-Key':key});assert r.status_code==202 and r.json()['accepted'],r.text
+    assert jobs()==(1,1)
+    # The same key with another body is refused and changes nothing.
+    r=post(a,'/auth/password/forgot',dict(email=uuid4().hex+'@example.test'),csrf,**{'Idempotency-Key':key})
+    assert r.status_code==409 and r.json()['error']['code']=='IDEMPOTENCY_MISMATCH',r.text
+    assert jobs()==(1,1)
+    # A receipt belongs to its pre-authentication context: another browser reusing the key is a new request.
+    other=TestClient(a.client.app,base_url='https://testserver');other_csrf=other.get(BASE+'/auth/csrf').json()['csrf_token']
+    r=other.post(BASE+'/auth/password/forgot',json=dict(email=a.email),headers={**HEADERS,'X-CSRF-Token':other_csrf,'Idempotency-Key':key});assert r.status_code==202,r.text
+    assert jobs()==(2,2)
+    # Distinct requests still spend the quota of three per hour, and a replay stays acknowledged after it is exhausted.
+    assert post(a,'/auth/password/forgot',dict(email=a.email),csrf).status_code==202
+    assert post(a,'/auth/password/forgot',dict(email=a.email),csrf).status_code==429
+    assert post(a,'/auth/password/forgot',dict(email=a.email),csrf,**{'Idempotency-Key':key}).status_code==202
+    assert jobs()==(3,3)

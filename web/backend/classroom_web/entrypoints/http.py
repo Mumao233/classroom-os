@@ -113,7 +113,7 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
         if path in changes:return auth.change(ctx,body,key,changes[path])
         if path.startswith('/me/sessions/') and path.endswith('/revoke'):return auth.change(ctx,body,key,'revokeSession',target_id=params['session_id'])
         if path.startswith('/me/devices/') and path.endswith('/revoke'):return auth.change(ctx,body,key,'revokeDevice',target_id=params['device_id'])
-        if path=='/auth/password/forgot':return auth.email_action(ctx,body,'forgot')
+        if path=='/auth/password/forgot':return auth.email_action(ctx,body,'forgot',key)
         if path=='/auth/password/reset':return auth.email_action(ctx,body,'reset')
         if path=='/auth/email/confirm':return auth.email_action(ctx,body,'confirm_email')
         if path in ('/auth/recovery/enroll','/auth/recovery/confirm'):return auth.automatic(ctx,body,key,path.rsplit('/',1)[-1])

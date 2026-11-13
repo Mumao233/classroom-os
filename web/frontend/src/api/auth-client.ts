@@ -75,10 +75,18 @@ export class AuthClient {
       response = await this.transport.call(globalThis, '/api/web/v1' + path, { method: body === undefined ? 'GET' : 'POST', credentials: 'same-origin', cache: 'no-store', redirect: 'error',
         headers: body === undefined ? {} : { 'Content-Type': 'application/json', 'X-CSRF-Token': sentCsrf, 'Idempotency-Key': options.key ?? crypto.randomUUID(), ...(options.reauth ? {'X-Reauth-Token': options.reauth} : {}) },
         body: body === undefined ? undefined : JSON.stringify(body) });
-    } catch { throw new AuthError('STORAGE_UNAVAILABLE'); }
+    } catch {
+      // A write whose response never arrived may still have committed: recovery codes,
+      // proofs and email tokens can already be consumed. Never present that as retryable.
+      throw new AuthError(body === undefined ? 'STORAGE_UNAVAILABLE' : 'RESULT_UNKNOWN');
+    }
     if (generation !== this.generation) throw new AuthError('STALE_ACCOUNT');
     let value: unknown;
-    try { value = await response.json(); } catch { throw new AuthError('OUTPUT_INVALID', response.status); }
+    try { value = await response.json(); } catch {
+      // Same for an unreadable body, unless the status is a definitive client rejection.
+      const unknown = body !== undefined && (response.ok || response.status >= 500);
+      throw new AuthError(unknown ? 'RESULT_UNKNOWN' : 'OUTPUT_INVALID', response.status);
+    }
     if (generation !== this.generation) throw new AuthError('STALE_ACCOUNT');
     if (!response.ok) {
       const code = object(value) && object(value.error) && typeof value.error.code === 'string' ? value.error.code : 'STORAGE_UNAVAILABLE';

@@ -226,13 +226,18 @@ class AuthService:
         if secret_codes:return AuthReply(dict(codes=secret_codes,shown_once=True),clear_session=purpose=='confirmMfa')
         return AuthReply({},clear_session=purpose in ('changePassword','logoutAll','disableMfa') or (purpose=='revokeDevice' and target_id==s['device_id']))
 
-    def email_action(self,ctx,body,action):
+    def email_action(self,ctx,body,action,key=None):
         self.require_csrf(ctx,'preauth');approval=None
         if action=='forgot':
-            if self.mail is None:raise AuthRejected('SERVICE_DISABLED',503)
-            email=normalize_email(body['email']);self.budget('mail',email,True);token=random_token()
+            if self.mail is None or key is None:raise AuthRejected('SERVICE_DISABLED',503)
+            email=normalize_email(body['email']);token=random_token()
             action_id=str(uuid4())
-            self._need(self._call('queue_auth_mail',dict(id=action_id,email=email,action_hash=digest('email_action',token),encrypted_mail=self.mail.seal(action_id,email,token,'reset'))))
+            # One transaction decides replay, quota and enqueue: a resubmission with the same
+            # context, key and body returns the first acknowledgement without spending the
+            # hourly mail quota or issuing another token.
+            self._need(self._call('queue_auth_mail',dict(id=action_id,email=email,action_hash=digest('email_action',token),encrypted_mail=self.mail.seal(action_id,email,token,'reset'),
+                context_hash=digest('preauth',ctx.preauth),operation_key=key,commitment=self.crypto.commitment('operation',dict(purpose='forgotPassword',email=email)),
+                budget_key=self.crypto.commitment('budget:mail',email))))
             return AuthReply({})
         payload=dict(action=action,action_hash=digest('email_action',body['token']),audit_id=str(uuid4()))
         if action=='reset':

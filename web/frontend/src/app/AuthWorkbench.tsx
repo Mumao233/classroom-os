@@ -13,7 +13,7 @@ const messages: Record<string,string> = {
   SERVICE_DISABLED:'这项服务暂未启用，请联系项目负责人。', REAUTH_REQUIRED:'请重新验证当前密码和必要的验证码。',
   VALIDATION_FAILED:'请检查输入内容。学生新密码至少 6 个字符，管理员至少 12 个字符。',
   SECRET_ALREADY_ISSUED:'秘密已展示一次。若未保存，请重新验证身份并明确发起新操作。',
-  RESULT_UNKNOWN:'提交结果暂不确定。请先重新登录核对状态，不要重复恢复操作。',
+  RESULT_UNKNOWN:'提交结果暂不确定，操作可能已经生效。请先刷新或重新登录核对当前状态，不要直接重复提交。',
   INCOMPATIBLE_CLIENT:'客户端与服务端不兼容，请刷新或更新后重试。',
   AUTH_CONTEXT_EXPIRED:'登录或验证流程已过期，请重新登录。',
 };
@@ -48,9 +48,13 @@ export default function AuthWorkbench() {
         setSession(null);setChallenge(null);setSeed(null);setCodes([]);setSessions([]);setDevices([]);
         setScreen('loading');setReload(value=>value+1);
       }
+      // An email-link token survives a definitive rejection (for example a new password the
+      // policy refused): its URL fragment is already gone, so clearing it here would force
+      // the user back to the email. It is dropped only when it may have been consumed.
+      if(error instanceof AuthError && error.code==='RESULT_UNKNOWN')setLinkToken('');
       setMessage(error instanceof AuthError ? messages[error.code]??'服务暂不可用，请稍后重试。':'服务暂不可用，请稍后重试。');
     }
-    finally{setPassword('');setCode('');setNewPassword('');setNewCode('');setLinkToken('');setBusy(false);}
+    finally{setPassword('');setCode('');setNewPassword('');setNewCode('');setBusy(false);}
   }
   async function accept(value:S['LoginResult']) {
     setSeed(null);setCodes([]);
@@ -58,9 +62,15 @@ export default function AuthWorkbench() {
     else if(value.state==='mfa_required'){setChallenge(value);setScreen('mfa');}
     else {setChallenge(null);setScreen('recovery');}
   }
-  async function loggedOut() {
-    client().clear();setSession(null);setChallenge(null);setSeed(null);setCodes([]);setSessions([]);setDevices([]);
-    await client().refreshCsrf();setScreen('login');
+  async function loggedOut(issued:string[]=[]) {
+    client().clear();setSession(null);setChallenge(null);setSeed(null);setCodes(issued);setSessions([]);setDevices([]);
+    try{await client().refreshCsrf();setScreen('login');}
+    catch(error){
+      // Once-only recovery codes were already received and the server keeps only their hashes.
+      // A failed follow-up request must not discard them: keep them on screen and offer to reconnect.
+      if(!issued.length)throw error;
+      setScreen('unavailable');
+    }
   }
   async function restartLogin() {
     if(screen==='recovery'||screen==='orphan') {
@@ -84,7 +94,7 @@ export default function AuthWorkbench() {
         else {
           const path={register:'/auth/register',forgot:'/auth/password/forgot',reset:'/auth/password/reset',verify:'/auth/verify-email',confirm_email:'/auth/email/confirm'}[mode];
           const body=mode==='register'?{email,password,invitation_token:linkToken}:mode==='forgot'?{email}:mode==='reset'?{token:linkToken,new_password:password}:{token:linkToken};
-          await client().request(path,body);setMailIntent(null);setMode('login');setMessage('请求已接收。如需邮件验证，请查看对应邮箱后完成验证。');
+          await client().request(path,body);setMailIntent(null);setLinkToken('');setMode('login');setMessage('请求已接收。如需邮件验证，请查看对应邮箱后完成验证。');
         }
       } else if(screen==='mfa'&&challenge) {
         await accept(recoveryCode?await client().recover(challenge,code):await client().totp(challenge.challenge_id,code));
@@ -122,7 +132,7 @@ export default function AuthWorkbench() {
         </div>
         <div className={styles.section}><h2>验证器与恢复码</h2>{seed?<><p>将以下地址导入你自己的验证器，确认前原验证器仍有效。</p><code className={styles.secret}>{seed.otpauth_uri}</code>
           <Input label="新验证器验证码" autoComplete="one-time-code" inputMode="numeric" value={newCode} onChange={e=>setNewCode(e.target.value)} maxLength={6}/>
-          <Button disabled={busy||!password||newCode.length!==6} onClick={()=>void run(async()=>{const value=await sensitive('confirmMfa',{enrollment_id:seed.enrollment_id,code:newCode},'/auth/mfa/confirm',seed.enrollment_id) as S['RecoveryCodes'];setSeed(null);await loggedOut();setCodes(value.codes);setMessage('验证器已启用。请保存下列恢复码，然后重新登录。');})}>确认新验证器</Button></>:
+          <Button disabled={busy||!password||newCode.length!==6} onClick={()=>void run(async()=>{const value=await sensitive('confirmMfa',{enrollment_id:seed.enrollment_id,code:newCode},'/auth/mfa/confirm',seed.enrollment_id) as S['RecoveryCodes'];await loggedOut(value.codes);setMessage('验证器已启用。请保存下列恢复码，然后重新登录。');})}>确认新验证器</Button></>:
           <div className={styles.actions}><Button disabled={busy||!password} variant="secondary" onClick={()=>void run(async()=>setSeed(await sensitive('enrollMfa',{},'/auth/mfa/enroll') as S['MfaEnrollment']))}>{session.user.mfa_enabled?'更换验证器':'启用验证器'}</Button>
             {session.user.mfa_enabled&&<Button disabled={busy||!password} variant="secondary" onClick={()=>void run(async()=>{const value=await sensitive('rotateRecoveryCodes',{},'/auth/mfa/recovery-codes') as S['RecoveryCodes'];setCodes(value.codes);})}>生成或轮换恢复码</Button>}
             {session.user.mfa_enabled&&session.user.role==='student'&&<Button disabled={busy||!password} variant="danger" onClick={()=>void run(async()=>{await sensitive('disableMfa',{},'/auth/mfa/disable');await loggedOut();})}>关闭双重验证</Button>}</div>}

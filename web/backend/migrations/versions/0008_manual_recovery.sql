@@ -657,10 +657,25 @@ END $f$;
 
 CREATE FUNCTION identity_api.queue_auth_mail(p jsonb) RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,identity_control,public,pg_temp AS $f$
-DECLARE u record;n timestamptz;
+DECLARE u record;n timestamptz;prior text;
 BEGIN
+  IF p->>'context_hash' IS NULL OR p->>'operation_key' IS NULL OR p->>'commitment' IS NULL OR p->>'budget_key' IS NULL THEN RETURN NULL;END IF;
   PERFORM pg_advisory_xact_lock(7303002);n:=clock_timestamp();
+  -- A resubmission from the same pre-authentication context with the same key and body
+  -- (for example after a lost acknowledgement) gets the original acknowledgement: no
+  -- quota, no new token and no second mail. The lock above serializes this check with
+  -- the receipt insert below.
+  SELECT commitment INTO prior FROM public.preauth_receipts WHERE context_hash=p->>'context_hash' AND operation='forgotPassword' AND operation_key=(p->>'operation_key')::uuid;
+  IF FOUND THEN
+    IF prior<>p->>'commitment' THEN RETURN jsonb_build_object('error','IDEMPOTENCY_MISMATCH');END IF;
+    RETURN '{}'::jsonb;
+  END IF;
   IF p->>'encrypted_mail' IS NULL OR (SELECT count(*) FROM identity_control.authentication_mail_jobs WHERE state IN('queued','sending') AND expires_at>n)>=200 THEN RETURN jsonb_build_object('error','RATE_LIMITED');END IF;
+  IF NOT coalesce((identity_api.authentication_budget(jsonb_build_object('kind','mail','key',p->>'budget_key','increment',true))->>'allowed')::boolean,false) THEN
+    RETURN jsonb_build_object('error','RATE_LIMITED');
+  END IF;
+  INSERT INTO public.preauth_receipts(context_hash,operation,operation_key,commitment,result)
+    VALUES(p->>'context_hash','forgotPassword',(p->>'operation_key')::uuid,p->>'commitment','{}'::jsonb);
   SELECT id,security_epoch INTO u FROM public.users WHERE normalized_email=p->>'email' AND state='active' AND deleted_at IS NULL AND email_verified_at IS NOT NULL FOR SHARE;
   IF u.id IS NOT NULL THEN
     INSERT INTO public.email_actions(id,owner_id,purpose,token_hash,security_epoch,expires_at)
