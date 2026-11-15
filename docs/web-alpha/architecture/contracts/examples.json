@@ -1,5 +1,5 @@
 {
-  "contract_version": "0.1.0",
+  "contract_version": "0.2.0",
   "description": "Synthetic structural validation cases; stateful transactions require future PG/HTTP/browser tests.",
   "cases": [
     {
@@ -668,6 +668,1502 @@
         "language": "mixed"
       },
       "reason": ""
+    },
+    {
+      "name": "s2_RegisterRequest_len_5",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/RegisterRequest",
+      "expected_valid": false,
+      "value": {
+        "email": "student@example.test",
+        "invitation_token": "fixture-AAAAAAAAAAAAAAAAAAAAAAAA",
+        "password": "xxxxx"
+      },
+      "reason": "Public role-agnostic structural boundary only; Admin 12 and actual account/token role are mandatory server semantics, not a client role flag."
+    },
+    {
+      "name": "s2_RegisterRequest_len_6",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/RegisterRequest",
+      "expected_valid": true,
+      "value": {
+        "email": "student@example.test",
+        "invitation_token": "fixture-AAAAAAAAAAAAAAAAAAAAAAAA",
+        "password": "xxxxxx"
+      },
+      "reason": "Public role-agnostic structural boundary only; Admin 12 and actual account/token role are mandatory server semantics, not a client role flag."
+    },
+    {
+      "name": "s2_RegisterRequest_len_11",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/RegisterRequest",
+      "expected_valid": true,
+      "value": {
+        "email": "student@example.test",
+        "invitation_token": "fixture-AAAAAAAAAAAAAAAAAAAAAAAA",
+        "password": "xxxxxxxxxxx"
+      },
+      "reason": "Public role-agnostic structural boundary only; Admin 12 and actual account/token role are mandatory server semantics, not a client role flag."
+    },
+    {
+      "name": "s2_RegisterRequest_len_12",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/RegisterRequest",
+      "expected_valid": true,
+      "value": {
+        "email": "student@example.test",
+        "invitation_token": "fixture-AAAAAAAAAAAAAAAAAAAAAAAA",
+        "password": "xxxxxxxxxxxx"
+      },
+      "reason": "Public role-agnostic structural boundary only; Admin 12 and actual account/token role are mandatory server semantics, not a client role flag."
+    },
+    {
+      "name": "s2_RegisterRequest_len_1024",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/RegisterRequest",
+      "expected_valid": true,
+      "value": {
+        "email": "student@example.test",
+        "invitation_token": "fixture-AAAAAAAAAAAAAAAAAAAAAAAA",
+        "password": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "reason": "Public role-agnostic structural boundary only; Admin 12 and actual account/token role are mandatory server semantics, not a client role flag."
+    },
+    {
+      "name": "s2_RegisterRequest_len_1025",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/RegisterRequest",
+      "expected_valid": false,
+      "value": {
+        "email": "student@example.test",
+        "invitation_token": "fixture-AAAAAAAAAAAAAAAAAAAAAAAA",
+        "password": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "reason": "Public role-agnostic structural boundary only; Admin 12 and actual account/token role are mandatory server semantics, not a client role flag."
+    },
+    {
+      "name": "s2_RegisterRequest_non_string",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/RegisterRequest",
+      "expected_valid": false,
+      "value": {
+        "email": "student@example.test",
+        "invitation_token": "fixture-AAAAAAAAAAAAAAAAAAAAAAAA",
+        "password": 123
+      },
+      "reason": "Synthetic schema structure only; no real identity, point/signature validation, current authorization, time, entropy or transaction execution is proved."
+    },
+    {
+      "name": "s2_PasswordResetRequest_len_5",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/PasswordResetRequest",
+      "expected_valid": false,
+      "value": {
+        "token": "fixture-AAAAAAAAAAAAAAAAAAAAAAAA",
+        "new_password": "xxxxx"
+      },
+      "reason": "Public role-agnostic structural boundary only; Admin 12 and actual account/token role are mandatory server semantics, not a client role flag."
+    },
+    {
+      "name": "s2_PasswordResetRequest_len_6",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/PasswordResetRequest",
+      "expected_valid": true,
+      "value": {
+        "token": "fixture-AAAAAAAAAAAAAAAAAAAAAAAA",
+        "new_password": "xxxxxx"
+      },
+      "reason": "Public role-agnostic structural boundary only; Admin 12 and actual account/token role are mandatory server semantics, not a client role flag."
+    },
+    {
+      "name": "s2_PasswordResetRequest_len_11",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/PasswordResetRequest",
+      "expected_valid": true,
+      "value": {
+        "token": "fixture-AAAAAAAAAAAAAAAAAAAAAAAA",
+        "new_password": "xxxxxxxxxxx"
+      },
+      "reason": "Public role-agnostic structural boundary only; Admin 12 and actual account/token role are mandatory server semantics, not a client role flag."
+    },
+    {
+      "name": "s2_PasswordResetRequest_len_12",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/PasswordResetRequest",
+      "expected_valid": true,
+      "value": {
+        "token": "fixture-AAAAAAAAAAAAAAAAAAAAAAAA",
+        "new_password": "xxxxxxxxxxxx"
+      },
+      "reason": "Public role-agnostic structural boundary only; Admin 12 and actual account/token role are mandatory server semantics, not a client role flag."
+    },
+    {
+      "name": "s2_PasswordResetRequest_len_1024",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/PasswordResetRequest",
+      "expected_valid": true,
+      "value": {
+        "token": "fixture-AAAAAAAAAAAAAAAAAAAAAAAA",
+        "new_password": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "reason": "Public role-agnostic structural boundary only; Admin 12 and actual account/token role are mandatory server semantics, not a client role flag."
+    },
+    {
+      "name": "s2_PasswordResetRequest_len_1025",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/PasswordResetRequest",
+      "expected_valid": false,
+      "value": {
+        "token": "fixture-AAAAAAAAAAAAAAAAAAAAAAAA",
+        "new_password": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "reason": "Public role-agnostic structural boundary only; Admin 12 and actual account/token role are mandatory server semantics, not a client role flag."
+    },
+    {
+      "name": "s2_PasswordResetRequest_non_string",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/PasswordResetRequest",
+      "expected_valid": false,
+      "value": {
+        "token": "fixture-AAAAAAAAAAAAAAAAAAAAAAAA",
+        "new_password": 123
+      },
+      "reason": "Synthetic schema structure only; no real identity, point/signature validation, current authorization, time, entropy or transaction execution is proved."
+    },
+    {
+      "name": "s2_PasswordChangeRequest_len_5",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/PasswordChangeRequest",
+      "expected_valid": false,
+      "value": {
+        "new_password": "xxxxx"
+      },
+      "reason": "Public role-agnostic structural boundary only; Admin 12 and actual account/token role are mandatory server semantics, not a client role flag."
+    },
+    {
+      "name": "s2_PasswordChangeRequest_len_6",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/PasswordChangeRequest",
+      "expected_valid": true,
+      "value": {
+        "new_password": "xxxxxx"
+      },
+      "reason": "Public role-agnostic structural boundary only; Admin 12 and actual account/token role are mandatory server semantics, not a client role flag."
+    },
+    {
+      "name": "s2_PasswordChangeRequest_len_11",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/PasswordChangeRequest",
+      "expected_valid": true,
+      "value": {
+        "new_password": "xxxxxxxxxxx"
+      },
+      "reason": "Public role-agnostic structural boundary only; Admin 12 and actual account/token role are mandatory server semantics, not a client role flag."
+    },
+    {
+      "name": "s2_PasswordChangeRequest_len_12",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/PasswordChangeRequest",
+      "expected_valid": true,
+      "value": {
+        "new_password": "xxxxxxxxxxxx"
+      },
+      "reason": "Public role-agnostic structural boundary only; Admin 12 and actual account/token role are mandatory server semantics, not a client role flag."
+    },
+    {
+      "name": "s2_PasswordChangeRequest_len_1024",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/PasswordChangeRequest",
+      "expected_valid": true,
+      "value": {
+        "new_password": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "reason": "Public role-agnostic structural boundary only; Admin 12 and actual account/token role are mandatory server semantics, not a client role flag."
+    },
+    {
+      "name": "s2_PasswordChangeRequest_len_1025",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/PasswordChangeRequest",
+      "expected_valid": false,
+      "value": {
+        "new_password": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "reason": "Public role-agnostic structural boundary only; Admin 12 and actual account/token role are mandatory server semantics, not a client role flag."
+    },
+    {
+      "name": "s2_PasswordChangeRequest_non_string",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/PasswordChangeRequest",
+      "expected_valid": false,
+      "value": {
+        "new_password": 123
+      },
+      "reason": "Synthetic schema structure only; no real identity, point/signature validation, current authorization, time, entropy or transaction execution is proved."
+    },
+    {
+      "name": "s2_student_role_injection",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/RegisterRequest",
+      "expected_valid": false,
+      "value": {
+        "email": "student@example.test",
+        "password": "example-only",
+        "invitation_token": "fixture-AAAAAAAAAAAAAAAAAAAAAAAA",
+        "role": "student"
+      },
+      "reason": "Synthetic schema structure only; no real identity, point/signature validation, current authorization, time, entropy or transaction execution is proved."
+    },
+    {
+      "name": "s2_unicode_six_codepoints",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/PasswordChangeRequest",
+      "expected_valid": true,
+      "value": {
+        "new_password": "😀😀😀😀😀😀"
+      },
+      "reason": "Synthetic schema structure only; no real identity, point/signature validation, current authorization, time, entropy or transaction execution is proved."
+    },
+    {
+      "name": "s2_unicode_five_codepoints",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/PasswordChangeRequest",
+      "expected_valid": false,
+      "value": {
+        "new_password": "😀😀😀😀😀"
+      },
+      "reason": "Synthetic schema structure only; no real identity, point/signature validation, current authorization, time, entropy or transaction execution is proved."
+    },
+    {
+      "name": "s2_login_authenticated",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/LoginResult",
+      "expected_valid": true,
+      "value": {
+        "state": "authenticated",
+        "challenge_id": null,
+        "user": {
+          "id": "11111111-1111-4111-8111-111111111111",
+          "revision": 1,
+          "created_at": "2026-11-06T00:00:00Z",
+          "updated_at": "2026-11-06T00:00:00Z",
+          "email": "student@example.test",
+          "nickname": "Synthetic",
+          "school": "",
+          "major": "",
+          "role": "student",
+          "status": "active",
+          "mfa_enabled": true
+        },
+        "device_id": "22222222-2222-4222-8222-222222222222",
+        "csrf_token": "fixture-csrf"
+      },
+      "reason": "Synthetic schema structure only; no real identity, point/signature validation, current authorization, time, entropy or transaction execution is proved."
+    },
+    {
+      "name": "s2_login_mfa_required",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/LoginResult",
+      "expected_valid": true,
+      "value": {
+        "state": "mfa_required",
+        "challenge_id": "22222222-2222-4222-8222-222222222222",
+        "user": null,
+        "device_id": null,
+        "csrf_token": null,
+        "receiver_challenge": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      },
+      "reason": "Synthetic schema structure only; no real identity, point/signature validation, current authorization, time, entropy or transaction execution is proved."
+    },
+    {
+      "name": "s2_login_recovery_required",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/LoginResult",
+      "expected_valid": true,
+      "value": {
+        "state": "recovery_required",
+        "challenge_id": null,
+        "user": null,
+        "device_id": null,
+        "csrf_token": null,
+        "recovery": {
+          "flow_id": "22222222-2222-4222-8222-222222222222",
+          "scope": "mfa_rebind",
+          "state": "pending",
+          "expires_at": "2026-11-06T00:02:00Z",
+          "csrf_token": "fixture-recovery-csrf",
+          "receiver_challenge": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
+      },
+      "reason": "Synthetic schema structure only; no real identity, point/signature validation, current authorization, time, entropy or transaction execution is proved."
+    },
+    {
+      "name": "s2_mfa_no_ordinary_user",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/LoginResult",
+      "expected_valid": false,
+      "value": {
+        "state": "mfa_required",
+        "challenge_id": "22222222-2222-4222-8222-222222222222",
+        "user": {
+          "id": "11111111-1111-4111-8111-111111111111",
+          "revision": 1,
+          "created_at": "2026-11-06T00:00:00Z",
+          "updated_at": "2026-11-06T00:00:00Z",
+          "email": "student@example.test",
+          "nickname": "Synthetic",
+          "school": "",
+          "major": "",
+          "role": "student",
+          "status": "active",
+          "mfa_enabled": true
+        },
+        "device_id": null,
+        "csrf_token": null,
+        "receiver_challenge": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      },
+      "reason": "Synthetic schema structure only; no real identity, point/signature validation, current authorization, time, entropy or transaction execution is proved."
+    },
+    {
+      "name": "s2_recovery_no_ordinary_csrf",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/LoginResult",
+      "expected_valid": false,
+      "value": {
+        "state": "recovery_required",
+        "challenge_id": null,
+        "user": null,
+        "device_id": null,
+        "csrf_token": "ordinary-forbidden",
+        "recovery": {
+          "flow_id": "22222222-2222-4222-8222-222222222222",
+          "scope": "mfa_rebind",
+          "state": "pending",
+          "expires_at": "2026-11-06T00:02:00Z",
+          "csrf_token": "fixture-recovery-csrf",
+          "receiver_challenge": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
+      },
+      "reason": "Synthetic schema structure only; no real identity, point/signature validation, current authorization, time, entropy or transaction execution is proved."
+    },
+    {
+      "name": "s2_unknown_login_state",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/LoginResult",
+      "expected_valid": false,
+      "value": {
+        "state": "future_authenticated",
+        "challenge_id": null,
+        "user": null,
+        "device_id": null,
+        "csrf_token": null,
+        "recovery": {
+          "flow_id": "22222222-2222-4222-8222-222222222222",
+          "scope": "mfa_rebind",
+          "state": "pending",
+          "expires_at": "2026-11-06T00:02:00Z",
+          "csrf_token": "fixture-recovery-csrf",
+          "receiver_challenge": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
+      },
+      "reason": "Synthetic schema structure only; no real identity, point/signature validation, current authorization, time, entropy or transaction execution is proved."
+    },
+    {
+      "name": "s2_recovery_no_codes",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/LoginResult",
+      "expected_valid": false,
+      "value": {
+        "state": "recovery_required",
+        "challenge_id": null,
+        "user": null,
+        "device_id": null,
+        "csrf_token": null,
+        "recovery": {
+          "flow_id": "22222222-2222-4222-8222-222222222222",
+          "scope": "mfa_rebind",
+          "state": "pending",
+          "expires_at": "2026-11-06T00:02:00Z",
+          "csrf_token": "fixture-recovery-csrf",
+          "receiver_challenge": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        },
+        "codes": [
+          "fixture-code"
+        ]
+      },
+      "reason": "Synthetic schema structure only; no real identity, point/signature validation, current authorization, time, entropy or transaction execution is proved."
+    },
+    {
+      "name": "s2_mfa_totp_shape",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/MfaChallengeRequest",
+      "expected_valid": true,
+      "value": {
+        "factor_type": "totp",
+        "challenge_id": "22222222-2222-4222-8222-222222222222",
+        "code": "123456"
+      },
+      "reason": "Synthetic schema structure only; no real identity, point/signature validation, current authorization, time, entropy or transaction execution is proved."
+    },
+    {
+      "name": "s2_mfa_recovery_code_shape",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/MfaChallengeRequest",
+      "expected_valid": true,
+      "value": {
+        "factor_type": "recovery_code",
+        "challenge_id": "22222222-2222-4222-8222-222222222222",
+        "code": "FIXTURE-ONLY-RECOVERY-CODE",
+        "receiver_public_key": {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "y": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
+        },
+        "receiver_proof": {
+          "challenge": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "signature": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
+      },
+      "reason": "Synthetic schema structure only; no real identity, point/signature validation, current authorization, time, entropy or transaction execution is proved."
+    },
+    {
+      "name": "s2_legacy_mfa_missing_factor_type",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/MfaChallengeRequest",
+      "expected_valid": false,
+      "value": {
+        "challenge_id": "22222222-2222-4222-8222-222222222222",
+        "code": "123456"
+      },
+      "reason": "Synthetic schema structure only; no real identity, point/signature validation, current authorization, time, entropy or transaction execution is proved."
+    },
+    {
+      "name": "s2_code_missing_receiver_key",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/MfaChallengeRequest",
+      "expected_valid": false,
+      "value": {
+        "factor_type": "recovery_code",
+        "challenge_id": "22222222-2222-4222-8222-222222222222",
+        "code": "FIXTURE-ONLY-RECOVERY-CODE",
+        "receiver_proof": {
+          "challenge": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "signature": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
+      },
+      "reason": "Synthetic schema structure only; no real identity, point/signature validation, current authorization, time, entropy or transaction execution is proved."
+    },
+    {
+      "name": "s2_receiver_private_key_rejected",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/MfaChallengeRequest",
+      "expected_valid": false,
+      "value": {
+        "factor_type": "recovery_code",
+        "challenge_id": "22222222-2222-4222-8222-222222222222",
+        "code": "FIXTURE-ONLY-RECOVERY-CODE",
+        "receiver_public_key": {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "y": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+          "d": "private-not-permitted"
+        },
+        "receiver_proof": {
+          "challenge": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "signature": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
+      },
+      "reason": "Synthetic schema structure only; no real identity, point/signature validation, current authorization, time, entropy or transaction execution is proved."
+    },
+    {
+      "name": "s2_reauth_password_change_bound",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/ReauthRequest",
+      "expected_valid": true,
+      "value": {
+        "password": "current-fixture-only",
+        "operation": {
+          "purpose": "changePassword",
+          "target": {
+            "kind": "account",
+            "id": "11111111-1111-4111-8111-111111111111"
+          },
+          "candidate_parameters": {
+            "idempotency_key": "22222222-2222-4222-8222-222222222222",
+            "body": {
+              "new_password": "new-fixture-only"
+            }
+          }
+        }
+      },
+      "reason": "Synthetic schema structure only; no real identity, point/signature validation, current authorization, time, entropy or transaction execution is proved."
+    },
+    {
+      "name": "s2_reauth_current_short_not_new_password_rule",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/ReauthRequest",
+      "expected_valid": true,
+      "value": {
+        "password": "old",
+        "operation": {
+          "purpose": "changePassword",
+          "target": {
+            "kind": "account",
+            "id": "11111111-1111-4111-8111-111111111111"
+          },
+          "candidate_parameters": {
+            "idempotency_key": "22222222-2222-4222-8222-222222222222",
+            "body": {
+              "new_password": "new-fixture-only"
+            }
+          }
+        }
+      },
+      "reason": "Synthetic schema structure only; no real identity, point/signature validation, current authorization, time, entropy or transaction execution is proved."
+    },
+    {
+      "name": "s2_reauth_student_recovery_status_bridge",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/ReauthRequest",
+      "expected_valid": true,
+      "value": {
+        "password": "current-fixture-only",
+        "mfa_code": "123456",
+        "operation": {
+          "purpose": "student_recovery_status",
+          "target": {
+            "kind": "recovery_case",
+            "id": "11111111-1111-4111-8111-111111111111"
+          },
+          "candidate_parameters": {
+            "op_id": "22222222-2222-4222-8222-222222222222",
+            "plan_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        }
+      },
+      "reason": "Synthetic schema structure only; no real identity, point/signature validation, current authorization, time, entropy or transaction execution is proved."
+    },
+    {
+      "name": "s2_legacy_unbound_reauth",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/ReauthRequest",
+      "expected_valid": false,
+      "value": {
+        "password": "current-fixture-only"
+      },
+      "reason": "Synthetic schema structure only; no real identity, point/signature validation, current authorization, time, entropy or transaction execution is proved."
+    },
+    {
+      "name": "s2_no_generic_reauth_purpose",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/ReauthRequest",
+      "expected_valid": false,
+      "value": {
+        "password": "current-fixture-only",
+        "operation": {
+          "purpose": "arbitrary_admin_write",
+          "target": {
+            "kind": "account",
+            "id": "11111111-1111-4111-8111-111111111111"
+          },
+          "candidate_parameters": {
+            "idempotency_key": "22222222-2222-4222-8222-222222222222",
+            "body": {
+              "new_password": "new-fixture-only"
+            }
+          }
+        }
+      },
+      "reason": "Synthetic schema structure only; no real identity, point/signature validation, current authorization, time, entropy or transaction execution is proved."
+    },
+    {
+      "name": "s2_wrong_reauth_target_kind",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/ReauthRequest",
+      "expected_valid": false,
+      "value": {
+        "password": "current-fixture-only",
+        "operation": {
+          "purpose": "changePassword",
+          "target": {
+            "kind": "device",
+            "id": "11111111-1111-4111-8111-111111111111"
+          },
+          "candidate_parameters": {
+            "idempotency_key": "22222222-2222-4222-8222-222222222222",
+            "body": {
+              "new_password": "new-fixture-only"
+            }
+          }
+        }
+      },
+      "reason": "Synthetic schema structure only; no real identity, point/signature validation, current authorization, time, entropy or transaction execution is proved."
+    },
+    {
+      "name": "s2_no_role_in_bound_candidate",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/ReauthRequest",
+      "expected_valid": false,
+      "value": {
+        "password": "current-fixture-only",
+        "operation": {
+          "purpose": "changePassword",
+          "target": {
+            "kind": "account",
+            "id": "11111111-1111-4111-8111-111111111111"
+          },
+          "candidate_parameters": {
+            "idempotency_key": "22222222-2222-4222-8222-222222222222",
+            "body": {
+              "new_password": "new-fixture-only",
+              "role": "admin"
+            }
+          }
+        }
+      },
+      "reason": "Synthetic schema structure only; no real identity, point/signature validation, current authorization, time, entropy or transaction execution is proved."
+    },
+    {
+      "name": "s2_automatic_enroll",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/RecoveryReceiverRequest",
+      "expected_valid": true,
+      "value": {
+        "flow_id": "11111111-1111-4111-8111-111111111111",
+        "password": "current-fixture-only",
+        "receiver_proof": {
+          "challenge": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "signature": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
+      },
+      "reason": "Synthetic schema structure only; no real identity, point/signature validation, current authorization, time, entropy or transaction execution is proved."
+    },
+    {
+      "name": "s2_automatic_confirm",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/RecoveryReceiverConfirm",
+      "expected_valid": true,
+      "value": {
+        "flow_id": "11111111-1111-4111-8111-111111111111",
+        "password": "current-fixture-only",
+        "receiver_proof": {
+          "challenge": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "signature": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        },
+        "enrollment_id": "22222222-2222-4222-8222-222222222222",
+        "code": "123456"
+      },
+      "reason": "Synthetic schema structure only; no real identity, point/signature validation, current authorization, time, entropy or transaction execution is proved."
+    },
+    {
+      "name": "s2_pending_factor_response",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/RecoveryReceiverEnrollment",
+      "expected_valid": true,
+      "value": {
+        "flow_id": "11111111-1111-4111-8111-111111111111",
+        "enrollment_id": "22222222-2222-4222-8222-222222222222",
+        "otpauth_uri": "otpauth://totp/synthetic-fixture-only",
+        "expires_at": "2026-11-06T00:02:00Z",
+        "receiver_challenge": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      },
+      "reason": "Synthetic schema structure only; no real identity, point/signature validation, current authorization, time, entropy or transaction execution is proved."
+    },
+    {
+      "name": "s2_automatic_completion_fact",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/RecoveryCompleted",
+      "expected_valid": true,
+      "value": {
+        "state": "completed",
+        "flow_id": "11111111-1111-4111-8111-111111111111",
+        "requires_full_login": true,
+        "new_recovery_codes_issued": false
+      },
+      "reason": "Synthetic schema structure only; no real identity, point/signature validation, current authorization, time, entropy or transaction execution is proved."
+    },
+    {
+      "name": "s2_automatic_enroll_requires_fresh_password",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/RecoveryReceiverRequest",
+      "expected_valid": false,
+      "value": {
+        "flow_id": "11111111-1111-4111-8111-111111111111",
+        "receiver_proof": {
+          "challenge": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "signature": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
+      },
+      "reason": "Synthetic schema structure only; no real identity, point/signature validation, current authorization, time, entropy or transaction execution is proved."
+    },
+    {
+      "name": "s2_automatic_confirm_requires_fresh_password",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/RecoveryReceiverConfirm",
+      "expected_valid": false,
+      "value": {
+        "flow_id": "11111111-1111-4111-8111-111111111111",
+        "receiver_proof": {
+          "challenge": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "signature": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        },
+        "enrollment_id": "22222222-2222-4222-8222-222222222222",
+        "code": "123456"
+      },
+      "reason": "Synthetic schema structure only; no real identity, point/signature validation, current authorization, time, entropy or transaction execution is proved."
+    },
+    {
+      "name": "s2_automatic_confirm_reject_bad_totp_shape",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/RecoveryReceiverConfirm",
+      "expected_valid": false,
+      "value": {
+        "flow_id": "11111111-1111-4111-8111-111111111111",
+        "password": "current-fixture-only",
+        "receiver_proof": {
+          "challenge": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "signature": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        },
+        "enrollment_id": "22222222-2222-4222-8222-222222222222",
+        "code": "12345x"
+      },
+      "reason": "Synthetic schema structure only; no real identity, point/signature validation, current authorization, time, entropy or transaction execution is proved."
+    },
+    {
+      "name": "s2_completion_no_session",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/RecoveryCompleted",
+      "expected_valid": false,
+      "value": {
+        "state": "completed",
+        "flow_id": "11111111-1111-4111-8111-111111111111",
+        "requires_full_login": true,
+        "new_recovery_codes_issued": false,
+        "session_token": "forbidden"
+      },
+      "reason": "Synthetic schema structure only; no real identity, point/signature validation, current authorization, time, entropy or transaction execution is proved."
+    },
+    {
+      "name": "s2_completion_never_issues_new_codes",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/RecoveryCompleted",
+      "expected_valid": false,
+      "value": {
+        "state": "completed",
+        "flow_id": "11111111-1111-4111-8111-111111111111",
+        "requires_full_login": true,
+        "new_recovery_codes_issued": true
+      },
+      "reason": "Synthetic schema structure only; no real identity, point/signature validation, current authorization, time, entropy or transaction execution is proved."
+    },
+    {
+      "name": "s2_nonempty_recovery_code_group",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/RecoveryCodes",
+      "expected_valid": true,
+      "value": {
+        "codes": [
+          "FIXTURE-ONLY-CODE-ONE"
+        ],
+        "shown_once": true
+      },
+      "reason": "Synthetic schema structure only; no real identity, point/signature validation, current authorization, time, entropy or transaction execution is proved."
+    },
+    {
+      "name": "s2_empty_recovery_code_group_rejected",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/RecoveryCodes",
+      "expected_valid": false,
+      "value": {
+        "codes": [],
+        "shown_once": true
+      },
+      "reason": "Synthetic schema structure only; no real identity, point/signature validation, current authorization, time, entropy or transaction execution is proved."
+    },
+    {
+      "name": "s2_duplicate_recovery_code_group_rejected",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/RecoveryCodes",
+      "expected_valid": false,
+      "value": {
+        "codes": [
+          "FIXTURE-CODE",
+          "FIXTURE-CODE"
+        ],
+        "shown_once": true
+      },
+      "reason": "Synthetic schema structure only; no real identity, point/signature validation, current authorization, time, entropy or transaction execution is proved."
+    },
+    {
+      "name": "s2_manual_issue_plan_shape",
+      "schema_file": "identity-control.schema.json",
+      "schema_pointer": "#/$defs/WritePlan",
+      "expected_valid": true,
+      "value": {
+        "deployment_id": "11111111-1111-4111-8111-111111111111",
+        "case_id": "11111111-1111-4111-8111-111111111111",
+        "op_id": "22222222-2222-4222-8222-222222222222",
+        "action": "issue",
+        "executor": {
+          "executor_type": "authority",
+          "executor_id": "11111111-1111-4111-8111-111111111111"
+        },
+        "authority_version": 1,
+        "target_user_id": "22222222-2222-4222-8222-222222222222",
+        "target_role": "admin",
+        "target_security_epoch": 1,
+        "verification_record_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "receiver_id": "22222222-2222-4222-8222-222222222222",
+        "receiver_key_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "flow_generation": 1,
+        "pending_factor_id": null,
+        "confirmation_hash": null
+      },
+      "reason": "Synthetic schema structure only; no real identity, point/signature validation, current authorization, time, entropy or transaction execution is proved."
+    },
+    {
+      "name": "s2_manual_complete_plan_shape",
+      "schema_file": "identity-control.schema.json",
+      "schema_pointer": "#/$defs/WritePlan",
+      "expected_valid": true,
+      "value": {
+        "deployment_id": "11111111-1111-4111-8111-111111111111",
+        "case_id": "11111111-1111-4111-8111-111111111111",
+        "op_id": "22222222-2222-4222-8222-222222222222",
+        "action": "complete",
+        "executor": {
+          "executor_type": "authority",
+          "executor_id": "11111111-1111-4111-8111-111111111111"
+        },
+        "authority_version": 1,
+        "target_user_id": "22222222-2222-4222-8222-222222222222",
+        "target_role": "admin",
+        "target_security_epoch": 1,
+        "verification_record_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "receiver_id": "22222222-2222-4222-8222-222222222222",
+        "receiver_key_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "flow_generation": 1,
+        "pending_factor_id": "11111111-1111-4111-8111-111111111111",
+        "confirmation_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "reason": "Synthetic schema structure only; no real identity, point/signature validation, current authorization, time, entropy or transaction execution is proved."
+    },
+    {
+      "name": "s2_complete_plan_requires_factor",
+      "schema_file": "identity-control.schema.json",
+      "schema_pointer": "#/$defs/WritePlan",
+      "expected_valid": false,
+      "value": {
+        "deployment_id": "11111111-1111-4111-8111-111111111111",
+        "case_id": "11111111-1111-4111-8111-111111111111",
+        "op_id": "22222222-2222-4222-8222-222222222222",
+        "action": "complete",
+        "executor": {
+          "executor_type": "authority",
+          "executor_id": "11111111-1111-4111-8111-111111111111"
+        },
+        "authority_version": 1,
+        "target_user_id": "22222222-2222-4222-8222-222222222222",
+        "target_role": "admin",
+        "target_security_epoch": 1,
+        "verification_record_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "receiver_id": "22222222-2222-4222-8222-222222222222",
+        "receiver_key_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "flow_generation": 1,
+        "pending_factor_id": null,
+        "confirmation_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "reason": "Synthetic schema structure only; no real identity, point/signature validation, current authorization, time, entropy or transaction execution is proved."
+    },
+    {
+      "name": "s2_student_executor_plan_shape",
+      "schema_file": "identity-control.schema.json",
+      "schema_pointer": "#/$defs/WritePlan",
+      "expected_valid": true,
+      "value": {
+        "deployment_id": "11111111-1111-4111-8111-111111111111",
+        "case_id": "11111111-1111-4111-8111-111111111111",
+        "op_id": "22222222-2222-4222-8222-222222222222",
+        "action": "issue",
+        "executor": {
+          "executor_type": "actor",
+          "executor_id": "11111111-1111-4111-8111-111111111111"
+        },
+        "authority_version": null,
+        "target_user_id": "22222222-2222-4222-8222-222222222222",
+        "target_role": "student",
+        "target_security_epoch": 1,
+        "verification_record_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "receiver_id": "22222222-2222-4222-8222-222222222222",
+        "receiver_key_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "flow_generation": 1,
+        "pending_factor_id": null,
+        "confirmation_hash": null
+      },
+      "reason": "Synthetic schema structure only; no real identity, point/signature validation, current authorization, time, entropy or transaction execution is proved."
+    },
+    {
+      "name": "s2_student_executor_cannot_plan_admin_target",
+      "schema_file": "identity-control.schema.json",
+      "schema_pointer": "#/$defs/WritePlan",
+      "expected_valid": false,
+      "value": {
+        "deployment_id": "11111111-1111-4111-8111-111111111111",
+        "case_id": "11111111-1111-4111-8111-111111111111",
+        "op_id": "22222222-2222-4222-8222-222222222222",
+        "action": "issue",
+        "executor": {
+          "executor_type": "actor",
+          "executor_id": "11111111-1111-4111-8111-111111111111"
+        },
+        "authority_version": null,
+        "target_user_id": "22222222-2222-4222-8222-222222222222",
+        "target_role": "admin",
+        "target_security_epoch": 1,
+        "verification_record_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "receiver_id": "22222222-2222-4222-8222-222222222222",
+        "receiver_key_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "flow_generation": 1,
+        "pending_factor_id": null,
+        "confirmation_hash": null
+      },
+      "reason": "Synthetic schema structure only; no real identity, point/signature validation, current authorization, time, entropy or transaction execution is proved."
+    },
+    {
+      "name": "s2_manual_issue_request",
+      "schema_file": "identity-control.schema.json",
+      "schema_pointer": "#/$defs/RecoveryIssueRequest",
+      "expected_valid": true,
+      "value": {
+        "protocol_version": 1,
+        "kind": "recovery.issue.request",
+        "proof_id": "11111111-1111-4111-8111-111111111111",
+        "case_id": "11111111-1111-4111-8111-111111111111",
+        "op_id": "22222222-2222-4222-8222-222222222222"
+      },
+      "reason": "Synthetic schema structure only; no real identity, point/signature validation, current authorization, time, entropy or transaction execution is proved."
+    },
+    {
+      "name": "s2_manual_no_claimed_actor",
+      "schema_file": "identity-control.schema.json",
+      "schema_pointer": "#/$defs/RecoveryIssueRequest",
+      "expected_valid": false,
+      "value": {
+        "protocol_version": 1,
+        "kind": "recovery.issue.request",
+        "proof_id": "11111111-1111-4111-8111-111111111111",
+        "case_id": "11111111-1111-4111-8111-111111111111",
+        "op_id": "22222222-2222-4222-8222-222222222222",
+        "actor_id": "11111111-1111-4111-8111-111111111111"
+      },
+      "reason": "Synthetic schema structure only; no real identity, point/signature validation, current authorization, time, entropy or transaction execution is proved."
+    },
+    {
+      "name": "s2_manual_complete_request",
+      "schema_file": "identity-control.schema.json",
+      "schema_pointer": "#/$defs/RecoveryCompleteRequest",
+      "expected_valid": true,
+      "value": {
+        "protocol_version": 1,
+        "kind": "recovery.complete.request",
+        "proof_id": "11111111-1111-4111-8111-111111111111",
+        "case_id": "11111111-1111-4111-8111-111111111111",
+        "op_id": "22222222-2222-4222-8222-222222222222"
+      },
+      "reason": "Synthetic schema structure only; no real identity, point/signature validation, current authorization, time, entropy or transaction execution is proved."
+    },
+    {
+      "name": "s2_manual_status_request",
+      "schema_file": "identity-control.schema.json",
+      "schema_pointer": "#/$defs/RecoveryStatusRequest",
+      "expected_valid": true,
+      "value": {
+        "protocol_version": 1,
+        "kind": "recovery.status.request",
+        "proof_id": "11111111-1111-4111-8111-111111111111",
+        "case_id": "11111111-1111-4111-8111-111111111111",
+        "op_id": "22222222-2222-4222-8222-222222222222"
+      },
+      "reason": "Synthetic schema structure only; no real identity, point/signature validation, current authorization, time, entropy or transaction execution is proved."
+    },
+    {
+      "name": "s2_status_does_not_take_old_cap",
+      "schema_file": "identity-control.schema.json",
+      "schema_pointer": "#/$defs/RecoveryStatusRequest",
+      "expected_valid": false,
+      "value": {
+        "protocol_version": 1,
+        "kind": "recovery.status.request",
+        "proof_id": "11111111-1111-4111-8111-111111111111",
+        "case_id": "11111111-1111-4111-8111-111111111111",
+        "op_id": "22222222-2222-4222-8222-222222222222",
+        "cap": "fixture-cap"
+      },
+      "reason": "Synthetic schema structure only; no real identity, point/signature validation, current authorization, time, entropy or transaction execution is proved."
+    },
+    {
+      "name": "s2_status_committed_shape",
+      "schema_file": "identity-control.schema.json",
+      "schema_pointer": "#/$defs/RecoveryStatusResponse",
+      "expected_valid": true,
+      "value": {
+        "protocol_version": 1,
+        "kind": "recovery.status.response",
+        "case_id": "11111111-1111-4111-8111-111111111111",
+        "op_id": "22222222-2222-4222-8222-222222222222",
+        "result": "committed",
+        "stage": "completed",
+        "audit_id": "11111111-1111-4111-8111-111111111111",
+        "as_of": "2026-11-06T00:00:00Z"
+      },
+      "reason": "Synthetic schema structure only; no real identity, point/signature validation, current authorization, time, entropy or transaction execution is proved."
+    },
+    {
+      "name": "s2_status_not_committed_pending_shape",
+      "schema_file": "identity-control.schema.json",
+      "schema_pointer": "#/$defs/RecoveryStatusResponse",
+      "expected_valid": true,
+      "value": {
+        "protocol_version": 1,
+        "kind": "recovery.status.response",
+        "case_id": "11111111-1111-4111-8111-111111111111",
+        "op_id": "22222222-2222-4222-8222-222222222222",
+        "result": "not_committed",
+        "stage": "pending",
+        "audit_id": null,
+        "as_of": "2026-11-06T00:00:00Z"
+      },
+      "reason": "Synthetic schema structure only; no real identity, point/signature validation, current authorization, time, entropy or transaction execution is proved."
+    },
+    {
+      "name": "s2_status_unknown_no_facts_shape",
+      "schema_file": "identity-control.schema.json",
+      "schema_pointer": "#/$defs/RecoveryStatusResponse",
+      "expected_valid": true,
+      "value": {
+        "protocol_version": 1,
+        "kind": "recovery.status.response",
+        "case_id": "11111111-1111-4111-8111-111111111111",
+        "op_id": "22222222-2222-4222-8222-222222222222",
+        "result": "unknown",
+        "stage": null,
+        "audit_id": null,
+        "as_of": "2026-11-06T00:00:00Z"
+      },
+      "reason": "Synthetic schema structure only; no real identity, point/signature validation, current authorization, time, entropy or transaction execution is proved."
+    },
+    {
+      "name": "s2_status_no_secret_fields",
+      "schema_file": "identity-control.schema.json",
+      "schema_pointer": "#/$defs/RecoveryStatusResponse",
+      "expected_valid": false,
+      "value": {
+        "protocol_version": 1,
+        "kind": "recovery.status.response",
+        "case_id": "11111111-1111-4111-8111-111111111111",
+        "op_id": "22222222-2222-4222-8222-222222222222",
+        "result": "committed",
+        "stage": "completed",
+        "audit_id": "11111111-1111-4111-8111-111111111111",
+        "as_of": "2026-11-06T00:00:00Z",
+        "codes": [
+          "forbidden"
+        ]
+      },
+      "reason": "Synthetic schema structure only; no real identity, point/signature validation, current authorization, time, entropy or transaction execution is proved."
+    },
+    {
+      "name": "s2_status_no_other_target_data",
+      "schema_file": "identity-control.schema.json",
+      "schema_pointer": "#/$defs/RecoveryStatusResponse",
+      "expected_valid": false,
+      "value": {
+        "protocol_version": 1,
+        "kind": "recovery.status.response",
+        "case_id": "11111111-1111-4111-8111-111111111111",
+        "op_id": "22222222-2222-4222-8222-222222222222",
+        "result": "committed",
+        "stage": "completed",
+        "audit_id": "11111111-1111-4111-8111-111111111111",
+        "as_of": "2026-11-06T00:00:00Z",
+        "target_user_id": "22222222-2222-4222-8222-222222222222"
+      },
+      "reason": "Synthetic schema structure only; no real identity, point/signature validation, current authorization, time, entropy or transaction execution is proved."
+    },
+    {
+      "name": "s2_manual_final_fact_only",
+      "schema_file": "identity-control.schema.json",
+      "schema_pointer": "#/$defs/RecoveryCompleteResponse",
+      "expected_valid": true,
+      "value": {
+        "protocol_version": 1,
+        "kind": "recovery.complete.response",
+        "case_id": "11111111-1111-4111-8111-111111111111",
+        "op_id": "22222222-2222-4222-8222-222222222222",
+        "stage": "completed",
+        "result": "committed",
+        "audit_id": "11111111-1111-4111-8111-111111111111",
+        "full_relogin_required": true,
+        "recovery_codes_issued": false
+      },
+      "reason": "Synthetic schema structure only; no real identity, point/signature validation, current authorization, time, entropy or transaction execution is proved."
+    },
+    {
+      "name": "s2_manual_final_no_new_code_group",
+      "schema_file": "identity-control.schema.json",
+      "schema_pointer": "#/$defs/RecoveryCompleteResponse",
+      "expected_valid": false,
+      "value": {
+        "protocol_version": 1,
+        "kind": "recovery.complete.response",
+        "case_id": "11111111-1111-4111-8111-111111111111",
+        "op_id": "22222222-2222-4222-8222-222222222222",
+        "stage": "completed",
+        "result": "committed",
+        "audit_id": "11111111-1111-4111-8111-111111111111",
+        "full_relogin_required": true,
+        "recovery_codes_issued": true
+      },
+      "reason": "Synthetic schema structure only; no real identity, point/signature validation, current authorization, time, entropy or transaction execution is proved."
+    },
+    {
+      "name": "s2_complete_fresh_proof_shape",
+      "schema_file": "identity-control.schema.json",
+      "schema_pointer": "#/$defs/ProofVerifyResponse",
+      "expected_valid": true,
+      "value": {
+        "protocol_version": 1,
+        "kind": "recovery.proof.verify.response",
+        "proof_id": "11111111-1111-4111-8111-111111111111",
+        "case_id": "11111111-1111-4111-8111-111111111111",
+        "op_id": "22222222-2222-4222-8222-222222222222",
+        "action": "complete",
+        "plan_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "verified_at": "2026-11-06T00:00:00Z",
+        "operation_deadline": "2026-11-06T00:02:00Z",
+        "single_use": true
+      },
+      "reason": "Synthetic schema structure only; no real identity, point/signature validation, current authorization, time, entropy or transaction execution is proved."
+    },
+    {
+      "name": "s2_status_reusable_read_proof_shape",
+      "schema_file": "identity-control.schema.json",
+      "schema_pointer": "#/$defs/ProofVerifyResponse",
+      "expected_valid": true,
+      "value": {
+        "protocol_version": 1,
+        "kind": "recovery.proof.verify.response",
+        "proof_id": "11111111-1111-4111-8111-111111111111",
+        "case_id": "11111111-1111-4111-8111-111111111111",
+        "op_id": "22222222-2222-4222-8222-222222222222",
+        "action": "status",
+        "plan_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "verified_at": "2026-11-06T00:00:00Z",
+        "operation_deadline": "2026-11-06T00:02:00Z",
+        "single_use": false
+      },
+      "reason": "Synthetic schema structure only; no real identity, point/signature validation, current authorization, time, entropy or transaction execution is proved."
+    },
+    {
+      "name": "s2_status_cannot_be_write_consumption_proof",
+      "schema_file": "identity-control.schema.json",
+      "schema_pointer": "#/$defs/ProofVerifyResponse",
+      "expected_valid": false,
+      "value": {
+        "protocol_version": 1,
+        "kind": "recovery.proof.verify.response",
+        "proof_id": "11111111-1111-4111-8111-111111111111",
+        "case_id": "11111111-1111-4111-8111-111111111111",
+        "op_id": "22222222-2222-4222-8222-222222222222",
+        "action": "status",
+        "plan_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "verified_at": "2026-11-06T00:00:00Z",
+        "operation_deadline": "2026-11-06T00:02:00Z",
+        "single_use": true
+      },
+      "reason": "Synthetic schema structure only; no real identity, point/signature validation, current authorization, time, entropy or transaction execution is proved."
+    },
+    {
+      "name": "s2_D0_change_bound_fields_shape",
+      "schema_file": "identity-control.schema.json",
+      "schema_pointer": "#/$defs/D0ChangeApproval",
+      "expected_valid": true,
+      "value": {
+        "protocol_version": 1,
+        "kind": "d0.change_approval",
+        "body": {
+          "deployment_id": "11111111-1111-4111-8111-111111111111",
+          "authority_id": "22222222-2222-4222-8222-222222222222",
+          "action": "rotate",
+          "old_manifest_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "new_manifest_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "old_version": 1,
+          "new_version": 2,
+          "old_binding_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "new_binding_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "approval_nonce": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "issued_at": "2026-11-06T00:00:00Z",
+          "expires_at": "2026-11-06T00:02:00Z",
+          "maintainer_ref": "synthetic-maintainer",
+          "external_approval_ref": "synthetic-independent-approval"
+        },
+        "signature": {
+          "alg": "Ed25519",
+          "key_id": "11111111-1111-4111-8111-111111111111",
+          "signature": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
+      },
+      "reason": "Synthetic schema structure only; no real identity, point/signature validation, current authorization, time, entropy or transaction execution is proved."
+    },
+    {
+      "name": "s2_D0_change_missing_old_hash_rejected",
+      "schema_file": "identity-control.schema.json",
+      "schema_pointer": "#/$defs/D0ChangeApproval",
+      "expected_valid": false,
+      "value": {
+        "protocol_version": 1,
+        "kind": "d0.change_approval",
+        "body": {
+          "deployment_id": "11111111-1111-4111-8111-111111111111",
+          "authority_id": "22222222-2222-4222-8222-222222222222",
+          "action": "rotate",
+          "new_manifest_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "old_version": 1,
+          "new_version": 2,
+          "old_binding_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "new_binding_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "approval_nonce": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "issued_at": "2026-11-06T00:00:00Z",
+          "expires_at": "2026-11-06T00:02:00Z",
+          "maintainer_ref": "synthetic-maintainer",
+          "external_approval_ref": "synthetic-independent-approval"
+        },
+        "signature": {
+          "alg": "Ed25519",
+          "key_id": "11111111-1111-4111-8111-111111111111",
+          "signature": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
+      },
+      "reason": "Synthetic schema structure only; no real identity, point/signature validation, current authorization, time, entropy or transaction execution is proved."
+    },
+    {
+      "name": "s2_D0_invalid_version_shape_rejected",
+      "schema_file": "identity-control.schema.json",
+      "schema_pointer": "#/$defs/D0ChangeApproval",
+      "expected_valid": false,
+      "value": {
+        "protocol_version": 1,
+        "kind": "d0.change_approval",
+        "body": {
+          "deployment_id": "11111111-1111-4111-8111-111111111111",
+          "authority_id": "22222222-2222-4222-8222-222222222222",
+          "action": "rotate",
+          "old_manifest_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "new_manifest_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "old_version": 1,
+          "new_version": 0,
+          "old_binding_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "new_binding_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "approval_nonce": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "issued_at": "2026-11-06T00:00:00Z",
+          "expires_at": "2026-11-06T00:02:00Z",
+          "maintainer_ref": "synthetic-maintainer",
+          "external_approval_ref": "synthetic-independent-approval"
+        },
+        "signature": {
+          "alg": "Ed25519",
+          "key_id": "11111111-1111-4111-8111-111111111111",
+          "signature": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        }
+      },
+      "reason": "Synthetic schema structure only; no real identity, point/signature validation, current authorization, time, entropy or transaction execution is proved."
+    },
+    {
+      "name": "s2_D0_request_cannot_supply_trust_root",
+      "schema_file": "identity-control.schema.json",
+      "schema_pointer": "#/$defs/D0ChangeApproval",
+      "expected_valid": false,
+      "value": {
+        "protocol_version": 1,
+        "kind": "d0.change_approval",
+        "body": {
+          "deployment_id": "11111111-1111-4111-8111-111111111111",
+          "authority_id": "22222222-2222-4222-8222-222222222222",
+          "action": "rotate",
+          "old_manifest_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "new_manifest_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "old_version": 1,
+          "new_version": 2,
+          "old_binding_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "new_binding_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "approval_nonce": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "issued_at": "2026-11-06T00:00:00Z",
+          "expires_at": "2026-11-06T00:02:00Z",
+          "maintainer_ref": "synthetic-maintainer",
+          "external_approval_ref": "synthetic-independent-approval"
+        },
+        "signature": {
+          "alg": "Ed25519",
+          "key_id": "11111111-1111-4111-8111-111111111111",
+          "signature": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        },
+        "root": "client-self-root"
+      },
+      "reason": "Synthetic schema structure only; no real identity, point/signature validation, current authorization, time, entropy or transaction execution is proved."
+    },
+    {
+      "name": "s2_cross_instant_tenths",
+      "schema_file": "identity-control.schema.json",
+      "schema_pointer": "#/$defs/Instant",
+      "expected_valid": true,
+      "value": "2026-11-06T00:00:00.1Z",
+      "reason": "Synthetic structure/encoding boundary only; no real token, entropy, password, signature or authorization is proved."
+    },
+    {
+      "name": "s2_cross_instant_microseconds",
+      "schema_file": "identity-control.schema.json",
+      "schema_pointer": "#/$defs/Instant",
+      "expected_valid": true,
+      "value": "2026-11-06T00:00:00.123456Z",
+      "reason": "Synthetic structure/encoding boundary only; no real token, entropy, password, signature or authorization is proved."
+    },
+    {
+      "name": "s2_cross_instant_overprecision",
+      "schema_file": "identity-control.schema.json",
+      "schema_pointer": "#/$defs/Instant",
+      "expected_valid": false,
+      "value": "2026-11-06T00:00:00.1234567Z",
+      "reason": "Synthetic structure/encoding boundary only; no real token, entropy, password, signature or authorization is proved."
+    },
+    {
+      "name": "s2_cross_instant_literal_backslash",
+      "schema_file": "identity-control.schema.json",
+      "schema_pointer": "#/$defs/Instant",
+      "expected_valid": false,
+      "value": "2026-11-06T00:00:00\\.123Z",
+      "reason": "Synthetic structure/encoding boundary only; no real token, entropy, password, signature or authorization is proved."
+    },
+    {
+      "name": "s2_cross_reauth_token_envelope",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/ReauthResult",
+      "expected_valid": true,
+      "value": {
+        "reauth_token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "expires_at": "2026-11-06T00:02:00Z"
+      },
+      "reason": "Synthetic structure/encoding boundary only; no real token, entropy, password, signature or authorization is proved."
+    },
+    {
+      "name": "s2_cross_reauth_token_too_short",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/ReauthResult",
+      "expected_valid": false,
+      "value": {
+        "reauth_token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "expires_at": "2026-11-06T00:02:00Z"
+      },
+      "reason": "Synthetic structure/encoding boundary only; no real token, entropy, password, signature or authorization is proved."
+    },
+    {
+      "name": "s2_cross_reauth_token_padding",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/ReauthResult",
+      "expected_valid": false,
+      "value": {
+        "reauth_token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        "expires_at": "2026-11-06T00:02:00Z"
+      },
+      "reason": "Synthetic structure/encoding boundary only; no real token, entropy, password, signature or authorization is proved."
+    },
+    {
+      "name": "s2_cross_reauth_header_envelope",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/parameters/ReauthToken/schema",
+      "expected_valid": true,
+      "value": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "reason": "Synthetic structure/encoding boundary only; no real token, entropy, password, signature or authorization is proved."
+    },
+    {
+      "name": "s2_cross_reauth_header_padding",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/parameters/ReauthToken/schema",
+      "expected_valid": false,
+      "value": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+      "reason": "Synthetic structure/encoding boundary only; no real token, entropy, password, signature or authorization is proved."
+    },
+    {
+      "name": "s2_cross_key_pop_exact_body",
+      "schema_file": "identity-control.schema.json",
+      "schema_pointer": "#/$defs/KeyPopSignedBody",
+      "expected_valid": true,
+      "value": {
+        "deployment_id": "11111111-1111-4111-8111-111111111111",
+        "key_purpose": "K_recover",
+        "key_id": "11111111-1111-4111-8111-111111111111",
+        "new_binding_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "approval_nonce": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      },
+      "reason": "Synthetic signed-body structure only; no signature generated, peer authenticated, key registered or authorization granted."
+    },
+    {
+      "name": "s2_cross_key_pop_missing_deployment",
+      "schema_file": "identity-control.schema.json",
+      "schema_pointer": "#/$defs/KeyPopSignedBody",
+      "expected_valid": false,
+      "value": {
+        "key_purpose": "K_recover",
+        "key_id": "11111111-1111-4111-8111-111111111111",
+        "new_binding_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "approval_nonce": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+      },
+      "reason": "Synthetic signed-body structure only; no signature generated, peer authenticated, key registered or authorization granted."
+    },
+    {
+      "name": "s2_cross_authenticate_exact_body",
+      "schema_file": "identity-control.schema.json",
+      "schema_pointer": "#/$defs/AuthenticateSignedBody",
+      "expected_valid": true,
+      "value": {
+        "hello": {
+          "protocol_version": 1,
+          "kind": "identity_control.hello.response",
+          "deployment_id": "11111111-1111-4111-8111-111111111111",
+          "authentication_challenge_id": "11111111-1111-4111-8111-111111111111",
+          "challenge_nonce": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "authentication_mode": "authority",
+          "challenge_expiry": "2026-11-06T00:02:00Z"
+        },
+        "peer": {
+          "provider": "linux_uid",
+          "subject": "1000"
+        }
+      },
+      "reason": "Synthetic signed-body structure only; no signature generated, peer authenticated, key registered or authorization granted."
+    },
+    {
+      "name": "s2_cross_authenticate_extra_identity",
+      "schema_file": "identity-control.schema.json",
+      "schema_pointer": "#/$defs/AuthenticateSignedBody",
+      "expected_valid": false,
+      "value": {
+        "hello": {
+          "protocol_version": 1,
+          "kind": "identity_control.hello.response",
+          "deployment_id": "11111111-1111-4111-8111-111111111111",
+          "authentication_challenge_id": "11111111-1111-4111-8111-111111111111",
+          "challenge_nonce": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+          "authentication_mode": "authority",
+          "challenge_expiry": "2026-11-06T00:02:00Z"
+        },
+        "peer": {
+          "provider": "linux_uid",
+          "subject": "1000"
+        },
+        "actor_id": "11111111-1111-4111-8111-111111111111"
+      },
+      "reason": "Synthetic signed-body structure only; no signature generated, peer authenticated, key registered or authorization granted."
     }
   ]
 }

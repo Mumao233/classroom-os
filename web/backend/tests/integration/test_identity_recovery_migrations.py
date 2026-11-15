@@ -47,7 +47,7 @@ def function_snapshot(database):
 
 
 @pytest.fixture
-def previous_recovery_schema(request, previous_schema):
+def previous_recovery_schema(request, previous_schema,password_policy):
     database = previous_schema
     previous = getattr(request, "param", IDENTITY)
     assert previous in (TASKS, IDENTITY)
@@ -93,7 +93,7 @@ def previous_recovery_schema(request, previous_schema):
                     email_verified_at=sa.func.clock_timestamp()))
             repository = PgIdentityRepository(database.runtime_url.set(username=ilogin).render_as_string(hide_password=False))
             service = IdentityService(repository, hasher,
-                                      admin_reauthentication_window=timedelta(minutes=5))
+                                      admin_reauthentication_window=timedelta(minutes=5),password_policy=password_policy)
             invitation = service.create_invitation(principal(admin_id, "admin"), kind="single_use")
             service.register(f"synthetic-migration-student-{marker}@example.test",
                              "Synthetic-migration-password", invitation.token)

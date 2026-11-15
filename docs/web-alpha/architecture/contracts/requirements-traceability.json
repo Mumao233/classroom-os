@@ -125,7 +125,23 @@
       "section": "认证/租户/隐私与生命周期",
       "implementation_pr": "03a、03b",
       "acceptance": "30分钟单次验证、重置撤全部旧会话、改邮箱验证、限流；哈希/12字符初值安全评审",
-      "status": "design mapped; implementation not performed in PR-01"
+      "status": "design mapped; implementation not performed in PR-01",
+      "s2_revision": {
+        "contract_version": "0.2.0",
+        "status": "S2 independent review candidate; no implementation or risk activation",
+        "design_refs": [
+          "docs/web-alpha/pr03b/s2/README.md",
+          "docs/web-alpha/pr03b/s2/HTTP-SESSION-CONTRACT.md",
+          "docs/web-alpha/pr03b/s2/DATA-LOCKS-AND-IMPLEMENTATION-GATES.md"
+        ],
+        "machine_refs": [
+          "docs/web-alpha/architecture/contracts/openapi.json",
+          "docs/web-alpha/architecture/contracts/domain-model.json",
+          "docs/web-alpha/architecture/contracts/identity-control.schema.json"
+        ],
+        "invariant": "D01-D03 design CLOSED; approved product policy retained; security_epoch is sole persistent epoch; TBD-08 OPEN",
+        "ref_base": "repository_root"
+      }
     },
     {
       "requirement_id": "AUTH-02",
@@ -143,7 +159,23 @@
       "section": "认证/租户/隐私与生命周期",
       "implementation_pr": "03b、05b",
       "acceptance": "可撤销Cookie/CSRF；多设备可读；采集租约竞争、失联接管与旧fencing拒绝",
-      "status": "design mapped; implementation not performed in PR-01"
+      "status": "design mapped; implementation not performed in PR-01",
+      "s2_revision": {
+        "contract_version": "0.2.0",
+        "status": "S2 independent review candidate; no implementation or risk activation",
+        "design_refs": [
+          "docs/web-alpha/pr03b/s2/README.md",
+          "docs/web-alpha/pr03b/s2/HTTP-SESSION-CONTRACT.md",
+          "docs/web-alpha/pr03b/s2/DATA-LOCKS-AND-IMPLEMENTATION-GATES.md"
+        ],
+        "machine_refs": [
+          "docs/web-alpha/architecture/contracts/openapi.json",
+          "docs/web-alpha/architecture/contracts/domain-model.json",
+          "docs/web-alpha/architecture/contracts/identity-control.schema.json"
+        ],
+        "invariant": "D01-D03 design CLOSED; approved product policy retained; security_epoch is sole persistent epoch; TBD-08 OPEN",
+        "ref_base": "repository_root"
+      }
     },
     {
       "requirement_id": "AUTH-04",
@@ -152,7 +184,23 @@
       "section": "认证/租户/隐私与生命周期",
       "implementation_pr": "03b",
       "acceptance": "TOTP/单次恢复码、敏感再认证；邀请不授Admin；管理员无后门恢复演练",
-      "status": "design mapped; implementation not performed in PR-01"
+      "status": "design mapped; implementation not performed in PR-01",
+      "s2_revision": {
+        "contract_version": "0.2.0",
+        "status": "S2 independent review candidate; no implementation or risk activation",
+        "design_refs": [
+          "docs/web-alpha/pr03b/s2/README.md",
+          "docs/web-alpha/pr03b/s2/HTTP-SESSION-CONTRACT.md",
+          "docs/web-alpha/pr03b/s2/DATA-LOCKS-AND-IMPLEMENTATION-GATES.md"
+        ],
+        "machine_refs": [
+          "docs/web-alpha/architecture/contracts/openapi.json",
+          "docs/web-alpha/architecture/contracts/domain-model.json",
+          "docs/web-alpha/architecture/contracts/identity-control.schema.json"
+        ],
+        "invariant": "D01-D03 design CLOSED; approved product policy retained; security_epoch is sole persistent epoch; TBD-08 OPEN",
+        "ref_base": "repository_root"
+      }
     },
     {
       "requirement_id": "AUTH-05",
@@ -161,7 +209,23 @@
       "section": "认证/租户/隐私与生命周期",
       "implementation_pr": "03a、04a、11b",
       "acceptance": "列表/WS/任务/搜索/文件/历史/导入导出全A/B越权矩阵；Admin无默认正文或冒充",
-      "status": "design mapped; implementation not performed in PR-01"
+      "status": "design mapped; implementation not performed in PR-01",
+      "s2_revision": {
+        "contract_version": "0.2.0",
+        "status": "S2 independent review candidate; no implementation or risk activation",
+        "design_refs": [
+          "docs/web-alpha/pr03b/s2/README.md",
+          "docs/web-alpha/pr03b/s2/HTTP-SESSION-CONTRACT.md",
+          "docs/web-alpha/pr03b/s2/DATA-LOCKS-AND-IMPLEMENTATION-GATES.md"
+        ],
+        "machine_refs": [
+          "docs/web-alpha/architecture/contracts/openapi.json",
+          "docs/web-alpha/architecture/contracts/domain-model.json",
+          "docs/web-alpha/architecture/contracts/identity-control.schema.json"
+        ],
+        "invariant": "D01-D03 design CLOSED; approved product policy retained; security_epoch is sole persistent epoch; TBD-08 OPEN",
+        "ref_base": "repository_root"
+      }
     },
     {
       "requirement_id": "AUTH-06",
@@ -170,7 +234,23 @@
       "section": "认证/租户/隐私与生命周期",
       "implementation_pr": "03b、04b、08c",
       "acceptance": "注销立即撤会话；禁用不等于删除；课程级联显式选择；24h删除目标实测；离线撤销边界",
-      "status": "design mapped; implementation not performed in PR-01"
+      "status": "design mapped; implementation not performed in PR-01",
+      "s2_revision": {
+        "contract_version": "0.2.0",
+        "status": "S2 independent review candidate; no implementation or risk activation",
+        "design_refs": [
+          "docs/web-alpha/pr03b/s2/README.md",
+          "docs/web-alpha/pr03b/s2/HTTP-SESSION-CONTRACT.md",
+          "docs/web-alpha/pr03b/s2/DATA-LOCKS-AND-IMPLEMENTATION-GATES.md"
+        ],
+        "machine_refs": [
+          "docs/web-alpha/architecture/contracts/openapi.json",
+          "docs/web-alpha/architecture/contracts/domain-model.json",
+          "docs/web-alpha/architecture/contracts/identity-control.schema.json"
+        ],
+        "invariant": "D01-D03 design CLOSED; approved product policy retained; security_epoch is sole persistent epoch; TBD-08 OPEN",
+        "ref_base": "repository_root"
+      }
     },
     {
       "requirement_id": "AUTH-07",

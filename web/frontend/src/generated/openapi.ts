@@ -28,7 +28,7 @@ export interface paths {
         };
         /**
          * getCsrf
-         * @description Creates/refreshes random preauth-session cookie and bound CSRF token; same-origin no-store; Origin/Fetch-Metadata checked. Authenticated callers obtain token bound to current session. Secret-bearing response is never stored in operation_receipts. Recheck identity, authorization, epochs and expiry before reissuing; never replay old key/cookie/ticket.
+         * @description Creates/refreshes random preauth-session cookie and bound CSRF token; same-origin no-store; Origin/Fetch-Metadata checked. Authenticated callers obtain token bound to current session. Secret-bearing response is never stored in operation_receipts. Recheck identity, authorization, epochs and expiry before reissuing; never replay old key/cookie/ticket. A valid automatic recovery cookie selects only its own restricted CSRF/receiver challenge; ordinary session, preauth and recovery material cannot substitute. Expired/consumed recovery cookie is not a terminal-status credential.
          */
         get: operations["getCsrf"];
         put?: never;
@@ -50,7 +50,7 @@ export interface paths {
         put?: never;
         /**
          * register
-         * @description Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics.
+         * @description Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. New password uses Student min 6/Admin min 12 from trusted server role and Unicode code-point rules; local approved list mandatory. If none valid, 503 SERVICE_DISABLED retryable true without reset/reauth consumption or success receipt; do not disable normal login or send password plaintext to a provider.
          */
         post: operations["register"];
         delete?: never;
@@ -110,7 +110,7 @@ export interface paths {
         put?: never;
         /**
          * login
-         * @description Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Secret-bearing response is never stored in operation_receipts. Recheck identity, authorization, epochs and expiry before reissuing; never replay old key/cookie/ticket.
+         * @description Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Secret-bearing response is never stored in operation_receipts. Recheck identity, authorization, epochs and expiry before reissuing; never replay old key/cookie/ticket. Local password-list failure does not block normal existing-password login. Admin MFA is mandatory; Student MFA is required when enrolled. Only authenticated establishes full cookie/user/device/CSRF; mfa_required and recovery_required are strictly disjoint restricted results. remember_me only changes Student cookie persistence.
          */
         post: operations["login"];
         delete?: never;
@@ -128,7 +128,7 @@ export interface paths {
         };
         /**
          * getSessionContext
-         * @description Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Secret-bearing response is never stored in operation_receipts. Recheck identity, authorization, epochs and expiry before reissuing; never replay old key/cookie/ticket.
+         * @description Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Secret-bearing response is never stored in operation_receipts. Recheck identity, authorization, epochs and expiry before reissuing; never replay old key/cookie/ticket. Full session only; recovery/preauth cookies return no User or normal context. Use current PG user/session/device/epoch, server role/factor and strict idle/absolute deadlines; no cached Principal fallback.
          */
         get: operations["getSessionContext"];
         put?: never;
@@ -150,7 +150,7 @@ export interface paths {
         put?: never;
         /**
          * completeLoginMfa
-         * @description Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Secret-bearing response is never stored in operation_receipts. Recheck identity, authorization, epochs and expiry before reissuing; never replay old key/cookie/ticket.
+         * @description Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Secret-bearing response is never stored in operation_receipts. Recheck identity, authorization, epochs and expiry before reissuing; never replay old key/cookie/ticket. factor_type is mandatory. totp can complete full authentication; recovery_code must verify receiver PoP, consume one code and return recovery_required only. Its password challenge, account/credential epoch and budgets must remain valid; if a consumed recovery-code request loses its secret response, never blindly consume another code or replay a cap; require separately reviewed fresh authorization.
          */
         post: operations["completeLoginMfa"];
         delete?: never;
@@ -170,7 +170,7 @@ export interface paths {
         put?: never;
         /**
          * logout
-         * @description Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics.
+         * @description Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Current-session logout never requires additional reauth; revoke server session and clear matching cookie attributes.
          */
         post: operations["logout"];
         delete?: never;
@@ -190,7 +190,7 @@ export interface paths {
         put?: never;
         /**
          * logoutAll
-         * @description Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics.
+         * @description Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. S2 route-mapping candidate: Student 600s/Admin 300s, exact account/body/key binding.
          */
         post: operations["logoutAll"];
         delete?: never;
@@ -210,7 +210,7 @@ export interface paths {
         put?: never;
         /**
          * reauthenticate
-         * @description Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Secret-bearing response is never stored in operation_receipts. Recheck identity, authorization, epochs and expiry before reissuing; never replay old key/cookie/ticket.
+         * @description Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Secret-bearing response is never stored in operation_receipts. Recheck identity, authorization, epochs and expiry before reissuing; never replay old key/cookie/ticket. Strict operation binding is mandatory; server derives risk and authorization, verifies current factors, computes an internal keyed canonical-parameter commitment, and never returns or logs low-entropy password SHA/candidate body. Student recovery purposes merely bridge a proof to an independently authorized local broker, never execute public issue/complete/status. The raw-body S2 candidate is 32 KiB here only because current and candidate passwords can both be present.
          */
         post: operations["reauthenticate"];
         delete?: never;
@@ -250,7 +250,7 @@ export interface paths {
         put?: never;
         /**
          * resetPassword
-         * @description Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics.
+         * @description Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. New password uses Student min 6/Admin min 12 from trusted server role and Unicode code-point rules; local approved list mandatory. If none valid, 503 SERVICE_DISABLED retryable true without reset/reauth consumption or success receipt; do not disable normal login or send password plaintext to a provider. Password change/reset never clears MFA or logs in; atomically increase security_epoch and revoke old derived authorizations.
          */
         post: operations["resetPassword"];
         delete?: never;
@@ -270,7 +270,7 @@ export interface paths {
         put?: never;
         /**
          * changePassword
-         * @description Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics.
+         * @description Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Maximum 300s; server role and local list rechecked before consuming proof or success receipt; atomic password/epoch/full revocation. New password uses Student min 6/Admin min 12 from trusted server role and Unicode code-point rules; local approved list mandatory. If none valid, 503 SERVICE_DISABLED retryable true without reset/reauth consumption or success receipt; do not disable normal login or send password plaintext to a provider. Password change/reset never clears MFA or logs in; atomically increase security_epoch and revoke old derived authorizations.
          */
         post: operations["changePassword"];
         delete?: never;
@@ -290,7 +290,7 @@ export interface paths {
         put?: never;
         /**
          * requestEmailChange
-         * @description Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics.
+         * @description Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Maximum 300s; binds exact new email; verified new-email proof required before login identity changes.
          */
         post: operations["requestEmailChange"];
         delete?: never;
@@ -330,7 +330,7 @@ export interface paths {
         put?: never;
         /**
          * enrollMfa
-         * @description Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Secret-bearing response is never stored in operation_receipts. Recheck identity, authorization, epochs and expiry before reissuing; never replay old key/cookie/ticket.
+         * @description Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Secret-bearing response is never stored in operation_receipts. Recheck identity, authorization, epochs and expiry before reissuing; never replay old key/cookie/ticket. First optional Student factor: R2; replacing an existing factor: R3. No ordinary Admin session without MFA and no public first-Admin bootstrap.
          */
         post: operations["enrollMfa"];
         delete?: never;
@@ -350,7 +350,7 @@ export interface paths {
         put?: never;
         /**
          * confirmMfa
-         * @description Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Secret is displayed only in first response, never saved in generic receipts. Lost-response retry returns 409 SECRET_ALREADY_ISSUED; reauthenticate then explicitly rotate/reissue with new operation, invalidating old secret.
+         * @description Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Secret is displayed only in first response, never saved in generic receipts. Lost-response retry returns 409 SECRET_ALREADY_ISSUED; reauthenticate then explicitly rotate/reissue with new operation, invalidating old secret. Separate proof bound to enrollment and code/body; first Student enrollment R2, existing-factor replacement R3. Ordinary enrollment only; never manual/automatic recovery final. Its existing RecoveryCodes first-response contract applies to ordinary enrollment only; it must reject recovery cookies and manual receiver contexts rather than act as recovery finalize.
          */
         post: operations["confirmMfa"];
         delete?: never;
@@ -370,7 +370,7 @@ export interface paths {
         put?: never;
         /**
          * disableMfa
-         * @description Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics.
+         * @description Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Single-use maximum 120s; Admin disable is forbidden, regardless of a valid proof; Student current factor required if enrolled.
          */
         post: operations["disableMfa"];
         delete?: never;
@@ -390,7 +390,7 @@ export interface paths {
         put?: never;
         /**
          * rotateRecoveryCodes
-         * @description Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Secret is displayed only in first response, never saved in generic receipts. Lost-response retry returns 409 SECRET_ALREADY_ISSUED; reauthenticate then explicitly rotate/reissue with new operation, invalidating old secret.
+         * @description Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Secret is displayed only in first response, never saved in generic receipts. Lost-response retry returns 409 SECRET_ALREADY_ISSUED; reauthenticate then explicitly rotate/reissue with new operation, invalidating old secret. S2 route-mapping candidate: single-use maximum 120s; full login plus current factor required; explicit first generation or whole-group rotation, one display only. Keep operationId rotateRecoveryCodes. After full password/new-MFA login this is also the explicit first-group generation when recovery final left no group. No flow cookie, old cap, CLI or status may call it; same-key lost-response retry remains 409 SECRET_ALREADY_ISSUED.
          */
         post: operations["rotateRecoveryCodes"];
         delete?: never;
@@ -518,7 +518,7 @@ export interface paths {
         put?: never;
         /**
          * revokeSession
-         * @description Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics.
+         * @description Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Owned other session only; use logout for the current session without extra reauth. Student 600s/Admin 300s.
          */
         post: operations["revokeSession"];
         delete?: never;
@@ -558,7 +558,7 @@ export interface paths {
         put?: never;
         /**
          * trustDevice
-         * @description Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics.
+         * @description Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. S2 route-mapping candidate; binds current device and exact consent/body. Existing PR-05a trust/cache security POC gate remains; no recording consent coercion.
          */
         post: operations["trustDevice"];
         delete?: never;
@@ -578,7 +578,7 @@ export interface paths {
         put?: never;
         /**
          * revokeDevice
-         * @description Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics.
+         * @description Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Owned device and derived sessions/grants; Student 600s/Admin 300s, exact target/body/key.
          */
         post: operations["revokeDevice"];
         delete?: never;
@@ -638,7 +638,7 @@ export interface paths {
         put?: never;
         /**
          * deleteAccount
-         * @description Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics.
+         * @description Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Single-use maximum 120s and exact confirmation/body/key; preserve tombstones/receipts/raw/unknown charge risk and existing deletion semantics.
          */
         post: operations["deleteAccount"];
         delete?: never;
@@ -2394,7 +2394,7 @@ export interface paths {
         put?: never;
         /**
          * createWsTicket
-         * @description Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Secret-bearing response is never stored in operation_receipts. Recheck identity, authorization, epochs and expiry before reissuing; never replay old key/cookie/ticket.
+         * @description Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Secret-bearing response is never stored in operation_receipts. Recheck identity, authorization, epochs and expiry before reissuing; never replay old key/cookie/ticket. Full current session only, CSRF and exact Origin; recovery context is rejected. Ticket is purpose/owner/session/device/security_epoch/channel/class/fence bound and single-use. TLS upgrade independently checks Cookie+Origin; first authenticate frame must meet BOTH ticket expiry and a distinct upgrade-relative deadline. S1 experimental inputs 30s ticket/5s first frame are not frozen production values. No ticket in URL/subprotocol/log; authenticated messages recheck PG revocation.
          */
         post: operations["createWsTicket"];
         delete?: never;
@@ -2417,6 +2417,46 @@ export interface paths {
         get: operations["getReviewRevision"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/recovery/enroll": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * enrollRecoveryMfa
+         * @description Valid automatic flow cookie + its bound CSRF + exact Origin + current password + fresh receiver P-256 PoP. Enroll/reissue each record actual server verified_at and fix an exact operation deadline at most 120s later, intersecting current flow/qualification expiry; recheck clock_timestamp after all locks. Create or independently reissue a pending new seed to that receiver; never change the active factor, extend original flow expiry or replay old seed from a receipt. Fresh challenge may be obtained as protocol material from getCsrf while the flow remains valid; reissue rotates pending generation and invalidates the old pending seed. No normal session/device/user or manual control authority; reject manual flows.
+         */
+        post: operations["enrollRecoveryMfa"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/recovery/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * confirmRecoveryMfa
+         * @description Automatic recovery only: reverify current password, fresh receiver PoP and current pending new TOTP; record actual server verified_at and fix operation deadline at most 120s later, intersecting flow/current qualification expiry. Recheck clock_timestamp, target epoch, flow, credential versions and all deadlines after all locks; atomically consume cap/challenge, activate new factor, invalidate old factor and old recovery-code group, increment sole security_epoch, revoke all old sessions/derived grants, and write mandatory audit/independent identity notification. Return completion fact only, clear restricted cookie; never issue normal session or new recovery codes. Full password+new-MFA login then an explicit rotateRecoveryCodes operation is required. PG/KEK/audit failure rolls back. Unknown COMMIT outcome is not a retry grant: old cap/old target epoch cannot query terminal status or blindly repeat final; use full login or separately reviewed fresh authorization. No public manual finalize/status.
+         */
+        post: operations["confirmRecoveryMfa"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2454,7 +2494,7 @@ export interface components {
             schema_revision: string;
             minimum_client_build: string;
             /** @constant */
-            contract_version: "0.1.0";
+            contract_version: "0.2.0";
             /** Format: date-time */
             server_time: string;
             features: {
@@ -2472,9 +2512,11 @@ export interface components {
                 heartbeat_seconds: number;
             };
         };
+        /** @description Invitation-only Student registration; no client role field. Local password policy/list and PR-03a capacity/invitation atomicity remain server-authoritative. */
         RegisterRequest: {
             /** Format: email */
             email: string;
+            /** @description New password: 6-1024 Unicode code points for Student; server-derived Admin role requires at least 12. No composition requirement, trimming, normalization or truncation. Local approved password list required. Public schema minimum 6 never authorizes an Admin short password. */
             password: string;
             invitation_token: string;
             nickname?: string;
@@ -2486,25 +2528,48 @@ export interface components {
         TokenRequest: {
             token: string;
         };
+        /** @description Protocol defense material only. With a valid automatic recovery cookie, csrf_token belongs only to that flow and receiver_challenge is present; no full-session or terminal-status grant. Ordinary/preauth responses omit receiver_challenge. Refreshing protocol material never extends session/proof/flow deadlines or performs recovery business changes. */
         CsrfBootstrap: {
             csrf_token: string;
             /** Format: date-time */
             expires_at: string;
+            receiver_challenge?: string;
         };
         LoginRequest: {
             /** Format: email */
             email: string;
+            /** @description Verify existing PHC; do not apply new-password minimum. Local-list unavailability does not disable normal login. */
             password: string;
+            /** @description Student: true persistent cookie, false session cookie; both retain server 14-day idle/30-day absolute. Admin: always non-persistent and server 15-minute idle/8-hour absolute. */
             remember_me: boolean;
             device_name: string;
         };
+        /** @description Disjoint strict results. mfa_required/recovery_required cannot carry a User, device or ordinary CSRF. Only authenticated establishes a normal session. Unknown states fail closed in all clients. */
         LoginResult: {
-            /** @enum {string} */
-            state: "authenticated" | "mfa_required";
-            challenge_id: string | null;
-            user: components["schemas"]["User"] | null;
-            device_id: string | null;
-            csrf_token: string | null;
+            /** @constant */
+            state: "authenticated";
+            challenge_id: null;
+            user: components["schemas"]["User"];
+            /** Format: uuid */
+            device_id: string;
+            csrf_token: string;
+        } | {
+            /** @constant */
+            state: "mfa_required";
+            /** Format: uuid */
+            challenge_id: string;
+            user: null;
+            device_id: null;
+            csrf_token: null;
+            receiver_challenge: string;
+        } | {
+            /** @constant */
+            state: "recovery_required";
+            challenge_id: null;
+            user: null;
+            device_id: null;
+            csrf_token: null;
+            recovery: components["schemas"]["AutomaticRecoveryContext"];
         };
         SessionContext: {
             user: components["schemas"]["User"];
@@ -2515,24 +2580,41 @@ export interface components {
             csrf_token: string;
         };
         MfaChallengeRequest: {
+            /** @constant */
+            factor_type: "totp";
             /** Format: uuid */
             challenge_id: string;
             code: string;
+        } | {
+            /** @constant */
+            factor_type: "recovery_code";
+            /** Format: uuid */
+            challenge_id: string;
+            code: string;
+            receiver_public_key: components["schemas"]["ReceiverPublicKey"];
+            receiver_proof: components["schemas"]["ReceiverProof"];
         };
+        /** @description Password is always current verification, not a new-password policy check. mfa_code may be omitted only by a Student without an enrolled factor; Admin/enrolled Student must prove current TOTP. Recovery code is not an ordinary reauth factor. Candidate new password is TLS input for server commitment only and must not enter logs/receipts. */
         ReauthRequest: {
             password: string;
             mfa_code?: string;
+            operation: components["schemas"]["ReauthOperation"];
         };
+        /** @description Opaque proof plus fixed server expiry only; no plaintext candidate parameters or public password fingerprint. R1 max Student 600s/Admin 300s; R2 max 300s; R3 and Student-recovery bridge max 120s from actual factor verified_at, then intersect proof/session/device/permission deadlines. R3 and recovery writes single-use; recovery_status read-only proof reusable only while valid, never consumes recovery nonce/cap. Token encoding is canonical unpadded base64url from at least 32 random bytes, 43..256 characters, identical to X-Reauth-Token and the control bridge; decoder enforces canonical encoding and byte minimum. */
         ReauthResult: {
             reauth_token: string;
             /** Format: date-time */
             expires_at: string;
         };
+        /** @description Server derives role from the valid one-time token; no valid local list means safe pause without consuming token. Reset revokes sessions/derived grants and increases the sole security_epoch, never clears MFA or logs in. */
         PasswordResetRequest: {
             token: string;
+            /** @description New password: 6-1024 Unicode code points for Student; server-derived Admin role requires at least 12. No composition requirement, trimming, normalization or truncation. Local approved password list required. Public schema minimum 6 never authorizes an Admin short password. */
             new_password: string;
         };
+        /** @description Server derives role from current validated account. Candidate password must match the server-keyed reauth commitment; no valid local list pauses before proof consumption or success receipt. */
         PasswordChangeRequest: {
+            /** @description New password: 6-1024 Unicode code points for Student; server-derived Admin role requires at least 12. No composition requirement, trimming, normalization or truncation. Local approved password list required. Public schema minimum 6 never authorizes an Admin short password. */
             new_password: string;
         };
         EmailChangeRequest: {
@@ -2551,6 +2633,7 @@ export interface components {
             enrollment_id: string;
             code: string;
         };
+        /** @description One display, no-store, digest storage only. Existing rotateRecoveryCodes route explicitly creates a first group after full login or rotates an existing group; manual/automatic recovery final and status never return this model. Lost first response: 409 SECRET_ALREADY_ISSUED; fresh reauth and a new explicit operation rotate/invalidate the old group, never replay plaintext. */
         RecoveryCodes: {
             codes: string[];
             /** @constant */
@@ -3882,12 +3965,317 @@ export interface components {
             items: components["schemas"]["AuditRecord"][];
             next_cursor: string | null;
         };
+        /** @description Public JWK only. Reject private/extra fields; mature crypto must verify canonical base64url coordinates and an on-curve public point. No hardware quantity is mandated. */
+        ReceiverPublicKey: {
+            /** @constant */
+            kty: "EC";
+            /** @constant */
+            crv: "P-256";
+            x: string;
+            y: string;
+        };
+        /** @description P-256 ECDSA SHA-256 with 64-byte IEEE-P1363 r||s signature encoded as canonical unpadded base64url. Sign the domain-separated method/path/Idempotency-Key/flow-or-login-challenge/receiver-thumbprint/challenge/body commitment defined in HTTP-SESSION-CONTRACT.md; all request fields except receiver_proof are covered. Challenge is server-issued, current, bound to the login/recovery receiver context and single-use; the signature binds the exact action/path. Client time is not authority. */
+        ReceiverProof: {
+            challenge: string;
+            signature: string;
+        };
+        /** @description Only the automatic recovery receiver context: distinct CSRF/key proof and cookie, no ordinary user/device/session authority. Flow expiry is bounded and never extended by challenge refresh. */
+        AutomaticRecoveryContext: {
+            /** Format: uuid */
+            flow_id: string;
+            /** @constant */
+            scope: "mfa_rebind";
+            /** @constant */
+            state: "pending";
+            /** Format: date-time */
+            expires_at: string;
+            csrf_token: string;
+            receiver_challenge: string;
+        };
+        /** @description Closed reviewed purpose set; no arbitrary operation/role/risk or parameters. Target and candidate body are strict. No generic proof for admin/cache/unreviewed routes. Stored server HMAC covers exact validated typed parameters plus current subject/session/device/epoch and operation identity; do not echo a low-entropy password fingerprint. */
+        ReauthOperation: {
+            /** @constant */
+            purpose: "logoutAll";
+            /** @description Locator only; server verifies current ownership and required role. An account target must equal the authenticated user. */
+            target: {
+                /** @constant */
+                kind: "account";
+                /** Format: uuid */
+                id: string;
+            };
+            /** @description Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned. */
+            candidate_parameters: {
+                /** Format: uuid */
+                idempotency_key: string;
+                body: components["schemas"]["Empty"];
+            };
+        } | {
+            /** @constant */
+            purpose: "revokeSession";
+            /** @description Locator only; server verifies current ownership and required role. An account target must equal the authenticated user. */
+            target: {
+                /** @constant */
+                kind: "session";
+                /** Format: uuid */
+                id: string;
+            };
+            /** @description Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned. */
+            candidate_parameters: {
+                /** Format: uuid */
+                idempotency_key: string;
+                body: components["schemas"]["Empty"];
+            };
+        } | {
+            /** @constant */
+            purpose: "revokeDevice";
+            /** @description Locator only; server verifies current ownership and required role. An account target must equal the authenticated user. */
+            target: {
+                /** @constant */
+                kind: "device";
+                /** Format: uuid */
+                id: string;
+            };
+            /** @description Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned. */
+            candidate_parameters: {
+                /** Format: uuid */
+                idempotency_key: string;
+                body: components["schemas"]["Empty"];
+            };
+        } | {
+            /** @constant */
+            purpose: "trustDevice";
+            /** @description Locator only; server verifies current ownership and required role. An account target must equal the authenticated user. */
+            target: {
+                /** @constant */
+                kind: "device";
+                /** Format: uuid */
+                id: string;
+            };
+            /** @description Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned. */
+            candidate_parameters: {
+                /** Format: uuid */
+                idempotency_key: string;
+                body: components["schemas"]["TrustDeviceRequest"];
+            };
+        } | {
+            /** @constant */
+            purpose: "changePassword";
+            /** @description Locator only; server verifies current ownership and required role. An account target must equal the authenticated user. */
+            target: {
+                /** @constant */
+                kind: "account";
+                /** Format: uuid */
+                id: string;
+            };
+            /** @description Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned. */
+            candidate_parameters: {
+                /** Format: uuid */
+                idempotency_key: string;
+                body: components["schemas"]["PasswordChangeRequest"];
+            };
+        } | {
+            /** @constant */
+            purpose: "requestEmailChange";
+            /** @description Locator only; server verifies current ownership and required role. An account target must equal the authenticated user. */
+            target: {
+                /** @constant */
+                kind: "account";
+                /** Format: uuid */
+                id: string;
+            };
+            /** @description Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned. */
+            candidate_parameters: {
+                /** Format: uuid */
+                idempotency_key: string;
+                body: components["schemas"]["EmailChangeRequest"];
+            };
+        } | {
+            /** @constant */
+            purpose: "enrollMfa";
+            /** @description Locator only; server verifies current ownership and required role. An account target must equal the authenticated user. */
+            target: {
+                /** @constant */
+                kind: "account";
+                /** Format: uuid */
+                id: string;
+            };
+            /** @description Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned. */
+            candidate_parameters: {
+                /** Format: uuid */
+                idempotency_key: string;
+                body: components["schemas"]["Empty"];
+            };
+        } | {
+            /** @constant */
+            purpose: "confirmMfa";
+            /** @description Locator only; server verifies current ownership and required role. An account target must equal the authenticated user. */
+            target: {
+                /** @constant */
+                kind: "mfa_enrollment";
+                /** Format: uuid */
+                id: string;
+            };
+            /** @description Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned. */
+            candidate_parameters: {
+                /** Format: uuid */
+                idempotency_key: string;
+                body: components["schemas"]["MfaEnrollmentConfirm"];
+            };
+        } | {
+            /** @constant */
+            purpose: "disableMfa";
+            /** @description Locator only; server verifies current ownership and required role. An account target must equal the authenticated user. */
+            target: {
+                /** @constant */
+                kind: "account";
+                /** Format: uuid */
+                id: string;
+            };
+            /** @description Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned. */
+            candidate_parameters: {
+                /** Format: uuid */
+                idempotency_key: string;
+                body: components["schemas"]["Empty"];
+            };
+        } | {
+            /** @constant */
+            purpose: "rotateRecoveryCodes";
+            /** @description Locator only; server verifies current ownership and required role. An account target must equal the authenticated user. */
+            target: {
+                /** @constant */
+                kind: "account";
+                /** Format: uuid */
+                id: string;
+            };
+            /** @description Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned. */
+            candidate_parameters: {
+                /** Format: uuid */
+                idempotency_key: string;
+                body: components["schemas"]["Empty"];
+            };
+        } | {
+            /** @constant */
+            purpose: "deleteAccount";
+            /** @description Locator only; server verifies current ownership and required role. An account target must equal the authenticated user. */
+            target: {
+                /** @constant */
+                kind: "account";
+                /** Format: uuid */
+                id: string;
+            };
+            /** @description Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned. */
+            candidate_parameters: {
+                /** Format: uuid */
+                idempotency_key: string;
+                body: components["schemas"]["DeletionSubmit"];
+            };
+        } | {
+            /** @constant */
+            purpose: "student_recovery_issue";
+            /** @description Locator only; server verifies current ownership and required role. An account target must equal the authenticated user. */
+            target: {
+                /** @constant */
+                kind: "recovery_case";
+                /** Format: uuid */
+                id: string;
+            };
+            candidate_parameters: {
+                /** Format: uuid */
+                op_id: string;
+                plan_hash: string;
+            };
+        } | {
+            /** @constant */
+            purpose: "student_recovery_reissue";
+            /** @description Locator only; server verifies current ownership and required role. An account target must equal the authenticated user. */
+            target: {
+                /** @constant */
+                kind: "recovery_case";
+                /** Format: uuid */
+                id: string;
+            };
+            candidate_parameters: {
+                /** Format: uuid */
+                op_id: string;
+                plan_hash: string;
+            };
+        } | {
+            /** @constant */
+            purpose: "student_recovery_complete";
+            /** @description Locator only; server verifies current ownership and required role. An account target must equal the authenticated user. */
+            target: {
+                /** @constant */
+                kind: "recovery_case";
+                /** Format: uuid */
+                id: string;
+            };
+            candidate_parameters: {
+                /** Format: uuid */
+                op_id: string;
+                plan_hash: string;
+            };
+        } | {
+            /** @constant */
+            purpose: "student_recovery_status";
+            /** @description Locator only; server verifies current ownership and required role. An account target must equal the authenticated user. */
+            target: {
+                /** @constant */
+                kind: "recovery_case";
+                /** Format: uuid */
+                id: string;
+            };
+            candidate_parameters: {
+                /** Format: uuid */
+                op_id: string;
+                plan_hash: string;
+            };
+        };
+        /** @description Only automatic flow. Valid restricted cookie, its CSRF, exact Origin, current target epoch/flow, current password verification and fresh receiver-key PoP are all required. Server records actual verified_at and an operation-specific deadline at most verified_at+120s, intersecting flow/current qualification expiry; recheck after all locks. No new-password minimum, lost old MFA, second recovery-code consumption or flow-TTL extension. Not a manual receiver protocol. */
+        RecoveryReceiverRequest: {
+            /** Format: uuid */
+            flow_id: string;
+            password: string;
+            receiver_proof: components["schemas"]["ReceiverProof"];
+        };
+        /** @description Pending seed to the bound automatic receiver once, no-store. Old factor remains active. A separately authorized fresh PoP reissue rotates pending seed/generation without extending original flow expiry; never replay old URI from generic receipt. */
+        RecoveryReceiverEnrollment: {
+            /** Format: uuid */
+            flow_id: string;
+            /** Format: uuid */
+            enrollment_id: string;
+            otpauth_uri: string;
+            /** Format: date-time */
+            expires_at: string;
+            receiver_challenge: string;
+        };
+        /** @description Reverify current password, fresh receiver PoP and new TOTP for the currently bound automatic flow/enrollment. Record actual verified_at and a fixed operation deadline at most verified_at+120s, intersect flow/current qualification expiry and recheck clock_timestamp after all locks. Consume challenge/cap atomically with final switch; no lost old MFA, second recovery-code consumption or flow-TTL extension. Manual cases are rejected even if identifiers resemble a flow. */
+        RecoveryReceiverConfirm: {
+            /** Format: uuid */
+            flow_id: string;
+            /** Format: uuid */
+            enrollment_id: string;
+            password: string;
+            code: string;
+            receiver_proof: components["schemas"]["ReceiverProof"];
+        };
+        /** @description Non-secret completion fact only. Atomic factor replacement, old code-group invalidation, sole epoch increment and full derived-authorization revocation; no session, seed, codes or terminal-status capability. Clear recovery cookie. Full password plus new MFA login is required. */
+        RecoveryCompleted: {
+            /** @constant */
+            state: "completed";
+            /** Format: uuid */
+            flow_id: string;
+            /** @constant */
+            requires_full_login: true;
+            /** @constant */
+            new_recovery_codes_issued: false;
+        };
     };
     responses: never;
     parameters: {
         IdempotencyKey: string;
-        /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+        /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
         CsrfToken: string;
+        /** @description Existing X-Reauth-Token header, carrying an opaque server-issued proof for the exact purpose, target, candidate parameters and future Idempotency-Key. R3 at most 120 seconds from real verified_at and single-use; R1/R2 use the documented role window. Recheck current session/device/epoch and deadline after all locks. This header cannot grant ordinary admin permissions or authorize an unreviewed operation. Producer generates at least 32 random bytes, canonical unpadded base64url, 43..256 characters; parser decodes/re-encodes and rejects noncanonical or insufficient-byte values. Same token is accepted by control StudentExecutorEvidence via its Secret envelope; shape alone does not prove entropy or authorization. */
         ReauthToken: string;
     };
     requestBodies: never;
@@ -3963,7 +4351,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path?: never;
@@ -4002,7 +4390,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path?: never;
@@ -4041,7 +4429,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path?: never;
@@ -4080,7 +4468,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path?: never;
@@ -4150,7 +4538,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path?: never;
@@ -4189,7 +4577,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path?: never;
@@ -4228,8 +4616,9 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
+                /** @description Existing X-Reauth-Token header, carrying an opaque server-issued proof for the exact purpose, target, candidate parameters and future Idempotency-Key. R3 at most 120 seconds from real verified_at and single-use; R1/R2 use the documented role window. Recheck current session/device/epoch and deadline after all locks. This header cannot grant ordinary admin permissions or authorize an unreviewed operation. Producer generates at least 32 random bytes, canonical unpadded base64url, 43..256 characters; parser decodes/re-encodes and rejects noncanonical or insufficient-byte values. Same token is accepted by control StudentExecutorEvidence via its Secret envelope; shape alone does not prove entropy or authorization. */
                 "X-Reauth-Token": components["parameters"]["ReauthToken"];
             };
             path?: never;
@@ -4268,7 +4657,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path?: never;
@@ -4307,7 +4696,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path?: never;
@@ -4346,7 +4735,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path?: never;
@@ -4385,8 +4774,9 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
+                /** @description Existing X-Reauth-Token header, carrying an opaque server-issued proof for the exact purpose, target, candidate parameters and future Idempotency-Key. R3 at most 120 seconds from real verified_at and single-use; R1/R2 use the documented role window. Recheck current session/device/epoch and deadline after all locks. This header cannot grant ordinary admin permissions or authorize an unreviewed operation. Producer generates at least 32 random bytes, canonical unpadded base64url, 43..256 characters; parser decodes/re-encodes and rejects noncanonical or insufficient-byte values. Same token is accepted by control StudentExecutorEvidence via its Secret envelope; shape alone does not prove entropy or authorization. */
                 "X-Reauth-Token": components["parameters"]["ReauthToken"];
             };
             path?: never;
@@ -4425,8 +4815,9 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
+                /** @description Existing X-Reauth-Token header, carrying an opaque server-issued proof for the exact purpose, target, candidate parameters and future Idempotency-Key. R3 at most 120 seconds from real verified_at and single-use; R1/R2 use the documented role window. Recheck current session/device/epoch and deadline after all locks. This header cannot grant ordinary admin permissions or authorize an unreviewed operation. Producer generates at least 32 random bytes, canonical unpadded base64url, 43..256 characters; parser decodes/re-encodes and rejects noncanonical or insufficient-byte values. Same token is accepted by control StudentExecutorEvidence via its Secret envelope; shape alone does not prove entropy or authorization. */
                 "X-Reauth-Token": components["parameters"]["ReauthToken"];
             };
             path?: never;
@@ -4465,7 +4856,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path?: never;
@@ -4504,8 +4895,9 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
+                /** @description Existing X-Reauth-Token header, carrying an opaque server-issued proof for the exact purpose, target, candidate parameters and future Idempotency-Key. R3 at most 120 seconds from real verified_at and single-use; R1/R2 use the documented role window. Recheck current session/device/epoch and deadline after all locks. This header cannot grant ordinary admin permissions or authorize an unreviewed operation. Producer generates at least 32 random bytes, canonical unpadded base64url, 43..256 characters; parser decodes/re-encodes and rejects noncanonical or insufficient-byte values. Same token is accepted by control StudentExecutorEvidence via its Secret envelope; shape alone does not prove entropy or authorization. */
                 "X-Reauth-Token": components["parameters"]["ReauthToken"];
             };
             path?: never;
@@ -4544,8 +4936,9 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
+                /** @description Existing X-Reauth-Token header, carrying an opaque server-issued proof for the exact purpose, target, candidate parameters and future Idempotency-Key. R3 at most 120 seconds from real verified_at and single-use; R1/R2 use the documented role window. Recheck current session/device/epoch and deadline after all locks. This header cannot grant ordinary admin permissions or authorize an unreviewed operation. Producer generates at least 32 random bytes, canonical unpadded base64url, 43..256 characters; parser decodes/re-encodes and rejects noncanonical or insufficient-byte values. Same token is accepted by control StudentExecutorEvidence via its Secret envelope; shape alone does not prove entropy or authorization. */
                 "X-Reauth-Token": components["parameters"]["ReauthToken"];
             };
             path?: never;
@@ -4584,8 +4977,9 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
+                /** @description Existing X-Reauth-Token header, carrying an opaque server-issued proof for the exact purpose, target, candidate parameters and future Idempotency-Key. R3 at most 120 seconds from real verified_at and single-use; R1/R2 use the documented role window. Recheck current session/device/epoch and deadline after all locks. This header cannot grant ordinary admin permissions or authorize an unreviewed operation. Producer generates at least 32 random bytes, canonical unpadded base64url, 43..256 characters; parser decodes/re-encodes and rejects noncanonical or insufficient-byte values. Same token is accepted by control StudentExecutorEvidence via its Secret envelope; shape alone does not prove entropy or authorization. */
                 "X-Reauth-Token": components["parameters"]["ReauthToken"];
             };
             path?: never;
@@ -4624,8 +5018,9 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
+                /** @description Existing X-Reauth-Token header, carrying an opaque server-issued proof for the exact purpose, target, candidate parameters and future Idempotency-Key. R3 at most 120 seconds from real verified_at and single-use; R1/R2 use the documented role window. Recheck current session/device/epoch and deadline after all locks. This header cannot grant ordinary admin permissions or authorize an unreviewed operation. Producer generates at least 32 random bytes, canonical unpadded base64url, 43..256 characters; parser decodes/re-encodes and rejects noncanonical or insufficient-byte values. Same token is accepted by control StudentExecutorEvidence via its Secret envelope; shape alone does not prove entropy or authorization. */
                 "X-Reauth-Token": components["parameters"]["ReauthToken"];
             };
             path?: never;
@@ -4695,7 +5090,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path?: never;
@@ -4767,7 +5162,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path?: never;
@@ -4905,8 +5300,9 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
+                /** @description Existing X-Reauth-Token header, carrying an opaque server-issued proof for the exact purpose, target, candidate parameters and future Idempotency-Key. R3 at most 120 seconds from real verified_at and single-use; R1/R2 use the documented role window. Recheck current session/device/epoch and deadline after all locks. This header cannot grant ordinary admin permissions or authorize an unreviewed operation. Producer generates at least 32 random bytes, canonical unpadded base64url, 43..256 characters; parser decodes/re-encodes and rejects noncanonical or insufficient-byte values. Same token is accepted by control StudentExecutorEvidence via its Secret envelope; shape alone does not prove entropy or authorization. */
                 "X-Reauth-Token": components["parameters"]["ReauthToken"];
             };
             path: {
@@ -4981,8 +5377,9 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
+                /** @description Existing X-Reauth-Token header, carrying an opaque server-issued proof for the exact purpose, target, candidate parameters and future Idempotency-Key. R3 at most 120 seconds from real verified_at and single-use; R1/R2 use the documented role window. Recheck current session/device/epoch and deadline after all locks. This header cannot grant ordinary admin permissions or authorize an unreviewed operation. Producer generates at least 32 random bytes, canonical unpadded base64url, 43..256 characters; parser decodes/re-encodes and rejects noncanonical or insufficient-byte values. Same token is accepted by control StudentExecutorEvidence via its Secret envelope; shape alone does not prove entropy or authorization. */
                 "X-Reauth-Token": components["parameters"]["ReauthToken"];
             };
             path?: never;
@@ -5021,8 +5418,9 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
+                /** @description Existing X-Reauth-Token header, carrying an opaque server-issued proof for the exact purpose, target, candidate parameters and future Idempotency-Key. R3 at most 120 seconds from real verified_at and single-use; R1/R2 use the documented role window. Recheck current session/device/epoch and deadline after all locks. This header cannot grant ordinary admin permissions or authorize an unreviewed operation. Producer generates at least 32 random bytes, canonical unpadded base64url, 43..256 characters; parser decodes/re-encodes and rejects noncanonical or insufficient-byte values. Same token is accepted by control StudentExecutorEvidence via its Secret envelope; shape alone does not prove entropy or authorization. */
                 "X-Reauth-Token": components["parameters"]["ReauthToken"];
             };
             path: {
@@ -5063,7 +5461,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path?: never;
@@ -5133,8 +5531,9 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
+                /** @description Existing X-Reauth-Token header, carrying an opaque server-issued proof for the exact purpose, target, candidate parameters and future Idempotency-Key. R3 at most 120 seconds from real verified_at and single-use; R1/R2 use the documented role window. Recheck current session/device/epoch and deadline after all locks. This header cannot grant ordinary admin permissions or authorize an unreviewed operation. Producer generates at least 32 random bytes, canonical unpadded base64url, 43..256 characters; parser decodes/re-encodes and rejects noncanonical or insufficient-byte values. Same token is accepted by control StudentExecutorEvidence via its Secret envelope; shape alone does not prove entropy or authorization. */
                 "X-Reauth-Token": components["parameters"]["ReauthToken"];
             };
             path?: never;
@@ -5207,7 +5606,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path?: never;
@@ -5281,7 +5680,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path: {
@@ -5355,7 +5754,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path: {
@@ -5434,7 +5833,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path?: never;
@@ -5509,7 +5908,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path: {
@@ -5583,7 +5982,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path: {
@@ -5660,7 +6059,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path: {
@@ -5736,7 +6135,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path?: never;
@@ -5811,7 +6210,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path: {
@@ -5885,7 +6284,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path: {
@@ -5959,7 +6358,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path: {
@@ -6000,7 +6399,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path: {
@@ -6041,7 +6440,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path: {
@@ -6082,7 +6481,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path: {
@@ -6123,7 +6522,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path: {
@@ -6164,7 +6563,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path: {
@@ -6205,7 +6604,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path: {
@@ -6281,7 +6680,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
                 /** @description Required for a fenced/retired epoch; authorization binds owner/epoch/manifest/range and is upload-only. */
                 "X-Recovery-Upload-Token"?: string;
@@ -6324,7 +6723,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
                 "Content-Digest": string;
             };
@@ -6366,7 +6765,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path: {
@@ -6440,7 +6839,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path: {
@@ -6553,7 +6952,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path: {
@@ -6594,7 +6993,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path: {
@@ -6635,7 +7034,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path: {
@@ -6676,7 +7075,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path?: never;
@@ -6715,7 +7114,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path: {
@@ -6756,7 +7155,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path: {
@@ -6797,7 +7196,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path: {
@@ -6909,7 +7308,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path: {
@@ -6950,7 +7349,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path: {
@@ -7027,7 +7426,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path: {
@@ -7103,7 +7502,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path: {
@@ -7144,7 +7543,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path: {
@@ -7218,7 +7617,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path: {
@@ -7259,7 +7658,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path: {
@@ -7402,7 +7801,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path: {
@@ -7443,7 +7842,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path: {
@@ -7484,7 +7883,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path: {
@@ -7593,7 +7992,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path: {
@@ -7673,7 +8072,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path?: never;
@@ -7748,7 +8147,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path: {
@@ -7825,7 +8224,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path: {
@@ -7866,7 +8265,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path: {
@@ -7907,7 +8306,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path?: never;
@@ -8079,7 +8478,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path: {
@@ -8120,7 +8519,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path?: never;
@@ -8159,7 +8558,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path?: never;
@@ -8198,7 +8597,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path?: never;
@@ -8341,7 +8740,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path: {
@@ -8382,7 +8781,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path?: never;
@@ -8455,8 +8854,9 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
+                /** @description Existing X-Reauth-Token header, carrying an opaque server-issued proof for the exact purpose, target, candidate parameters and future Idempotency-Key. R3 at most 120 seconds from real verified_at and single-use; R1/R2 use the documented role window. Recheck current session/device/epoch and deadline after all locks. This header cannot grant ordinary admin permissions or authorize an unreviewed operation. Producer generates at least 32 random bytes, canonical unpadded base64url, 43..256 characters; parser decodes/re-encodes and rejects noncanonical or insufficient-byte values. Same token is accepted by control StudentExecutorEvidence via its Secret envelope; shape alone does not prove entropy or authorization. */
                 "X-Reauth-Token": components["parameters"]["ReauthToken"];
             };
             path: {
@@ -8564,8 +8964,9 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
+                /** @description Existing X-Reauth-Token header, carrying an opaque server-issued proof for the exact purpose, target, candidate parameters and future Idempotency-Key. R3 at most 120 seconds from real verified_at and single-use; R1/R2 use the documented role window. Recheck current session/device/epoch and deadline after all locks. This header cannot grant ordinary admin permissions or authorize an unreviewed operation. Producer generates at least 32 random bytes, canonical unpadded base64url, 43..256 characters; parser decodes/re-encodes and rejects noncanonical or insufficient-byte values. Same token is accepted by control StudentExecutorEvidence via its Secret envelope; shape alone does not prove entropy or authorization. */
                 "X-Reauth-Token": components["parameters"]["ReauthToken"];
             };
             path?: never;
@@ -8604,8 +9005,9 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
+                /** @description Existing X-Reauth-Token header, carrying an opaque server-issued proof for the exact purpose, target, candidate parameters and future Idempotency-Key. R3 at most 120 seconds from real verified_at and single-use; R1/R2 use the documented role window. Recheck current session/device/epoch and deadline after all locks. This header cannot grant ordinary admin permissions or authorize an unreviewed operation. Producer generates at least 32 random bytes, canonical unpadded base64url, 43..256 characters; parser decodes/re-encodes and rejects noncanonical or insufficient-byte values. Same token is accepted by control StudentExecutorEvidence via its Secret envelope; shape alone does not prove entropy or authorization. */
                 "X-Reauth-Token": components["parameters"]["ReauthToken"];
             };
             path: {
@@ -8646,8 +9048,9 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
+                /** @description Existing X-Reauth-Token header, carrying an opaque server-issued proof for the exact purpose, target, candidate parameters and future Idempotency-Key. R3 at most 120 seconds from real verified_at and single-use; R1/R2 use the documented role window. Recheck current session/device/epoch and deadline after all locks. This header cannot grant ordinary admin permissions or authorize an unreviewed operation. Producer generates at least 32 random bytes, canonical unpadded base64url, 43..256 characters; parser decodes/re-encodes and rejects noncanonical or insufficient-byte values. Same token is accepted by control StudentExecutorEvidence via its Secret envelope; shape alone does not prove entropy or authorization. */
                 "X-Reauth-Token": components["parameters"]["ReauthToken"];
             };
             path: {
@@ -8688,8 +9091,9 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
+                /** @description Existing X-Reauth-Token header, carrying an opaque server-issued proof for the exact purpose, target, candidate parameters and future Idempotency-Key. R3 at most 120 seconds from real verified_at and single-use; R1/R2 use the documented role window. Recheck current session/device/epoch and deadline after all locks. This header cannot grant ordinary admin permissions or authorize an unreviewed operation. Producer generates at least 32 random bytes, canonical unpadded base64url, 43..256 characters; parser decodes/re-encodes and rejects noncanonical or insufficient-byte values. Same token is accepted by control StudentExecutorEvidence via its Secret envelope; shape alone does not prove entropy or authorization. */
                 "X-Reauth-Token": components["parameters"]["ReauthToken"];
             };
             path?: never;
@@ -8823,8 +9227,9 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
+                /** @description Existing X-Reauth-Token header, carrying an opaque server-issued proof for the exact purpose, target, candidate parameters and future Idempotency-Key. R3 at most 120 seconds from real verified_at and single-use; R1/R2 use the documented role window. Recheck current session/device/epoch and deadline after all locks. This header cannot grant ordinary admin permissions or authorize an unreviewed operation. Producer generates at least 32 random bytes, canonical unpadded base64url, 43..256 characters; parser decodes/re-encodes and rejects noncanonical or insufficient-byte values. Same token is accepted by control StudentExecutorEvidence via its Secret envelope; shape alone does not prove entropy or authorization. */
                 "X-Reauth-Token": components["parameters"]["ReauthToken"];
             };
             path?: never;
@@ -8897,7 +9302,7 @@ export interface operations {
             query?: never;
             header: {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-                /** @description Bound to session or public preauth session; Origin/Fetch-Metadata also checked. */
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
             path?: never;
@@ -8953,6 +9358,84 @@ export interface operations {
                 };
             };
             /** @description Typed failure; no private content in error messages. */
+            default: {
+                headers: {
+                    "Cache-Control"?: "no-store";
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    enrollRecoveryMfa: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
+                "X-CSRF-Token": components["parameters"]["CsrfToken"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecoveryReceiverRequest"];
+            };
+        };
+        responses: {
+            /** @description Automatic restricted recovery only; never ordinary authentication. */
+            200: {
+                headers: {
+                    "Cache-Control"?: "no-store";
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecoveryReceiverEnrollment"];
+                };
+            };
+            /** @description Typed generic failure; no private data or secrets; consumed cookie never authorizes terminal-status read. */
+            default: {
+                headers: {
+                    "Cache-Control"?: "no-store";
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    confirmRecoveryMfa: {
+        parameters: {
+            query?: never;
+            header: {
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
+                "X-CSRF-Token": components["parameters"]["CsrfToken"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecoveryReceiverConfirm"];
+            };
+        };
+        responses: {
+            /** @description Automatic restricted recovery only; never ordinary authentication. */
+            200: {
+                headers: {
+                    "Cache-Control"?: "no-store";
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecoveryCompleted"];
+                };
+            };
+            /** @description Typed generic failure; no private data or secrets; consumed cookie never authorizes terminal-status read. */
             default: {
                 headers: {
                     "Cache-Control"?: "no-store";

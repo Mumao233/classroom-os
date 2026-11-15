@@ -153,7 +153,7 @@ def test_resend_wins_before_old_activation_and_rotates_all_proofs(identity, monk
 
 def test_default_resend_interval_and_registration_pause_preserve_ledgers(identity):
     invite, _, token = queued(identity)
-    service = IdentityService(identity.repository, identity.service.hasher, admin_reauthentication_window=timedelta(minutes=5))
+    service = IdentityService(identity.repository, identity.service.hasher, admin_reauthentication_window=timedelta(minutes=5),password_policy=identity.service.password_policy)
     before = {n: rows(identity, n) for n in ids}
     with pytest.raises(IdentityRejected) as err:
         service.resend('synthetic-student@example.test', invite.token)

@@ -1,6 +1,7 @@
 {
   "schema_version": "1.0.0",
-  "status": "PR-01 architecture baseline pending user review; not applied migrations",
+  "contract_version": "0.2.0",
+  "status": "PR-03b S2 identity contract proposal 0.2.0; S1 approved; no migrations applied; independent S2 review pending",
   "database": "PostgreSQL 17 target; patch/driver lock and actual validation in PR-02",
   "runtime": "Python 3.12 target; independent Web dependency environment",
   "id_strategy": "UUIDv4; no semantic IDs or course-name keys",
@@ -111,7 +112,8 @@
       ],
       "transactional_invariants": [
         "email is normalized by documented policy; no provider-specific dot/plus rewriting",
-        "erased principal retains opaque UUID only until tombstone/accounting retention approved; email and secrets nulled"
+        "erased principal retains opaque UUID only until tombstone/accounting retention approved; email and secrets nulled",
+        "security_epoch is the sole account invalidation counter; password/factor/account-wide recovery changes increment it atomically and revoke old derived grants; no auth_epoch column"
       ],
       "row_security": "No general owner API grant; dedicated identity/control repository only"
     },
@@ -379,7 +381,9 @@
         "kind IN ('reset_password','change_email','verify_email')"
       ],
       "transactional_invariants": [
-        "single-use consume under row lock; reset increments user security_epoch and revokes all sessions"
+        "single-use consume under row lock; reset increments user security_epoch and revokes all sessions",
+        "password reset preserves MFA, increments users.security_epoch and revokes derived grants; no automatic login",
+        "current local password-list version rechecked before commit; list unavailable does not consume action/reauth proof or create success receipt"
       ],
       "row_security": "FORCE RLS: owner_id = nullif(current_setting('app.owner_id', true), '')::uuid; empty scope denies"
     },
@@ -459,6 +463,21 @@
           "name": "device_id",
           "type": "uuid",
           "nullable": false
+        },
+        {
+          "name": "logical_session_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "established_at",
+          "type": "timestamptz",
+          "nullable": false
+        },
+        {
+          "name": "mfa_level",
+          "type": "text",
+          "nullable": false
         }
       ],
       "primary_key": [
@@ -507,11 +526,20 @@
           "revoked_at"
         ]
       ],
-      "checks": [],
-      "transactional_invariants": [
-        "token and CSRF plaintext never persisted; live HTTP/WS validate revocation and security_epoch"
+      "checks": [
+        "mfa_level IN ('password','totp')",
+        "security_epoch >= 1",
+        "established_at <= last_seen_at AND last_seen_at <= absolute_expires_at",
+        "idle_expires_at <= absolute_expires_at"
       ],
-      "row_security": "FORCE RLS: owner_id = nullif(current_setting('app.owner_id', true), '')::uuid; empty scope denies"
+      "transactional_invariants": [
+        "token and CSRF plaintext never persisted; live HTTP/WS validate revocation and security_epoch",
+        "student idle 14 days / absolute 30 days; admin idle 15 minutes / absolute 8 hours; now equal to either deadline rejects",
+        "token/CSRF rotation preserves logical_session_id, established_at and absolute_expires_at; only full login creates a new logical session",
+        "device/session/user current state and epoch checked under ordered locks through business COMMIT; first lock is exclusive when refreshing activity; heartbeat/poll/failure does not extend idle",
+        "remember_me only changes student Cookie persistence; admin Cookie always non-persistent; device IDs and MFA-required challenges are not full sessions"
+      ],
+      "row_security": "FORCE RLS: owner_id = nullif(current_setting('app.owner_id', true), '')::uuid for authorized owner paths; empty external scope denies; separate narrowly scoped definer policies support auth lookup/verification and authorized control functions, never general HTTP/runtime credential grants"
     },
     {
       "name": "mfa_credentials",
@@ -554,6 +582,37 @@
           "name": "enabled_at",
           "type": "timestamptz",
           "nullable": true
+        },
+        {
+          "name": "state",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "version",
+          "type": "bigint",
+          "nullable": false,
+          "default": "1"
+        },
+        {
+          "name": "pending_expires_at",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "confirmed_at",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "revoked_at",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "recovery_case_id",
+          "type": "uuid",
+          "nullable": true
         }
       ],
       "primary_key": [
@@ -563,9 +622,6 @@
         [
           "owner_id",
           "id"
-        ],
-        [
-          "owner_id"
         ]
       ],
       "foreign_keys": [
@@ -580,14 +636,38 @@
             ]
           },
           "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "recovery_case_id"
+          ],
+          "references": {
+            "table": "manual_recovery_cases",
+            "columns": [
+              "target_user_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT",
+          "deferrable": "INITIALLY DEFERRED"
         }
       ],
       "indexes": [],
-      "checks": [],
-      "transactional_invariants": [
-        "TOTP replay prevention compares last_accepted_step transactionally; admin login requires enabled MFA"
+      "checks": [
+        "state IN ('pending','active','revoked')",
+        "version >= 1",
+        "state <> 'pending' OR pending_expires_at IS NOT NULL",
+        "state <> 'active' OR (confirmed_at IS NOT NULL AND enabled_at IS NOT NULL AND revoked_at IS NULL)"
       ],
-      "row_security": "FORCE RLS: owner_id = nullif(current_setting('app.owner_id', true), '')::uuid; empty scope denies"
+      "transactional_invariants": [
+        "TOTP replay prevention compares last_accepted_step transactionally; admin login requires enabled MFA",
+        "UNIQUE(owner_id) WHERE state='active'; old active plus pending candidate may coexist; lock owner first and revoke old before activating new in one final transaction",
+        "pending_confirmed does not change old active factor or grant normal session; manual candidate may only be finalized by original current executor fresh complete",
+        "versioned KEK ciphertext only; error/log/APM never contain plaintext seed; KEK/audit failure rolls back",
+        "last_accepted_step advances once under factor lock across login/reauth/recovery; current factor/epoch rechecked after all lock waits; expired pending never activates"
+      ],
+      "row_security": "FORCE RLS: owner_id = nullif(current_setting('app.owner_id', true), '')::uuid for authorized owner paths; empty external scope denies; separate narrowly scoped definer policies support auth lookup/verification and authorized control functions, never general HTTP/runtime credential grants"
     },
     {
       "name": "mfa_recovery_codes",
@@ -623,6 +703,16 @@
         },
         {
           "name": "used_at",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "group_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "revoked_at",
           "type": "timestamptz",
           "nullable": true
         }
@@ -666,14 +756,31 @@
             ]
           },
           "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "group_id"
+          ],
+          "references": {
+            "table": "recovery_code_groups",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
         }
       ],
       "indexes": [],
       "checks": [],
       "transactional_invariants": [
-        "successful recovery consumes exactly one row under lock"
+        "successful recovery consumes exactly one row under lock",
+        "group owner and credential_id must match locked recovery_code_groups row; revoked group/credential/epoch cannot consume code",
+        "manual final revokes all old groups/codes but creates none; full password+new MFA login then explicit fresh R3 operation creates/rotates new group",
+        "no plaintext code replay; secret-response loss reports SECRET_ALREADY_ISSUED and requires independently reauthorized explicit whole-group rotation"
       ],
-      "row_security": "FORCE RLS: owner_id = nullif(current_setting('app.owner_id', true), '')::uuid; empty scope denies"
+      "row_security": "FORCE RLS: owner_id = nullif(current_setting('app.owner_id', true), '')::uuid for authorized owner paths; empty external scope denies; separate narrowly scoped definer policies support auth lookup/verification and authorized control functions, never general HTTP/runtime credential grants"
     },
     {
       "name": "devices",
@@ -738,6 +845,11 @@
           "name": "security_epoch",
           "type": "bigint",
           "nullable": false
+        },
+        {
+          "name": "last_seen_at",
+          "type": "timestamptz",
+          "nullable": true
         }
       ],
       "primary_key": [
@@ -771,7 +883,9 @@
         "revision >= 1"
       ],
       "transactional_invariants": [
-        "device identity is not an authentication credential; recording recovery consent is separate from trusted learning cache"
+        "device identity is not an authentication credential; recording recovery consent is separate from trusted learning cache",
+        "identity reuses this existing owner-scoped device ID; device token/label cannot authenticate alone or grant trusted learning cache/recording consent",
+        "session/device revocation is checked live; auth implementation does not create cache_keys or grant private persistence"
       ],
       "row_security": "FORCE RLS: owner_id = nullif(current_setting('app.owner_id', true), '')::uuid; empty scope denies"
     },
@@ -7439,6 +7553,72 @@
           "name": "security_epoch",
           "type": "bigint",
           "nullable": true
+        },
+        {
+          "name": "device_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "verified_at",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "failed_attempts",
+          "type": "integer",
+          "nullable": false,
+          "default": "0"
+        },
+        {
+          "name": "flow_generation",
+          "type": "bigint",
+          "nullable": true
+        },
+        {
+          "name": "receiver_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "receiver_key_hash",
+          "type": "bytea",
+          "nullable": true
+        },
+        {
+          "name": "pending_factor_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "pending_confirmed_at",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "recovery_mode",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "operation_action",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "operation_proof_hash",
+          "type": "bytea",
+          "nullable": true
+        },
+        {
+          "name": "operation_deadline",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "operation_consumed_at",
+          "type": "timestamptz",
+          "nullable": true
         }
       ],
       "primary_key": [
@@ -7475,16 +7655,74 @@
             ]
           },
           "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "device_id"
+          ],
+          "references": {
+            "table": "devices",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "pending_factor_id"
+          ],
+          "references": {
+            "table": "mfa_credentials",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "receiver_id"
+          ],
+          "references": {
+            "table": "recovery_receivers",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT",
+          "deferrable": "INITIALLY DEFERRED"
         }
       ],
       "indexes": [],
       "checks": [
-        "kind IN ('preauth','login_mfa','reauth','ws_ticket','media_ticket','deletion_preview')"
+        "kind IN ('preauth','login_mfa','reauth','ws_ticket','media_ticket','deletion_preview','auto_recovery')",
+        "expires_at > created_at AND failed_attempts >= 0",
+        "kind <> 'preauth' OR (owner_id IS NULL AND session_id IS NULL AND security_epoch IS NULL)",
+        "kind = 'preauth' OR (owner_id IS NOT NULL AND security_epoch IS NOT NULL)",
+        "session_id IS NULL OR (owner_id IS NOT NULL AND device_id IS NOT NULL)",
+        "recovery_mode IS NULL OR (recovery_mode = 'auto_code' AND kind = 'auto_recovery')",
+        "operation_action IS NULL OR (recovery_mode = 'auto_code' AND operation_action IN ('auto_enroll','auto_reissue','auto_confirm'))",
+        "operation_deadline IS NULL OR (verified_at IS NOT NULL AND operation_deadline > verified_at AND operation_deadline <= verified_at + interval '120 seconds')",
+        "operation_action IS NULL OR (operation_proof_hash IS NOT NULL AND verified_at IS NOT NULL AND operation_deadline IS NOT NULL)"
       ],
       "transactional_invariants": [
         "dedicated auth repository only; preauth has null owner and cannot authorize learning access",
         "bounded scope binds channel/resource/version/fence; one-time grants consume under lock; never store plaintext bearer or returned secret",
-        "non-preauth grants require valid owner and current security epoch; session FK if grant depends on session"
+        "non-preauth grants require valid owner and current security epoch; session FK if grant depends on session",
+        "nullable composite FK components cannot bypass ownership: session_id/device_id/pending_factor_id implies owner_id; session device matches locked auth_sessions row",
+        "reauth challenge is not an execution proof; successful verified_at is actual server verification time and produces separately scoped reauth_proofs",
+        "auto_code mode only: password+single recovery-code consumption creates receiver-bound restricted auto_recovery challenge; token_hash is capability digest; bounded scope includes old epoch, credential/group, receiver, plan/flow and pending expiry",
+        "auto receiver confirm may atomically finalize only auto_code scope after new factor proof; never use an auto/browser operation to finalize manual_recovery_cases; no ordinary session or secret receipt",
+        "WS ticket lifetime and first-frame deadline checked independently; ticket binds parent session/device/epoch and existing channel/resource/fence; cleanup is bounded and does not grant permission",
+        "auto receiver registration and challenge share server deployment and immutable mode; lock receiver before auth_challenge during consume; response nonce rotation cannot extend original flow expiry",
+        "auto enroll/reissue/confirm EACH freshly reverify current password + valid code-derived cap + receiver PoP; confirm also verifies new TOTP; record actual server verified_at and action/request/receiver/flow-bound proof digest + deadline <=120 seconds, min current qualifications/flow expiry; after all locks clock_timestamp < deadline",
+        "auto action proof is single-use and rotated per action; current operation_proof_hash/action must match before consumption, previous proof never revived by overwritten timestamps or nonce; do not consume original recovery code again or require lost old MFA",
+        "auto restricted flow total expiry remains original <=10 minute candidate; fresh proof/receiver nonce rotation or reissue never extends it; only auto final atomically consumes cap, activates factor, revokes old groups, increments epoch/all grants, audits, with no login or new codes"
       ],
       "row_security": "No general owner API grant; dedicated identity/control repository only"
     },
@@ -7572,6 +7810,1890 @@
         "short-lived minimized receipt; no password/token/seed/email-link response payload; replay reauthenticates; scope never transfers to another browser"
       ],
       "row_security": "No general owner API grant; dedicated identity/control repository only"
+    },
+    {
+      "name": "recovery_code_groups",
+      "schema": "public",
+      "module": "identity",
+      "tenant_scope": "owner",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "owner_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "credential_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "generation",
+          "type": "bigint",
+          "nullable": false
+        },
+        {
+          "name": "security_epoch",
+          "type": "bigint",
+          "nullable": false
+        },
+        {
+          "name": "issuance_op_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "secret_response_issued_at",
+          "type": "timestamptz",
+          "nullable": false
+        },
+        {
+          "name": "revoked_at",
+          "type": "timestamptz",
+          "nullable": true
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "owner_id",
+          "id"
+        ],
+        [
+          "owner_id",
+          "credential_id",
+          "generation"
+        ],
+        [
+          "owner_id",
+          "issuance_op_id"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "owner_id"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "credential_id"
+          ],
+          "references": {
+            "table": "mfa_credentials",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [],
+      "checks": [
+        "generation >= 1 AND security_epoch >= 1"
+      ],
+      "transactional_invariants": [
+        "at most one non-revoked group per owner, enforced by partial unique index; owner/factor locked before group/code locks",
+        "explicit generate/rotate requires complete current login and fresh operation-bound single-use R3 proof; final manual recovery never creates a group",
+        "secret_response_issued_at is durable once-only delivery fact in the same issuance transaction; no plaintext codes or response retained; timeout is not authorization to regenerate"
+      ],
+      "row_security": "FORCE RLS: owner_id = nullif(current_setting('app.owner_id', true), '')::uuid for authorized owner paths; empty external scope denies; separate narrowly scoped definer policies support auth lookup/verification and authorized control functions, never general HTTP/runtime credential grants"
+    },
+    {
+      "name": "reauth_proofs",
+      "schema": "public",
+      "module": "identity",
+      "tenant_scope": "owner",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "owner_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "session_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "device_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "security_epoch",
+          "type": "bigint",
+          "nullable": false
+        },
+        {
+          "name": "proof_hash",
+          "type": "bytea",
+          "nullable": false
+        },
+        {
+          "name": "risk_level",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "purpose",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "target_user_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "parameter_hash",
+          "type": "bytea",
+          "nullable": false
+        },
+        {
+          "name": "verified_at",
+          "type": "timestamptz",
+          "nullable": false
+        },
+        {
+          "name": "operation_deadline",
+          "type": "timestamptz",
+          "nullable": false
+        },
+        {
+          "name": "single_use",
+          "type": "boolean",
+          "nullable": false
+        },
+        {
+          "name": "consumed_at",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "revoked_at",
+          "type": "timestamptz",
+          "nullable": true
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "owner_id",
+          "id"
+        ],
+        [
+          "proof_hash"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "owner_id"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "session_id"
+          ],
+          "references": {
+            "table": "auth_sessions",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "owner_id",
+            "device_id"
+          ],
+          "references": {
+            "table": "devices",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [],
+      "checks": [
+        "risk_level IN ('R1','R2','R3')",
+        "risk_level <> 'R3' OR single_use",
+        "operation_deadline > verified_at AND security_epoch >= 1",
+        "octet_length(proof_hash) = 32",
+        "octet_length(parameter_hash) = 32"
+      ],
+      "transactional_invariants": [
+        "R1 student 600/admin 300 seconds; R2 300; R3 120; deadline min(actual verified_at+route window, parent session/device/proof expiry); never last_seen or issuance time",
+        "server maps purpose to approved route/target/canonical parameter hash; missing/wrong purpose, target, session/device/epoch or weaker MFA rejects",
+        "R3 nonce/proof consumed once in same successful operation transaction after all ordered locks and clock_timestamp deadline recheck; failures roll back consumption",
+        "ordinary session metadata reauthenticated_at is not sufficient authorization for a high-risk write; current user role and MFA govern; lost-MFA independent admin recovery never requires this Web proof"
+      ],
+      "row_security": "FORCE RLS: owner_id = nullif(current_setting('app.owner_id', true), '')::uuid for authorized owner paths; empty external scope denies; separate narrowly scoped definer policies support auth lookup/verification and authorized control functions, never general HTTP/runtime credential grants"
+    },
+    {
+      "name": "identity_deployment_guards",
+      "schema": "identity_control",
+      "module": "identity",
+      "tenant_scope": "control_plane",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "version",
+          "type": "bigint",
+          "nullable": false
+        },
+        {
+          "name": "manifest_hash",
+          "type": "bytea",
+          "nullable": false
+        },
+        {
+          "name": "transition_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "state",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "last_change_nonce_hash",
+          "type": "bytea",
+          "nullable": true
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [],
+      "foreign_keys": [],
+      "indexes": [],
+      "checks": [
+        "version >= 1",
+        "state IN ('closed','ready','applying')",
+        "octet_length(manifest_hash) = 32",
+        "octet_length(last_change_nonce_hash) = 32"
+      ],
+      "transactional_invariants": [
+        "id is deployment_id; bootstrap cannot initialize without independently authorized D0 installation record",
+        "D0 external current high-water, signed manifest and PG version/hash must agree; equal version only same hash, never rollback or silently reinitialize missing D0 state",
+        "single supervised broker holds PG-before-control shared admission gate through recovery/status commit; maintenance exclusive gate drains readers/writers, advances external approved ledger then PG then manifest, fail-closed across interruption",
+        "recovery/status share this row; maintenance FOR UPDATE; PG control-state commit is change qualification linearization point, external publication mismatch remains closed",
+        "root/R0/K_change/private recovery keys and authoritative external ledger are never stored or authorized by PG rows; ordinary runtime/recovery cannot change root"
+      ],
+      "row_security": "FORCE RLS; no general owner/runtime grants; fixed broker functions only; trusted executor context is server-derived, never accepted from caller SET/app parameters"
+    },
+    {
+      "name": "recovery_authorities",
+      "schema": "identity_control",
+      "module": "identity",
+      "tenant_scope": "control_plane",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "deployment_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "version",
+          "type": "bigint",
+          "nullable": false
+        },
+        {
+          "name": "manifest_hash",
+          "type": "bytea",
+          "nullable": false
+        },
+        {
+          "name": "person_mapping_hash",
+          "type": "bytea",
+          "nullable": false
+        },
+        {
+          "name": "os_subject_hash",
+          "type": "bytea",
+          "nullable": false
+        },
+        {
+          "name": "recovery_key_fingerprint",
+          "type": "bytea",
+          "nullable": false
+        },
+        {
+          "name": "state",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "valid_until",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "revoked_at",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "last_change_nonce_hash",
+          "type": "bytea",
+          "nullable": false
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "deployment_id",
+          "id"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "deployment_id"
+          ],
+          "references": {
+            "table": "identity_deployment_guards",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [],
+      "checks": [
+        "version >= 1",
+        "state IN ('active','revoked')",
+        "octet_length(manifest_hash) = 32",
+        "octet_length(person_mapping_hash) = 32",
+        "octet_length(os_subject_hash) = 32",
+        "octet_length(recovery_key_fingerprint) = 32",
+        "octet_length(last_change_nonce_hash) = 32"
+      ],
+      "transactional_invariants": [
+        "id is stable authority_id for independently verified designated project person; OS/key control alone never authorizes initial mapping or change",
+        "only maintenance fixed function with current D0 K_change approval can enroll/rotate/revoke; package binds deployment/authority/action/old-new hashes+versions/OS-key binding/nonce/issued-expiry/maintainer/external approval reference",
+        "maintenance and issue/complete/status follow deployment_guard then sorted required users before authority; key/permission revocation first commit rejects later old proof; current valid stable authority may query own historical case despite old target epoch",
+        "PG only mirrors externally authorized current mapping and revocation; restores/row edits cannot lower independent high-water"
+      ],
+      "row_security": "FORCE RLS; no general owner/runtime grants; fixed broker functions only; trusted executor context is server-derived, never accepted from caller SET/app parameters"
+    },
+    {
+      "name": "recovery_permissions",
+      "schema": "identity_control",
+      "module": "identity",
+      "tenant_scope": "control_plane",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "deployment_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "actor_user_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "purpose",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "version",
+          "type": "bigint",
+          "nullable": false
+        },
+        {
+          "name": "state",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "expires_at",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "revoked_at",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "authorization_reference_hash",
+          "type": "bytea",
+          "nullable": false
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "deployment_id",
+          "actor_user_id",
+          "purpose"
+        ],
+        [
+          "deployment_id",
+          "id"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "deployment_id"
+          ],
+          "references": {
+            "table": "identity_deployment_guards",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "actor_user_id"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [],
+      "checks": [
+        "purpose = 'student_recovery'",
+        "version >= 1",
+        "state IN ('active','revoked')",
+        "octet_length(authorization_reference_hash) = 32"
+      ],
+      "transactional_invariants": [
+        "Admin role alone is insufficient; dedicated current permission plus current Admin/MFA/session/device/epoch required",
+        "maintenance must take deployment_guard then actor user before permission row; no permission-to-user reverse lock; no generic runtime grants"
+      ],
+      "row_security": "FORCE RLS; no general owner/runtime grants; fixed broker functions only; trusted executor context is server-derived, never accepted from caller SET/app parameters"
+    },
+    {
+      "name": "manual_recovery_cases",
+      "schema": "identity_control",
+      "module": "identity",
+      "tenant_scope": "control_plane",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "deployment_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "target_user_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "target_role",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "target_security_epoch",
+          "type": "bigint",
+          "nullable": false
+        },
+        {
+          "name": "executor_type",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "executor_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "executor_actor_user_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "executor_authority_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "state",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "flow_generation",
+          "type": "bigint",
+          "nullable": false
+        },
+        {
+          "name": "plan_hash",
+          "type": "bytea",
+          "nullable": false
+        },
+        {
+          "name": "receiver_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "receiver_key_hash",
+          "type": "bytea",
+          "nullable": true
+        },
+        {
+          "name": "verification_reference_hash",
+          "type": "bytea",
+          "nullable": true
+        },
+        {
+          "name": "issue_approval_reference_hash",
+          "type": "bytea",
+          "nullable": true
+        },
+        {
+          "name": "pending_expires_at",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "pending_factor_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "confirmation_hash",
+          "type": "bytea",
+          "nullable": true
+        },
+        {
+          "name": "completed_at",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "completed_op_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "minimized_at",
+          "type": "timestamptz",
+          "nullable": true
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "deployment_id",
+          "id"
+        ],
+        [
+          "target_user_id",
+          "id"
+        ],
+        [
+          "deployment_id",
+          "id",
+          "executor_type",
+          "executor_id"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "deployment_id"
+          ],
+          "references": {
+            "table": "identity_deployment_guards",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "target_user_id"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "executor_actor_user_id"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "deployment_id",
+            "executor_authority_id"
+          ],
+          "references": {
+            "table": "recovery_authorities",
+            "columns": [
+              "deployment_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "target_user_id",
+            "pending_factor_id"
+          ],
+          "references": {
+            "table": "mfa_credentials",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT",
+          "deferrable": "INITIALLY DEFERRED"
+        },
+        {
+          "columns": [
+            "deployment_id",
+            "id",
+            "completed_op_id"
+          ],
+          "references": {
+            "table": "manual_recovery_operations",
+            "columns": [
+              "deployment_id",
+              "case_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT",
+          "deferrable": "INITIALLY DEFERRED"
+        },
+        {
+          "columns": [
+            "deployment_id",
+            "receiver_id"
+          ],
+          "references": {
+            "table": "recovery_receivers",
+            "columns": [
+              "deployment_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [],
+      "checks": [
+        "(executor_type = 'actor' AND executor_actor_user_id IS NOT NULL AND executor_actor_user_id = executor_id AND executor_authority_id IS NULL) OR (executor_type = 'authority' AND executor_authority_id IS NOT NULL AND executor_authority_id = executor_id AND executor_actor_user_id IS NULL)",
+        "target_role IN ('student','admin')",
+        "target_security_epoch >= 1 AND flow_generation >= 1",
+        "state IN ('unverified_case','verified_case','pending','pending_confirmed','completed','expired','abandoned')",
+        "executor_type <> 'actor' OR target_role = 'student'",
+        "state NOT IN ('pending','pending_confirmed') OR pending_expires_at IS NOT NULL",
+        "state <> 'completed' OR (completed_at IS NOT NULL AND completed_op_id IS NOT NULL)",
+        "(executor_type = 'actor' AND target_role = 'student') OR (executor_type = 'authority' AND target_role = 'admin')",
+        "state NOT IN ('pending','pending_confirmed','completed') OR (receiver_id IS NOT NULL AND receiver_key_hash IS NOT NULL AND verification_reference_hash IS NOT NULL AND issue_approval_reference_hash IS NOT NULL)",
+        "state <> 'pending_confirmed' OR (pending_factor_id IS NOT NULL AND confirmation_hash IS NOT NULL)",
+        "octet_length(plan_hash) = 32",
+        "octet_length(receiver_key_hash) = 32",
+        "octet_length(verification_reference_hash) = 32",
+        "octet_length(issue_approval_reference_hash) = 32",
+        "octet_length(confirmation_hash) = 32"
+      ],
+      "transactional_invariants": [
+        "executor binding immutable and server-derived; actor path target must still be student, authority path only designated project person independent identity; browser/other Admin cannot finalize",
+        "all write actions re-read current role/target epoch/evidence/receiver/flow under full locks; manual complete requires pending_confirmed and fresh original executor proof",
+        "flow expiry is total restricted lifetime, not extended operation authorization; original consumed/expired issue proof does not block fresh complete on current valid flow",
+        "completed/expired/abandoned terminal for that flow; reissue uses new proof/nonce, rotates flow and revokes old cap, cannot change stable executor or switch factor twice",
+        "U02 OPEN: minimization/retention configured only after separate policy approval; absent case/op after approved cleanup => unknown, never not_committed; no evidence body or classroom content",
+        "initial issue uses flow_generation=1; reissue uses current+1, atomically revokes old receiver/cap and preserves the original pending total expiry"
+      ],
+      "row_security": "FORCE RLS; no general owner/runtime grants; fixed broker functions only; trusted executor context is server-derived, never accepted from caller SET/app parameters"
+    },
+    {
+      "name": "manual_recovery_operations",
+      "schema": "identity_control",
+      "module": "identity",
+      "tenant_scope": "control_plane",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "deployment_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "case_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "action",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "executor_type",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "executor_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "plan_hash",
+          "type": "bytea",
+          "nullable": false
+        },
+        {
+          "name": "flow_generation",
+          "type": "bigint",
+          "nullable": false
+        },
+        {
+          "name": "state",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "committed_at",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "audit_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "result_stage",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "minimized_at",
+          "type": "timestamptz",
+          "nullable": true
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "deployment_id",
+          "case_id",
+          "id"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "deployment_id",
+            "case_id",
+            "executor_type",
+            "executor_id"
+          ],
+          "references": {
+            "table": "manual_recovery_cases",
+            "columns": [
+              "deployment_id",
+              "id",
+              "executor_type",
+              "executor_id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "deployment_id",
+            "audit_id"
+          ],
+          "references": {
+            "table": "identity_control_audit",
+            "columns": [
+              "deployment_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT",
+          "deferrable": "INITIALLY DEFERRED"
+        }
+      ],
+      "indexes": [],
+      "checks": [
+        "action IN ('issue','reissue','complete')",
+        "state IN ('reserved','committed')",
+        "flow_generation >= 1",
+        "(state = 'reserved' AND committed_at IS NULL) OR (state = 'committed' AND committed_at IS NOT NULL AND audit_id IS NOT NULL)",
+        "octet_length(plan_hash) = 32"
+      ],
+      "transactional_invariants": [
+        "id is stable op_id; immutable case/executor/action/plan hash/flow prevents cross-op substitution; reservation is not operation authorization",
+        "committed fact/result_stage/audit link written in SAME transaction as corresponding case/cap/factor/epoch effect, never infer from client timeout or emit before COMMIT",
+        "status shared-locks own case/op with current executor qualifications; committed needs durable matched fact, not_committed only matched reserved op plus valid pending and proof at read linearization; missing/mismatched/minimized/inconsistent => unknown",
+        "operation rows may be minimized/deleted only under separately approved U02 policy; no secrets or signed proof body; cleanup cannot remove D0 high-water/revocation tombstones",
+        "receiver-cap abandon is a separate restricted receiver transition, not a new operator-proof command or replacement for manual complete"
+      ],
+      "row_security": "FORCE RLS; no general owner/runtime grants; fixed broker functions only; trusted executor context is server-derived, never accepted from caller SET/app parameters"
+    },
+    {
+      "name": "identity_operation_proofs",
+      "schema": "identity_control",
+      "module": "identity",
+      "tenant_scope": "control_plane",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "deployment_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "case_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "op_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "executor_type",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "executor_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "executor_actor_user_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "executor_authority_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "action",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "nonce_hash",
+          "type": "bytea",
+          "nullable": false
+        },
+        {
+          "name": "challenge_hash",
+          "type": "bytea",
+          "nullable": false
+        },
+        {
+          "name": "challenge_expires_at",
+          "type": "timestamptz",
+          "nullable": false
+        },
+        {
+          "name": "verified_at",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "operation_deadline",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "target_user_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "target_role",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "target_security_epoch",
+          "type": "bigint",
+          "nullable": false
+        },
+        {
+          "name": "flow_generation",
+          "type": "bigint",
+          "nullable": false
+        },
+        {
+          "name": "plan_hash",
+          "type": "bytea",
+          "nullable": false
+        },
+        {
+          "name": "receiver_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "receiver_key_hash",
+          "type": "bytea",
+          "nullable": false
+        },
+        {
+          "name": "pending_factor_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "confirmation_hash",
+          "type": "bytea",
+          "nullable": true
+        },
+        {
+          "name": "authority_version",
+          "type": "bigint",
+          "nullable": true
+        },
+        {
+          "name": "actor_session_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "actor_device_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "actor_security_epoch",
+          "type": "bigint",
+          "nullable": true
+        },
+        {
+          "name": "consumed_at",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "revoked_at",
+          "type": "timestamptz",
+          "nullable": true
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "nonce_hash"
+        ],
+        [
+          "deployment_id",
+          "case_id",
+          "id"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "deployment_id",
+            "case_id",
+            "op_id"
+          ],
+          "references": {
+            "table": "manual_recovery_operations",
+            "columns": [
+              "deployment_id",
+              "case_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "target_user_id",
+            "case_id"
+          ],
+          "references": {
+            "table": "manual_recovery_cases",
+            "columns": [
+              "target_user_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "executor_actor_user_id"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "deployment_id",
+            "executor_authority_id"
+          ],
+          "references": {
+            "table": "recovery_authorities",
+            "columns": [
+              "deployment_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "executor_actor_user_id",
+            "actor_session_id"
+          ],
+          "references": {
+            "table": "auth_sessions",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "executor_actor_user_id",
+            "actor_device_id"
+          ],
+          "references": {
+            "table": "devices",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "target_user_id",
+            "pending_factor_id"
+          ],
+          "references": {
+            "table": "mfa_credentials",
+            "columns": [
+              "owner_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "deployment_id",
+            "receiver_id"
+          ],
+          "references": {
+            "table": "recovery_receivers",
+            "columns": [
+              "deployment_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [],
+      "checks": [
+        "(executor_type = 'actor' AND executor_actor_user_id IS NOT NULL AND executor_actor_user_id = executor_id AND executor_authority_id IS NULL) OR (executor_type = 'authority' AND executor_authority_id IS NOT NULL AND executor_authority_id = executor_id AND executor_actor_user_id IS NULL)",
+        "action IN ('issue','reissue','complete')",
+        "challenge_expires_at > created_at",
+        "(verified_at IS NULL AND operation_deadline IS NULL) OR (verified_at IS NOT NULL AND operation_deadline > verified_at AND operation_deadline <= verified_at + interval '120 seconds')",
+        "executor_type <> 'actor' OR (actor_session_id IS NOT NULL AND actor_device_id IS NOT NULL AND actor_security_epoch IS NOT NULL)",
+        "executor_type <> 'authority' OR authority_version IS NOT NULL",
+        "verified_at IS NULL OR verified_at < challenge_expires_at",
+        "(verified_at IS NULL) = (operation_deadline IS NULL)",
+        "action <> 'complete' OR (pending_factor_id IS NOT NULL AND confirmation_hash IS NOT NULL)",
+        "octet_length(nonce_hash) = 32",
+        "octet_length(challenge_hash) = 32",
+        "octet_length(plan_hash) = 32",
+        "octet_length(receiver_key_hash) = 32",
+        "octet_length(confirmation_hash) = 32"
+      ],
+      "transactional_invariants": [
+        "challenge expiry only controls completing all verification; server DB actual verified_at recorded after factors/signature/scope success, never client/challenge issuance time",
+        "deadline min(verified_at+120 seconds,current qualifying credentials,existing pending expiry); all locks acquired then clock_timestamp < deadline and fresh current qualifications rechecked; equality rejects",
+        "each issue/reissue and complete uses a different proof/action/nonce; completion_nonce consumed exactly once with cap and final effects; issue nonce remains consumed and is not consumed twice",
+        "write proof embeds exact deployment/case/op/executor/target role+epoch/plan/receiver/flow and complete factor+confirmation; any change invalidates it",
+        "status proofs are ephemeral independent read credentials, NOT rows here; status cannot insert/update/consume this table",
+        "challenge creation/verification/consumption transactions enumerate all parent FK locks in global order, commit before interactive waits; no proof lock held while later acquiring users"
+      ],
+      "row_security": "FORCE RLS; no general owner/runtime grants; fixed broker functions only; trusted executor context is server-derived, never accepted from caller SET/app parameters"
+    },
+    {
+      "name": "manual_recovery_capabilities",
+      "schema": "identity_control",
+      "module": "identity",
+      "tenant_scope": "control_plane",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "deployment_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "case_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "target_user_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "flow_generation",
+          "type": "bigint",
+          "nullable": false
+        },
+        {
+          "name": "token_hash",
+          "type": "bytea",
+          "nullable": false
+        },
+        {
+          "name": "receiver_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "receiver_key_hash",
+          "type": "bytea",
+          "nullable": false
+        },
+        {
+          "name": "target_security_epoch",
+          "type": "bigint",
+          "nullable": false
+        },
+        {
+          "name": "issue_op_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "issue_proof_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "expires_at",
+          "type": "timestamptz",
+          "nullable": false
+        },
+        {
+          "name": "consumed_at",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "revoked_at",
+          "type": "timestamptz",
+          "nullable": true
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "token_hash"
+        ],
+        [
+          "deployment_id",
+          "case_id",
+          "flow_generation"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "deployment_id",
+            "case_id"
+          ],
+          "references": {
+            "table": "manual_recovery_cases",
+            "columns": [
+              "deployment_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "target_user_id",
+            "case_id"
+          ],
+          "references": {
+            "table": "manual_recovery_cases",
+            "columns": [
+              "target_user_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "deployment_id",
+            "case_id",
+            "issue_op_id"
+          ],
+          "references": {
+            "table": "manual_recovery_operations",
+            "columns": [
+              "deployment_id",
+              "case_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "deployment_id",
+            "case_id",
+            "issue_proof_id"
+          ],
+          "references": {
+            "table": "identity_operation_proofs",
+            "columns": [
+              "deployment_id",
+              "case_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "deployment_id",
+            "receiver_id"
+          ],
+          "references": {
+            "table": "recovery_receivers",
+            "columns": [
+              "deployment_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [],
+      "checks": [
+        "flow_generation >= 1 AND target_security_epoch >= 1",
+        "expires_at > created_at",
+        "octet_length(token_hash) = 32",
+        "octet_length(receiver_key_hash) = 32"
+      ],
+      "transactional_invariants": [
+        "digest only; scope solely receiver proof-of-new-factor or explicit abandon, no final/status/ordinary session/WS ticket/cache/content/codes authority",
+        "validity requires current matching target epoch/case flow/receiver and unexpired pending; issue/reissue atomically invalidates older cap before next flow",
+        "manual complete consumes cap plus NEW completion proof; original issue proof fact checked for provenance/not revoked but never reconsumed",
+        "cap response loss never replays plaintext; independent authorized status then separately fresh issue/reissue as case permits"
+      ],
+      "row_security": "FORCE RLS; no general owner/runtime grants; fixed broker functions only; trusted executor context is server-derived, never accepted from caller SET/app parameters"
+    },
+    {
+      "name": "identity_revocation_notices",
+      "schema": "identity_control",
+      "module": "identity",
+      "tenant_scope": "control_plane",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "deployment_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "subject_user_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "security_epoch",
+          "type": "bigint",
+          "nullable": true
+        },
+        {
+          "name": "source_operation_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "kind",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "lease_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "lease_expires_at",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "delivered_at",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "attempt_count",
+          "type": "integer",
+          "nullable": false,
+          "default": "0"
+        },
+        {
+          "name": "authority_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "authority_version",
+          "type": "bigint",
+          "nullable": true
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "deployment_id",
+          "source_operation_id",
+          "subject_user_id",
+          "kind"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "deployment_id"
+          ],
+          "references": {
+            "table": "identity_deployment_guards",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "subject_user_id"
+          ],
+          "references": {
+            "table": "users",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "deployment_id",
+            "authority_id"
+          ],
+          "references": {
+            "table": "recovery_authorities",
+            "columns": [
+              "deployment_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [],
+      "checks": [
+        "security_epoch >= 1 AND attempt_count >= 0",
+        "kind IN ('security_epoch_changed','sessions_revoked','authority_revoked')",
+        "(lease_id IS NULL) = (lease_expires_at IS NULL)",
+        "(kind = 'authority_revoked' AND authority_id IS NOT NULL AND authority_version IS NOT NULL) OR (kind <> 'authority_revoked' AND subject_user_id IS NOT NULL AND security_epoch IS NOT NULL)"
+      ],
+      "transactional_invariants": [
+        "independent internal identity notice, never business owner_event_counter/outbox/task FK or public WS event; minimal nonsecret payload only",
+        "producer holds all referenced users and control parents in ordered transaction before INSERT; audit/notice atomic with security change",
+        "claim transaction locks only notice rows, writes bounded lease and commits/releases BEFORE separately reading current user/authority or closing connections",
+        "ack/retry/cleanup transactions touch only notice rows; no event-held user/counter lookup; bounded lease cleanup deletes exact rows and grants no restored authorization",
+        "delivery is advisory and at-least-once; dropped/duplicate notice cannot authorize, finalize or resend Provider; realtime PG authorization remains source of truth",
+        "unique notice source key uses NULLS NOT DISTINCT for nullable subject; authority-only maintenance notices do not invent a Web user or acquire a late target user FK",
+        "authority-only notices carry authority_version rather than fabricating target Web security_epoch; user notices carry actual users.security_epoch"
+      ],
+      "row_security": "FORCE RLS; no general owner/runtime grants; fixed broker functions only; trusted executor context is server-derived, never accepted from caller SET/app parameters"
+    },
+    {
+      "name": "identity_control_audit",
+      "schema": "identity_control",
+      "module": "identity",
+      "tenant_scope": "control_plane",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "deployment_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "executor_type",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "executor_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "subject_user_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "case_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "op_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "action",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "approval_reference_hash",
+          "type": "bytea",
+          "nullable": true
+        },
+        {
+          "name": "result_stage",
+          "type": "text",
+          "nullable": false
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "deployment_id",
+          "id"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "deployment_id"
+          ],
+          "references": {
+            "table": "identity_deployment_guards",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        }
+      ],
+      "indexes": [
+        [
+          "deployment_id",
+          "created_at"
+        ]
+      ],
+      "checks": [
+        "executor_type IN ('actor','authority','maintenance','receiver')",
+        "octet_length(approval_reference_hash) = 32"
+      ],
+      "transactional_invariants": [
+        "append-only minimized nonsecret control audit; executor and references server-derived; bounded action/result enum follows identity-control schema; no signed package body, evidence detail, key/seed/token or classroom content",
+        "written in the same successful operation/maintenance transaction; failure rolls back business changes; minimal references intentionally do not add late user/case FK locks",
+        "U02 OPEN: real retention/access/deletion rules not frozen; status op facts and anti-rollback D0 control tombstones have separate lifecycles"
+      ],
+      "row_security": "FORCE RLS; fixed broker append/status projection functions only; no generic runtime/scheduler/admin read or mutation"
+    },
+    {
+      "name": "recovery_receivers",
+      "schema": "identity_control",
+      "module": "identity",
+      "tenant_scope": "control_plane",
+      "columns": [
+        {
+          "name": "id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "created_at",
+          "type": "timestamptz",
+          "nullable": false,
+          "default": "transaction_timestamp()"
+        },
+        {
+          "name": "deployment_id",
+          "type": "uuid",
+          "nullable": false
+        },
+        {
+          "name": "public_key",
+          "type": "jsonb",
+          "nullable": false
+        },
+        {
+          "name": "receiver_key_hash",
+          "type": "bytea",
+          "nullable": false
+        },
+        {
+          "name": "client_nonce_hash",
+          "type": "bytea",
+          "nullable": false
+        },
+        {
+          "name": "current_server_nonce_hash",
+          "type": "bytea",
+          "nullable": false
+        },
+        {
+          "name": "registration_expires_at",
+          "type": "timestamptz",
+          "nullable": false
+        },
+        {
+          "name": "current_nonce_expires_at",
+          "type": "timestamptz",
+          "nullable": false
+        },
+        {
+          "name": "registration_consumed_at",
+          "type": "timestamptz",
+          "nullable": true
+        },
+        {
+          "name": "mode",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "bound_case_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "bound_auto_challenge_id",
+          "type": "uuid",
+          "nullable": true
+        },
+        {
+          "name": "flow_generation",
+          "type": "bigint",
+          "nullable": true
+        },
+        {
+          "name": "request_generation",
+          "type": "bigint",
+          "nullable": false,
+          "default": "0"
+        },
+        {
+          "name": "revoked_at",
+          "type": "timestamptz",
+          "nullable": true
+        }
+      ],
+      "primary_key": [
+        "id"
+      ],
+      "unique_keys": [
+        [
+          "deployment_id",
+          "id"
+        ],
+        [
+          "current_server_nonce_hash"
+        ]
+      ],
+      "foreign_keys": [
+        {
+          "columns": [
+            "deployment_id"
+          ],
+          "references": {
+            "table": "identity_deployment_guards",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT"
+        },
+        {
+          "columns": [
+            "deployment_id",
+            "bound_case_id"
+          ],
+          "references": {
+            "table": "manual_recovery_cases",
+            "columns": [
+              "deployment_id",
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT",
+          "deferrable": "INITIALLY DEFERRED"
+        },
+        {
+          "columns": [
+            "bound_auto_challenge_id"
+          ],
+          "references": {
+            "table": "auth_challenges",
+            "columns": [
+              "id"
+            ]
+          },
+          "on_delete": "RESTRICT",
+          "deferrable": "INITIALLY DEFERRED"
+        }
+      ],
+      "indexes": [
+        [
+          "registration_expires_at"
+        ]
+      ],
+      "checks": [
+        "mode IS NULL OR mode IN ('manual','auto_code')",
+        "request_generation >= 0",
+        "flow_generation IS NULL OR flow_generation >= 1",
+        "mode <> 'manual' OR (bound_case_id IS NOT NULL AND bound_auto_challenge_id IS NULL)",
+        "mode <> 'auto_code' OR (bound_auto_challenge_id IS NOT NULL AND bound_case_id IS NULL)",
+        "mode IS NOT NULL OR (bound_case_id IS NULL AND bound_auto_challenge_id IS NULL AND flow_generation IS NULL)",
+        "mode IS NULL OR (flow_generation IS NOT NULL AND registration_consumed_at IS NOT NULL)",
+        "octet_length(receiver_key_hash) = 32",
+        "octet_length(client_nonce_hash) = 32",
+        "octet_length(current_server_nonce_hash) = 32",
+        "registration_expires_at > created_at AND current_nonce_expires_at > created_at",
+        "jsonb_typeof(public_key) = 'object' AND public_key ?& ARRAY['kty','crv','x','y'] AND (public_key - ARRAY['kty','crv','x','y']) = '{}'::jsonb AND public_key->>'kty' = 'EC' AND public_key->>'crv' = 'P-256'"
+      ],
+      "transactional_invariants": [
+        "registration stores only public EC P-256 JWK (kty/crv/x/y, no private d) and RFC7638 SHA256 thumbprint; registration itself grants no case, recovery, ordinary session or final authority",
+        "each receiver action signs server current single-use nonce + case/auto challenge + flow + receiver_id + canonical request hash; under ordered locks consume old nonce and replace digest/request_generation, reject replay",
+        "unbound registration expires independently; after binding all nonce/action expiry is capped by original pending flow expiry; nonce rotation never renews that total flow",
+        "case/op locked before receiver when binding or performing an action; insert/update FK references only prelocked case/challenge parents; no receiver lock held while acquiring users/case",
+        "issue binds initial flow 1; reissue uses current+1 and revokes old cap/receiver channel atomically without extending original total pending expiry; complete still requires original operator fresh proof"
+      ],
+      "row_security": "FORCE RLS; bounded anonymous register and receiver-PoP fixed functions only; no general owner/runtime grant; server establishes deployment and binding, case_id knowledge is not authority"
     }
-  ]
+  ],
+  "identity_contract_scope": {
+    "logical_control_schema": "identity_control; new logical subset only; existing public tables are not relocated",
+    "implementation_gate": "S2 independent approval and separately authorized S3 scope required; do not create all architecture tables",
+    "epoch_authority": "users.security_epoch is the sole persisted account security epoch; auth_epoch is a documentation alias, never a second column",
+    "retention": "U02 OPEN: no real retention duration frozen; 90/30 day S1 suggestions are not policy; missing/minimized status facts => unknown; D0 anti-rollback high-water/tombstones are not TTL status facts",
+    "status_storage": "Business-read-only status uses ephemeral independently authenticated proof; it creates/consumes no recovery proof, nonce, cap or case row",
+    "physical_schema_gate": "Names/columns below are logical contract. SQL DDL, grants, definer bodies, RLS and constraints require additive migrations and real PostgreSQL validation in S3; 0001-0006 unchanged"
+  }
 }

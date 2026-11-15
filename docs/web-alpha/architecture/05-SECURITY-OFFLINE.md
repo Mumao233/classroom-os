@@ -151,3 +151,18 @@ TBD-04未签署前只允许合成时钟测试，不开放真实音频存储。�
 | 新版本页面更新 | SW提示可更新，录音/唯一稿处理前不强制reload；兼容读旧缓存schema，不可逆升级先备份密文 | PR-08/09跨build验收 |
 
 安全验收不止检查schema。需要真实PG、受控对象环境、多账号浏览器与故障注入；本PR只完成设计与合成契约验证，不能据此声称已防住全部攻击或已完成隐私合规。
+
+
+## PR-03b S2 · 2026-11-06：身份增量与既定政策
+
+本节为获审S1的S2正式契约交审增量，上方历史12字符/管理员待定/双人或项目负责人等旧候选不覆盖最新产品决定。S1 APPROVE、D01–D03 CLOSED仅设计层，S2待独审，TBD-08仍OPEN — PARTIALLY DECIDED；风险未因文档工作生效。
+
+学生新设最低6、MFA可选，Admin最低12/MFA强制、无组合强制，建议密码管理器16以上。学生idle14天/absolute30天；remember_me只影响Cookie持久性。Admin idle15分钟/absolute8小时、始终非持久Cookie。轮换/touch/reauth不延长逻辑绝对期；当前logout不加再认证门槛。R1学生10分钟/Admin5分钟、R2均5分钟、R3均2分钟具体操作绑定单次；新增逐路由归类明确标S2候选，缓存/后台未审路由不得继承通用proof。
+
+历史auth_epoch统一映射到现有users.security_epoch，只有这一持久安全版本，不新增第二列/计数。普通HTTP不能构造Principal或选择OwnerContext，DB故障不以缓存主体兜底。内部worker/LocalReconciler保留窄端口，重置/恢复不清raw/Receipt/Outbox/fence/unknown，不重发Provider、退款或清收费风险；mark_submitting成功COMMIT仍为发送授权点。
+
+学生人工恢复仅获权Admin，管理员人工恢复仅指定项目用户本人以独立运维身份手动专用命令；无其他Admin/Agent代执行、人工SQL、公开bootstrap、skip_mfa或正文后门。D0既存部署授权及独立安装批准固定根/本人映射，R0/K_change/K_recover分用途；新key PoP不授登记权。根缺/全失保持关闭，重建另审；部署root与验证器完全接管超出应用层保证。真实D0尚未建立，合成材料不冒充真实登记。
+
+四时间分别记录，验证时verified_at<challenge_expiry，issue/manual complete各自产生fresh操作绑定单次≤120秒证明，全部锁后重核实际DB时钟、当前资格/flow；5分钟challenge及10分钟pending仍为实验输入，不扩大写授权。原issue证明已用/过期不阻止有效pending取得fresh complete；原nonce不可再用。status当前稳定主体独立授权与恢复写nonce分离。
+
+N01独立内部通知、N02 final废旧码/重登显式新组保持；密码/seed/恢复码/Cookie/ticket/cap/低熵摘要不进通用日志/APM/Receipt/Outbox/CLI argv/env/history/stdout/stderr/转储。仅一次绑定TLS接收端no-store交付，秘密丢响应不回放。U02真实核验/最小留存尚待负责人批准，90/30天仅候选；不在本次协议冻结真实留存或据此启用恢复。具体协议、逻辑模型、角色/锁序和实施前置见[S2入口](../pr03b/s2/README.md)。

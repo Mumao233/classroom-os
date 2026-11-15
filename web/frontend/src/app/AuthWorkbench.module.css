@@ -1,0 +1,22 @@
+.main { max-width: 780px; margin: 0 auto; padding: 3rem 1.25rem 6rem; }
+.brand { display: flex; align-items: baseline; gap: 1rem; margin-bottom: 1.5rem; }
+.brand span { font-size: 1.6rem; font-weight: 750; color: var(--color-primary); }
+.brand p { color: var(--color-text-secondary); font-size: .85rem; }
+.card { padding: clamp(1.5rem, 5vw, 3rem); }
+.card h1 { font-size: clamp(1.7rem, 4vw, 2.2rem); margin: .3rem 0 1rem; overflow-wrap: anywhere; }
+.card h2 { font-size: 1.15rem; margin: 0 0 .7rem; }
+.card p { line-height: 1.65; color: var(--color-text-secondary); }
+.form { display: grid; gap: 1.25rem; margin-top: 1.5rem; }
+.check { display: flex; gap: .6rem; align-items: center; font-size: .9rem; }
+.check input { accent-color: var(--color-primary); }
+.actions, .links { display: flex; flex-wrap: wrap; gap: .65rem; margin-top: 1rem; }
+.links { padding-top: 1rem; border-top: 1px solid var(--color-border); }
+.section { display: grid; gap: 1rem; padding-top: 1.6rem; margin-top: 1.6rem; border-top: 1px solid var(--color-border); }
+.section p { margin: 0; }
+.eyebrow { color: var(--color-primary); font-size: .8rem; }
+.message { border-left: 3px solid var(--color-primary); padding: .6rem 1rem; margin-top: 1.5rem; background: var(--color-surface-secondary); }
+.secret { display: block; padding: 1rem; overflow-wrap: anywhere; white-space: pre-wrap; background: var(--color-surface-secondary); border-radius: var(--radius-control); }
+.codes { display: grid; gap: .6rem; user-select: all; }
+.codes code { overflow-wrap: anywhere; font-size: .8rem; }
+.list { padding: 0; list-style: none; }
+.list li { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; justify-content: space-between; padding: .7rem 0; border-bottom: 1px solid var(--color-border); }

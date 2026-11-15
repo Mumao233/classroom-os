@@ -1,0 +1,210 @@
+"""Regressions for the 2026-11-12 Astra review of PR-03b, on real disposable PostgreSQL."""
+import hashlib,threading
+from uuid import uuid4
+
+import sqlalchemy as sa
+from fastapi.testclient import TestClient
+
+from test_authentication import auth,post,login,install_factor,PASSWORD,BASE
+from test_auth_mail import mail
+
+WRONG='wrong-synthetic-password'
+HEADERS={'Origin':'https://testserver','Sec-Fetch-Site':'same-origin'}
+
+
+def _attempt(a,password):
+    a.client.cookies.clear();csrf=a.client.get(BASE+'/auth/csrf').json()['csrf_token']
+    return post(a,'/auth/login',dict(email=a.email,password=password,remember_me=False,device_name='budget'),csrf).status_code
+
+
+def test_concurrent_wrong_passwords_cannot_exceed_the_account_failure_budget(auth,monkeypatch):
+    a=auth;calls=[];verify=a.crypto.verify;guard=threading.Lock()
+    def counted(*args):
+        with guard:calls.append(True)
+        return verify(*args)
+    monkeypatch.setattr(a.crypto,'verify',counted)
+    burst=8;barrier=threading.Barrier(burst);statuses=[None]*burst
+    def worker(index):
+        # Separate cookie jars: every request has its own valid pre-authentication context.
+        client=TestClient(a.client.app,base_url='https://testserver')
+        csrf=client.get(BASE+'/auth/csrf').json()['csrf_token'];barrier.wait(15)
+        statuses[index]=client.post(BASE+'/auth/login',json=dict(email=a.email,password=WRONG,remember_me=False,device_name='burst'),
+            headers={**HEADERS,'X-CSRF-Token':csrf,'Idempotency-Key':str(uuid4())}).status_code
+    threads=[threading.Thread(target=worker,args=(i,)) for i in range(burst)]
+    for t in threads:t.start()
+    for t in threads:t.join(30)
+    # The budget is three failures. Checking before and counting after verification let all
+    # eight through; reserving first admits exactly three password verifications.
+    assert sorted(statuses)==[401]*3+[429]*(burst-3),statuses
+    assert len(calls)==3
+    assert _attempt(a,PASSWORD)==429
+
+
+def test_a_successful_login_returns_only_its_own_reservation(auth):
+    a=auth
+    assert _attempt(a,WRONG)==401 and _attempt(a,WRONG)==401
+    assert _attempt(a,PASSWORD)==200          # allowed with one slot left, and does not consume it
+    assert _attempt(a,WRONG)==401             # the third failure is still available
+    assert _attempt(a,PASSWORD)==429          # and success never reset the two earlier failures
+
+
+def test_session_and_device_lists_stay_within_the_contract_cap(auth):
+    a=auth;current=login(a)
+    with a.pg.admin.begin() as c:
+        # History that is newer than the current login, so a plain "newest 100" would drop it.
+        c.execute(sa.text("INSERT INTO devices(id,owner_id,device_name,revoked_at,created_at) SELECT gen_random_uuid(),:u,'old device '||g,clock_timestamp(),"
+                          "clock_timestamp()+make_interval(secs=>g) FROM generate_series(1,120) g"),dict(u=a.uid))
+        c.execute(sa.text("INSERT INTO auth_sessions(id,owner_id,device_id,token_hash,logical_session_id,security_epoch,role,mfa_level,idle_deadline,absolute_deadline,revoked_at,created_at) "
+                          "SELECT gen_random_uuid(),d.owner_id,d.id,encode(sha256(convert_to(d.id::text,'UTF8')),'hex'),gen_random_uuid(),1,'student','none',"
+                          "clock_timestamp()+interval '1 hour',clock_timestamp()+interval '2 hours',clock_timestamp(),d.created_at FROM devices d WHERE d.owner_id=:u AND d.device_name LIKE 'old device %'"),dict(u=a.uid))
+    sessions=a.client.get(BASE+'/me/sessions');assert sessions.status_code==200,sessions.text
+    items=sessions.json()['items'];assert len(items)==100
+    assert [item['is_current'] for item in items].count(True)==1
+    devices=a.client.get(BASE+'/me/devices');assert devices.status_code==200,devices.text
+    items=devices.json()['items'];assert len(items)==100
+    assert current['device_id'] in {item['id'] for item in items}
+    # The remaining entries stay reachable: follow the cursor until it ends, in pages of the requested size.
+    for kind,total in (('sessions',121),('devices',121)):
+        seen=[];cursor=None;pages=0
+        while True:
+            page=a.client.get(BASE+'/me/'+kind,params=dict(limit=50,**({'cursor':cursor} if cursor else {})));assert page.status_code==200,page.text
+            body=page.json();assert 1<=len(body['items'])<=50;seen+=[item['id'] for item in body['items']];pages+=1;cursor=body['next_cursor']
+            if cursor is None:break
+            assert len(body['items'])==50 and pages<10
+        assert len(seen)==len(set(seen))==total and pages==3
+        assert seen[0]==(current['device_id'] if kind=='devices' else next(i['id'] for i in sessions.json()['items'] if i['is_current']))
+    # The default page announces that more exist, and malformed paging input is refused rather than ignored.
+    assert sessions.json()['next_cursor'] is not None and devices.json()['next_cursor'] is not None
+    for query in ('limit=0','limit=101','limit=x','cursor=not-a-cursor','limit=5&limit=6','offset=3'):
+        assert a.client.get(BASE+'/me/sessions?'+query).status_code==422,query
+
+
+def test_pending_automatic_recovery_can_be_abandoned_so_login_can_restart(auth):
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
+    import rfc8785
+    from classroom_web.infrastructure.auth_crypto import b64,random_token,receiver_key
+    a=auth;recovery_code=random_token();install_factor(a,code=recovery_code)
+    private=ec.generate_private_key(ec.SECP256R1());numbers=private.public_key().public_numbers()
+    jwk=dict(kty='EC',crv='P-256',x=b64(numbers.x.to_bytes(32)),y=b64(numbers.y.to_bytes(32)));_,thumb=receiver_key(jwk)
+    csrf=a.client.get(BASE+'/auth/csrf').json()['csrf_token']
+    credentials=dict(email=a.email,password=PASSWORD,remember_me=False,device_name='Recovery device')
+    challenge=post(a,'/auth/login',credentials,csrf).json();key=str(uuid4());path='/auth/login/mfa'
+    body=dict(factor_type='recovery_code',challenge_id=challenge['challenge_id'],code=recovery_code,receiver_public_key=jwk)
+    message='\n'.join(('ClassroomOS.Web.ReceiverPoP.v1','POST',BASE+path,key,'login_challenge',challenge['challenge_id'],thumb,challenge['receiver_challenge'],
+                       hashlib.sha256(rfc8785.dumps(body)).hexdigest())).encode('utf8')
+    r,s=decode_dss_signature(private.sign(message,ec.ECDSA(hashes.SHA256())))
+    body['receiver_proof']=dict(challenge=challenge['receiver_challenge'],signature=b64(r.to_bytes(32)+s.to_bytes(32)))
+    r=post(a,path,body,csrf,**{'Idempotency-Key':key});assert r.status_code==200 and r.json()['state']=='recovery_required',r.text
+    flow=r.json()['recovery']
+
+    # The stuck state: the browser has dropped its receiver key, but the HttpOnly recovery
+    # cookie keeps every bootstrap in recovery scope, where a normal login is refused.
+    assert a.client.get(BASE+'/auth/csrf').json()['csrf_token']==flow['csrf_token']
+    assert post(a,'/auth/login',credentials,flow['csrf_token']).status_code==403
+    # Abandoning needs the recovery-scoped CSRF token, not merely the cookie.
+    assert post(a,'/auth/logout',{},csrf).status_code==403
+    assert a.client.get(BASE+'/auth/csrf').json()['csrf_token']==flow['csrf_token']
+
+    # A session cookie may coexist (another tab finished a login). Bootstrap still answers in
+    # recovery scope, so the recovery CSRF token must select the recovery context for logout.
+    a.client.cookies.set('__Host-classroom_session',random_token())
+    assert a.client.get(BASE+'/auth/csrf').json()['csrf_token']==flow['csrf_token']
+    r=post(a,'/auth/logout',{},flow['csrf_token']);assert r.status_code==200,r.text
+    assert not a.client.cookies.get('__Host-classroom_recovery')
+    a.client.cookies.delete('__Host-classroom_session')
+    fresh=a.client.get(BASE+'/auth/csrf').json()['csrf_token'];assert fresh!=flow['csrf_token']
+    r=post(a,'/auth/login',credentials,fresh);assert r.status_code==200 and r.json()['state']=='mfa_required',r.text
+    with a.pg.admin.connect() as c:
+        assert c.scalar(sa.text("SELECT count(*) FROM auth_challenges WHERE kind='auto_recovery' AND consumed_at IS NULL"))==0
+
+
+def test_resubmitted_forgot_password_returns_the_first_acknowledgement_without_new_mail_or_quota(mail):
+    a,_,_=mail;csrf=a.client.get(BASE+'/auth/csrf').json()['csrf_token'];key=str(uuid4())
+    def jobs():
+        with a.pg.admin.connect() as sql:
+            return (sql.scalar(sa.text('SELECT count(*) FROM identity_control.authentication_mail_jobs WHERE owner_id=:u'),dict(u=a.uid)),
+                    sql.scalar(sa.text("SELECT count(*) FROM email_actions WHERE owner_id=:u AND purpose='reset'"),dict(u=a.uid)))
+    # The acknowledgement was lost four times: the hourly quota is three, and none of the repeats may spend it.
+    for _ in range(5):
+        r=post(a,'/auth/password/forgot',dict(email=a.email),csrf,**{'Idempotency-Key':key});assert r.status_code==202 and r.json()['accepted'],r.text
+    assert jobs()==(1,1)
+    # The same key with another body is refused and changes nothing.
+    r=post(a,'/auth/password/forgot',dict(email=uuid4().hex+'@example.test'),csrf,**{'Idempotency-Key':key})
+    assert r.status_code==409 and r.json()['error']['code']=='IDEMPOTENCY_MISMATCH',r.text
+    assert jobs()==(1,1)
+    # A receipt belongs to its pre-authentication context: another browser reusing the key is a new request.
+    other=TestClient(a.client.app,base_url='https://testserver');other_csrf=other.get(BASE+'/auth/csrf').json()['csrf_token']
+    r=other.post(BASE+'/auth/password/forgot',json=dict(email=a.email),headers={**HEADERS,'X-CSRF-Token':other_csrf,'Idempotency-Key':key});assert r.status_code==202,r.text
+    assert jobs()==(2,2)
+    # Distinct requests still spend the quota of three per hour, and a replay stays acknowledged after it is exhausted.
+    assert post(a,'/auth/password/forgot',dict(email=a.email),csrf).status_code==202
+    assert post(a,'/auth/password/forgot',dict(email=a.email),csrf).status_code==429
+    assert post(a,'/auth/password/forgot',dict(email=a.email),csrf,**{'Idempotency-Key':key}).status_code==202
+    assert jobs()==(3,3)
+
+
+def test_an_unknown_outcome_is_never_advertised_as_retryable():
+    import json
+    from classroom_web.domain.auth import AuthRejected
+    from classroom_web.entrypoints.http import failure
+    flag=lambda code,status:json.loads(failure(AuthRejected(code,status),str(uuid4())).body)['error']['retryable']
+    # The write may already have committed; the contract forbids a blind retry.
+    assert flag('RESULT_UNKNOWN',503) is False
+    assert flag('STORAGE_UNAVAILABLE',503) is True and flag('RATE_LIMITED',429) is True and flag('UNAUTHENTICATED',401) is False
+
+
+def test_invitation_routes_replay_one_idempotency_key_without_applying_it_twice(auth):
+    import json,secrets
+    from datetime import timedelta
+    from pathlib import Path
+    from classroom_web.application.identity import IdentityService
+    from classroom_web.entrypoints.http import create_app
+    from classroom_web.infrastructure.identity_passwords import Argon2PasswordHasher
+    from classroom_web.infrastructure.identity_repository import PgIdentityRepository
+    a=auth;role='pr02a_identity_login_'+uuid4().hex;invitation=secrets.token_urlsafe(32);email=uuid4().hex+'@example.test'
+    with a.pg.admin.begin() as sql:
+        sql.exec_driver_sql(f'CREATE ROLE "{role}" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS');sql.exec_driver_sql(f'GRANT classroom_web_identity TO "{role}"')
+        sql.execute(sa.text("INSERT INTO invitations(id,token_hash,status,expires_at,created_by) VALUES(:i,:h,'open',clock_timestamp()+interval '1 day',:u)"),
+                    dict(i=uuid4(),h=hashlib.sha256(invitation.encode()).digest(),u=a.uid))
+    repository=PgIdentityRepository(a.pg.admin_url.set(username=role).render_as_string(hide_password=False))
+    # A 60 second resend interval, as deployed: an immediate resend changes nothing.
+    service=IdentityService(repository,Argon2PasswordHasher(),admin_reauthentication_window=timedelta(minutes=5),resend_interval=timedelta(seconds=60),password_policy=a.policy)
+    contract=json.loads((Path(__file__).resolve().parents[4]/'docs/web-alpha/architecture/contracts/openapi.json').read_text(encoding='utf8'))
+    def counts():
+        with a.pg.admin.connect() as sql:
+            return (sql.scalar(sa.text('SELECT count(*) FROM pending_registrations WHERE normalized_email=:e'),dict(e=email)),
+                    sql.scalar(sa.text('SELECT count(*) FROM identity_mail_intents m JOIN pending_registrations p ON p.id=m.pending_registration_id WHERE p.normalized_email=:e'),dict(e=email)))
+    try:
+        with TestClient(create_app(auth=a.service,contract=contract,origin='https://testserver',identity=service),base_url='https://testserver') as client:
+            csrf=client.get(BASE+'/auth/csrf').json()['csrf_token']
+            def send(path,body,key):return client.post(BASE+path,json=body,headers={**HEADERS,'X-CSRF-Token':csrf,'Idempotency-Key':key})
+            body=dict(email=email,password='synthetic-registration-password',invitation_token=invitation);key=str(uuid4())
+            first=send('/auth/register',body,key);assert first.status_code in (200,201,202) and first.json()['accepted'],first.text
+            # The acknowledgement was lost. Without the receipt the repeat is refused as an existing pending registration.
+            again=send('/auth/register',body,key);assert again.status_code==first.status_code and again.json()['accepted'],again.text
+            assert counts()==(1,1)
+            changed=send('/auth/register',dict(body,password='another-synthetic-password'),key)
+            assert changed.status_code==409 and changed.json()['error']['code']=='IDEMPOTENCY_MISMATCH',changed.text
+            # A new key is a new request and gets the ordinary rejection; it leaves no receipt, so it stays rejected.
+            other=str(uuid4())
+            for _ in range(2):assert send('/auth/register',body,other).status_code==422
+            assert counts()==(1,1)
+            # Resend inside the interval changes nothing but is acknowledged. Repeating that key once the
+            # interval has passed must still change nothing, while a new request then does resend.
+            resend=str(uuid4());assert send('/auth/resend-verification',dict(email=email),resend).status_code==first.status_code
+            assert counts()==(1,1)
+            with a.pg.admin.begin() as sql:
+                sql.execute(sa.text("UPDATE identity_mail_intents SET created_at=created_at-interval '5 minutes' WHERE pending_registration_id IN (SELECT id FROM pending_registrations WHERE normalized_email=:e)"),dict(e=email))
+            assert send('/auth/resend-verification',dict(email=email),resend).status_code==first.status_code
+            assert counts()==(1,1)
+            fresh=str(uuid4())
+            for _ in range(3):assert send('/auth/resend-verification',dict(email=email),fresh).status_code==first.status_code
+            assert counts()==(1,2)
+            mismatch=send('/auth/resend-verification',dict(email=uuid4().hex+'@example.test'),fresh)
+            assert mismatch.status_code==409 and mismatch.json()['error']['code']=='IDEMPOTENCY_MISMATCH',mismatch.text
+    finally:
+        repository.dispose()
+        with a.pg.admin.begin() as sql:
+            sql.exec_driver_sql(f'DROP OWNED BY "{role}"');sql.exec_driver_sql(f'DROP ROLE "{role}"')

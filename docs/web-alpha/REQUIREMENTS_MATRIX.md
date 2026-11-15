@@ -160,3 +160,10 @@ DS-04～06、DS-08～09、DS-10～12在原件是联合小节。下面分别保�
 范围外（PRODUCT-04，p6）：完整智能课表、教务账号、自动调课/AI排程、跨课程知识图谱、间隔重复、原生客户端、Watch/Widget、学校组织、协同笔记、商业结算；整份PDF/PPT、OCR、跨课程语义搜索、公共知识库亦非必达。计划关系和视觉概念不自动增加这些功能。双语按需解释不等于实时全文翻译。
 
 现有实现证据入口：[核心应用](../../app.py)、[课程](../../course_catalog.py)、[学习工作流](../../study_workflow.py)、[Review结构](../../review_schema.py)、[Review工作流](../../review_workflow.py)、[来源](../../review_sources.py)、[课件历史](../../slide_history.py)、[课堂包](../../portable_package.py)、[浏览器缓存](../../static/study-cache.js)、[音频Worklet](../../static/pcm-worklet.js)、[旧验证记录](../VALIDATION.md)。本表仅引用已审计源码语义；当前测试结果以[本轮测试说明](TESTING.md)与实际日志为准。
+
+
+## PR-03b S2 · 2026-11-06：身份需求契约追踪增量
+
+本节追加获审S1至0.2.0候选的追踪，不新增/删除118个需求ID，不重写PRD与历史12字符初值。AUTH-01对应三新设字段的学生6/Admin12、Unicode/名单故障、操作绑定reauth和不清MFA的密码重置；AUTH-03对应实时session/device/security_epoch、已定idle/absolute/remember_me和WS双deadline；AUTH-04对应严格受限恢复、D0/issue/manual complete/status、N01内部通知和N02后置新组；AUTH-05/06保留owner/撤销/原任务不变量。AUTH-02邀请、AUTH-07后台、AUTH-08最终集成不借本次扩实现范围。
+
+对应机器来源为[OpenAPI0.2.0候选](architecture/contracts/openapi.json)、[独立本机控制协议](architecture/contracts/identity-control.schema.json)、[领域身份增量](architecture/contracts/domain-model.json)，结构正反例见[examples](architecture/contracts/examples.json)，实施前置见[S2门禁](pr03b/s2/DATA-LOCKS-AND-IMPLEMENTATION-GATES.md)。契约映射不等于实现或验收，TBD-08和真实留存/凭据/补偿仍未闭合。
