@@ -4,7 +4,9 @@
 
 迁入的审核源提交为 `c80fd29d7834cca040a0a037019c8ba4731ce4ec`，完整 tree 为 `a7d8e70828d1187fb55485879013e1b3f11408dd`。迁移后的文档提交和 GitHub merge commit 不改业务、测试、SQL、迁移、RLS、工作流或冻结契约。
 
-当前已整合 PR-00/01/02a/02b/03a/09a。请从 [架构](architecture/README.md)、[后端入口](../../web/backend/README.md)、[前端入口](../../web/frontend/README.md)、[测试说明](TESTING.md) 和 [迁移记录](repository-migration/README.md) 继续。数据库支持仅限已验证可信 bootstrap；P3-01、PR-02b 两项 P3、PR-09a Mock 实体 ID P3 与 11 项 TBD 继续 OPEN。真实认证/邮件/收费 Provider/麦克风/生产迁移及完整 HTTP 联调尚未验收。
+**2026-11-15 收尾确认：PR-03b（Web Alpha 认证与会话）核心包已完成。** 登录/会话、MFA、改密与重置、CSRF、WSS 票据及 F01/F02 已按用户确认范围收口；主线双 CI 与 VMware 完整补验通过。人工恢复与维护 M0–M4 延后且保持关闭，R05 为设计论证加小样本、非统计通过；权限补审证据缺口仍保留。见 [PR-03b 收尾记录](pr03b/INTEGRATION-20261115.md) 与 [范围决定](pr03b/SCOPE-DECISION-20261112.md)。
+
+当前已整合 PR-00/01/02a/02b/03a/03b 核心包、PR-06a 模拟 POC 和 PR-09a。请从 [架构](architecture/README.md)、[后端入口](../../web/backend/README.md)、[前端入口](../../web/frontend/README.md)、[测试说明](TESTING.md) 和 [迁移记录](repository-migration/README.md) 继续。数据库支持仍限各阶段已验证的可信 bootstrap 范围；P3-01、PR-02b 两项 P3、PR-09a Mock 实体 ID P3 与 11 项 TBD 继续 OPEN。真实邮件、收费 Provider、麦克风、生产迁移及完整学习闭环尚未验收；PR-06a 的真实接口验证仍需原专项授权与前置门禁。
 
 下方 PR-00 索引原文属于历史阶段快照。其中 `main`/v1.3.0 指旧仓 Windows 基线，授权和“远端 CI 待验证”也描述当时状态；本次实际远端 run、checkout 和最终 main 以迁移收据为准，不改写旧报告。
 
