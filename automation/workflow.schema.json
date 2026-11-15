@@ -1,0 +1,905 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://classroom-os.invalid/schemas/workflow-v2.json",
+  "title": "Pinned operator-owned Classroom OS workflow plan",
+  "description": "Python task_config additionally enforces DAG equality, scope protections, trusted command semantics, Git provenance and evidence SHA256. No gate is approved by this schema.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "type": "integer",
+      "const": 2
+    },
+    "authorization_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9-]{0,79}$"
+    },
+    "repository": {
+      "const": "Mumao233/classroom-os"
+    },
+    "author_login": {
+      "const": "Mumao233"
+    },
+    "dag_path": {
+      "const": "docs/web-alpha/architecture/contracts/pr-dependencies.json"
+    },
+    "enabled_tasks": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "00",
+          "01",
+          "02a",
+          "02b",
+          "03a",
+          "03b",
+          "04a",
+          "04b",
+          "05a",
+          "05b",
+          "06a",
+          "06b",
+          "06c",
+          "07a",
+          "07b",
+          "08a",
+          "08b",
+          "08c",
+          "09a",
+          "09b",
+          "10a",
+          "10b",
+          "11a",
+          "11b",
+          "11c",
+          "12a",
+          "12b",
+          "12c"
+        ]
+      },
+      "uniqueItems": true
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "extra_api_spend_usd": {
+          "const": 0,
+          "type": "integer"
+        },
+        "batch_wall_seconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "task_wall_seconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "batch_max_calls": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "task_max_calls": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "batch_max_turns": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "task_max_turns": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "batch_max_input_tokens": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "batch_max_output_tokens": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "task_max_input_tokens": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "task_max_output_tokens": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "max_repairs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3
+        }
+      },
+      "required": []
+    },
+    "baselines": {
+      "type": "object",
+      "propertyNames": {
+        "enum": [
+          "00",
+          "01",
+          "02a",
+          "02b",
+          "03a",
+          "03b",
+          "04a",
+          "04b",
+          "05a",
+          "05b",
+          "06a",
+          "06b",
+          "06c",
+          "07a",
+          "07b",
+          "08a",
+          "08b",
+          "08c",
+          "09a",
+          "09b",
+          "10a",
+          "10b",
+          "11a",
+          "11b",
+          "11c",
+          "12a",
+          "12b",
+          "12c"
+        ]
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/baseline"
+      }
+    },
+    "tasks": {
+      "type": "object",
+      "propertyNames": {
+        "enum": [
+          "00",
+          "01",
+          "02a",
+          "02b",
+          "03a",
+          "03b",
+          "04a",
+          "04b",
+          "05a",
+          "05b",
+          "06a",
+          "06b",
+          "06c",
+          "07a",
+          "07b",
+          "08a",
+          "08b",
+          "08c",
+          "09a",
+          "09b",
+          "10a",
+          "10b",
+          "11a",
+          "11b",
+          "11c",
+          "12a",
+          "12b",
+          "12c"
+        ]
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/task"
+      },
+      "minProperties": 1
+    }
+  },
+  "required": [
+    "version",
+    "authorization_id",
+    "repository",
+    "author_login",
+    "dag_path",
+    "enabled_tasks",
+    "limits",
+    "baselines",
+    "tasks"
+  ],
+  "$defs": {
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.?(/|$))[^\\\\:]+$"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "required": [
+        "path",
+        "sha256"
+      ]
+    },
+    "audit": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "enum": [
+            "COMPLETE",
+            "IMPLEMENTED_UNVERIFIED",
+            "PARTIAL",
+            "NOT_STARTED",
+            "BLOCKED"
+          ]
+        },
+        "head_sha": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9a-f]{40}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tree_sha": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^[0-9a-f]{40}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/evidence"
+          },
+          "maxItems": 32
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 6000
+        }
+      },
+      "required": [
+        "status",
+        "head_sha",
+        "tree_sha",
+        "evidence",
+        "reason"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "COMPLETE"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "head_sha": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{40}$"
+              },
+              "tree_sha": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{40}$"
+              },
+              "evidence": {
+                "minItems": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "NOT_STARTED"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "head_sha": {
+                "type": "null"
+              },
+              "tree_sha": {
+                "type": "null"
+              },
+              "evidence": {
+                "maxItems": 0
+              }
+            }
+          }
+        }
+      ]
+    },
+    "baseline": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "const": "COMPLETE"
+        },
+        "head_sha": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "tree_sha": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/evidence"
+          },
+          "minItems": 1,
+          "maxItems": 32
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 6000
+        },
+        "approved": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "status",
+        "head_sha",
+        "tree_sha",
+        "evidence",
+        "reason",
+        "approved"
+      ]
+    },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "enum": [
+            "gpt-6.1-sol",
+            "gpt-6.1-terra",
+            "gpt-6-astra",
+            "gpt-6-sol",
+            "gpt-6-luna"
+          ]
+        },
+        "reasoning": {
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+            "ultra"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "reasoning"
+      ]
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "add_prefixes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 6000
+          },
+          "uniqueItems": true,
+          "maxItems": 256
+        },
+        "modify_files": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 6000
+          },
+          "uniqueItems": true,
+          "maxItems": 256
+        },
+        "delete_files": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 6000
+          },
+          "uniqueItems": true,
+          "maxItems": 256
+        },
+        "deny_prefixes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 6000
+          },
+          "uniqueItems": true,
+          "maxItems": 256
+        },
+        "max_files": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_bytes": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "add_prefixes",
+        "modify_files",
+        "delete_files",
+        "deny_prefixes",
+        "max_files",
+        "max_bytes"
+      ]
+    },
+    "test": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,79}$"
+        },
+        "kind": {
+          "enum": [
+            "candidate",
+            "trusted"
+          ]
+        },
+        "command": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 6000
+          },
+          "minItems": 2,
+          "maxItems": 128
+        },
+        "timeout_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3600
+        },
+        "completion": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "marker": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 6000
+            },
+            "stage": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_-]{0,79}$"
+            },
+            "min_tests": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100000
+            }
+          },
+          "required": [
+            "marker",
+            "stage",
+            "min_tests"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "command",
+        "timeout_seconds",
+        "completion"
+      ]
+    },
+    "task": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "goal": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 6000
+        },
+        "acceptance": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 6000
+          },
+          "uniqueItems": true,
+          "maxItems": 256,
+          "minItems": 1
+        },
+        "review_criteria": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 6000
+          },
+          "uniqueItems": true,
+          "maxItems": 256,
+          "minItems": 1
+        },
+        "phase": {
+          "enum": [
+            "poc",
+            "implementation",
+            "integration",
+            "paid",
+            "activation"
+          ]
+        },
+        "base": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "ref": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 6000
+            },
+            "sha": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{40}$"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "confirmed": {
+              "type": "boolean"
+            },
+            "dependency_heads": {
+              "type": "object",
+              "propertyNames": {
+                "enum": [
+                  "00",
+                  "01",
+                  "02a",
+                  "02b",
+                  "03a",
+                  "03b",
+                  "04a",
+                  "04b",
+                  "05a",
+                  "05b",
+                  "06a",
+                  "06b",
+                  "06c",
+                  "07a",
+                  "07b",
+                  "08a",
+                  "08b",
+                  "08c",
+                  "09a",
+                  "09b",
+                  "10a",
+                  "10b",
+                  "11a",
+                  "11b",
+                  "11c",
+                  "12a",
+                  "12b",
+                  "12c"
+                ]
+              },
+              "additionalProperties": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{40}$"
+              }
+            }
+          },
+          "required": [
+            "ref",
+            "sha",
+            "confirmed",
+            "dependency_heads"
+          ]
+        },
+        "branch": {
+          "type": "string",
+          "pattern": "^feature/workflow-[a-z0-9][a-z0-9-]{0,99}$"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 6000
+        },
+        "depends_on": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "00",
+              "01",
+              "02a",
+              "02b",
+              "03a",
+              "03b",
+              "04a",
+              "04b",
+              "05a",
+              "05b",
+              "06a",
+              "06b",
+              "06c",
+              "07a",
+              "07b",
+              "08a",
+              "08b",
+              "08c",
+              "09a",
+              "09b",
+              "10a",
+              "10b",
+              "11a",
+              "11b",
+              "11c",
+              "12a",
+              "12b",
+              "12c"
+            ]
+          },
+          "uniqueItems": true
+        },
+        "integration_depends_on": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "00",
+              "01",
+              "02a",
+              "02b",
+              "03a",
+              "03b",
+              "04a",
+              "04b",
+              "05a",
+              "05b",
+              "06a",
+              "06b",
+              "06c",
+              "07a",
+              "07b",
+              "08a",
+              "08b",
+              "08c",
+              "09a",
+              "09b",
+              "10a",
+              "10b",
+              "11a",
+              "11b",
+              "11c",
+              "12a",
+              "12b",
+              "12c"
+            ]
+          },
+          "uniqueItems": true
+        },
+        "paid_depends_on": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "00",
+              "01",
+              "02a",
+              "02b",
+              "03a",
+              "03b",
+              "04a",
+              "04b",
+              "05a",
+              "05b",
+              "06a",
+              "06b",
+              "06c",
+              "07a",
+              "07b",
+              "08a",
+              "08b",
+              "08c",
+              "09a",
+              "09b",
+              "10a",
+              "10b",
+              "11a",
+              "11b",
+              "11c",
+              "12a",
+              "12b",
+              "12c"
+            ]
+          },
+          "uniqueItems": true
+        },
+        "gates": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "development": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 6000
+              },
+              "uniqueItems": true,
+              "maxItems": 256
+            },
+            "enablement": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 6000
+              },
+              "uniqueItems": true,
+              "maxItems": 256
+            },
+            "paid": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 6000
+              },
+              "uniqueItems": true,
+              "maxItems": 256
+            }
+          },
+          "required": [
+            "development",
+            "enablement",
+            "paid"
+          ]
+        },
+        "scope": {
+          "$ref": "#/$defs/scope"
+        },
+        "model": {
+          "$ref": "#/$defs/model"
+        },
+        "review_model": {
+          "$ref": "#/$defs/model"
+        },
+        "limits": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "wall_seconds": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "max_calls": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "max_repairs": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 3
+            },
+            "call_timeout_seconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1200
+            }
+          },
+          "required": [
+            "wall_seconds",
+            "max_calls",
+            "max_repairs",
+            "call_timeout_seconds"
+          ]
+        },
+        "tests": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/test"
+          },
+          "minItems": 1,
+          "maxItems": 32,
+          "contains": {
+            "properties": {
+              "kind": {
+                "const": "trusted"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "minContains": 1
+        },
+        "audit": {
+          "$ref": "#/$defs/audit"
+        }
+      },
+      "required": [
+        "goal",
+        "acceptance",
+        "review_criteria",
+        "phase",
+        "base",
+        "branch",
+        "title",
+        "depends_on",
+        "integration_depends_on",
+        "paid_depends_on",
+        "gates",
+        "scope",
+        "model",
+        "review_model",
+        "limits",
+        "tests",
+        "audit"
+      ]
+    }
+  }
+}

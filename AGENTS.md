@@ -53,3 +53,27 @@ The latest user decision supersedes historical plans to merge Web work into the 
 - Preserve approved commit history, historical URLs/SHAs/reports, Windows product behavior and all existing safety/collaboration constraints. Migration documentation is not authorization for new business packages, deployment, release, production database migration or paid services.
 - Temporary migration clones are transport/evidence copies, not additional long-term development sources. Preserve other worktrees and user changes; shared Git configuration changes require all-worktree checks.
 - PR-00 Actions proves only its actual Windows/Node/static gates. Keep historical local results separate; bootstrap-only, P3-01, other P3/TBD and real-service limitations remain open as recorded in [migration notes](docs/web-alpha/repository-migration/README.md).
+
+## Authorized unattended pilot (2026-11-06)
+
+- The user authorized automation infrastructure and one PR-06a **simulated** trial, including feature branches, commits, pushes and Draft PRs in this repository. This supersedes the historical PR-00 no-write stage only for this scope. No other new business package is enabled.
+- Model execution uses the user's existing ChatGPT/Codex subscription locally. Extra API expenditure is **$0**; do not configure API keys, buy credits, switch billing providers, upload Codex authentication caches, or fall back to an API after an authentication/quota error. The earlier $50 API ceiling was replaced by this instruction.
+- All new Git authors and committers must be `Mumao233 <325669781+Mumao233@users.noreply.github.com>`; Draft PR author must be `Mumao233`. Do not add Codex or other coauthor trailers.
+- Task workers may only add files in the four PR-06a directories approved by `automation/prompts/06a.md`. They may not change this file, control scripts, workflow/configuration, existing tests, migrations, frozen contracts or Git metadata. Only the trusted controller publishes validated objects.
+- Use a pinned clean control commit, isolated tracked-source checkout, restricted local executor and persistent limits. Maximum three repairs; unresolved calls block further invocation. Passing a simulation does not approve real ASR, budget, persistence, security or recovery integration.
+- All PRs remain Draft. No automatic merge, deployment, release, tags, production operations or real business service calls. See [pilot operation guide](docs/web-alpha/overnight/README.md).
+
+## Authorized configurable workflow engineering (2026-11-07)
+
+- The user authorized incremental generalization of the existing pilot inside this repository, with controlled task configuration, serial scheduling, synthetic failure/recovery acceptance and retained 06a regression. Do not extract a separate platform or rewrite completed work.
+- Default v2 scope audits and skips the accepted simulated 06a result. The 05a entry is a disabled future template, not authorization to implement its business/security behavior. Loading the 28-node frozen DAG never enables all packages.
+- Control/configuration/schema, approval records and trusted acceptance entrypoints are pinned and outside worker write authority. Automatic review or Draft publication cannot supply human acceptance, enablement gates or a common merged base.
+- Keep the v1 pilot and all previous ledgers/review/integration evidence unchanged. Do not clear cumulative reservations, reset repair limits, change authorization identity on resume, or rerun a real model trial merely to validate the new workflow.
+- Current delivery may use a feature branch, Mumao233 commits/push and a Draft PR under the existing infrastructure authorization. It does not authorize merging this new change into main, scheduling, deployment, release, real data/microphone/provider work, or starting 05a. See [v2 operation and recovery](docs/web-alpha/overnight/WORKFLOW.md).
+
+## 本机发布的 PR 负责人（2026-11-07）
+
+- 用户本人为 **林珈诚**，对应 GitHub 账号 **Mumao233**。以后从这台电脑发布的 PR，路线图 `owner` 与 PR 说明中的负责人统一填写「林珈诚」；需要设置 GitHub assignee 时使用 `Mumao233`。
+- Codex、Claude Code、Astra 等是技术执行或审查协作角色，不作为本机发布工作的默认负责人。原技术分工、审查署名和既有验收证据保持各自含义。
+- 此约定只涉及项目负责人展示与 PR 归属，不修改业务鉴权 `owner_id`、Git 历史、权限或架构。新提交的 author/committer 继续使用已有的 `Mumao233 <325669781+Mumao233@users.noreply.github.com>`，不添加 agent coauthor。
+- 更新 roadmap 时按 [SPEC](docs/roadmap/SPEC.md) 显式使用 `--owner <id> 林珈诚`，并同步生成报告。
