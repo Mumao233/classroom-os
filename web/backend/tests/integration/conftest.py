@@ -12,6 +12,17 @@ from alembic.config import Config
 import pytest
 import sqlalchemy as sa
 
+# The real-browser test needs a built frontend, Node and Playwright's Chromium, which exist
+# only in the prepared VMware guest. Its runner (tools/pr03b/product/test_backend.py) opts in
+# explicitly; everywhere else, including CI, the module is not collected at all, so it
+# counts neither as passed nor as skipped.
+collect_ignore = [] if os.environ.get("PR03B_REAL_BROWSER") == "1" else ["test_auth_browser.py"]
+# Manual recovery talks to its control plane over a Windows named pipe authenticated by the
+# kernel (recovery_transport_windows.py), and every case in that module needs it. The feature
+# is Windows-only and stays disabled; on other systems the module is likewise not collected.
+if os.name != "nt":
+    collect_ignore.append("test_manual_recovery.py")
+
 
 @pytest.fixture
 def password_policy(tmp_path):

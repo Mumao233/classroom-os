@@ -41,6 +41,7 @@ try:
     url=validate_test_database_target(f'postgresql+psycopg://{admin}@127.0.0.1:{port}/pr02a_control',environ=env)
     env['PR02A_TEST_ADMIN_URL']=url.render_as_string(hide_password=False)
     env['PR03A_THIRD_ROUND_PG_LOG']=str(pg_log)
+    env['PR03B_REAL_BROWSER']='1'  # this runner is the prepared environment for test_auth_browser.py
     selected=['tests/integration/test_authentication.py','tests/integration/test_manual_recovery.py','tests/integration/test_auth_mail.py'] if mode=='auth' else ['tests/unit'] if mode=='unit' else ['tests/integration/test_auth_browser.py'] if mode=='browser' else ['tests/integration/test_enumeration_parity.py','-rP'] if mode=='parity' else ['tests/integration/test_auth_review_fixes.py','tests/integration/test_auth_mail.py'] if mode=='review' else ['tests']
     test=call([sys.executable,'-B','-m','pytest',*selected,'-q','--basetemp='+str(folder/'pytest'),'-o','cache_dir='+str(W/'cache/pytest'),
                '--junitxml='+str(O/('backend-'+tag+'.xml'))],cwd=R/'web/backend',timeout=900)
