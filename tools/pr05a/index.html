@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PR-05a 合成缓存实验</title>
+<link rel="stylesheet" href="/lab.css">
+<main>
+  <h1>PR-05a 合成缓存实验</h1>
+  <p>仅使用内置合成文本。恢复窗口和恢复证明要求等待 TBD-03 决定。</p>
+  <div class="actions">
+    <button id="login-a">登录合成账号 A</button>
+    <button id="login-b">登录合成账号 B</button>
+    <button id="unlock">在线解锁草稿</button>
+    <button id="save">保存合成样本</button>
+    <button id="read">读取样本</button>
+    <button id="lock">锁定</button>
+    <button id="logout">退出</button>
+    <button id="recover">明确确认合成恢复</button>
+  </div>
+  <p id="status" role="status">已锁定</p>
+  <pre id="content"></pre>
+</main>
+<script type="module" src="/app.mjs"></script>
+</html>

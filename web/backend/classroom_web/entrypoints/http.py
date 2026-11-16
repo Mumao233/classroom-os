@@ -67,7 +67,7 @@ def failure(error,request_id):
         headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'})
 
 
-def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admission=None):
+def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admission=None,cache=None):
     parsed=urlsplit(origin)
     if parsed.scheme!='https' or not parsed.netloc or parsed.path or parsed.query or parsed.fragment or parsed.username:raise ValueError('one exact HTTPS origin is required')
     if contract.get('info',{}).get('version')!='0.2.0':raise ValueError('approved contract 0.2.0 required')
@@ -108,6 +108,8 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
            '/me/devices':lambda c,p:auth.list_contexts(c,'devices',p.get('cursor'),p.get('limit'))}
 
     def dispatch(path,ctx,body,key,params):
+        if cache is not None and path in ('/me/cache-unlock','/me/cache-recover'):
+            return cache.release(ctx,body,key,recovery=path=='/me/cache-recover')
         if path in reads:return reads[path](ctx,params)
         if path=='/auth/login':return auth.login(ctx,body)
         if path=='/auth/login/mfa':return auth.login_mfa(ctx,body,key)
@@ -149,6 +151,10 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
         '/auth/password/forgot','/auth/password/reset','/auth/email/confirm','/auth/recovery/enroll','/auth/recovery/confirm','/ws-tickets',
         '/me/sessions/{session_id}/revoke','/me/devices/{device_id}/revoke'}
     if business is not None:selected.add('/courses/{course_id}')
+    if cache is not None:
+        selected.add('/me/cache-unlock')
+        if cache.allow_recovery and contract.get('x-pr05a-candidate') is True:
+            selected.add('/me/cache-recover')
     def endpoint(path,method,operation):
         success=next(k for k in operation['responses'] if k.startswith('2'))
         response_schema=operation['responses'][success]['content']['application/json']['schema']

@@ -60,7 +60,7 @@ class Database:
                       'tasks','task_attempts','provider_results','operation_receipts',
                       'owner_event_counters','outbox_events','invitations',
                       'pending_registrations','identity_capacity','identity_mail_intents',
-                      'identity_audit','identity_events')
+                      'identity_audit','identity_events','cache_keys')
                     AND pg_has_role(current_user, c.relowner, 'USAGE')
                 ) FROM pg_roles r WHERE r.rolname=current_user
             """))
