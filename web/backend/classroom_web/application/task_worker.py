@@ -40,7 +40,7 @@ class TaskWorker:
             try:
                 with self.database.transaction(OwnerContext(claim.owner_id)) as tx:
                     recovered.append(tx.tasks.recover(claim.id, claim.lease_token))
-            except (Gone, InactiveOwner):
+            except (Gone, InactiveOwner, NotFound):
                 # Narrow metadata-only transition for revoked owners/lineages.
                 # It cannot read inputs/results or submit anything externally.
                 # SQL uses the same identity predicate as the denied owner UoW.
@@ -48,7 +48,7 @@ class TaskWorker:
                 # it is never authorization to load a body or submit a request.
                 self.scheduler.recover_revoked(claim.id, claim.lease_token)
                 continue
-            except (StaleFence, NotFound, RevisionConflict):
+            except (StaleFence, RevisionConflict):
                 continue
             finally:
                 if self.billing is not None:
@@ -66,6 +66,8 @@ class TaskWorker:
         try:
             with self.database.transaction(owner) as tx:
                 task = tx.tasks.get(claim.id)
+                if task.schema_version != '1':
+                    raise UnsafeRetry('this worker cannot dispatch a specialized task')
                 attempt = tx.tasks.prepare_attempt(claim.id, claim.lease_token, self.worker_id)
             if attempt.raw_output_ref is None:
                 with self.database.transaction(owner) as tx:

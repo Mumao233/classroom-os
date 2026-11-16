@@ -67,12 +67,20 @@ def failure(error,request_id):
         headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'})
 
 
-def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admission=None,cache=None,media=None,media_spool_directory=None,billing=None,billing_admin=None):
+def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admission=None,cache=None,media=None,media_spool_directory=None,billing=None,billing_admin=None,qa=None):
     parsed=urlsplit(origin)
     if parsed.scheme!='https' or not parsed.netloc or parsed.path or parsed.query or parsed.fragment or parsed.username:raise ValueError('one exact HTTPS origin is required')
     if contract.get('info',{}).get('version')!='0.2.0':raise ValueError('approved contract 0.2.0 required')
     if billing_admin is not None and not contract.get('x-pr11a-candidate'):
         raise ValueError('billing administration requires its explicit contract candidate')
+    if qa is not None and contract.get('x-pr07a-candidate') != 'pr07a-1':
+        raise ValueError('QA requires its explicit PR-07a contract candidate')
+    qa_paths = {
+        '/class-sessions/{class_session_id}/generation-plans',
+        '/generation-plans/{plan_id}', '/generation-plans/{plan_id}/execute',
+        '/source-snapshots/{snapshot_id}', '/questions', '/questions/{question_id}',
+        '/tasks/{task_id}', '/tasks/{task_id}/cancel', '/tasks/{task_id}/reconcile',
+    } if qa is not None else set()
     if billing_admin is not None:
         if auth.admin_reauth is not None and auth.admin_reauth is not billing_admin:
             raise ValueError('an existing admin reauth delegate must be coordinated')
@@ -113,7 +121,9 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
            '/me/sessions':lambda c,p:auth.list_contexts(c,'sessions',p.get('cursor'),p.get('limit')),
            '/me/devices':lambda c,p:auth.list_contexts(c,'devices',p.get('cursor'),p.get('limit'))}
 
-    def dispatch(path,ctx,body,key,params,method):
+    def dispatch(path,ctx,body,key,params,method,operation_id):
+        if path in qa_paths:
+            return qa.dispatch(operation_id,ctx,body,key,params,billing_fallback=billing)
         if cache is not None and path in ('/me/cache-unlock','/me/cache-recover'):
             return cache.release(ctx,body,key,recovery=path=='/me/cache-recover')
         if path=='/me/quota' and billing is not None:return billing.quota(ctx)
@@ -165,6 +175,7 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
         '/auth/password/forgot','/auth/password/reset','/auth/email/confirm','/auth/recovery/enroll','/auth/recovery/confirm','/ws-tickets',
         '/me/sessions/{session_id}/revoke','/me/devices/{device_id}/revoke'}
     if business is not None:selected.add('/courses/{course_id}')
+    selected.update(qa_paths)
     if billing is not None:selected.update(('/me/quota','/tasks/{task_id}/cancel'))
     if billing_admin is not None:selected.update(('/admin/switches','/admin/usage','/admin/quota-adjustments','/admin/users/{user_id}/quota'))
     if cache is not None:
@@ -180,6 +191,27 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
             entered=time.monotonic();deadline=entered+5;deadline_token=DEADLINE.set(deadline);dispatched=False
             try:
                 secure(request,write=method!='get');ctx=request_context(request);key=None;body={};params=dict(request.path_params)
+                if path in qa_paths and method == 'get':
+                    pairs = list(request.query_params.multi_items())
+                    allowed = {'class_session_id', 'cursor', 'limit'} if path == '/questions' else set()
+                    if len({name for name, _ in pairs}) != len(pairs) or any(name not in allowed for name, _ in pairs):
+                        raise AuthRejected('VALIDATION_FAILED', 422)
+                    for name, value in pairs:
+                        if name == 'limit':
+                            if not value.isascii() or not value.isdecimal() or not 1 <= int(value) <= 100:
+                                raise AuthRejected('VALIDATION_FAILED', 422)
+                            params[name] = int(value)
+                        elif name == 'class_session_id':
+                            try:
+                                if str(UUID(value)) != value:
+                                    raise ValueError()
+                            except ValueError:
+                                raise AuthRejected('VALIDATION_FAILED', 422) from None
+                            params[name] = value
+                        else:
+                            if not 1 <= len(value) <= 512:
+                                raise AuthRejected('VALIDATION_FAILED', 422)
+                            params[name] = value
                 if path in ('/me/quota','/admin/switches','/admin/users/{user_id}/quota') and method=='get' and request.url.query:
                     raise AuthRejected('VALIDATION_FAILED',422)
                 if path=='/admin/usage':
@@ -219,7 +251,7 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
                 if not slots.acquire(False):raise AuthRejected('RATE_LIMITED',429)
                 context=copy_context()
                 def work():
-                    try:remaining();return dispatch(path,ctx,body,key,params,method)
+                    try:remaining();return dispatch(path,ctx,body,key,params,method,operation['operationId'])
                     finally:slots.release()
                 try:future=workers.submit(context.run,work)
                 except BaseException:slots.release();raise

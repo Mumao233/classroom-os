@@ -1,0 +1,112 @@
+{
+  "base_sha": "b86bed0c37851f2ef65b01729c097d0970cdf551",
+  "source_zip_sha256": "6c607bbab7713fd6cef1f04d4395c78f7025c9ac6f08d5be7d7e46c6d011c24c",
+  "evidence_zip_sha256": "fb4d7e9ac4b2c8e90aeb864efb3dd4a3cc8cf389c0ff991d43ba51da4884e351",
+  "vmware_job": "pr07a-20261116-170331-d7e0dc70",
+  "suite": {
+    "junit_cases": 840,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "required_modules": {
+      "test_private_media": {
+        "required": 16,
+        "observed": 16,
+        "missing": []
+      },
+      "test_media_stream_lifecycle": {
+        "required": 10,
+        "observed": 10,
+        "missing": []
+      },
+      "test_pr07a_http": {
+        "required": 8,
+        "observed": 8,
+        "missing": []
+      },
+      "test_pr07a_recovery": {
+        "required": 21,
+        "observed": 21,
+        "missing": []
+      },
+      "test_pr07a_sources": {
+        "required": 23,
+        "observed": 23,
+        "missing": []
+      },
+      "test_pr07a_context_provider": {
+        "required": 25,
+        "observed": 25,
+        "missing": []
+      },
+      "test_auth_browser": {
+        "required": 1,
+        "observed": 1,
+        "missing": []
+      }
+    },
+    "all_required_executed": true
+  },
+  "test_exit": 0,
+  "pg_stop_exit": 0,
+  "object_process_stopped": true,
+  "frontend_build": [
+    {
+      "step": "contracts",
+      "exit_code": 0
+    },
+    {
+      "step": "typescript",
+      "exit_code": 0
+    },
+    {
+      "step": "vite",
+      "exit_code": 0
+    },
+    {
+      "step": "verify-build",
+      "exit_code": 0
+    }
+  ],
+  "contract_checks": [
+    {
+      "name": "All local JSON refs resolve",
+      "status": "passed"
+    },
+    {
+      "name": "OpenAPI3.1 + unique operationId",
+      "status": "passed"
+    },
+    {
+      "name": "Events JSON Schema 2020-12",
+      "status": "passed"
+    },
+    {
+      "name": "Synthetic positive and negative contract fixtures",
+      "status": "passed"
+    },
+    {
+      "name": "Five workflow transition guards and negative traces",
+      "status": "passed"
+    },
+    {
+      "name": "Domain model keys, FK targets/types and owner scope",
+      "status": "passed"
+    },
+    {
+      "name": "28 PR DAG hard + integration + paid dependencies",
+      "status": "passed"
+    },
+    {
+      "name": "118 requirement IDs fully mapped",
+      "status": "passed"
+    },
+    {
+      "name": "Markdown local links, fences and whitespace",
+      "status": "passed"
+    }
+  ],
+  "synthetic_only": true,
+  "real_provider_calls": 0,
+  "pytest_subtests_passed": 29
+}

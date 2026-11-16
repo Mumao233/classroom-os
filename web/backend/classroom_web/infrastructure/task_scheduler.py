@@ -24,17 +24,23 @@ class PgTaskScheduler:
         if safe is not True:
             raise PermissionError('a separate restricted scheduler identity is required')
 
-    def claim(self, worker, lease_seconds=30, batch_size=1):
+    def claim(self, worker, lease_seconds=30, batch_size=1, *, schema_version='1'):
         if not isinstance(worker, str) or not 1 <= len(worker) <= 100:
             raise ValueError('worker identifier must be 1..100 characters')
         if type(lease_seconds) is not int or not 1 <= lease_seconds <= 3600:
             raise ValueError('lease seconds must be 1..3600')
         if type(batch_size) is not int or not 1 <= batch_size <= 100:
             raise ValueError('batch size must be 1..100')
+        if schema_version not in ('1', 'pr07a-1'):
+            raise ValueError('unsupported task schema version')
         with self.engine.begin() as connection:
             self._check_identity(connection)
-            rows = connection.execute(text('SELECT * FROM classroom_web_claim_tasks(:worker,:seconds,:batch)'),
-                {'worker': worker, 'seconds': lease_seconds, 'batch': batch_size}).mappings().all()
+            if schema_version == '1':
+                query = 'SELECT * FROM classroom_web_claim_tasks(:worker,:seconds,:batch)'
+            else:
+                query = 'SELECT * FROM classroom_web_claim_tasks(:worker,:seconds,:batch,:schema_version)'
+            rows = connection.execute(text(query), {'worker': worker, 'seconds': lease_seconds,
+                'batch': batch_size, 'schema_version': schema_version}).mappings().all()
             return [Claim(**row) for row in rows]
 
     def expired(self, batch_size=100):
@@ -50,6 +56,17 @@ class PgTaskScheduler:
             self._check_identity(connection)
             return connection.scalar(text('SELECT classroom_web_recover_revoked(:task,:token)'),
                                      {'task': task_id, 'token': lease_token})
+
+    def question_results(self, batch_size=100):
+        """Routing metadata for bounded local-only question reconciliation."""
+        if type(batch_size) is not int or not 1 <= batch_size <= 100:
+            raise ValueError('question recovery batch must be 1..100')
+        with self.engine.begin() as connection:
+            self._check_identity(connection)
+            rows = connection.execute(text(
+                'SELECT * FROM classroom_web_qa_saved_candidates(:batch)'),
+                {'batch': batch_size}).mappings()
+            return [Claim(**row) for row in rows]
 
     def dispose(self):
         self.engine.dispose()

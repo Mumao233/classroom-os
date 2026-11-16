@@ -22,6 +22,7 @@ from classroom_web.infrastructure.database import Database
 from classroom_web.infrastructure.schema import metadata, tables
 from classroom_web.infrastructure.task_schema import tables as task_tables
 from classroom_web.infrastructure.identity_schema import tables as identity_tables
+from classroom_web.infrastructure.qa_schema import QA_TABLES
 
 from conftest import BACKEND, ROOT, migration_config
 
@@ -39,7 +40,7 @@ def test_only_required_tables_and_contract_columns_exist(pg):
     # assertion below remains unchanged and full metadata still must match.
     auth_tables={'devices','auth_sessions','auth_challenges','reauth_proofs','mfa_credentials','recovery_code_groups','mfa_recovery_codes','email_actions','preauth_receipts'}
     media_tables={'media_assets','media_uploads','media_tickets'}
-    assert set(inspector.get_table_names()) == expected | set(task_tables) | set(identity_tables) | auth_tables | media_tables | {"alembic_version"}
+    assert set(inspector.get_table_names()) == expected | set(task_tables) | set(identity_tables) | auth_tables | media_tables | set(QA_TABLES) | {"alembic_version"}
     contract = json.loads((ROOT / "docs/web-alpha/architecture/contracts/domain-model.json").read_text("utf-8"))
     for table in contract["tables"]:
         if table["name"] in expected:

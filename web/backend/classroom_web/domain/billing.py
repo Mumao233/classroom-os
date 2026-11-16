@@ -128,6 +128,8 @@ class ReservationRequest:
     input_ref: dict
     class_session_id: UUID | None = None
     quota_root_id: UUID | None = None
+    schema_version: str = '1'
+    plan_id: UUID | None = None
 
     def validate(self):
         if self.purpose not in PURPOSES or not isinstance(self.op_id, UUID) or self.op_id.version != 4:
@@ -141,6 +143,13 @@ class ReservationRequest:
             raise ValueError('ASR requires a bounded positive duration')
         if self.quota_root_id is not None and self.purpose != 'review_summary':
             raise ValueError('only summary children share the root operation quota')
+        if self.schema_version not in ('1', 'pr07a-1'):
+            raise ValueError('unsupported task schema version')
+        if self.schema_version == 'pr07a-1' and (self.purpose != 'ai_question'
+                or self.plan_id is None or self.class_session_id is None):
+            raise ValueError('question reservations require their generation plan')
+        if self.schema_version == '1' and self.plan_id is not None:
+            raise ValueError('legacy reservations cannot reference question plans')
 
 
 @dataclass(frozen=True, kw_only=True)
