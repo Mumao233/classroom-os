@@ -24,6 +24,11 @@ class UnitOfWork:
     events: 'PgEventRepository'
     receipts: 'PgReceiptRepository'
 
+    @property
+    def billing(self):
+        from .billing_repository import PgBillingRepository
+        return PgBillingRepository(self)
+
 
 class Database:
     def __init__(self, url: str, *, pool_size: int = 2, max_overflow: int = 0,
