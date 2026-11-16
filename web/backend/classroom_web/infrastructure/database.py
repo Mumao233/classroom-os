@@ -24,6 +24,11 @@ class UnitOfWork:
     events: 'PgEventRepository'
     receipts: 'PgReceiptRepository'
 
+    @property
+    def billing(self):
+        from .billing_repository import PgBillingRepository
+        return PgBillingRepository(self)
+
 
 class Database:
     def __init__(self, url: str, *, pool_size: int = 2, max_overflow: int = 0,
@@ -60,7 +65,7 @@ class Database:
                       'tasks','task_attempts','provider_results','operation_receipts',
                       'owner_event_counters','outbox_events','invitations',
                       'pending_registrations','identity_capacity','identity_mail_intents',
-                      'identity_audit','identity_events','media_assets','media_uploads','media_tickets')
+                      'identity_audit','identity_events','cache_keys','media_assets','media_uploads','media_tickets')
                     AND pg_has_role(current_user, c.relowner, 'USAGE')
                 ) FROM pg_roles r WHERE r.rolname=current_user
             """))

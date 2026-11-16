@@ -15,10 +15,11 @@ def stamp(value):return datetime.fromisoformat(value.replace('Z','+00:00'))
 
 
 class AuthService:
-    def __init__(self,repository,credentials,password_policy,*,policy=AuthPolicy(),mail=None,hash_gate=None,control_deployment_id=None):
+    def __init__(self,repository,credentials,password_policy,*,policy=AuthPolicy(),mail=None,hash_gate=None,control_deployment_id=None,admin_reauth=None):
         self.repository=repository;self.crypto=credentials;self.password_policy=password_policy
         self.policy=policy;self.mail=mail;self.hash_gate=hash_gate
         self.control_deployment_id=control_deployment_id
+        self.admin_reauth=admin_reauth
 
     def _call(self,operation,payload,**options):return self.repository.call(operation,payload,**options)
 
@@ -199,6 +200,8 @@ class AuthService:
         needs_mfa=bool(row['factor_id'] or row['role']=='admin')
         with self.failure_budget(*([('mfa_fail',row['owner_id'])] if needs_mfa else [])):
             proof,_=self._attest(row,'reauth',binding=commitment,code=body.get('mfa_code'))
+        if self.admin_reauth is not None and purpose in self.admin_reauth.PURPOSES:
+            return self.admin_reauth.issue_reauth(ctx,operation,proof)
         if purpose.startswith('student_recovery_'):
             token=random_token();value=self._need(self._call('issue_control_reauth',dict(token_hash=digest('session',ctx.session),proof_hash=proof,id=str(uuid4()),
                 reauth_hash=digest('reauth',token),purpose=purpose,case_id=operation['target']['id'],deployment_id=self.control_deployment_id,commitment=commitment,

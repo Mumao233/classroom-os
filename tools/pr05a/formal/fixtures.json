@@ -1,0 +1,22 @@
+{
+  "positive": [
+    {
+      "schema": "CacheUnlockRequest",
+      "value": {"device_id": "10000000-0000-4000-8000-000000000001", "key_epoch": 1, "scope": "drafts", "class_session_id": null}
+    },
+    {
+      "schema": "CacheRecoverRequest",
+      "value": {"device_id": "10000000-0000-4000-8000-000000000001", "key_epoch": 2, "scope": "drafts", "class_session_id": null, "key_id": "20000000-0000-4000-8000-000000000001"}
+    }
+  ],
+  "negative": [
+    {
+      "schema": "CacheUnlockRequest",
+      "value": {"device_id": "10000000-0000-4000-8000-000000000001", "key_epoch": 1, "scope": "drafts", "class_session_id": null, "owner_id": "30000000-0000-4000-8000-000000000001"}
+    },
+    {
+      "schema": "CacheRecoverRequest",
+      "value": {"device_id": "10000000-0000-4000-8000-000000000001", "key_epoch": 2, "scope": "drafts", "class_session_id": null}
+    }
+  ]
+}

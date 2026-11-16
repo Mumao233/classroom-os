@@ -1,0 +1,26 @@
+"""Unassigned PR-11a migration template. Coordinator freezes the combined SQL.
+
+Proposed composition was tested after PR-04a's 0009_private_media candidate.
+The placeholders below are not registered in the repository migration chain.
+"""
+from pathlib import Path
+from alembic import context, op
+
+revision = '__PR11A_REVISION__'
+down_revision = '__COORDINATED_PARENT__'
+branch_labels = None
+depends_on = None
+
+
+def upgrade():
+    # Freeze billing_schema.sql followed by billing_integration.sql into this
+    # revision's SQL sidecar. Historical revisions never import live app code.
+    sql = Path(__file__).with_suffix('.sql').read_text(encoding='utf-8')
+    if context.is_offline_mode():
+        op.execute(sql.replace(':', r'\:'))
+    else:
+        op.get_bind().execution_options(no_parameters=True).exec_driver_sql(sql)
+
+
+def downgrade():
+    raise RuntimeError('preserve reservations, unknown exposure, receipts and audit. Use forward repair')
