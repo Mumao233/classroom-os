@@ -107,7 +107,8 @@
 4. **“临近到期”阈值 48 小时**是前端常量（`EXPIRY_WARNING_MS`），属于产品参数，待产品确认。
 5. **test:ui 配置差异**：VMware 访客没有系统 Chrome，生成的配置与 `tests/playwright.config.ts` 只差浏览器通道（改用访客中已锁定版本的 Playwright Chromium），其余选项一致。
 6. **测试环境分工**：按仓库 AGENTS.md，全部测试在 VMware 访客中运行；宿主机只做编辑和静态检查（tsc、eslint），不作为通过证据。
-7. 没有调用真实收费模型/ASR，没有使用真实麦克风、真实课堂资料或真实 Key。
+7. Astra 第 2 轮的 3 条 P2 未修复（见第 6 节），需要用户决定是否在本 PR 内继续修复。
+8. 没有调用真实收费模型/ASR，没有使用真实麦克风、真实课堂资料或真实 Key。
 
 ## 6. 独立复审（astra-review）
 
@@ -115,6 +116,7 @@
 |---|---|---|---|---|---|
 | 0 | `--base main`，HEAD `12f2e24` | `review_completed`，全部门禁通过 | gpt-6-astra / ultra / read-only | 5 条 P2，无 P0/P1 | 5 条均判定成立，已修复并补回归测试（VMware 第 06 次运行 57/57） |
 | 1 | `--base main`，HEAD `c86c57a` | `review_completed`，全部门禁通过 | gpt-6-astra / ultra / read-only | 4 条新 P2，无 P0/P1 | 4 条均判定成立，已修复（VMware 第 07 次运行 59/59） |
+| 2 | `--base main`，HEAD `d49e1ac` | `review_completed`，全部门禁通过 | gpt-6-astra / ultra / read-only | 3 条新 P2，无 P0/P1 | 3 条均判定成立，**未修复**：已达两轮上限，按 CLAUDE.md 停止并交用户决定 |
 
 第 0 轮发现与处理：
 
@@ -131,4 +133,10 @@
 3. 首页待办只显示前 6 条且没有入口查看其余 → 增加“显示全部 N 项/收起”按钮（`aria-expanded`、`aria-controls`），新增浏览器用例。
 4. 编辑课程的入口、保存和取消丢失课程列表返回上下文 → 编辑链接、取消链接和保存后跳转都带上原 `location.state`，新增浏览器用例。
 
-后续轮次结果见下方补记。
+第 2 轮发现（成立，未修复，属于遗留问题）：
+
+1. 资料编辑器以 `material.id` 作 key。真实后端每次保存生成新的版本 ID（`repositories.py` 中 `update_material` 使用 `uuid4()`），保存后会重新挂载，丢失保存期间的输入；Mock 复用 ID，所以没有暴露。资料编辑器在保存期间也没有锁定字段。
+2. 偏好冲突选择“放弃我的修改”后，CAS base 会被 effect 回退到旧缓存的 revision，下次保存会再次冲突（不会丢数据，但需要再处理一次冲突）。
+3. 课程/学期保存成功后，在等待 invalidate 期间切换账号，会跳到上一个账号的课程 URL，显示“课程不存在”（不会泄露数据：B 账号读取 A 的课程会得到 404）。
+
+复审最终报告：`outputs/astra-review/20261116T012209Z-base-main-r2-O4XiFY/final-report.md`（`outputs/` 被 Git 忽略）。
