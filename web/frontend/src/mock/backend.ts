@@ -370,7 +370,9 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
           || !(body.glossary as unknown[]).every(term => typeof term === 'object' && term !== null && str((term as Record<string, unknown>).term, 160, 1) && str((term as Record<string, unknown>).meaning, 1000) && languages.includes(String((term as Record<string, unknown>).language))))
           return error(400, 'VALIDATION_FAILED', '资料格式无效');
         const conflict = cas(current, body); if (conflict) return conflict;
-        const next: S['CourseMaterial'] = { ...touch(current), syllabus: String(body.syllabus), glossary: body.glossary as S['GlossaryTerm'][], language: body.language as S['CourseMaterial']['language'], content_sha256: sha(current.revision + 100) };
+        // Like the backend's update_material: every write appends a new immutable version with its own ID.
+        const stamp = now();
+        const next: S['CourseMaterial'] = { ...current, id: newId(), revision: current.revision + 1, created_at: stamp, updated_at: stamp, syllabus: String(body.syllabus), glossary: body.glossary as S['GlossaryTerm'][], language: body.language as S['CourseMaterial']['language'], content_sha256: sha(current.revision + 100) };
         store.materials = store.materials.map(item => item.id === current.id ? next : item);
         return ok(next, 201);
       }

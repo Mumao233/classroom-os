@@ -173,7 +173,7 @@ function Materials({ course }: { course: S['Course'] }) {
   if (materials.isPending) return <Loading label="正在读取课程资料…" />;
   const material = materials.data.items[0];
   return <div className={styles.stack}>
-    {material ? <MaterialEditor key={material.id} material={material} /> : <section className={styles.panel}><Empty title="课程资料暂不可用" description="服务端尚未提供这门课程的资料记录。" /></section>}
+    {material ? <MaterialEditor key={course.id} material={material} /> : <section className={styles.panel}><Empty title="课程资料暂不可用" description="服务端尚未提供这门课程的资料记录。" /></section>}
     <section className={styles.panel} aria-labelledby="mat-images"><h3 id="mat-images">课堂图片</h3>
       <p className={`${styles.small} ${styles.muted}`}>课件照片和板书图片在各自课堂中上传与管理（PR-10a），不会混入课程资料。本版不要求上传整份 PDF/PPT。</p>
       <Link className={styles.buttonGhost} to={`/courses/${course.id}/classrooms`}>查看本课程的课堂</Link></section>
@@ -200,6 +200,7 @@ function MaterialEditor({ material }: { material: S['CourseMaterial'] }) {
   const invalidTerm = glossary.some(term => term.term.length > 160 || term.meaning.length > 1000);
   return <form className={`${styles.panel} ${styles.form}`} style={{ maxWidth: 'none' }} onSubmit={event => { event.preventDefault(); setAcked(null); save.mutate(base); }} aria-labelledby="mat-heading">
     <h3 id="mat-heading">课程大纲与术语词表</h3>
+    <fieldset disabled={save.isPending} className={styles.stack} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>{/* Locked while saving so no edit is lost when the new version arrives. */}
     <div className={styles.field}><label htmlFor="mat-syllabus">课程大纲</label><textarea id="mat-syllabus" value={syllabus} maxLength={120000} onChange={event => setSyllabus(event.target.value)} aria-describedby="mat-syllabus-hint" /><span id="mat-syllabus-hint" className={styles.hint}>可留空，之后再补。</span></div>
     <div className={styles.field}><label htmlFor="mat-language">资料语言</label><select id="mat-language" value={language} onChange={event => setLanguage(event.target.value as S['CourseMaterial']['language'])} aria-describedby="mat-language-hint">{(Object.keys(languageLabels) as Array<keyof typeof languageLabels>).map(key => <option key={key} value={key}>{languageLabels[key]}</option>)}</select>
       <span id="mat-language-hint" className={styles.hint}>修改语言或词表只影响之后课堂的默认设置，不会重新识别或重新生成历史结果。</span></div>
@@ -210,6 +211,7 @@ function MaterialEditor({ material }: { material: S['CourseMaterial'] }) {
           <button type="button" className={styles.buttonGhost} aria-label={`删除术语 ${index + 1}`} onClick={() => setGlossary(glossary.filter((_, i) => i !== index))}><IconX size={16} aria-hidden="true" /></button></div>
       </div>)}
       <div><button type="button" className={styles.buttonSecondary} disabled={glossary.length >= 2000} onClick={() => setGlossary([...glossary, { term: '', meaning: '', language: 'auto' }])}><IconPlus size={15} aria-hidden="true" /> 添加术语</button></div>
+    </fieldset>
     </fieldset>
     {latest && <div className={`${styles.banner} ${styles.bannerWarning}`} role="alert" data-testid="conflict-panel"><div className={styles.stack}><strong>版本冲突：资料已在其他地方更新，你的输入仍保留。</strong>
       <div className={styles.compare}><div><strong>你的大纲</strong><p>{syllabus || '（空）'}</p><p>词表 {glossary.length} 条</p></div><div><strong>最新大纲</strong><p>{latest.syllabus || '（空）'}</p><p>词表 {latest.glossary.length} 条</p></div></div>

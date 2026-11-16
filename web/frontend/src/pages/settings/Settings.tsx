@@ -157,14 +157,16 @@ function ReadingForm({ preferences }: { preferences: S['Preferences'] }) {
  */
 function usePreferenceBase(preferences: S['Preferences'], dirty: boolean) {
   const { api } = useAppData();
+  const invalidate = useInvalidateAccount();
   const [base, setBase] = useState(preferences.revision);
   const [latest, setLatest] = useState<S['Preferences'] | null>(null);
-  useEffect(() => { if (!dirty && !latest) setBase(preferences.revision); }, [dirty, latest, preferences.revision]);
+  // Follow newer revisions only: a stale cache must never pull the base behind a revision already seen.
+  useEffect(() => { if (!dirty && !latest) setBase(current => Math.max(current, preferences.revision)); }, [dirty, latest, preferences.revision]);
   return {
     base, latest,
     acknowledge: (next: S['Preferences']) => { setBase(next.revision); setLatest(null); },
     onError: async (error: unknown) => { if (isConflict(error)) setLatest(await api.preferences()); },
-    takeLatest: () => { const revision = latest?.revision ?? base; setBase(revision); setLatest(null); return revision; },
+    takeLatest: () => { const revision = Math.max(latest?.revision ?? base, base); setBase(revision); setLatest(null); void invalidate(); return revision; },
   };
 }
 function PreferenceConflict({ onKeep, onDiscard }: { onKeep: () => void; onDiscard: () => void }) {

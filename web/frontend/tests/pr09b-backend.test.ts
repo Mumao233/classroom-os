@@ -114,6 +114,9 @@ describe('mock backend failure modes used by PR-09b pages', () => {
     expect(call('A', 'POST', `/courses/${mockIds.la}/materials`, { base_revision: material.revision, syllabus: '', glossary: [{ term: '', meaning: '', language: 'en' }], language: 'en' }).status).toBe(400);
     const saved = call('A', 'POST', `/courses/${mockIds.la}/materials`, { base_revision: material.revision, syllabus: '新大纲', glossary: [], language: 'en' });
     expect(saved.body).toMatchObject({ revision: material.revision + 1, language: 'en', syllabus: '新大纲' });
+    // Each write is a new immutable version with its own ID; the list returns only the current one.
+    expect((saved.body as S['CourseMaterial']).id).not.toBe(material.id);
+    expect(items<S['CourseMaterial']>(call('A', 'GET', `/courses/${mockIds.la}/materials`)).map(item => item.id)).toEqual([(saved.body as S['CourseMaterial']).id]);
     const sessions = items<S['ClassSession']>(call('A', 'GET', '/class-sessions', undefined, `course_id=${mockIds.la}`));
     expect(sessions.every(item => item.language === 'auto')).toBe(true);
   });

@@ -170,6 +170,23 @@ test.describe('PR-09b Courses', () => {
     await expect(page).toHaveURL(/q=physics/);
   });
 
+  test('two list changes in the same tick both reach the URL', async ({ page }) => {
+    await ready(page, '/courses');
+    await expect(page.getByTestId('course-cards')).toBeVisible();
+    // Fire both changes before React re-renders: the second must not overwrite the first.
+    await page.evaluate(() => {
+      const listButton = Array.from(document.querySelectorAll('button')).find(button => button.textContent?.includes('列表'))!;
+      const sort = document.getElementById(Array.from(document.querySelectorAll('label')).find(label => label.textContent?.trim() === '排序')!.htmlFor) as HTMLSelectElement;
+      listButton.click();
+      const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!;
+      setter.call(sort, 'name');
+      sort.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+    await expect(page).toHaveURL(/view=list/);
+    await expect(page).toHaveURL(/sort=name/);
+    await expect(page.getByTestId('course-table')).toBeVisible();
+  });
+
   test('same-name courses stay separate with their own IDs; creating another same-name course does not merge', async ({ page }) => {
     await ready(page, '/courses?semester=all');
     const cards = page.getByTestId('course-cards').locator('a', { has: page.getByRole('heading', { name: '线性代数', exact: true }) });
@@ -304,6 +321,10 @@ test.describe('PR-09b Courses', () => {
     await expect(savedNotice).toBeVisible();
     await page.getByRole('textbox', { name: '课程大纲', exact: true }).fill('尚未保存的修改');
     await expect(savedNotice).toHaveCount(0);
+    // The saved version has a new ID; the editor stays mounted and the next save uses the new revision.
+    await page.getByRole('button', { name: '保存资料' }).click();
+    await expect(page.getByRole('status').filter({ hasText: '已保存到云端（版本 4）' })).toBeVisible();
+    await expect(page.getByRole('textbox', { name: '课程大纲', exact: true })).toHaveValue('尚未保存的修改');
     await expect(page.getByText('课件照片和板书图片在各自课堂中上传与管理')).toBeVisible();
   });
 
@@ -377,6 +398,25 @@ test.describe('PR-09b Settings', () => {
     await expect(page.getByTestId('conflict-panel')).toHaveCount(0);
     await expect(language).toHaveValue('en');
     await expect(page.getByTestId('ai-preferences').getByRole('button', { name: '保存' })).toBeDisabled();
+  });
+
+  test('discarding a preference conflict loads the latest revision; the next save does not conflict again', async ({ page }) => {
+    await ready(page, '/settings/ai');
+    const form = page.getByTestId('ai-preferences');
+    const language = page.getByLabel('解释语言');
+    await language.selectOption('en');
+    // Another device changes an unrelated preference.
+    await page.evaluate(() => (globalThis as unknown as { __classroomMock: { bump: (k: string, i: string, c: object) => void } }).__classroomMock.bump('preferences', '', { reading_font_px: 20 }));
+    await form.getByRole('button', { name: '保存' }).click();
+    await expect(page.getByTestId('conflict-panel')).toBeVisible();
+    await page.getByRole('button', { name: '放弃我的修改，载入最新版本' }).click();
+    await expect(page.getByTestId('conflict-panel')).toHaveCount(0);
+    await expect(language).toHaveValue('auto');
+    await language.selectOption('zh');
+    await form.getByRole('button', { name: '保存' }).click();
+    await expect(form.getByRole('button', { name: '保存' })).toBeDisabled();
+    await expect(page.getByTestId('conflict-panel')).toHaveCount(0);
+    await expect(language).toHaveValue('zh');
   });
 
   test('profile and reading preference save with revisions; theme switch keeps an active capture', async ({ page }) => {

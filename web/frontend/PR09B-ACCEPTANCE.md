@@ -78,7 +78,7 @@
 
 ## 4. 检查命令、退出码与数量
 
-最终一次运行在 VMware 访客 `TEST` 中完成（Node v24.19.0，2026-11-16T01:18:25Z–01:20:25Z，broker 任务 `claude-pr09b-20261115-checks-07`，包含 Astra 第 0、1 轮复审后的修复）。源码为本工作树快照：81 个文件，逐文件 SHA-256 校验 0 个不一致，基点 `81ab191`，`source.zip` SHA-256 `8ddf961f12343fc1555bbe2a8a9068e1cd11e9817a19533a87bb8986bcaec7b5`。访客中直接用 `node` 调用与 `package.json` 脚本相同的命令（访客里没有 pnpm shim），步骤一一对应：
+最终一次运行在 VMware 访客 `TEST` 中完成（Node v24.19.0，2026-11-16T01:46:04Z–01:48:01Z，broker 任务 `claude-pr09b-20261116-checks-09`，包含 Astra 三轮复审发现的全部修复）。源码为本工作树快照：81 个文件，逐文件 SHA-256 校验 0 个不一致，基点 `81ab191`，`source.zip` SHA-256 `dae4a8ffacca6b221680c2a5683dc0d17e9d4826b89d5391ad3097e092b43102`。访客中直接用 `node` 调用与 `package.json` 脚本相同的命令（访客里没有 pnpm shim），步骤一一对应：
 
 | package.json 脚本 | 访客中执行的命令 | 退出码 | 数量 |
 |---|---|---|---|
@@ -88,15 +88,17 @@
 | `pnpm test:unit` | `vitest run … unit/api/pr09b-domain/pr09b-backend` | 0 | 4 文件，92 通过 |
 | （补充）全部 Vitest | `vitest run --config tests/vitest.config.ts` | 0 | 8 文件，274 通过 |
 | `pnpm build` | `tsc -b` → `vite build --mode production` → `node scripts/verify-build.mjs` | 0 / 0 / 0 | 生产产物 7 个文件，未发现 Mock 入口标记 |
-| `pnpm test:ui` | `playwright test`（配置差异见第 5 节第 5 条） | 0 | 59 通过，0 失败，0 跳过，0 flaky；其中 `pr09b.browser.spec.ts` 23 条，其余 36 条为 09a/03b 已有用例 |
+| `pnpm test:ui` | `playwright test`（配置差异见第 5 节第 5 条） | 0 | 61 通过，0 失败，0 跳过，0 flaky；其中 `pr09b.browser.spec.ts` 25 条，其余 36 条为 09a/03b 已有用例 |
 
-- 证据包：`outputs/pr09b/vm-run-07/evidence.zip`（SHA-256 `d5b6694ea972df103805d7998cd80c297ae5a5eafd021e923dc1440e2d3e7a74`），内含各步骤日志、`checks.json`（逐步退出码与耗时）、`playwright.json` 和 19 张截图。`typecheck-*`、`lint`、`build-tsc` 成功时没有输出，日志为空文件，`Compress-Archive` 不打包空文件，所以包里没有这几份日志；它们的结论以 `checks.json` 中的退出码为准。`outputs/` 被 Git 忽略，不随提交。
+- 证据包：`outputs/pr09b/vm-run-09/evidence.zip`（SHA-256 `74c7fa52a02388cdb99ba844f10c23c1f342fcccd97fa00b54f5fa0f4a0ff4df`），内含各步骤日志、`checks.json`（逐步退出码与耗时）、`playwright.json` 和 19 张截图。`typecheck-*`、`lint`、`build-tsc` 成功时没有输出，日志为空文件，`Compress-Archive` 不打包空文件，所以包里没有这几份日志；它们的结论以 `checks.json` 中的退出码为准。`outputs/` 被 Git 忽略，不随提交。
 - 过程如实记录：第 01–04 次运行失败，均已修复。
   - 01：访客无网络导致 `navigator.onLine=false`；J: 盘 subst 路径与 Vitest 的 realpath 不一致；定位器有歧义。
   - 02：场景 05 的测试步骤写错；未知标签的断言写错；只看已归档复选框在路由 transition 中短暂回到旧状态（页面缺陷，已改为本地镜像状态）；离线时重新请求失败会把已读取的数据替换成错误页（页面缺陷，已改为保留缓存，确认删除的 404 除外）。
   - 03–04：表单名称与标签子串歧义（测试定位器问题）。05 全部通过（55 条）。
   - 06：Astra 第 0 轮复审的 5 条 P2 修复后重跑，新增 2 条浏览器用例并扩展 4 条已有用例，全部通过。
   - 07：Astra 第 1 轮复审的 4 条 P2 修复后重跑，再新增 2 条浏览器用例，59/59 通过。
+  - 08：修复第 2 轮的 3 条 P2 后重跑，60 条中 1 条失败（课程列表快速连续切换视图和排序时，后一次修改覆盖前一次的 URL），属于页面竞态缺陷。
+  - 09：修复该竞态并新增同一事件循环内连续两次修改的用例，61/61 通过。
 - 宿主机只做了 tsc 和 eslint 静态检查，不作为通过证据。
 
 ## 5. 已知限制
@@ -107,7 +109,7 @@
 4. **“临近到期”阈值 48 小时**是前端常量（`EXPIRY_WARNING_MS`），属于产品参数，待产品确认。
 5. **test:ui 配置差异**：VMware 访客没有系统 Chrome，生成的配置与 `tests/playwright.config.ts` 只差浏览器通道（改用访客中已锁定版本的 Playwright Chromium），其余选项一致。
 6. **测试环境分工**：按仓库 AGENTS.md，全部测试在 VMware 访客中运行；宿主机只做编辑和静态检查（tsc、eslint），不作为通过证据。
-7. Astra 第 2 轮的 3 条 P2 未修复（见第 6 节），需要用户决定是否在本 PR 内继续修复。
+7. Astra 第 2 轮的 3 条 P2 和课程列表 URL 竞态已修复，但在两轮复审上限之后，只经过 VMware 测试验证，没有独立复审。
 8. 没有调用真实收费模型/ASR，没有使用真实麦克风、真实课堂资料或真实 Key。
 
 ## 6. 独立复审（astra-review）
@@ -116,7 +118,7 @@
 |---|---|---|---|---|---|
 | 0 | `--base main`，HEAD `12f2e24` | `review_completed`，全部门禁通过 | gpt-6-astra / ultra / read-only | 5 条 P2，无 P0/P1 | 5 条均判定成立，已修复并补回归测试（VMware 第 06 次运行 57/57） |
 | 1 | `--base main`，HEAD `c86c57a` | `review_completed`，全部门禁通过 | gpt-6-astra / ultra / read-only | 4 条新 P2，无 P0/P1 | 4 条均判定成立，已修复（VMware 第 07 次运行 59/59） |
-| 2 | `--base main`，HEAD `d49e1ac` | `review_completed`，全部门禁通过 | gpt-6-astra / ultra / read-only | 3 条新 P2，无 P0/P1 | 3 条均判定成立，**未修复**：已达两轮上限，按 CLAUDE.md 停止并交用户决定 |
+| 2 | `--base main`，HEAD `d49e1ac` | `review_completed`，全部门禁通过 | gpt-6-astra / ultra / read-only | 3 条新 P2，无 P0/P1 | 3 条均判定成立。按 CLAUDE.md 停止后交用户决定；用户 2026-11-16 指示修复，已修复并经 VMware 第 09 次运行 61/61 验证，**这批修复没有再经过 Astra 复审**（脚本拒绝第 3 轮） |
 
 第 0 轮发现与处理：
 
@@ -133,10 +135,18 @@
 3. 首页待办只显示前 6 条且没有入口查看其余 → 增加“显示全部 N 项/收起”按钮（`aria-expanded`、`aria-controls`），新增浏览器用例。
 4. 编辑课程的入口、保存和取消丢失课程列表返回上下文 → 编辑链接、取消链接和保存后跳转都带上原 `location.state`，新增浏览器用例。
 
-第 2 轮发现（成立，未修复，属于遗留问题）：
+第 2 轮发现（成立；用户指示后已修复，未再复审）：
 
 1. 资料编辑器以 `material.id` 作 key。真实后端每次保存生成新的版本 ID（`repositories.py` 中 `update_material` 使用 `uuid4()`），保存后会重新挂载，丢失保存期间的输入；Mock 复用 ID，所以没有暴露。资料编辑器在保存期间也没有锁定字段。
 2. 偏好冲突选择“放弃我的修改”后，CAS base 会被 effect 回退到旧缓存的 revision，下次保存会再次冲突（不会丢数据，但需要再处理一次冲突）。
 3. 课程/学期保存成功后，在等待 invalidate 期间切换账号，会跳到上一个账号的课程 URL，显示“课程不存在”（不会泄露数据：B 账号读取 A 的课程会得到 404）。
+
+处理：
+
+1. 资料编辑器改为以课程 ID 作 key，保存期间锁定字段；Mock 每次保存生成新的版本 ID（与后端 `update_material` 一致）。单元测试断言版本 ID 改变、列表只返回当前版本；浏览器用例在新版本 ID 上连续保存第二次。
+2. CAS base 只前进不后退；选择“放弃”时刷新偏好缓存。新增浏览器用例：冲突 → 放弃 → 再编辑保存，不再出现冲突。
+3. 课程/学期保存成功后，只有表单仍挂载、账号作用域未变时才跳转。时序相关，未加自动化用例。
+
+另外，第 08 次运行暴露了一个复审没有报告的竞态：课程列表的 URL 修改基于上一次渲染的参数，快速连续修改时后一次会覆盖前一次。已改为基于最近一次写入的参数，并新增确定性用例。这项修复同样没有经过 Astra 复审。
 
 复审最终报告：`outputs/astra-review/20261116T012209Z-base-main-r2-O4XiFY/final-report.md`（`outputs/` 被 Git 忽略）。

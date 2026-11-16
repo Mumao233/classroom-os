@@ -1,4 +1,4 @@
-import { useRef, useState, type ReactNode } from 'react';
+import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from 'react-router';
 import { useForm, type FieldErrors as RHFErrors, type Resolver } from 'react-hook-form';
 import { useMutation } from '@tanstack/react-query';
@@ -50,6 +50,20 @@ function ConflictPanel({ rows, onOverwrite, onDiscard, busy }: { rows: Array<{ l
   </div></div>;
 }
 
+/**
+ * True while this form and the account scope it was opened in are still current. An account
+ * switch remounts the whole scope, so a save that finishes afterwards must not navigate.
+ */
+function useStillCurrent() {
+  const { accountKey } = useAppData();
+  const opened = useRef(accountKey);
+  const latestKey = useRef(accountKey);
+  const mounted = useRef(true);
+  useEffect(() => { latestKey.current = accountKey; }, [accountKey]);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  return () => mounted.current && latestKey.current === opened.current;
+}
+
 export function SemesterFormPage() {
   const { semesterId } = useParams();
   const semesters = useSemesters();
@@ -67,6 +81,7 @@ function SemesterForm({ semester, others = [] }: { semester?: S['Semester']; oth
   const { api, online } = useAppData();
   const invalidate = useInvalidateAccount();
   const navigate = useNavigate();
+  const stillCurrent = useStillCurrent();
   const intentKey = useIntentKey();
   // The revision this form was opened with; background refetches never move it silently.
   const [baseRevision, setBaseRevision] = useState(semester?.revision ?? 0);
@@ -81,7 +96,7 @@ function SemesterForm({ semester, others = [] }: { semester?: S['Semester']; oth
       const body = semesterPayload(values);
       return semester ? api.updateSemester(semester.id, { base_revision: revision, ...body }) : api.createSemester(body, intentKey(body));
     },
-    onSuccess: async saved => { setLatest(null); await invalidate(); navigate(`/courses?semester=${saved.id}`); },
+    onSuccess: async saved => { setLatest(null); await invalidate(); if (stillCurrent()) navigate(`/courses?semester=${saved.id}`); },
     onError: async error => { if (isConflict(error) && semester) setLatest(await api.semester(semester.id)); },
   });
   const archive = useMutation({
@@ -147,6 +162,7 @@ function CourseForm({ course, semesters, defaultSemesterId, existing }: { course
   const { api, online } = useAppData();
   const invalidate = useInvalidateAccount();
   const navigate = useNavigate();
+  const stillCurrent = useStillCurrent();
   const intentKey = useIntentKey();
   // The course-list return context travels through the editor and back.
   const returnState = useLocation().state;
@@ -163,7 +179,7 @@ function CourseForm({ course, semesters, defaultSemesterId, existing }: { course
       const body = coursePayload(values);
       return course ? api.updateCourse(course.id, { base_revision: revision, ...body }) : api.createCourse(body, intentKey(body));
     },
-    onSuccess: async saved => { setLatest(null); await invalidate(); navigate(`/courses/${saved.id}/overview`, { replace: !course, state: returnState }); },
+    onSuccess: async saved => { setLatest(null); await invalidate(); if (stillCurrent()) navigate(`/courses/${saved.id}/overview`, { replace: !course, state: returnState }); },
     onError: async error => { if (isConflict(error) && course) setLatest(await api.course(course.id)); },
   });
   const errors = form.formState.errors;

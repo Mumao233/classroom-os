@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useSearchParams } from 'react-router';
 import { IconLayoutGrid, IconList, IconPlus } from '@tabler/icons-react';
 import { defaultSemester, languageLabels, readCourseListParams, writeCourseListParams, type CourseListParams } from '../../domain/courses';
@@ -30,7 +30,17 @@ export function CourseList() {
     const handle = setTimeout(() => update({ q: query.trim() }), 300);
     return () => clearTimeout(handle);
   });
-  const update = (change: Partial<CourseListParams>) => setSearchParams(writeCourseListParams({ ...params, semester: params.semester ?? fallback?.id ?? null }, change), { replace: true });
+  // Successive changes build on the latest written URL, not on the params of the last render:
+  // the router commits each URL change in a transition, so a quick second change (view, then
+  // sort) would otherwise overwrite the first.
+  const written = useRef(searchParams);
+  useEffect(() => { written.current = searchParams; }, [searchParams]);
+  const update = (change: Partial<CourseListParams>) => {
+    const current = readCourseListParams(written.current);
+    const next = writeCourseListParams({ ...current, semester: current.semester ?? fallback?.id ?? null }, change);
+    written.current = next;
+    setSearchParams(next, { replace: true });
+  };
   const semesterName = new Map((semesters.data?.items ?? []).map(item => [item.id, item.name]));
   const currentSemester = semesters.data?.items.find(item => item.id === semesterId);
   const items = courses.data?.items ?? [];
