@@ -1,5 +1,5 @@
 import { useRef, useState, type ReactNode } from 'react';
-import { Link, Navigate, useNavigate, useParams, useSearchParams } from 'react-router';
+import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from 'react-router';
 import { useForm, type FieldErrors as RHFErrors, type Resolver } from 'react-hook-form';
 import { useMutation } from '@tanstack/react-query';
 import type { components } from '../../generated/openapi';
@@ -55,7 +55,8 @@ export function SemesterFormPage() {
   const semesters = useSemesters();
   if (!semesterId) return <SemesterForm />;
   if (semesters.isPending) return <main id="main-content" className={shell.page} tabIndex={-1}><Loading label="正在读取学期…" /></main>;
-  if (semesters.isError) return <main id="main-content" className={shell.page} tabIndex={-1}><QueryError error={semesters.error} retry={() => void semesters.refetch()} /></main>;
+  // A failed background refetch keeps the cached list so a mounted form never loses its draft.
+  if (!semesters.data) return <main id="main-content" className={shell.page} tabIndex={-1}><QueryError error={semesters.error} retry={() => void semesters.refetch()} /></main>;
   const found = semesters.data.items.find(item => item.id === semesterId);
   if (!found) return <main id="main-content" className={shell.page} tabIndex={-1}><PageHeading title="学期不存在" detail="该学期可能已被删除。" focusKey="missing" /><Link className={styles.buttonSecondary} to="/courses">返回课程</Link></main>;
   // Keyed by id only: a background refetch must never remount the form and drop the user's input.
@@ -95,12 +96,14 @@ function SemesterForm({ semester, others = [] }: { semester?: S['Semester']; oth
     <div className={styles.stack}>
       <OfflineBanner scope="学期信息只读。" /><DataSourceNote />
       <form className={`${styles.panel} ${styles.form}`} onSubmit={submit} noValidate aria-label="学期信息">
+        <fieldset disabled={save.isPending} className={styles.stack} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>{/* Locked while saving so no edit made after submit is lost when the page navigates away. */}
         <Field id="semester-name" label="学期名称（必填）" error={errors.name?.message}><input {...form.register('name')} {...described('semester-name', errors.name?.message)} maxLength={100} autoComplete="off" /></Field>
         <Field id="semester-year" label="学年" error={errors.academic_year?.message} hint="例如 2026-2027，可留空。"><input {...form.register('academic_year')} {...described('semester-year', errors.academic_year?.message, 'hint')} maxLength={30} /></Field>
         <div className={styles.formGrid}>
           <Field id="semester-start" label="开始日期" error={errors.starts_on?.message}><input type="date" {...form.register('starts_on')} {...described('semester-start', errors.starts_on?.message)} /></Field>
           <Field id="semester-end" label="结束日期" error={errors.ends_on?.message}><input type="date" {...form.register('ends_on')} {...described('semester-end', errors.ends_on?.message)} /></Field>
         </div>
+        </fieldset>
         {latest && semester && <ConflictPanel busy={save.isPending}
           rows={[{ label: '名称', mine: values.name, latest: latest.name }, { label: '学年', mine: values.academic_year, latest: latest.academic_year ?? '' }, { label: '日期', mine: `${values.starts_on || '—'} 至 ${values.ends_on || '—'}`, latest: `${latest.starts_on ?? '—'} 至 ${latest.ends_on ?? '—'}` }]}
           onOverwrite={() => { setBaseRevision(latest.revision); void form.handleSubmit(v => save.mutate({ values: v, revision: latest.revision }))(); }}
@@ -130,9 +133,9 @@ export function CourseFormPage() {
   const course = useCourse(courseId ?? '', Boolean(courseId));
   const existing = useCourses({ semester_id: undefined }, semesters.isSuccess);
   if (semesters.isPending || (courseId && course.isPending)) return <main id="main-content" className={shell.page} tabIndex={-1}><Loading label="正在读取…" /></main>;
-  if (semesters.isError) return <main id="main-content" className={shell.page} tabIndex={-1}><QueryError error={semesters.error} retry={() => void semesters.refetch()} /></main>;
-  if (courseId && course.isError) {
-    const gone = course.error instanceof ApiClientError && (course.error.status === 404 || course.error.status === 410);
+  if (!semesters.data) return <main id="main-content" className={shell.page} tabIndex={-1}><QueryError error={semesters.error} retry={() => void semesters.refetch()} /></main>;
+  const gone = Boolean(courseId) && course.isError && course.error instanceof ApiClientError && (course.error.status === 404 || course.error.status === 410);
+  if (courseId && (gone || !course.data)) {
     return <main id="main-content" className={shell.page} tabIndex={-1}><PageHeading title={gone ? '课程不存在' : '无法读取课程'} focusKey="error" />{gone ? <Link className={styles.buttonSecondary} to="/courses">返回课程</Link> : <QueryError error={course.error} retry={() => void course.refetch()} />}</main>;
   }
   if (!courseId && semesters.data.items.length === 0) return <Navigate to="/semesters/new" replace />;
@@ -145,6 +148,8 @@ function CourseForm({ course, semesters, defaultSemesterId, existing }: { course
   const invalidate = useInvalidateAccount();
   const navigate = useNavigate();
   const intentKey = useIntentKey();
+  // The course-list return context travels through the editor and back.
+  const returnState = useLocation().state;
   const [baseRevision, setBaseRevision] = useState(course?.revision ?? 0);
   const [latest, setLatest] = useState<S['Course'] | null>(null);
   const form = useForm<CourseValues>({
@@ -158,7 +163,7 @@ function CourseForm({ course, semesters, defaultSemesterId, existing }: { course
       const body = coursePayload(values);
       return course ? api.updateCourse(course.id, { base_revision: revision, ...body }) : api.createCourse(body, intentKey(body));
     },
-    onSuccess: async saved => { setLatest(null); await invalidate(); navigate(`/courses/${saved.id}/overview`, { replace: !course }); },
+    onSuccess: async saved => { setLatest(null); await invalidate(); navigate(`/courses/${saved.id}/overview`, { replace: !course, state: returnState }); },
     onError: async error => { if (isConflict(error) && course) setLatest(await api.course(course.id)); },
   });
   const errors = form.formState.errors;
@@ -171,6 +176,7 @@ function CourseForm({ course, semesters, defaultSemesterId, existing }: { course
     <div className={styles.stack}>
       <OfflineBanner scope="课程信息只读。" /><DataSourceNote />
       <form className={`${styles.panel} ${styles.form}`} onSubmit={form.handleSubmit(v => save.mutate({ values: v, revision: baseRevision }))} noValidate aria-label="课程信息">
+        <fieldset disabled={save.isPending} className={styles.stack} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>{/* Locked while saving so no edit made after submit is lost when the page navigates away. */}
         <Field id="course-name" label="课程名称（必填）" error={errors.name?.message} hint={sameName.length ? `已有 ${sameName.length} 门同名课程。保存后会是一门独立的新课程，不会合并。` : undefined}>
           <input {...form.register('name')} {...described('course-name', errors.name?.message, sameName.length ? 'hint' : undefined)} maxLength={160} autoComplete="off" /></Field>
         <Field id="course-english" label="英文名" error={errors.english_name?.message}><input {...form.register('english_name')} {...described('course-english', errors.english_name?.message)} maxLength={200} lang="en" /></Field>
@@ -184,6 +190,7 @@ function CourseForm({ course, semesters, defaultSemesterId, existing }: { course
           <Field id="course-color" label="课程颜色"><select {...form.register('color_token')} id="course-color">{colorTokens.map(key => <option key={key} value={key}>{colorLabels[key]}</option>)}{!(colorTokens as readonly string[]).includes(values.color_token) && <option value={values.color_token}>{values.color_token}</option>}</select></Field>
           <Field id="course-icon" label="课程图标"><select {...form.register('icon_token')} id="course-icon">{iconTokens.map(key => <option key={key} value={key}>{iconLabels[key]}</option>)}{!(iconTokens as readonly string[]).includes(values.icon_token) && <option value={values.icon_token}>{values.icon_token}</option>}</select></Field>
         </div>
+        </fieldset>
         <p className={`${styles.small} ${styles.muted}`}>课程大纲和术语词表在课程详情的“资料”标签中维护。</p>
         {latest && course && <ConflictPanel busy={save.isPending}
           rows={[{ label: '名称', mine: values.name, latest: latest.name }, { label: '英文名', mine: values.english_name, latest: latest.english_name }, { label: '学期', mine: semesterName(values.semester_id), latest: semesterName(latest.semester_id) }, { label: '语言', mine: languageLabels[values.language], latest: languageLabels[latest.language] }, { label: '教师/教室', mine: `${values.teacher} ${values.room}`.trim(), latest: `${latest.teacher} ${latest.room}`.trim() }]}
@@ -192,7 +199,7 @@ function CourseForm({ course, semesters, defaultSemesterId, existing }: { course
         {save.isError && !latest && <p role="alert" className={styles.error}>{describeError(save.error)}</p>}
         <div className={styles.row}>
           <button type="submit" className={styles.button} disabled={!online || save.isPending}>{save.isPending ? '正在保存…' : course ? '保存' : '创建课程'}</button>
-          <Link className={styles.buttonSecondary} to={course ? `/courses/${course.id}/overview` : '/courses'}>取消</Link>
+          <Link className={styles.buttonSecondary} to={course ? `/courses/${course.id}/overview` : '/courses'} state={returnState}>取消</Link>
         </div>
       </form>
     </div>

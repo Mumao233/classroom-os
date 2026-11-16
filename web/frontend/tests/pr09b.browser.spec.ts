@@ -85,6 +85,27 @@ test.describe('PR-09b Dashboard', () => {
     await expect(page).toHaveURL(/\/classrooms\/c0000000-0000-4000-8000-000000000004\/processing$/);
   });
 
+  test('every loaded todo stays reachable beyond the preview', async ({ page }) => {
+    await ready(page);
+    await page.evaluate(() => {
+      const mock = (globalThis as unknown as { __classroomMock: { bump: (k: string, i: string, c: object) => void } }).__classroomMock;
+      for (const n of [2, 3, 5, 7]) mock.bump('class_session', `c0000000-0000-4000-8000-00000000000${n}`, { flows: { capture: 'ended', upload: 'failed', asr: 'succeeded', ai: 'idle', sync: 'synced' } });
+    });
+    // Re-entering account A clears the query cache, so the dashboard reads the changed records.
+    await page.getByRole('button', { name: '切换模拟账号 A' }).click();
+    await page.getByRole('button', { name: '切换模拟账号 B' }).click();
+    const todos = page.getByTestId('todo-list');
+    await expect(todos.locator('li[data-kind="failed"]').first()).toBeVisible();
+    const toggle = page.getByRole('button', { name: /^显示全部 \d+ 项$/ });
+    await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    const total = Number((await toggle.innerText()).match(/\d+/)![0]);
+    expect(total).toBeGreaterThan(6);
+    await expect(todos.locator('li')).toHaveCount(6);
+    await toggle.click();
+    await expect(todos.locator('li')).toHaveCount(total);
+    await expect(page.getByRole('button', { name: '收起' })).toHaveAttribute('aria-expanded', 'true');
+  });
+
   test('deleting a course removes its entries and todos everywhere (UI-DASH-09)', async ({ page }) => {
     await ready(page, `/courses/${MP}/overview`);
     await page.getByRole('button', { name: /删除/ }).click();
@@ -292,6 +313,20 @@ test.describe('PR-09b Courses', () => {
     await page.getByRole('navigation', { name: '课程内容' }).getByRole('link', { name: '复习' }).click();
     await page.getByLabel('类型').selectOption('card');
     await expect(page).toHaveURL(/kind=card/);
+    await page.getByRole('link', { name: '← 课程列表' }).click();
+    await expect(page).toHaveURL(/view=list/);
+    await expect(page).toHaveURL(/sort=name/);
+  });
+
+  test('editing a course keeps the course-list return context on save and cancel', async ({ page }) => {
+    await ready(page, '/courses?view=list&sort=name');
+    await page.getByTestId('course-table').getByRole('link', { name: '线性代数', exact: true }).click();
+    await page.getByRole('link', { name: /编辑/ }).click();
+    await page.getByRole('link', { name: '取消' }).click();
+    await page.getByRole('link', { name: /编辑/ }).click();
+    await page.getByLabel('教师').fill('合成教师');
+    await page.getByRole('button', { name: '保存', exact: true }).click();
+    await expect(page.getByRole('heading', { name: '线性代数', level: 1 })).toBeVisible();
     await page.getByRole('link', { name: '← 课程列表' }).click();
     await expect(page).toHaveURL(/view=list/);
     await expect(page).toHaveURL(/sort=name/);

@@ -54,7 +54,7 @@ export function CourseDetail() {
         <CourseGlyph course={data} />
         <PageHeading title={data.name} detail={<>{data.english_name && <span lang="en">{data.english_name} · </span>}{semester?.name ?? '学期'} · {languageLabels[data.language]}{data.teacher ? ` · ${data.teacher}` : ''}{data.room ? ` · ${data.room}` : ''}</>}
           actions={online ? <>
-            <Link className={styles.buttonSecondary} to={`/courses/${data.id}/edit`}><IconEdit size={15} aria-hidden="true" /> 编辑</Link>
+            <Link className={styles.buttonSecondary} to={`/courses/${data.id}/edit`} state={location.state}><IconEdit size={15} aria-hidden="true" /> 编辑</Link>
             <button type="button" className={styles.buttonSecondary} disabled={archive.isPending} onClick={() => archive.mutate(data)}><IconArchive size={15} aria-hidden="true" /> {data.archived ? '取消归档' : '归档'}</button>
             <button type="button" className={styles.buttonDanger} onClick={() => setDeleteOpen(true)}><IconTrash size={15} aria-hidden="true" /> 删除…</button></> : undefined} />
         <div className={styles.row}>{data.archived && <Badge>已归档 · 内容全部保留</Badge>}<Badge>{data.class_session_count} 节课堂</Badge></div>

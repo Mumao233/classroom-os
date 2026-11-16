@@ -78,7 +78,7 @@
 
 ## 4. 检查命令、退出码与数量
 
-最终一次运行在 VMware 访客 `TEST` 中完成（Node v24.19.0，2026-11-16T01:04:10Z–01:06:06Z，broker 任务 `claude-pr09b-20261115-checks-06`，包含 Astra 第 0 轮复审后的修复）。源码为本工作树快照：81 个文件，逐文件 SHA-256 校验 0 个不一致，基点 `81ab191`，`source.zip` SHA-256 `e955b5ebce90750b289c441fc6ee114cf5bb296a754a1d528166a6551db454de`。访客中直接用 `node` 调用与 `package.json` 脚本相同的命令（访客里没有 pnpm shim），步骤一一对应：
+最终一次运行在 VMware 访客 `TEST` 中完成（Node v24.19.0，2026-11-16T01:18:25Z–01:20:25Z，broker 任务 `claude-pr09b-20261115-checks-07`，包含 Astra 第 0、1 轮复审后的修复）。源码为本工作树快照：81 个文件，逐文件 SHA-256 校验 0 个不一致，基点 `81ab191`，`source.zip` SHA-256 `8ddf961f12343fc1555bbe2a8a9068e1cd11e9817a19533a87bb8986bcaec7b5`。访客中直接用 `node` 调用与 `package.json` 脚本相同的命令（访客里没有 pnpm shim），步骤一一对应：
 
 | package.json 脚本 | 访客中执行的命令 | 退出码 | 数量 |
 |---|---|---|---|
@@ -88,14 +88,15 @@
 | `pnpm test:unit` | `vitest run … unit/api/pr09b-domain/pr09b-backend` | 0 | 4 文件，92 通过 |
 | （补充）全部 Vitest | `vitest run --config tests/vitest.config.ts` | 0 | 8 文件，274 通过 |
 | `pnpm build` | `tsc -b` → `vite build --mode production` → `node scripts/verify-build.mjs` | 0 / 0 / 0 | 生产产物 7 个文件，未发现 Mock 入口标记 |
-| `pnpm test:ui` | `playwright test`（配置差异见第 5 节第 5 条） | 0 | 57 通过，0 失败，0 跳过，0 flaky；其中 `pr09b.browser.spec.ts` 21 条，其余 36 条为 09a/03b 已有用例 |
+| `pnpm test:ui` | `playwright test`（配置差异见第 5 节第 5 条） | 0 | 59 通过，0 失败，0 跳过，0 flaky；其中 `pr09b.browser.spec.ts` 23 条，其余 36 条为 09a/03b 已有用例 |
 
-- 证据包：`outputs/pr09b/vm-run-06/evidence.zip`（SHA-256 `9a3f461963f5509da0e433e8bdf4dd677281c4d29df316362cfe170b2f23df11`），内含各步骤日志、`checks.json`（逐步退出码与耗时）、`playwright.json` 和 19 张截图。`typecheck-*`、`lint`、`build-tsc` 成功时没有输出，日志为空文件，`Compress-Archive` 不打包空文件，所以包里没有这几份日志；它们的结论以 `checks.json` 中的退出码为准。`outputs/` 被 Git 忽略，不随提交。
+- 证据包：`outputs/pr09b/vm-run-07/evidence.zip`（SHA-256 `d5b6694ea972df103805d7998cd80c297ae5a5eafd021e923dc1440e2d3e7a74`），内含各步骤日志、`checks.json`（逐步退出码与耗时）、`playwright.json` 和 19 张截图。`typecheck-*`、`lint`、`build-tsc` 成功时没有输出，日志为空文件，`Compress-Archive` 不打包空文件，所以包里没有这几份日志；它们的结论以 `checks.json` 中的退出码为准。`outputs/` 被 Git 忽略，不随提交。
 - 过程如实记录：第 01–04 次运行失败，均已修复。
   - 01：访客无网络导致 `navigator.onLine=false`；J: 盘 subst 路径与 Vitest 的 realpath 不一致；定位器有歧义。
   - 02：场景 05 的测试步骤写错；未知标签的断言写错；只看已归档复选框在路由 transition 中短暂回到旧状态（页面缺陷，已改为本地镜像状态）；离线时重新请求失败会把已读取的数据替换成错误页（页面缺陷，已改为保留缓存，确认删除的 404 除外）。
   - 03–04：表单名称与标签子串歧义（测试定位器问题）。05 全部通过（55 条）。
   - 06：Astra 第 0 轮复审的 5 条 P2 修复后重跑，新增 2 条浏览器用例并扩展 4 条已有用例，全部通过。
+  - 07：Astra 第 1 轮复审的 4 条 P2 修复后重跑，再新增 2 条浏览器用例，59/59 通过。
 - 宿主机只做了 tsc 和 eslint 静态检查，不作为通过证据。
 
 ## 5. 已知限制
@@ -113,6 +114,7 @@
 | 轮次 | 范围 | 状态 | 实际模型/等级/沙箱 | 发现 | 处理 |
 |---|---|---|---|---|---|
 | 0 | `--base main`，HEAD `12f2e24` | `review_completed`，全部门禁通过 | gpt-6-astra / ultra / read-only | 5 条 P2，无 P0/P1 | 5 条均判定成立，已修复并补回归测试（VMware 第 06 次运行 57/57） |
+| 1 | `--base main`，HEAD `c86c57a` | `review_completed`，全部门禁通过 | gpt-6-astra / ultra / read-only | 4 条新 P2，无 P0/P1 | 4 条均判定成立，已修复（VMware 第 07 次运行 59/59） |
 
 第 0 轮发现与处理：
 
@@ -121,5 +123,12 @@
 3. 首页只为最近 5 节课读取疑问，较早课堂的未懂问题被漏掉 → 改为读取已加载的全部有效课堂；Mock 种子增加一条较早课堂的未懂问题作为回归用例。
 4. 切换账号后模拟离线复选框重置为在线，而传输层仍离线 → 复选框从传输层状态初始化。
 5. 课程复习标签改筛选时丢失课程列表返回上下文 → 更新查询参数时保留 `location.state`。
+
+第 1 轮发现与处理：
+
+1. 课程/学期表单保存进行中仍可编辑，成功后跳转会丢弃新输入 → 保存期间以 `fieldset disabled` 锁定字段。（时序相关，未加自动化用例。）
+2. 表单页外层在后台重新请求失败时仍会卸载表单 → 学期、课程、个人资料、偏好表单在有缓存数据时保持挂载；确认删除（404/410）仍显示删除页。
+3. 首页待办只显示前 6 条且没有入口查看其余 → 增加“显示全部 N 项/收起”按钮（`aria-expanded`、`aria-controls`），新增浏览器用例。
+4. 编辑课程的入口、保存和取消丢失课程列表返回上下文 → 编辑链接、取消链接和保存后跳转都带上原 `location.state`，新增浏览器用例。
 
 后续轮次结果见下方补记。

@@ -51,8 +51,9 @@ function NotYet({ title, pr, text }: { title: string; pr: string; text: string }
 
 function Profile() {
   const me = useMe();
-  if (me.isError) return <QueryError error={me.error} retry={() => void me.refetch()} />;
   if (me.isPending) return <Loading label="正在读取个人资料…" />;
+  // Cached data survives a failed refetch so the mounted form keeps its draft.
+  if (!me.data) return <QueryError error={me.error} retry={() => void me.refetch()} />;
   return <ProfileForm key={me.data.id} user={me.data} />;
 }
 function ProfileForm({ user }: { user: S['User'] }) {
@@ -131,7 +132,7 @@ function Appearance({ theme, setTheme, effects, setEffects }: { theme: Theme; se
         <label className={styles.choice} key={item.value}><input type="radio" name="theme" value={item.value} checked={theme === item.value} onChange={() => setTheme(item.value)} /><span><strong>{item.title}</strong><br /><small className={styles.muted}>{item.desc}</small></span></label>)}</div></section>
     <section className={styles.panel}><h2>视觉效果</h2><p className={`${styles.small} ${styles.muted}`}>减少透明、模糊与动画效果，同时保留所有功能。</p>
       <label className={styles.choice}><input type="checkbox" checked={effects === 'reduced'} onChange={event => setEffects(event.target.checked ? 'reduced' : 'normal')} /> 低特效模式</label></section>
-    {preferences.isError ? <QueryError error={preferences.error} /> : preferences.isPending ? <Loading label="正在读取阅读偏好…" /> : <ReadingForm preferences={preferences.data} />}
+    {preferences.data ? <ReadingForm preferences={preferences.data} /> : preferences.isPending ? <Loading label="正在读取阅读偏好…" /> : <QueryError error={preferences.error} />}
   </>;
 }
 function ReadingForm({ preferences }: { preferences: S['Preferences'] }) {
@@ -176,8 +177,8 @@ function PreferenceConflict({ onKeep, onDiscard }: { onKeep: () => void; onDisca
 /** CF-15: allowed preferences only — no platform key, provider URL, model or BYOK fields. */
 function AiPreferences() {
   const preferences = usePreferences();
-  if (preferences.isError) return <QueryError error={preferences.error} retry={() => void preferences.refetch()} />;
   if (preferences.isPending) return <Loading label="正在读取 AI 偏好…" />;
+  if (!preferences.data) return <QueryError error={preferences.error} retry={() => void preferences.refetch()} />;
   return <AiForm preferences={preferences.data} />;
 }
 function AiForm({ preferences }: { preferences: S['Preferences'] }) {

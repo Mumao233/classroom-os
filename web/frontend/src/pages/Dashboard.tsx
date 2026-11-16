@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { IconArrowRight, IconBolt, IconBook2, IconCalendar, IconChevronRight, IconFileText, IconListCheck, IconMicrophone, IconTimeline } from '@tabler/icons-react';
 import { Link } from 'react-router';
 import { activityItems, chooseContinueEntry, deriveTodos, EXPIRY_WARNING_MS, formatDate, formatDateTime, liveSessions, recentSessions, type ContinueEntry } from '../domain/dashboard';
@@ -17,8 +17,12 @@ const todoLabel = { conflict: '冲突', failed: '失败', unknown: '待核对', 
  * 继续学习 → 快速开始 → 最近课程 → 待处理 → 学习动态. Every value comes from a server record or
  * the account runtime; nothing is invented to fill space (CF-09).
  */
+/** Todos shown before the explicit “show all” control; every loaded todo stays reachable. */
+const TODO_PREVIEW = 6;
+
 export function Dashboard() {
   const app = useAppData();
+  const [showAllTodos, setShowAllTodos] = useState(false);
   const me = useMe();
   const semesters = useSemesters();
   const active = useCourses({});
@@ -84,9 +88,10 @@ export function Dashboard() {
           <div className={styles.sectionHead}><h2 id="dash-todo"><IconListCheck size={18} aria-hidden="true" /> 待处理</h2></div>
           {questions.error && <p className={`${styles.small} ${styles.warning}`}>部分课堂的疑问暂时无法读取，待办可能不完整。</p>}
           {todos.length === 0 ? <Empty title="没有需要处理的事项" description="未同步、冲突、失败、未懂和临近到期的原音会在这里出现。" /> :
-            <ul className={styles.list} data-testid="todo-list">{todos.slice(0, 6).map(todo => <li key={todo.id} className={styles.listItem} data-kind={todo.kind}>
+            <ul className={styles.list} data-testid="todo-list" id="todo-list">{(showAllTodos ? todos : todos.slice(0, TODO_PREVIEW)).map(todo => <li key={todo.id} className={styles.listItem} data-kind={todo.kind}>
               <Badge tone={todo.kind === 'not_understood' || todo.kind === 'expiring' ? 'info' : todo.kind === 'failed' ? 'danger' : 'warning'}>{todoLabel[todo.kind]}</Badge>
               <div><strong>{todo.title}</strong><p>{todo.detail}</p></div><Link to={todo.to} aria-label={`定位：${todo.title}，${todoLabel[todo.kind]}`}>定位</Link></li>)}</ul>}
+          {todos.length > TODO_PREVIEW && <button type="button" className={styles.buttonGhost} aria-expanded={showAllTodos} aria-controls="todo-list" onClick={() => setShowAllTodos(value => !value)}>{showAllTodos ? '收起' : `显示全部 ${todos.length} 项`}</button>}
           {todos.some(todo => todo.kind === 'expiring') && <p className={`${styles.small} ${styles.muted}`}>“临近到期”指 {EXPIRY_WARNING_MS / 3600000} 小时内将自动删除的原音（产品参数）。</p>}
         </section>
         <section className={styles.panel} aria-labelledby="dash-activity" data-module="activity">
