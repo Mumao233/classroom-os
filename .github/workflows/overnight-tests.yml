@@ -99,8 +99,6 @@ jobs:
           python -m pip check
           python -m pip freeze > outputs/overnight/web-pip-freeze.txt
       - name: Record the exact checkout identity
-        # Cache integration includes a real TLS browser test in the backend suite.
-        # Its locked browser dependencies are installed before the network guard runs.
         shell: bash
         run: |
           python - <<'PY'
@@ -125,7 +123,7 @@ jobs:
         run: |
           export PLAYWRIGHT_BROWSERS_PATH="$GITHUB_WORKSPACE/work/overnight/ms-playwright"
           export npm_config_cache="$GITHUB_WORKSPACE/work/overnight/cache/npm"
-          npm ci --prefix web/frontend --ignore-scripts
+          npx --yes pnpm@10.34.9 --dir web/frontend install --frozen-lockfile --ignore-scripts --store-dir "$GITHUB_WORKSPACE/work/overnight/cache/pnpm"
           node web/frontend/node_modules/@playwright/test/cli.js install --with-deps chromium
           printf '%s\n' "PLAYWRIGHT_BROWSERS_PATH=$PLAYWRIGHT_BROWSERS_PATH" "PR05A_DEPENDENCY_ROOT=$GITHUB_WORKSPACE" "PR05A_REVIEW_OUTPUT=$GITHUB_WORKSPACE/outputs/overnight" >> "$GITHUB_ENV"
       - name: Validate the frozen contracts and complete dependency DAG
