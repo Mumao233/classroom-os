@@ -91,7 +91,7 @@ test('mock Vault results shown on the page track writes, locking, failure and ac
   await page.getByRole('button', { name: '模拟写入成功' }).click();
   await expect(panel.getByText('模拟本地保存成功，等待联网核对。')).toBeVisible();
   await page.getByRole('button', { name: '切换模拟账号 A' }).click();
-  await expect(page.getByText('组合数学（模拟账号 B）')).toBeVisible();
+  await expect(page.getByRole('heading', { name: '组合数学（模拟账号 B）', exact: true })).toBeVisible();
   await page.getByLabel('模拟场景').selectOption('05');
   await expect(page.getByText('模拟 Vault 记录：无')).toBeVisible();
   await page.getByRole('button', { name: '撤销模拟会话' }).click();

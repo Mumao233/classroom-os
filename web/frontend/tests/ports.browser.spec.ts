@@ -19,7 +19,7 @@ test('the page commands and synthetic events use the runtime capture, upload and
   await page.getByRole('region', { name: '模拟课堂状态' }).getByRole('button', { name: '停止' }).click();
   await expect(result).toHaveAttribute('data-port-capture', 'ended');
   await page.getByRole('button', { name: '切换模拟账号 A' }).click();
-  await expect(page.getByText('组合数学（模拟账号 B）')).toBeVisible();
+  await expect(page.getByRole('heading', { name: '组合数学（模拟账号 B）', exact: true })).toBeVisible();
   await expect(result).toHaveAttribute('data-port-capture', 'idle');
   // Account B owns a newly staged synthetic chunk, not A's durable receipt.
   await expect(result).toHaveAttribute('data-port-upload-pending', 'true');
