@@ -25,7 +25,7 @@ operation_receipts = sa.Table("operation_receipts", metadata, *_base(owner=True)
     sa.CheckConstraint("request_hash ~ '^[0-9a-f]{64}$'", name="hash"),
     sa.CheckConstraint("char_length(operation) BETWEEN 1 AND 100", name="operation"),
     sa.CheckConstraint("response_status BETWEEN 100 AND 599", name="response_status"),
-    sa.CheckConstraint("resource_type IN ('task','semester','course','class_session','course_material_version','media_asset','media_upload','generation_plan','question')",
+    sa.CheckConstraint("resource_type IN ('task','semester','course','class_session','course_material_version','media_asset','media_upload','generation_plan','question','review_document','review_revision','review_conflict')",
                        name="resource_type"),
     sa.CheckConstraint("jsonb_typeof(response_body) = 'object' AND pg_column_size(response_body) <= 4096",
                        name="bounded_response"),
@@ -69,11 +69,13 @@ tasks = sa.Table("tasks", metadata, *_base(owner=True),
     sa.CheckConstraint("revision >= 1 AND lease_token >= 0", name="counters"),
     sa.CheckConstraint("(schema_version='1' AND plan_id IS NULL) OR "
                        "(schema_version='pr07a-1' AND plan_id IS NOT NULL "
-                       "AND class_session_id IS NOT NULL AND kind='ai_question')",
+                       "AND class_session_id IS NOT NULL AND kind='ai_question') OR "
+                       "(schema_version IN ('pr07b-1','pr07b-batch-1') AND plan_id IS NOT NULL "
+                       "AND class_session_id IS NOT NULL AND kind='review_summary')",
                        name="qa_plan"),
     sa.CheckConstraint("jsonb_typeof(input_ref) = 'object' AND pg_column_size(input_ref) <= 16384",
                        name="bounded_input"),
-    sa.CheckConstraint("schema_version IN ('1','pr07a-1')", name="schema_version"),
+    sa.CheckConstraint("schema_version IN ('1','pr07a-1','pr07b-1','pr07b-batch-1')", name="schema_version"),
     sa.CheckConstraint("leased_by IS NULL OR char_length(leased_by) BETWEEN 1 AND 100", name="worker"),
     sa.CheckConstraint("error_code IS NULL OR char_length(error_code) <= 64", name="error_code"),
     sa.CheckConstraint("(leased_by IS NULL) = (lease_expires_at IS NULL)", name="lease_pair"),

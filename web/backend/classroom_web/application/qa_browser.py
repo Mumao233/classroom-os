@@ -20,6 +20,12 @@ class QaBrowser:
         self.config = deepcopy(config)
         self.billing = billing
 
+    def repository(self, tx, operation, body, params):
+        return PgQaRepository(tx), self.config
+
+    def billing_for(self, repository):
+        return self.billing
+
     def dispatch(self, operation, ctx, body, key, params, *, billing_fallback=None):
         """No caller can supply an owner or select an execution provider."""
         try:
@@ -32,17 +38,19 @@ class QaBrowser:
             principal = self.auth.principal(ctx)
             operation_key = UUID(key) if key else None
             synchronize = None
+            synchronization_ids = []
             fallback = False
             with self.database.authorized_transaction(principal, activity=True) as tx:
-                repository = PgQaRepository(tx)
+                repository, config = self.repository(tx, operation, body, params)
+                lifecycle = self.billing_for(repository)
                 if operation == 'prepareGeneration':
                     value = repository.prepare(UUID(params['class_session_id']), body,
-                                               operation_key, self.config)
+                                               operation_key, config)
                 elif operation == 'getGenerationPlan':
                     value = repository.plan(UUID(params['plan_id']))
                 elif operation == 'executeGeneration':
                     task = repository.execute(UUID(params['plan_id']), body,
-                                              operation_key, self.config)
+                                              operation_key, config)
                     value = repository.task_view(task.id)
                 elif operation == 'getSourceSnapshot':
                     value = repository.snapshot(UUID(params['snapshot_id']))
@@ -57,20 +65,22 @@ class QaBrowser:
                 elif operation == 'cancelTask':
                     task_id = UUID(params['task_id'])
                     task = tx.tasks.get(task_id)
-                    if task.schema_version != 'pr07a-1' and billing_fallback is not None:
+                    if task.schema_version not in ('pr07a-1', 'pr07b-1', 'pr07b-batch-1') and billing_fallback is not None:
                         fallback = True
                         value = None
                     else:
                         if not self.config.get('enabled', False):
                             raise AuthRejected('SERVICE_DISABLED', 503)
                         repository.task_view(task_id)
-                        tx.tasks.cancel(task_id, operation_key)
+                        synchronization_ids = repository.synchronization_ids(task_id)
+                        repository.cancel(task_id, operation_key)
                         synchronize = task_id
                         value = repository.task_view(task_id)
                 elif operation == 'reconcileTask':
                     task_id = UUID(params['task_id'])
                     repository.task_view(task_id)
-                    task = tx.tasks.reconcile_result(task_id, operation_key)
+                    synchronization_ids = repository.synchronization_ids(task_id)
+                    task = repository.reconcile(task_id, operation_key)
                     synchronize = task_id
                     value = dict(state=task.state, provider_query_supported=False,
                                  checked_at=tx.connection.scalar(text('SELECT clock_timestamp()')).isoformat(),
@@ -79,8 +89,9 @@ class QaBrowser:
                     raise AuthRejected('SERVICE_DISABLED', 503)
             if fallback:
                 return billing_fallback.cancel(ctx, params['task_id'], key)
-            if synchronize is not None and self.billing is not None:
-                self.billing.synchronize(principal.user_id, synchronize)
+            if synchronize is not None and lifecycle is not None:
+                for identity in synchronization_ids:
+                    lifecycle.synchronize(principal.user_id, identity)
             return AuthReply(value)
         except (NotFound, Gone):
             raise AuthRejected('NOT_FOUND', 404) from None

@@ -93,19 +93,26 @@ class ContextSelection:
     reasons: tuple[str, ...]
 
 
-def messages_for(question: str, entries: tuple[ContextEntry, ...]) -> list[dict]:
+def messages_for(question: str, entries: tuple[ContextEntry, ...], *,
+                 purpose: str = 'ai_question') -> list[dict]:
     """Only server aliases cross the model boundary, never ambient history/tools."""
+    system_prompt = SYSTEM_PROMPT
+    if purpose != 'ai_question':
+        from .review import system_prompt_for
+
+        system_prompt = system_prompt_for(purpose)
     sources = [dict(source_id=entry.alias, kind=entry.source.kind,
                     start_ms=entry.source.start_ms, end_ms=entry.source.end_ms,
                     text=entry.excerpt) for entry in entries]
     content = json.dumps(dict(question=question, sources=sources),
                          ensure_ascii=False, separators=(',', ':'), allow_nan=False)
-    return [dict(role='system', content=SYSTEM_PROMPT), dict(role='user', content=content)]
+    return [dict(role='system', content=system_prompt), dict(role='user', content=content)]
 
 
-def input_token_bound(question: str, entries: tuple[ContextEntry, ...]) -> int:
+def input_token_bound(question: str, entries: tuple[ContextEntry, ...], *,
+                      purpose: str = 'ai_question') -> int:
     """UTF-8 bytes plus message framing conservatively bound byte-level tokens."""
-    encoded = json.dumps(messages_for(question, entries), ensure_ascii=False,
+    encoded = json.dumps(messages_for(question, entries, purpose=purpose), ensure_ascii=False,
                          separators=(',', ':')).encode('utf-8')
     return len(encoded) + 128
 
@@ -153,6 +160,7 @@ class ProviderRequest:
     owner_id: UUID
     question: str = field(repr=False)
     selection: ContextSelection
+    purpose: str = 'ai_question'
     max_output_tokens: int = 1024
     permit: InvocationPermit | None = field(default=None, repr=False)
     cancel_event: threading.Event | None = field(default=None, repr=False)

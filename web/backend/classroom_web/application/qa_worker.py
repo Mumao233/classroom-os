@@ -17,6 +17,10 @@ from .task_worker import TaskWorker
 
 
 class QaWorker(TaskWorker):
+    schema_version = 'pr07a-1'
+    purpose = 'ai_question'
+    repository_type = PgQaRepository
+
     def __init__(self, database, scheduler, provider, *, worker_id,
                  billing=None, enabled=False, lease_seconds=30):
         super().__init__(database, scheduler, provider, worker_id=worker_id,
@@ -27,11 +31,11 @@ class QaWorker(TaskWorker):
 
     def reconcile_saved(self):
         completed = 0
-        for claim in self.scheduler.question_results():
+        for claim in self.scheduler.generation_results(schema_version=self.schema_version):
             try:
                 with self.database.transaction(OwnerContext(claim.owner_id)) as tx:
                     task = tx.tasks.get(claim.id)
-                    if task.schema_version != 'pr07a-1':
+                    if task.schema_version != self.schema_version:
                         continue
                     result = tx.tasks.reconcile_result(task.id, uuid4())
                     completed += int(result.state in ('succeeded', 'failed'))
@@ -44,7 +48,11 @@ class QaWorker(TaskWorker):
 
     def _send_intent(self, tx, task, attempt, claim):
         # This rechecks and locks all frozen sources before the send boundary.
-        values = PgQaRepository(tx).worker_input(task.id)
+        try:
+            values = self.repository_type(tx).worker_input(task.id)
+        except QaRejected:
+            tx.tasks.fail_unsent(task.id, claim.lease_token, self.worker_id, 'SOURCE_UNAVAILABLE')
+            return None
         destination = values['destination']
         if (getattr(self.provider, 'provider', None) != destination['provider']
                 or getattr(self.provider, 'model', None) != destination['model']):
@@ -65,7 +73,7 @@ class QaWorker(TaskWorker):
             self.billing.before_submit(tx, task, attempt, claim, self.worker_id)
         return ProviderRequest(task_id=task.id, attempt_id=attempt.id,
             owner_id=task.owner_id, question=values['question'], selection=values['selection'],
-            max_output_tokens=values['config']['max_output_tokens'])
+            max_output_tokens=values['config']['max_output_tokens'], purpose=self.purpose)
 
     def _unknown(self, owner, claim, attempt):
         with self.database.transaction(owner) as tx:
@@ -77,7 +85,7 @@ class QaWorker(TaskWorker):
         self.recover_expired()
         reconciled = self.reconcile_saved()
         claims = self.scheduler.claim(self.worker_id, self.lease_seconds, 1,
-                                      schema_version='pr07a-1')
+                                      schema_version=self.schema_version)
         if not claims:
             return bool(reconciled)
         claim = claims[0]
@@ -85,7 +93,7 @@ class QaWorker(TaskWorker):
         try:
             with self.database.transaction(owner) as tx:
                 task = tx.tasks.get(claim.id)
-                if task.schema_version != 'pr07a-1':
+                if task.schema_version != self.schema_version:
                     raise UnsafeRetry('question worker requires a question generation plan')
                 attempt = tx.tasks.prepare_attempt(task.id, claim.lease_token, self.worker_id)
             if attempt.raw_output_ref is None:

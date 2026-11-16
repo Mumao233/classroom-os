@@ -133,12 +133,14 @@ class PgTaskRepository:
                 schema_version='1', plan_id=None):
         if kind not in KINDS or type(priority) is not int or not -100 <= priority <= 100:
             raise ValueError('invalid task kind or priority')
-        if schema_version not in ('1', 'pr07a-1'):
+        if schema_version not in ('1', 'pr07a-1', 'pr07b-1', 'pr07b-batch-1'):
             raise ValueError('unsupported task schema version')
         if schema_version == 'pr07a-1' and (kind != 'ai_question' or plan_id is None or class_session_id is None):
             raise ValueError('question tasks require their generation plan')
         if schema_version == '1' and plan_id is not None:
             raise ValueError('legacy tasks cannot reference question plans')
+        if schema_version in ('pr07b-1', 'pr07b-batch-1') and (kind != 'review_summary' or plan_id is None or class_session_id is None):
+            raise ValueError('review tasks require their generation plan')
         reference = input_reference(input_ref)
         request = {'kind': kind, 'input_ref': reference,
             'class_session_id': str(class_session_id) if class_session_id else None,
@@ -215,7 +217,7 @@ class PgTaskRepository:
 
     def fail_unsent(self, task_id, lease_token, worker, error_code):
         """Record a permanent local preflight failure without claiming a send."""
-        if error_code not in ('PROVIDER_CONFIG_CHANGED', 'QA_CONFIGURATION_INVALID'):
+        if error_code not in ('PROVIDER_CONFIG_CHANGED', 'QA_CONFIGURATION_INVALID', 'SOURCE_UNAVAILABLE'):
             raise ValueError('unsupported preflight error')
         task = self._fenced(task_id, lease_token, worker)
         history = self._history(task_id)
@@ -269,12 +271,15 @@ class PgTaskRepository:
 
     def _finish_result(self, task, attempt, validator):
         question = None
-        if task.schema_version == 'pr07a-1':
+        if task.schema_version in ('pr07a-1', 'pr07b-1', 'pr07b-batch-1'):
             from .qa_repository import PgQaRepository
+            from .review_generation import PgReviewGenerationRepository, PgReviewBatchRepository
 
             transaction = SimpleNamespace(connection=self.connection, catalog=self.catalog,
                 tasks=self, events=self.events, receipts=self.receipts)
-            question = PgQaRepository(transaction)
+            repository_type = {'pr07a-1': PgQaRepository, 'pr07b-1': PgReviewGenerationRepository,
+                               'pr07b-batch-1': PgReviewBatchRepository}[task.schema_version]
+            question = repository_type(transaction)
             validator = question.validator(task.id)
         attempt_id = attempt.id
         t = tables['provider_results']
@@ -291,20 +296,40 @@ class PgTaskRepository:
             valid = True
         except (ValueError, TypeError, RecursionError):
             payload, valid = None, False
+        publication_error = None
+        awaiting_batches = False
         if valid and question is not None:
-            question.finish(task, payload)
+            if task.schema_version in ('pr07b-1', 'pr07b-batch-1'):
+                from ..domain.qa import QaRejected
+
+                try:
+                    with self.connection.begin_nested():
+                        publication = question.finish(task, payload, raw_output_ref=row['id'])
+                        awaiting_batches = bool(publication and publication.get('awaiting_batches'))
+                except QaRejected as error:
+                    if error.code not in ('NOT_FOUND', 'SOURCE_UNAVAILABLE', 'CAPACITY_EXCEEDED'):
+                        raise
+                    publication_error = ('CAPACITY_EXCEEDED' if error.code == 'CAPACITY_EXCEEDED'
+                                         else 'RESULT_TARGET_UNAVAILABLE')
+            else:
+                question.finish(task, payload)
         # Completion of any durable result closes every unused plan, including
         # legacy multi-attempt histories without an explicit cancellation.
         self._cancel_unsent(self._history(task.id))
         self.connection.execute(t.update().where(t.c.id == row['id'], t.c.owner_id == self.owner_id)
             .values(validation_status='valid' if valid else 'invalid',
                     validated_payload=payload if valid else sa.null()))
+        completed = valid and publication_error is None
+        error_code = publication_error if valid else 'OUTPUT_INVALID'
         self.connection.execute(tables['task_attempts'].update().where(
             tables['task_attempts'].c.id == attempt_id, tables['task_attempts'].c.owner_id == self.owner_id
-        ).values(state='succeeded' if valid else 'failed', provider_outcome='succeeded',
-                 error_code=None if valid else 'OUTPUT_INVALID', finished_at=sa.func.clock_timestamp()))
-        return self._write(task, state='succeeded' if valid else 'failed',
-            error_code=None if valid else 'OUTPUT_INVALID', completed_at=sa.func.clock_timestamp(),
+        ).values(state='succeeded' if completed else 'failed', provider_outcome='succeeded',
+                 error_code=error_code, finished_at=sa.func.clock_timestamp()))
+        if awaiting_batches:
+            return self._write(task, state='running', error_code='BATCHES_PENDING', completed_at=None,
+                leased_by=None, lease_expires_at=None, lease_token=task.lease_token + 1, may_have_charged=True)
+        return self._write(task, state='succeeded' if completed else 'failed',
+            error_code=error_code, completed_at=sa.func.clock_timestamp(),
             leased_by=None, lease_expires_at=None, lease_token=task.lease_token + 1,
             may_have_charged=True)
 

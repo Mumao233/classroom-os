@@ -31,7 +31,7 @@ class PgTaskScheduler:
             raise ValueError('lease seconds must be 1..3600')
         if type(batch_size) is not int or not 1 <= batch_size <= 100:
             raise ValueError('batch size must be 1..100')
-        if schema_version not in ('1', 'pr07a-1'):
+        if schema_version not in ('1', 'pr07a-1', 'pr07b-1', 'pr07b-batch-1'):
             raise ValueError('unsupported task schema version')
         with self.engine.begin() as connection:
             self._check_identity(connection)
@@ -67,6 +67,25 @@ class PgTaskScheduler:
                 'SELECT * FROM classroom_web_qa_saved_candidates(:batch)'),
                 {'batch': batch_size}).mappings()
             return [Claim(**row) for row in rows]
+
+    def generation_results(self, batch_size=100, *, schema_version='pr07a-1'):
+        if schema_version == 'pr07a-1':
+            return self.question_results(batch_size)
+        if schema_version not in ('pr07b-1', 'pr07b-batch-1') or type(batch_size) is not int or not 1 <= batch_size <= 100:
+            raise ValueError('invalid generation recovery bounds')
+        with self.engine.begin() as connection:
+            self._check_identity(connection)
+            function = ('classroom_web_review_saved_candidates' if schema_version == 'pr07b-1'
+                        else 'classroom_web_review_batch_saved_candidates')
+            rows = connection.execute(text(f'SELECT * FROM {function}(:batch)'),
+                {'batch': batch_size}).mappings()
+            return [Claim(**row) for row in rows]
+
+    def review_pending(self):
+        with self.engine.begin() as connection:
+            self._check_identity(connection)
+            return [Claim(**row) for row in connection.execute(text(
+                'SELECT * FROM classroom_web_review_pending(32)')).mappings()]
 
     def dispose(self):
         self.engine.dispose()

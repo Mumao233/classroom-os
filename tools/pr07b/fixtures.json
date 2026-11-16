@@ -1,0 +1,1804 @@
+{
+  "contract_version": "0.2.0",
+  "candidate": "pr07b-1",
+  "description": "Synthetic positive and negative PR-07b candidate fixtures. Values contain no user records. Runtime ownership, cross-field source membership, transaction and billing behavior are verified by integration tests.",
+  "cases": [
+    {
+      "name": "legacy_qa_task_without_batch_tasks",
+      "schema_file": "candidate-openapi.json",
+      "schema_pointer": "#/components/schemas/Task",
+      "expected_valid": true,
+      "value": {
+        "id": "00000000-0000-4000-8000-000000000001",
+        "revision": 1,
+        "created_at": "2026-11-16T12:00:00Z",
+        "updated_at": "2026-11-16T12:00:00Z",
+        "class_session_id": "00000000-0000-4000-8000-000000000002",
+        "kind": "ai_question",
+        "state": "queued",
+        "attempt_id": null,
+        "parent_task_id": null,
+        "completed_units": 0,
+        "total_units": 1,
+        "error_code": null,
+        "result_id": null,
+        "source_snapshot_id": "00000000-0000-4000-8000-000000000003",
+        "provider_outcome": "not_submitted",
+        "maximum_cost_microyuan": "200000",
+        "settled_cost_microyuan": null,
+        "may_have_charged": false
+      },
+      "reason": "The optional review batch extension preserves existing QA task DTOs."
+    },
+    {
+      "name": "review_parent_pending_batches",
+      "schema_file": "candidate-openapi.json",
+      "schema_pointer": "#/components/schemas/Task",
+      "expected_valid": true,
+      "value": {
+        "id": "00000000-0000-4000-8000-000000000001",
+        "revision": 1,
+        "created_at": "2026-11-16T12:00:00Z",
+        "updated_at": "2026-11-16T12:00:00Z",
+        "class_session_id": "00000000-0000-4000-8000-000000000002",
+        "kind": "review_summary",
+        "state": "running",
+        "attempt_id": "00000000-0000-4000-8000-000000000004",
+        "parent_task_id": null,
+        "completed_units": 1,
+        "total_units": 3,
+        "error_code": "BATCHES_PENDING",
+        "result_id": null,
+        "source_snapshot_id": "00000000-0000-4000-8000-000000000003",
+        "provider_outcome": "succeeded",
+        "maximum_cost_microyuan": "200000",
+        "settled_cost_microyuan": "2000",
+        "may_have_charged": true,
+        "batch_tasks": [
+          {
+            "batch_index": 0,
+            "task_id": "00000000-0000-4000-8000-000000000001",
+            "state": "succeeded",
+            "source_ids": [
+              "S1",
+              "S2"
+            ]
+          },
+          {
+            "batch_index": 1,
+            "task_id": "00000000-0000-4000-8000-000000000005",
+            "state": "queued",
+            "source_ids": [
+              "S3"
+            ]
+          },
+          {
+            "batch_index": 2,
+            "task_id": null,
+            "state": "planned",
+            "source_ids": [
+              "S512"
+            ]
+          }
+        ]
+      },
+      "reason": "A parent exposes completed, queued and frozen planned batch entries."
+    },
+    {
+      "name": "review_parent_unknown_child_charge_possible",
+      "schema_file": "candidate-openapi.json",
+      "schema_pointer": "#/components/schemas/Task",
+      "expected_valid": true,
+      "value": {
+        "id": "00000000-0000-4000-8000-000000000001",
+        "revision": 1,
+        "created_at": "2026-11-16T12:00:00Z",
+        "updated_at": "2026-11-16T12:00:00Z",
+        "class_session_id": "00000000-0000-4000-8000-000000000002",
+        "kind": "review_summary",
+        "state": "unknown",
+        "attempt_id": "00000000-0000-4000-8000-000000000004",
+        "parent_task_id": null,
+        "completed_units": 1,
+        "total_units": 3,
+        "error_code": "BATCHES_PENDING",
+        "result_id": null,
+        "source_snapshot_id": "00000000-0000-4000-8000-000000000003",
+        "provider_outcome": "unknown",
+        "maximum_cost_microyuan": "200000",
+        "settled_cost_microyuan": null,
+        "may_have_charged": true,
+        "batch_tasks": [
+          {
+            "batch_index": 0,
+            "task_id": "00000000-0000-4000-8000-000000000001",
+            "state": "succeeded",
+            "source_ids": [
+              "S1",
+              "S2"
+            ]
+          },
+          {
+            "batch_index": 1,
+            "task_id": "00000000-0000-4000-8000-000000000005",
+            "state": "unknown",
+            "source_ids": [
+              "S3"
+            ]
+          },
+          {
+            "batch_index": 2,
+            "task_id": null,
+            "state": "planned",
+            "source_ids": [
+              "S512"
+            ]
+          }
+        ]
+      },
+      "reason": "Unknown parent state retains the possible-charge indication."
+    },
+    {
+      "name": "unknown_parent_cannot_deny_possible_charge",
+      "schema_file": "candidate-openapi.json",
+      "schema_pointer": "#/components/schemas/Task",
+      "expected_valid": false,
+      "value": {
+        "id": "00000000-0000-4000-8000-000000000001",
+        "revision": 1,
+        "created_at": "2026-11-16T12:00:00Z",
+        "updated_at": "2026-11-16T12:00:00Z",
+        "class_session_id": "00000000-0000-4000-8000-000000000002",
+        "kind": "review_summary",
+        "state": "unknown",
+        "attempt_id": "00000000-0000-4000-8000-000000000004",
+        "parent_task_id": null,
+        "completed_units": 1,
+        "total_units": 3,
+        "error_code": "BATCHES_PENDING",
+        "result_id": null,
+        "source_snapshot_id": "00000000-0000-4000-8000-000000000003",
+        "provider_outcome": "unknown",
+        "maximum_cost_microyuan": "200000",
+        "settled_cost_microyuan": null,
+        "may_have_charged": false,
+        "batch_tasks": [
+          {
+            "batch_index": 0,
+            "task_id": "00000000-0000-4000-8000-000000000001",
+            "state": "succeeded",
+            "source_ids": [
+              "S1",
+              "S2"
+            ]
+          },
+          {
+            "batch_index": 1,
+            "task_id": "00000000-0000-4000-8000-000000000005",
+            "state": "unknown",
+            "source_ids": [
+              "S3"
+            ]
+          },
+          {
+            "batch_index": 2,
+            "task_id": null,
+            "state": "planned",
+            "source_ids": [
+              "S512"
+            ]
+          }
+        ]
+      },
+      "reason": "The existing unknown-state cost invariant remains enforced."
+    },
+    {
+      "name": "batch_index_exceeds_31",
+      "schema_file": "candidate-openapi.json",
+      "schema_pointer": "#/components/schemas/Task",
+      "expected_valid": false,
+      "value": {
+        "id": "00000000-0000-4000-8000-000000000001",
+        "revision": 1,
+        "created_at": "2026-11-16T12:00:00Z",
+        "updated_at": "2026-11-16T12:00:00Z",
+        "class_session_id": "00000000-0000-4000-8000-000000000002",
+        "kind": "review_summary",
+        "state": "running",
+        "attempt_id": "00000000-0000-4000-8000-000000000004",
+        "parent_task_id": null,
+        "completed_units": 1,
+        "total_units": 3,
+        "error_code": "BATCHES_PENDING",
+        "result_id": null,
+        "source_snapshot_id": "00000000-0000-4000-8000-000000000003",
+        "provider_outcome": "succeeded",
+        "maximum_cost_microyuan": "200000",
+        "settled_cost_microyuan": "2000",
+        "may_have_charged": true,
+        "batch_tasks": [
+          {
+            "batch_index": 0,
+            "task_id": "00000000-0000-4000-8000-000000000001",
+            "state": "succeeded",
+            "source_ids": [
+              "S1",
+              "S2"
+            ]
+          },
+          {
+            "batch_index": 1,
+            "task_id": "00000000-0000-4000-8000-000000000005",
+            "state": "queued",
+            "source_ids": [
+              "S3"
+            ]
+          },
+          {
+            "batch_index": 32,
+            "task_id": null,
+            "state": "planned",
+            "source_ids": [
+              "S512"
+            ]
+          }
+        ]
+      },
+      "reason": "At most 32 indexed batches fit the candidate contract."
+    },
+    {
+      "name": "batch_index_cannot_be_negative",
+      "schema_file": "candidate-openapi.json",
+      "schema_pointer": "#/components/schemas/Task",
+      "expected_valid": false,
+      "value": {
+        "id": "00000000-0000-4000-8000-000000000001",
+        "revision": 1,
+        "created_at": "2026-11-16T12:00:00Z",
+        "updated_at": "2026-11-16T12:00:00Z",
+        "class_session_id": "00000000-0000-4000-8000-000000000002",
+        "kind": "review_summary",
+        "state": "running",
+        "attempt_id": "00000000-0000-4000-8000-000000000004",
+        "parent_task_id": null,
+        "completed_units": 1,
+        "total_units": 3,
+        "error_code": "BATCHES_PENDING",
+        "result_id": null,
+        "source_snapshot_id": "00000000-0000-4000-8000-000000000003",
+        "provider_outcome": "succeeded",
+        "maximum_cost_microyuan": "200000",
+        "settled_cost_microyuan": "2000",
+        "may_have_charged": true,
+        "batch_tasks": [
+          {
+            "batch_index": -1,
+            "task_id": "00000000-0000-4000-8000-000000000001",
+            "state": "succeeded",
+            "source_ids": [
+              "S1",
+              "S2"
+            ]
+          },
+          {
+            "batch_index": 1,
+            "task_id": "00000000-0000-4000-8000-000000000005",
+            "state": "queued",
+            "source_ids": [
+              "S3"
+            ]
+          },
+          {
+            "batch_index": 2,
+            "task_id": null,
+            "state": "planned",
+            "source_ids": [
+              "S512"
+            ]
+          }
+        ]
+      },
+      "reason": "Batch indexes start at zero."
+    },
+    {
+      "name": "batch_state_rejects_arbitrary_value",
+      "schema_file": "candidate-openapi.json",
+      "schema_pointer": "#/components/schemas/Task",
+      "expected_valid": false,
+      "value": {
+        "id": "00000000-0000-4000-8000-000000000001",
+        "revision": 1,
+        "created_at": "2026-11-16T12:00:00Z",
+        "updated_at": "2026-11-16T12:00:00Z",
+        "class_session_id": "00000000-0000-4000-8000-000000000002",
+        "kind": "review_summary",
+        "state": "running",
+        "attempt_id": "00000000-0000-4000-8000-000000000004",
+        "parent_task_id": null,
+        "completed_units": 1,
+        "total_units": 3,
+        "error_code": "BATCHES_PENDING",
+        "result_id": null,
+        "source_snapshot_id": "00000000-0000-4000-8000-000000000003",
+        "provider_outcome": "succeeded",
+        "maximum_cost_microyuan": "200000",
+        "settled_cost_microyuan": "2000",
+        "may_have_charged": true,
+        "batch_tasks": [
+          {
+            "batch_index": 0,
+            "task_id": "00000000-0000-4000-8000-000000000001",
+            "state": "succeeded",
+            "source_ids": [
+              "S1",
+              "S2"
+            ]
+          },
+          {
+            "batch_index": 1,
+            "task_id": "00000000-0000-4000-8000-000000000005",
+            "state": "retry_now",
+            "source_ids": [
+              "S3"
+            ]
+          },
+          {
+            "batch_index": 2,
+            "task_id": null,
+            "state": "planned",
+            "source_ids": [
+              "S512"
+            ]
+          }
+        ]
+      },
+      "reason": "Batch state is an explicit enum."
+    },
+    {
+      "name": "batch_task_id_requires_uuid",
+      "schema_file": "candidate-openapi.json",
+      "schema_pointer": "#/components/schemas/Task",
+      "expected_valid": false,
+      "value": {
+        "id": "00000000-0000-4000-8000-000000000001",
+        "revision": 1,
+        "created_at": "2026-11-16T12:00:00Z",
+        "updated_at": "2026-11-16T12:00:00Z",
+        "class_session_id": "00000000-0000-4000-8000-000000000002",
+        "kind": "review_summary",
+        "state": "running",
+        "attempt_id": "00000000-0000-4000-8000-000000000004",
+        "parent_task_id": null,
+        "completed_units": 1,
+        "total_units": 3,
+        "error_code": "BATCHES_PENDING",
+        "result_id": null,
+        "source_snapshot_id": "00000000-0000-4000-8000-000000000003",
+        "provider_outcome": "succeeded",
+        "maximum_cost_microyuan": "200000",
+        "settled_cost_microyuan": "2000",
+        "may_have_charged": true,
+        "batch_tasks": [
+          {
+            "batch_index": 0,
+            "task_id": "00000000-0000-4000-8000-000000000001",
+            "state": "succeeded",
+            "source_ids": [
+              "S1",
+              "S2"
+            ]
+          },
+          {
+            "batch_index": 1,
+            "task_id": "another-account-task",
+            "state": "queued",
+            "source_ids": [
+              "S3"
+            ]
+          },
+          {
+            "batch_index": 2,
+            "task_id": null,
+            "state": "planned",
+            "source_ids": [
+              "S512"
+            ]
+          }
+        ]
+      },
+      "reason": "Materialized batch task IDs use UUID format."
+    },
+    {
+      "name": "batch_cannot_inject_owner",
+      "schema_file": "candidate-openapi.json",
+      "schema_pointer": "#/components/schemas/Task",
+      "expected_valid": false,
+      "value": {
+        "id": "00000000-0000-4000-8000-000000000001",
+        "revision": 1,
+        "created_at": "2026-11-16T12:00:00Z",
+        "updated_at": "2026-11-16T12:00:00Z",
+        "class_session_id": "00000000-0000-4000-8000-000000000002",
+        "kind": "review_summary",
+        "state": "running",
+        "attempt_id": "00000000-0000-4000-8000-000000000004",
+        "parent_task_id": null,
+        "completed_units": 1,
+        "total_units": 3,
+        "error_code": "BATCHES_PENDING",
+        "result_id": null,
+        "source_snapshot_id": "00000000-0000-4000-8000-000000000003",
+        "provider_outcome": "succeeded",
+        "maximum_cost_microyuan": "200000",
+        "settled_cost_microyuan": "2000",
+        "may_have_charged": true,
+        "batch_tasks": [
+          {
+            "batch_index": 0,
+            "task_id": "00000000-0000-4000-8000-000000000001",
+            "state": "succeeded",
+            "source_ids": [
+              "S1",
+              "S2"
+            ]
+          },
+          {
+            "batch_index": 1,
+            "task_id": "00000000-0000-4000-8000-000000000005",
+            "state": "queued",
+            "source_ids": [
+              "S3"
+            ],
+            "owner_id": "00000000-0000-4000-8000-000000000009"
+          },
+          {
+            "batch_index": 2,
+            "task_id": null,
+            "state": "planned",
+            "source_ids": [
+              "S512"
+            ]
+          }
+        ]
+      },
+      "reason": "Batch entries expose only their declared fields."
+    },
+    {
+      "name": "batch_rejects_duplicate_alias",
+      "schema_file": "candidate-openapi.json",
+      "schema_pointer": "#/components/schemas/Task",
+      "expected_valid": false,
+      "value": {
+        "id": "00000000-0000-4000-8000-000000000001",
+        "revision": 1,
+        "created_at": "2026-11-16T12:00:00Z",
+        "updated_at": "2026-11-16T12:00:00Z",
+        "class_session_id": "00000000-0000-4000-8000-000000000002",
+        "kind": "review_summary",
+        "state": "running",
+        "attempt_id": "00000000-0000-4000-8000-000000000004",
+        "parent_task_id": null,
+        "completed_units": 1,
+        "total_units": 3,
+        "error_code": "BATCHES_PENDING",
+        "result_id": null,
+        "source_snapshot_id": "00000000-0000-4000-8000-000000000003",
+        "provider_outcome": "succeeded",
+        "maximum_cost_microyuan": "200000",
+        "settled_cost_microyuan": "2000",
+        "may_have_charged": true,
+        "batch_tasks": [
+          {
+            "batch_index": 0,
+            "task_id": "00000000-0000-4000-8000-000000000001",
+            "state": "succeeded",
+            "source_ids": [
+              "S1",
+              "S2"
+            ]
+          },
+          {
+            "batch_index": 1,
+            "task_id": "00000000-0000-4000-8000-000000000005",
+            "state": "queued",
+            "source_ids": [
+              "S3",
+              "S3"
+            ]
+          },
+          {
+            "batch_index": 2,
+            "task_id": null,
+            "state": "planned",
+            "source_ids": [
+              "S512"
+            ]
+          }
+        ]
+      },
+      "reason": "A batch cites each frozen alias once."
+    },
+    {
+      "name": "batch_rejects_alias_beyond_snapshot_limit",
+      "schema_file": "candidate-openapi.json",
+      "schema_pointer": "#/components/schemas/Task",
+      "expected_valid": false,
+      "value": {
+        "id": "00000000-0000-4000-8000-000000000001",
+        "revision": 1,
+        "created_at": "2026-11-16T12:00:00Z",
+        "updated_at": "2026-11-16T12:00:00Z",
+        "class_session_id": "00000000-0000-4000-8000-000000000002",
+        "kind": "review_summary",
+        "state": "running",
+        "attempt_id": "00000000-0000-4000-8000-000000000004",
+        "parent_task_id": null,
+        "completed_units": 1,
+        "total_units": 3,
+        "error_code": "BATCHES_PENDING",
+        "result_id": null,
+        "source_snapshot_id": "00000000-0000-4000-8000-000000000003",
+        "provider_outcome": "succeeded",
+        "maximum_cost_microyuan": "200000",
+        "settled_cost_microyuan": "2000",
+        "may_have_charged": true,
+        "batch_tasks": [
+          {
+            "batch_index": 0,
+            "task_id": "00000000-0000-4000-8000-000000000001",
+            "state": "succeeded",
+            "source_ids": [
+              "S1",
+              "S2"
+            ]
+          },
+          {
+            "batch_index": 1,
+            "task_id": "00000000-0000-4000-8000-000000000005",
+            "state": "queued",
+            "source_ids": [
+              "S3"
+            ]
+          },
+          {
+            "batch_index": 2,
+            "task_id": null,
+            "state": "planned",
+            "source_ids": [
+              "S513"
+            ]
+          }
+        ]
+      },
+      "reason": "The global snapshot has at most 512 sources."
+    },
+    {
+      "name": "batch_requires_all_progress_fields",
+      "schema_file": "candidate-openapi.json",
+      "schema_pointer": "#/components/schemas/Task",
+      "expected_valid": false,
+      "value": {
+        "id": "00000000-0000-4000-8000-000000000001",
+        "revision": 1,
+        "created_at": "2026-11-16T12:00:00Z",
+        "updated_at": "2026-11-16T12:00:00Z",
+        "class_session_id": "00000000-0000-4000-8000-000000000002",
+        "kind": "review_summary",
+        "state": "running",
+        "attempt_id": "00000000-0000-4000-8000-000000000004",
+        "parent_task_id": null,
+        "completed_units": 1,
+        "total_units": 3,
+        "error_code": "BATCHES_PENDING",
+        "result_id": null,
+        "source_snapshot_id": "00000000-0000-4000-8000-000000000003",
+        "provider_outcome": "succeeded",
+        "maximum_cost_microyuan": "200000",
+        "settled_cost_microyuan": "2000",
+        "may_have_charged": true,
+        "batch_tasks": [
+          {
+            "batch_index": 0,
+            "task_id": "00000000-0000-4000-8000-000000000001",
+            "state": "succeeded",
+            "source_ids": [
+              "S1",
+              "S2"
+            ]
+          },
+          {
+            "batch_index": 1,
+            "state": "queued",
+            "source_ids": [
+              "S3"
+            ]
+          },
+          {
+            "batch_index": 2,
+            "task_id": null,
+            "state": "planned",
+            "source_ids": [
+              "S512"
+            ]
+          }
+        ]
+      },
+      "reason": "Planned and materialized entries both declare their task ID or null."
+    },
+    {
+      "name": "new_summary_plan",
+      "schema_file": "candidate-openapi.json",
+      "schema_pointer": "#/components/schemas/GenerationPlanRequest",
+      "expected_valid": true,
+      "value": {
+        "kind": "review_summary",
+        "scope": "all",
+        "seen_sources": [],
+        "include_images": false,
+        "accept_partial_scope": true,
+        "granularity": "standard",
+        "card_types": [
+          "concept",
+          "derivation",
+          "example",
+          "pitfall"
+        ],
+        "english_answer": false,
+        "anchor_ms": 120000
+      },
+      "reason": "All four supported card types can be requested."
+    },
+    {
+      "name": "regeneration_with_document_and_cas",
+      "schema_file": "candidate-openapi.json",
+      "schema_pointer": "#/components/schemas/GenerationPlanRequest",
+      "expected_valid": true,
+      "value": {
+        "kind": "review_summary",
+        "scope": "all",
+        "seen_sources": [],
+        "include_images": false,
+        "accept_partial_scope": true,
+        "granularity": "standard",
+        "card_types": [
+          "concept",
+          "derivation",
+          "example",
+          "pitfall"
+        ],
+        "english_answer": false,
+        "anchor_ms": 120000,
+        "target_document_id": "00000000-0000-4000-8000-000000000006",
+        "base_revision": 3
+      },
+      "reason": "Regeneration binds a target document to its current revision."
+    },
+    {
+      "name": "regeneration_requires_base_revision",
+      "schema_file": "candidate-openapi.json",
+      "schema_pointer": "#/components/schemas/GenerationPlanRequest",
+      "expected_valid": false,
+      "value": {
+        "kind": "review_summary",
+        "scope": "all",
+        "seen_sources": [],
+        "include_images": false,
+        "accept_partial_scope": true,
+        "granularity": "standard",
+        "card_types": [
+          "concept",
+          "derivation",
+          "example",
+          "pitfall"
+        ],
+        "english_answer": false,
+        "anchor_ms": 120000,
+        "target_document_id": "00000000-0000-4000-8000-000000000006"
+      },
+      "reason": "The target and CAS revision must appear together."
+    },
+    {
+      "name": "regeneration_requires_target_document",
+      "schema_file": "candidate-openapi.json",
+      "schema_pointer": "#/components/schemas/GenerationPlanRequest",
+      "expected_valid": false,
+      "value": {
+        "kind": "review_summary",
+        "scope": "all",
+        "seen_sources": [],
+        "include_images": false,
+        "accept_partial_scope": true,
+        "granularity": "standard",
+        "card_types": [
+          "concept",
+          "derivation",
+          "example",
+          "pitfall"
+        ],
+        "english_answer": false,
+        "anchor_ms": 120000,
+        "base_revision": 3
+      },
+      "reason": "The target and CAS revision must appear together."
+    },
+    {
+      "name": "regeneration_rejects_revision_zero",
+      "schema_file": "candidate-openapi.json",
+      "schema_pointer": "#/components/schemas/GenerationPlanRequest",
+      "expected_valid": false,
+      "value": {
+        "kind": "review_summary",
+        "scope": "all",
+        "seen_sources": [],
+        "include_images": false,
+        "accept_partial_scope": true,
+        "granularity": "standard",
+        "card_types": [
+          "concept",
+          "derivation",
+          "example",
+          "pitfall"
+        ],
+        "english_answer": false,
+        "anchor_ms": 120000,
+        "target_document_id": "00000000-0000-4000-8000-000000000006",
+        "base_revision": 0
+      },
+      "reason": "Document revisions are positive integers."
+    },
+    {
+      "name": "regeneration_rejects_invalid_target_uuid",
+      "schema_file": "candidate-openapi.json",
+      "schema_pointer": "#/components/schemas/GenerationPlanRequest",
+      "expected_valid": false,
+      "value": {
+        "kind": "review_summary",
+        "scope": "all",
+        "seen_sources": [],
+        "include_images": false,
+        "accept_partial_scope": true,
+        "granularity": "standard",
+        "card_types": [
+          "concept",
+          "derivation",
+          "example",
+          "pitfall"
+        ],
+        "english_answer": false,
+        "anchor_ms": 120000,
+        "target_document_id": "summary-1",
+        "base_revision": 3
+      },
+      "reason": "The regeneration target is a UUID."
+    },
+    {
+      "name": "review_rejects_duplicate_card_types",
+      "schema_file": "candidate-openapi.json",
+      "schema_pointer": "#/components/schemas/GenerationPlanRequest",
+      "expected_valid": false,
+      "value": {
+        "kind": "review_summary",
+        "scope": "all",
+        "seen_sources": [],
+        "include_images": false,
+        "accept_partial_scope": true,
+        "granularity": "standard",
+        "card_types": [
+          "concept",
+          "concept"
+        ],
+        "english_answer": false,
+        "anchor_ms": 120000
+      },
+      "reason": "Each requested card type is unique for review generation."
+    },
+    {
+      "name": "review_rejects_unknown_granularity",
+      "schema_file": "candidate-openapi.json",
+      "schema_pointer": "#/components/schemas/GenerationPlanRequest",
+      "expected_valid": false,
+      "value": {
+        "kind": "review_summary",
+        "scope": "all",
+        "seen_sources": [],
+        "include_images": false,
+        "accept_partial_scope": true,
+        "granularity": "unbounded",
+        "card_types": [
+          "concept",
+          "derivation",
+          "example",
+          "pitfall"
+        ],
+        "english_answer": false,
+        "anchor_ms": 120000
+      },
+      "reason": "Granularity is concise, standard or detailed."
+    },
+    {
+      "name": "review_rejects_owner_override",
+      "schema_file": "candidate-openapi.json",
+      "schema_pointer": "#/components/schemas/GenerationPlanRequest",
+      "expected_valid": false,
+      "value": {
+        "kind": "review_summary",
+        "scope": "all",
+        "seen_sources": [],
+        "include_images": false,
+        "accept_partial_scope": true,
+        "granularity": "standard",
+        "card_types": [
+          "concept",
+          "derivation",
+          "example",
+          "pitfall"
+        ],
+        "english_answer": false,
+        "anchor_ms": 120000,
+        "owner_id": "00000000-0000-4000-8000-000000000009"
+      },
+      "reason": "Authenticated ownership cannot be supplied in generation input."
+    },
+    {
+      "name": "legacy_qa_generation_request",
+      "schema_file": "candidate-openapi.json",
+      "schema_pointer": "#/components/schemas/GenerationPlanRequest",
+      "expected_valid": true,
+      "value": {
+        "kind": "ai_question",
+        "scope": "recent120",
+        "seen_sources": [],
+        "question": "什么是机会成本？",
+        "include_images": false,
+        "accept_partial_scope": false
+      },
+      "reason": "QA keeps its existing request shape without review-only fields."
+    },
+    {
+      "name": "qa_rejects_review_regeneration_fields",
+      "schema_file": "candidate-openapi.json",
+      "schema_pointer": "#/components/schemas/GenerationPlanRequest",
+      "expected_valid": false,
+      "value": {
+        "kind": "ai_question",
+        "scope": "recent120",
+        "seen_sources": [],
+        "question": "什么是机会成本？",
+        "include_images": false,
+        "accept_partial_scope": false,
+        "target_document_id": "00000000-0000-4000-8000-000000000006",
+        "base_revision": 3
+      },
+      "reason": "Document regeneration fields belong to review summary requests."
+    },
+    {
+      "name": "qa_rejects_review_granularity",
+      "schema_file": "candidate-openapi.json",
+      "schema_pointer": "#/components/schemas/GenerationPlanRequest",
+      "expected_valid": false,
+      "value": {
+        "kind": "ai_question",
+        "scope": "recent120",
+        "seen_sources": [],
+        "question": "什么是机会成本？",
+        "include_images": false,
+        "accept_partial_scope": false,
+        "granularity": "concise"
+      },
+      "reason": "Review granularity cannot silently affect QA requests."
+    },
+    {
+      "name": "personal_save_with_candidate_parent",
+      "schema_file": "candidate-openapi.json",
+      "schema_pointer": "#/components/schemas/PersonalRevisionWrite",
+      "expected_valid": true,
+      "value": {
+        "base_revision": 3,
+        "base_content_revision_id": "00000000-0000-4000-8000-000000000007",
+        "draft_id": "00000000-0000-4000-8000-000000000008",
+        "body_markdown": "我把机会成本理解为最有价值的替代选择。",
+        "personal_note": "课后补充自己的例子。"
+      },
+      "reason": "A personal save keeps the chosen content parent and document CAS revision."
+    },
+    {
+      "name": "personal_save_without_content_parent",
+      "schema_file": "candidate-openapi.json",
+      "schema_pointer": "#/components/schemas/PersonalRevisionWrite",
+      "expected_valid": true,
+      "value": {
+        "base_revision": 3,
+        "base_content_revision_id": null,
+        "draft_id": "00000000-0000-4000-8000-000000000008",
+        "body_markdown": "我把机会成本理解为最有价值的替代选择。",
+        "personal_note": "课后补充自己的例子。"
+      },
+      "reason": "An explicit null content parent remains valid for an original personal note."
+    },
+    {
+      "name": "personal_save_requires_base_revision",
+      "schema_file": "candidate-openapi.json",
+      "schema_pointer": "#/components/schemas/PersonalRevisionWrite",
+      "expected_valid": false,
+      "value": {
+        "base_content_revision_id": "00000000-0000-4000-8000-000000000007",
+        "draft_id": "00000000-0000-4000-8000-000000000008",
+        "body_markdown": "我把机会成本理解为最有价值的替代选择。",
+        "personal_note": "课后补充自己的例子。"
+      },
+      "reason": "Personal saves declare base_revision explicitly."
+    },
+    {
+      "name": "personal_save_requires_base_content_revision_id",
+      "schema_file": "candidate-openapi.json",
+      "schema_pointer": "#/components/schemas/PersonalRevisionWrite",
+      "expected_valid": false,
+      "value": {
+        "base_revision": 3,
+        "draft_id": "00000000-0000-4000-8000-000000000008",
+        "body_markdown": "我把机会成本理解为最有价值的替代选择。",
+        "personal_note": "课后补充自己的例子。"
+      },
+      "reason": "Personal saves declare base_content_revision_id explicitly."
+    },
+    {
+      "name": "personal_save_requires_draft_id",
+      "schema_file": "candidate-openapi.json",
+      "schema_pointer": "#/components/schemas/PersonalRevisionWrite",
+      "expected_valid": false,
+      "value": {
+        "base_revision": 3,
+        "base_content_revision_id": "00000000-0000-4000-8000-000000000007",
+        "body_markdown": "我把机会成本理解为最有价值的替代选择。",
+        "personal_note": "课后补充自己的例子。"
+      },
+      "reason": "Personal saves declare draft_id explicitly."
+    },
+    {
+      "name": "personal_save_requires_body_markdown",
+      "schema_file": "candidate-openapi.json",
+      "schema_pointer": "#/components/schemas/PersonalRevisionWrite",
+      "expected_valid": false,
+      "value": {
+        "base_revision": 3,
+        "base_content_revision_id": "00000000-0000-4000-8000-000000000007",
+        "draft_id": "00000000-0000-4000-8000-000000000008",
+        "personal_note": "课后补充自己的例子。"
+      },
+      "reason": "Personal saves declare body_markdown explicitly."
+    },
+    {
+      "name": "personal_save_requires_personal_note",
+      "schema_file": "candidate-openapi.json",
+      "schema_pointer": "#/components/schemas/PersonalRevisionWrite",
+      "expected_valid": false,
+      "value": {
+        "base_revision": 3,
+        "base_content_revision_id": "00000000-0000-4000-8000-000000000007",
+        "draft_id": "00000000-0000-4000-8000-000000000008",
+        "body_markdown": "我把机会成本理解为最有价值的替代选择。"
+      },
+      "reason": "Personal saves declare personal_note explicitly."
+    },
+    {
+      "name": "personal_save_rejects_pointer_override",
+      "schema_file": "candidate-openapi.json",
+      "schema_pointer": "#/components/schemas/PersonalRevisionWrite",
+      "expected_valid": false,
+      "value": {
+        "base_revision": 3,
+        "base_content_revision_id": "00000000-0000-4000-8000-000000000007",
+        "draft_id": "00000000-0000-4000-8000-000000000008",
+        "body_markdown": "我把机会成本理解为最有价值的替代选择。",
+        "personal_note": "课后补充自己的例子。",
+        "adopted_revision_id": "00000000-0000-4000-8000-000000000009"
+      },
+      "reason": "Adoption is handled by the separate CAS operation."
+    },
+    {
+      "name": "personal_save_rejects_owner_override",
+      "schema_file": "candidate-openapi.json",
+      "schema_pointer": "#/components/schemas/PersonalRevisionWrite",
+      "expected_valid": false,
+      "value": {
+        "base_revision": 3,
+        "base_content_revision_id": "00000000-0000-4000-8000-000000000007",
+        "draft_id": "00000000-0000-4000-8000-000000000008",
+        "body_markdown": "我把机会成本理解为最有价值的替代选择。",
+        "personal_note": "课后补充自己的例子。",
+        "owner_id": "00000000-0000-4000-8000-000000000009"
+      },
+      "reason": "Personal saves derive ownership from authentication."
+    },
+    {
+      "name": "personal_save_rejects_invalid_draft_uuid",
+      "schema_file": "candidate-openapi.json",
+      "schema_pointer": "#/components/schemas/PersonalRevisionWrite",
+      "expected_valid": false,
+      "value": {
+        "base_revision": 3,
+        "base_content_revision_id": "00000000-0000-4000-8000-000000000007",
+        "draft_id": "local-draft",
+        "body_markdown": "我把机会成本理解为最有价值的替代选择。",
+        "personal_note": "课后补充自己的例子。"
+      },
+      "reason": "The draft identity is a UUID."
+    },
+    {
+      "name": "manual_note_create",
+      "schema_file": "candidate-openapi.json",
+      "schema_pointer": "#/components/schemas/ReviewDocumentCreate",
+      "expected_valid": true,
+      "value": {
+        "class_session_id": "00000000-0000-4000-8000-000000000002",
+        "title": "我的课堂笔记",
+        "body_markdown": "课后补充",
+        "draft_id": "00000000-0000-4000-8000-000000000008"
+      },
+      "reason": "Manual notes retain the established creation DTO."
+    },
+    {
+      "name": "adoption_requires_document_cas",
+      "schema_file": "candidate-openapi.json",
+      "schema_pointer": "#/components/schemas/AdoptRequest",
+      "expected_valid": true,
+      "value": {
+        "base_revision": 3,
+        "revision_id": "00000000-0000-4000-8000-000000000007"
+      },
+      "reason": "Explicit adoption identifies a content revision and document CAS revision."
+    },
+    {
+      "name": "adoption_missing_document_cas",
+      "schema_file": "candidate-openapi.json",
+      "schema_pointer": "#/components/schemas/AdoptRequest",
+      "expected_valid": false,
+      "value": {
+        "revision_id": "00000000-0000-4000-8000-000000000007"
+      },
+      "reason": "Adoption cannot omit its CAS revision."
+    },
+    {
+      "name": "review_output_global_alias_boundary",
+      "schema_file": "candidate-openapi.json",
+      "schema_pointer": "#/components/schemas/ReviewModelOutput",
+      "expected_valid": true,
+      "value": {
+        "schema_version": 1,
+        "cards": [
+          {
+            "type": "concept",
+            "title": "机会成本",
+            "front": "什么是机会成本？",
+            "back": "被放弃的最佳选择的价值。",
+            "supplement": "",
+            "english": "",
+            "english_meaning": "",
+            "source_ids": [
+              "S1",
+              "S512"
+            ],
+            "missing": []
+          }
+        ],
+        "notes": [
+          {
+            "section": "structure",
+            "title": "成本与选择",
+            "body": "每次选择都有被放弃的替代方案。",
+            "supplement": "",
+            "source_ids": [
+              "S1"
+            ],
+            "missing": []
+          }
+        ]
+      },
+      "reason": "A merged review can cite the first and last frozen global aliases."
+    },
+    {
+      "name": "review_output_rejects_unbounded_alias",
+      "schema_file": "candidate-openapi.json",
+      "schema_pointer": "#/components/schemas/ReviewModelOutput",
+      "expected_valid": false,
+      "value": {
+        "schema_version": 1,
+        "cards": [
+          {
+            "type": "concept",
+            "title": "机会成本",
+            "front": "什么是机会成本？",
+            "back": "被放弃的最佳选择的价值。",
+            "supplement": "",
+            "english": "",
+            "english_meaning": "",
+            "source_ids": [
+              "S513"
+            ],
+            "missing": []
+          }
+        ],
+        "notes": [
+          {
+            "section": "structure",
+            "title": "成本与选择",
+            "body": "每次选择都有被放弃的替代方案。",
+            "supplement": "",
+            "source_ids": [
+              "S1"
+            ],
+            "missing": []
+          }
+        ]
+      },
+      "reason": "Review aliases stop at S512."
+    },
+    {
+      "name": "review_output_rejects_zero_alias",
+      "schema_file": "candidate-openapi.json",
+      "schema_pointer": "#/components/schemas/ReviewModelOutput",
+      "expected_valid": false,
+      "value": {
+        "schema_version": 1,
+        "cards": [
+          {
+            "type": "concept",
+            "title": "机会成本",
+            "front": "什么是机会成本？",
+            "back": "被放弃的最佳选择的价值。",
+            "supplement": "",
+            "english": "",
+            "english_meaning": "",
+            "source_ids": [
+              "S1",
+              "S512"
+            ],
+            "missing": []
+          }
+        ],
+        "notes": [
+          {
+            "section": "structure",
+            "title": "成本与选择",
+            "body": "每次选择都有被放弃的替代方案。",
+            "supplement": "",
+            "source_ids": [
+              "S0"
+            ],
+            "missing": []
+          }
+        ]
+      },
+      "reason": "Source aliases begin at S1."
+    },
+    {
+      "name": "review_output_rejects_padded_alias",
+      "schema_file": "candidate-openapi.json",
+      "schema_pointer": "#/components/schemas/ReviewModelOutput",
+      "expected_valid": false,
+      "value": {
+        "schema_version": 1,
+        "cards": [
+          {
+            "type": "concept",
+            "title": "机会成本",
+            "front": "什么是机会成本？",
+            "back": "被放弃的最佳选择的价值。",
+            "supplement": "",
+            "english": "",
+            "english_meaning": "",
+            "source_ids": [
+              "S0001"
+            ],
+            "missing": []
+          }
+        ],
+        "notes": [
+          {
+            "section": "structure",
+            "title": "成本与选择",
+            "body": "每次选择都有被放弃的替代方案。",
+            "supplement": "",
+            "source_ids": [
+              "S1"
+            ],
+            "missing": []
+          }
+        ]
+      },
+      "reason": "The candidate uses canonical global source aliases."
+    },
+    {
+      "name": "review_output_requires_evidence",
+      "schema_file": "candidate-openapi.json",
+      "schema_pointer": "#/components/schemas/ReviewModelOutput",
+      "expected_valid": false,
+      "value": {
+        "schema_version": 1,
+        "cards": [
+          {
+            "type": "concept",
+            "title": "机会成本",
+            "front": "什么是机会成本？",
+            "back": "被放弃的最佳选择的价值。",
+            "supplement": "",
+            "english": "",
+            "english_meaning": "",
+            "source_ids": [],
+            "missing": []
+          }
+        ],
+        "notes": [
+          {
+            "section": "structure",
+            "title": "成本与选择",
+            "body": "每次选择都有被放弃的替代方案。",
+            "supplement": "",
+            "source_ids": [
+              "S1"
+            ],
+            "missing": []
+          }
+        ]
+      },
+      "reason": "Cards require at least one declared source alias."
+    },
+    {
+      "name": "review_output_rejects_duplicate_evidence",
+      "schema_file": "candidate-openapi.json",
+      "schema_pointer": "#/components/schemas/ReviewModelOutput",
+      "expected_valid": false,
+      "value": {
+        "schema_version": 1,
+        "cards": [
+          {
+            "type": "concept",
+            "title": "机会成本",
+            "front": "什么是机会成本？",
+            "back": "被放弃的最佳选择的价值。",
+            "supplement": "",
+            "english": "",
+            "english_meaning": "",
+            "source_ids": [
+              "S1",
+              "S512"
+            ],
+            "missing": []
+          }
+        ],
+        "notes": [
+          {
+            "section": "structure",
+            "title": "成本与选择",
+            "body": "每次选择都有被放弃的替代方案。",
+            "supplement": "",
+            "source_ids": [
+              "S1",
+              "S1"
+            ],
+            "missing": []
+          }
+        ]
+      },
+      "reason": "Note evidence aliases are unique."
+    },
+    {
+      "name": "review_output_rejects_unknown_content",
+      "schema_file": "candidate-openapi.json",
+      "schema_pointer": "#/components/schemas/ReviewModelOutput",
+      "expected_valid": false,
+      "value": {
+        "schema_version": 1,
+        "cards": [
+          {
+            "type": "concept",
+            "title": "机会成本",
+            "front": "什么是机会成本？",
+            "back": "被放弃的最佳选择的价值。",
+            "supplement": "",
+            "english": "",
+            "english_meaning": "",
+            "source_ids": [
+              "S1",
+              "S512"
+            ],
+            "missing": [],
+            "owner_id": "00000000-0000-4000-8000-000000000009"
+          }
+        ],
+        "notes": [
+          {
+            "section": "structure",
+            "title": "成本与选择",
+            "body": "每次选择都有被放弃的替代方案。",
+            "supplement": "",
+            "source_ids": [
+              "S1"
+            ],
+            "missing": []
+          }
+        ]
+      },
+      "reason": "Model card fields are closed."
+    },
+    {
+      "name": "ai_candidate_revision",
+      "schema_file": "candidate-openapi.json",
+      "schema_pointer": "#/components/schemas/ReviewRevision",
+      "expected_valid": true,
+      "value": {
+        "id": "00000000-0000-4000-8000-000000000007",
+        "revision": 1,
+        "created_at": "2026-11-16T12:00:00Z",
+        "updated_at": "2026-11-16T12:00:00Z",
+        "document_id": "00000000-0000-4000-8000-000000000006",
+        "kind": "ai_candidate",
+        "parent_revision_id": null,
+        "source_snapshot_id": "00000000-0000-4000-8000-000000000003",
+        "raw_output_ref": "00000000-0000-4000-8000-000000000010",
+        "body_markdown": "# 成本与选择\n\n选择会放弃其他机会。",
+        "structured_content": {
+          "schema_version": 1,
+          "cards": [
+            {
+              "type": "concept",
+              "title": "机会成本",
+              "front": "什么是机会成本？",
+              "back": "被放弃的最佳选择的价值。",
+              "supplement": "",
+              "english": "",
+              "english_meaning": "",
+              "source_ids": [
+                "S1",
+                "S512"
+              ],
+              "missing": []
+            }
+          ],
+          "notes": [
+            {
+              "section": "structure",
+              "title": "成本与选择",
+              "body": "每次选择都有被放弃的替代方案。",
+              "supplement": "",
+              "source_ids": [
+                "S1"
+              ],
+              "missing": []
+            }
+          ]
+        },
+        "personal_note": ""
+      },
+      "reason": "A candidate keeps the source snapshot, raw result and structured review together."
+    },
+    {
+      "name": "personal_revision_retains_generation_provenance",
+      "schema_file": "candidate-openapi.json",
+      "schema_pointer": "#/components/schemas/ReviewRevision",
+      "expected_valid": true,
+      "value": {
+        "id": "00000000-0000-4000-8000-000000000011",
+        "revision": 1,
+        "created_at": "2026-11-16T12:00:00Z",
+        "updated_at": "2026-11-16T12:00:00Z",
+        "document_id": "00000000-0000-4000-8000-000000000006",
+        "kind": "personal",
+        "parent_revision_id": "00000000-0000-4000-8000-000000000007",
+        "source_snapshot_id": "00000000-0000-4000-8000-000000000003",
+        "raw_output_ref": "00000000-0000-4000-8000-000000000010",
+        "body_markdown": "我把机会成本理解为最有价值的替代选择。",
+        "structured_content": {
+          "schema_version": 1,
+          "cards": [
+            {
+              "type": "concept",
+              "title": "机会成本",
+              "front": "什么是机会成本？",
+              "back": "被放弃的最佳选择的价值。",
+              "supplement": "",
+              "english": "",
+              "english_meaning": "",
+              "source_ids": [
+                "S1",
+                "S512"
+              ],
+              "missing": []
+            }
+          ],
+          "notes": [
+            {
+              "section": "structure",
+              "title": "成本与选择",
+              "body": "每次选择都有被放弃的替代方案。",
+              "supplement": "",
+              "source_ids": [
+                "S1"
+              ],
+              "missing": []
+            }
+          ]
+        },
+        "personal_note": "课后补充自己的例子。"
+      },
+      "reason": "Personal revision DTOs can retain their candidate source and raw provenance."
+    },
+    {
+      "name": "manual_personal_revision_without_model_output",
+      "schema_file": "candidate-openapi.json",
+      "schema_pointer": "#/components/schemas/ReviewRevision",
+      "expected_valid": true,
+      "value": {
+        "id": "00000000-0000-4000-8000-000000000011",
+        "revision": 1,
+        "created_at": "2026-11-16T12:00:00Z",
+        "updated_at": "2026-11-16T12:00:00Z",
+        "document_id": "00000000-0000-4000-8000-000000000006",
+        "kind": "personal",
+        "parent_revision_id": null,
+        "source_snapshot_id": null,
+        "raw_output_ref": null,
+        "body_markdown": "我把机会成本理解为最有价值的替代选择。",
+        "structured_content": null,
+        "personal_note": "课后补充自己的例子。"
+      },
+      "reason": "Manual revisions can have no model content or source snapshot."
+    },
+    {
+      "name": "revision_rejects_unknown_kind",
+      "schema_file": "candidate-openapi.json",
+      "schema_pointer": "#/components/schemas/ReviewRevision",
+      "expected_valid": false,
+      "value": {
+        "id": "00000000-0000-4000-8000-000000000007",
+        "revision": 1,
+        "created_at": "2026-11-16T12:00:00Z",
+        "updated_at": "2026-11-16T12:00:00Z",
+        "document_id": "00000000-0000-4000-8000-000000000006",
+        "kind": "adopted",
+        "parent_revision_id": null,
+        "source_snapshot_id": "00000000-0000-4000-8000-000000000003",
+        "raw_output_ref": "00000000-0000-4000-8000-000000000010",
+        "body_markdown": "# 成本与选择\n\n选择会放弃其他机会。",
+        "structured_content": {
+          "schema_version": 1,
+          "cards": [
+            {
+              "type": "concept",
+              "title": "机会成本",
+              "front": "什么是机会成本？",
+              "back": "被放弃的最佳选择的价值。",
+              "supplement": "",
+              "english": "",
+              "english_meaning": "",
+              "source_ids": [
+                "S1",
+                "S512"
+              ],
+              "missing": []
+            }
+          ],
+          "notes": [
+            {
+              "section": "structure",
+              "title": "成本与选择",
+              "body": "每次选择都有被放弃的替代方案。",
+              "supplement": "",
+              "source_ids": [
+                "S1"
+              ],
+              "missing": []
+            }
+          ]
+        },
+        "personal_note": ""
+      },
+      "reason": "Adoption is represented by a document pointer."
+    },
+    {
+      "name": "document_preserves_personal_pointer_with_candidate",
+      "schema_file": "candidate-openapi.json",
+      "schema_pointer": "#/components/schemas/ReviewDocument",
+      "expected_valid": true,
+      "value": {
+        "id": "00000000-0000-4000-8000-000000000006",
+        "revision": 3,
+        "created_at": "2026-11-16T12:00:00Z",
+        "updated_at": "2026-11-16T12:00:00Z",
+        "class_session_id": "00000000-0000-4000-8000-000000000002",
+        "kind": "summary",
+        "title": "课堂总结",
+        "adopted_revision_id": "00000000-0000-4000-8000-000000000011",
+        "latest_personal_revision_id": "00000000-0000-4000-8000-000000000011",
+        "candidate_revision_ids": [
+          "00000000-0000-4000-8000-000000000007"
+        ],
+        "understood": false,
+        "source_status": "unchanged"
+      },
+      "reason": "A document can expose candidates while retaining its personal and adopted pointers."
+    },
+    {
+      "name": "document_requires_personal_pointer_field",
+      "schema_file": "candidate-openapi.json",
+      "schema_pointer": "#/components/schemas/ReviewDocument",
+      "expected_valid": false,
+      "value": {
+        "id": "00000000-0000-4000-8000-000000000006",
+        "revision": 3,
+        "created_at": "2026-11-16T12:00:00Z",
+        "updated_at": "2026-11-16T12:00:00Z",
+        "class_session_id": "00000000-0000-4000-8000-000000000002",
+        "kind": "summary",
+        "title": "课堂总结",
+        "adopted_revision_id": "00000000-0000-4000-8000-000000000011",
+        "candidate_revision_ids": [
+          "00000000-0000-4000-8000-000000000007"
+        ],
+        "understood": false,
+        "source_status": "unchanged"
+      },
+      "reason": "A nullable personal pointer remains explicit in the DTO."
+    },
+    {
+      "name": "snapshot_item_global_alias_boundary",
+      "schema_file": "candidate-openapi.json",
+      "schema_pointer": "#/components/schemas/QaSourceItem",
+      "expected_valid": true,
+      "value": {
+        "alias": "S512",
+        "kind": "transcript_segment",
+        "source_id": "00000000-0000-4000-8000-000000000012",
+        "fragment_id": "00000000-0000-4000-8000-000000000013",
+        "object_id": "00000000-0000-4000-8000-000000000014",
+        "revision_id": "00000000-0000-4000-8000-000000000015",
+        "class_session_id": "00000000-0000-4000-8000-000000000002",
+        "content_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "excerpt_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "excerpt": "课堂证据",
+        "excerpt_start": 0,
+        "excerpt_end": 4,
+        "start_ms": 1000,
+        "end_ms": 2000,
+        "visible_at": "2026-11-16T12:00:00Z",
+        "origin": "transcript"
+      },
+      "reason": "The shared snapshot DTO accepts the final review alias."
+    },
+    {
+      "name": "snapshot_item_rejects_unbounded_alias",
+      "schema_file": "candidate-openapi.json",
+      "schema_pointer": "#/components/schemas/QaSourceItem",
+      "expected_valid": false,
+      "value": {
+        "alias": "S513",
+        "kind": "transcript_segment",
+        "source_id": "00000000-0000-4000-8000-000000000012",
+        "fragment_id": "00000000-0000-4000-8000-000000000013",
+        "object_id": "00000000-0000-4000-8000-000000000014",
+        "revision_id": "00000000-0000-4000-8000-000000000015",
+        "class_session_id": "00000000-0000-4000-8000-000000000002",
+        "content_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "excerpt_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "excerpt": "课堂证据",
+        "excerpt_start": 0,
+        "excerpt_end": 4,
+        "start_ms": 1000,
+        "end_ms": 2000,
+        "visible_at": "2026-11-16T12:00:00Z",
+        "origin": "transcript"
+      },
+      "reason": "Snapshot entries use the same bounded alias domain as review output."
+    },
+    {
+      "name": "ai_candidate_exposes_root_generation_task",
+      "schema_file": "candidate-openapi.json",
+      "schema_pointer": "#/components/schemas/ReviewRevision",
+      "expected_valid": true,
+      "value": {
+        "id": "00000000-0000-4000-8000-000000000007",
+        "revision": 1,
+        "created_at": "2026-11-16T12:00:00Z",
+        "updated_at": "2026-11-16T12:00:00Z",
+        "document_id": "00000000-0000-4000-8000-000000000006",
+        "kind": "ai_candidate",
+        "parent_revision_id": null,
+        "source_snapshot_id": "00000000-0000-4000-8000-000000000003",
+        "raw_output_ref": "00000000-0000-4000-8000-000000000010",
+        "body_markdown": "# 成本与选择\n\n选择会放弃其他机会。",
+        "structured_content": {
+          "schema_version": 1,
+          "cards": [
+            {
+              "type": "concept",
+              "title": "机会成本",
+              "front": "什么是机会成本？",
+              "back": "被放弃的最佳选择的价值。",
+              "supplement": "",
+              "english": "",
+              "english_meaning": "",
+              "source_ids": [
+                "S1",
+                "S512"
+              ],
+              "missing": []
+            }
+          ],
+          "notes": [
+            {
+              "section": "structure",
+              "title": "成本与选择",
+              "body": "每次选择都有被放弃的替代方案。",
+              "supplement": "",
+              "source_ids": [
+                "S1"
+              ],
+              "missing": []
+            }
+          ]
+        },
+        "personal_note": "",
+        "generation_task_id": "00000000-0000-4000-8000-000000000001"
+      },
+      "reason": "The AI revision exposes the root task used to retrieve authorized raw output."
+    },
+    {
+      "name": "personal_revision_has_null_generation_task",
+      "schema_file": "candidate-openapi.json",
+      "schema_pointer": "#/components/schemas/ReviewRevision",
+      "expected_valid": true,
+      "value": {
+        "id": "00000000-0000-4000-8000-000000000011",
+        "revision": 1,
+        "created_at": "2026-11-16T12:00:00Z",
+        "updated_at": "2026-11-16T12:00:00Z",
+        "document_id": "00000000-0000-4000-8000-000000000006",
+        "kind": "personal",
+        "parent_revision_id": "00000000-0000-4000-8000-000000000007",
+        "source_snapshot_id": "00000000-0000-4000-8000-000000000003",
+        "raw_output_ref": "00000000-0000-4000-8000-000000000010",
+        "body_markdown": "我把机会成本理解为最有价值的替代选择。",
+        "structured_content": {
+          "schema_version": 1,
+          "cards": [
+            {
+              "type": "concept",
+              "title": "机会成本",
+              "front": "什么是机会成本？",
+              "back": "被放弃的最佳选择的价值。",
+              "supplement": "",
+              "english": "",
+              "english_meaning": "",
+              "source_ids": [
+                "S1",
+                "S512"
+              ],
+              "missing": []
+            }
+          ],
+          "notes": [
+            {
+              "section": "structure",
+              "title": "成本与选择",
+              "body": "每次选择都有被放弃的替代方案。",
+              "supplement": "",
+              "source_ids": [
+                "S1"
+              ],
+              "missing": []
+            }
+          ]
+        },
+        "personal_note": "课后补充自己的例子。",
+        "generation_task_id": null
+      },
+      "reason": "A personal revision carries an explicit null generation task pointer."
+    },
+    {
+      "name": "generation_task_pointer_rejects_invalid_uuid",
+      "schema_file": "candidate-openapi.json",
+      "schema_pointer": "#/components/schemas/ReviewRevision",
+      "expected_valid": false,
+      "value": {
+        "id": "00000000-0000-4000-8000-000000000007",
+        "revision": 1,
+        "created_at": "2026-11-16T12:00:00Z",
+        "updated_at": "2026-11-16T12:00:00Z",
+        "document_id": "00000000-0000-4000-8000-000000000006",
+        "kind": "ai_candidate",
+        "parent_revision_id": null,
+        "source_snapshot_id": "00000000-0000-4000-8000-000000000003",
+        "raw_output_ref": "00000000-0000-4000-8000-000000000010",
+        "body_markdown": "# 成本与选择\n\n选择会放弃其他机会。",
+        "structured_content": {
+          "schema_version": 1,
+          "cards": [
+            {
+              "type": "concept",
+              "title": "机会成本",
+              "front": "什么是机会成本？",
+              "back": "被放弃的最佳选择的价值。",
+              "supplement": "",
+              "english": "",
+              "english_meaning": "",
+              "source_ids": [
+                "S1",
+                "S512"
+              ],
+              "missing": []
+            }
+          ],
+          "notes": [
+            {
+              "section": "structure",
+              "title": "成本与选择",
+              "body": "每次选择都有被放弃的替代方案。",
+              "supplement": "",
+              "source_ids": [
+                "S1"
+              ],
+              "missing": []
+            }
+          ]
+        },
+        "personal_note": "",
+        "generation_task_id": "task-1"
+      },
+      "reason": "Generation task pointers use UUID format."
+    },
+    {
+      "name": "generation_task_pointer_rejects_object",
+      "schema_file": "candidate-openapi.json",
+      "schema_pointer": "#/components/schemas/ReviewRevision",
+      "expected_valid": false,
+      "value": {
+        "id": "00000000-0000-4000-8000-000000000007",
+        "revision": 1,
+        "created_at": "2026-11-16T12:00:00Z",
+        "updated_at": "2026-11-16T12:00:00Z",
+        "document_id": "00000000-0000-4000-8000-000000000006",
+        "kind": "ai_candidate",
+        "parent_revision_id": null,
+        "source_snapshot_id": "00000000-0000-4000-8000-000000000003",
+        "raw_output_ref": "00000000-0000-4000-8000-000000000010",
+        "body_markdown": "# 成本与选择\n\n选择会放弃其他机会。",
+        "structured_content": {
+          "schema_version": 1,
+          "cards": [
+            {
+              "type": "concept",
+              "title": "机会成本",
+              "front": "什么是机会成本？",
+              "back": "被放弃的最佳选择的价值。",
+              "supplement": "",
+              "english": "",
+              "english_meaning": "",
+              "source_ids": [
+                "S1",
+                "S512"
+              ],
+              "missing": []
+            }
+          ],
+          "notes": [
+            {
+              "section": "structure",
+              "title": "成本与选择",
+              "body": "每次选择都有被放弃的替代方案。",
+              "supplement": "",
+              "source_ids": [
+                "S1"
+              ],
+              "missing": []
+            }
+          ]
+        },
+        "personal_note": "",
+        "generation_task_id": {
+          "id": "00000000-0000-4000-8000-000000000001"
+        }
+      },
+      "reason": "The pointer is a UUID string or null."
+    }
+  ]
+}
