@@ -53,6 +53,8 @@ def billing_pg(pg):
             cfg.attributes['connection'] = connection
             command.upgrade(cfg, 'head')
         with admin.begin() as connection:
+            baseline_revisions = connection.execute(sa.text('SELECT version_num FROM alembic_version')).scalars().all()
+            assert len(baseline_revisions) == 1
             connection.exec_driver_sql(candidate_ddl(), execution_options={'no_parameters': True})
             for login, role in ((scheduler_login, 'classroom_web_scheduler'),
                                 (reconciler_login, 'classroom_billing_reconciler')):
@@ -63,7 +65,8 @@ def billing_pg(pg):
                       cursor_secret=b'pr11a-synthetic-cursor-key-00000000')
         scheduler = PgTaskScheduler(url.set(username=scheduler_login).render_as_string(hide_password=False))
         reconciler = sa.create_engine(url.set(username=reconciler_login, password=SYNTHETIC_PASSWORD))
-        yield SimpleNamespace(admin=admin, db=db, scheduler=scheduler, reconciler=reconciler,runtime_url=runtime,admin_url=url)
+        yield SimpleNamespace(admin=admin, db=db, scheduler=scheduler, reconciler=reconciler,
+                              runtime_url=runtime,admin_url=url,baseline_revisions=baseline_revisions)
     finally:
         for resource in (db, scheduler):
             if resource is not None:
@@ -455,7 +458,7 @@ def test_quota_adjustment_is_idempotent_and_preserves_budget(ledger):
 
 def test_candidate_upgrade_preserves_single_alembic_head_and_history(ledger):
     with ledger.pg.admin.connect() as connection:
-        assert connection.execute(sa.text('SELECT version_num FROM alembic_version')).scalars().all()==['0008_manual_recovery']
+        assert connection.execute(sa.text('SELECT version_num FROM alembic_version')).scalars().all()==ledger.pg.baseline_revisions
         assert connection.scalar(sa.text('SELECT count(*) FROM price_catalog'))>0
         assert connection.scalar(sa.text("SELECT relforcerowsecurity FROM pg_class WHERE oid='quota_reservations'::regclass")) is True
 
@@ -523,11 +526,14 @@ def test_candidate_ddl_rollback_and_existing_task_compatibility(billing_pg):
         operation = uuid4()
         with database.transaction(owner) as tx:
             task = tx.tasks.enqueue('export',{'schema_version':1},op_id=operation)
+        with admin.connect() as connection:
+            baseline_revisions = connection.execute(sa.text('SELECT version_num FROM alembic_version')).scalars().all()
+            assert len(baseline_revisions) == 1
         with pytest.raises(sa.exc.DBAPIError),admin.begin() as connection:
             connection.exec_driver_sql(candidate_ddl()+'\nSELECT 1/0;',execution_options={'no_parameters':True})
         with admin.connect() as connection:
             assert connection.scalar(sa.text("SELECT to_regnamespace('billing_api')")) is None
-            assert connection.scalar(sa.text('SELECT version_num FROM alembic_version'))=='0008_manual_recovery'
+            assert connection.execute(sa.text('SELECT version_num FROM alembic_version')).scalars().all()==baseline_revisions
         with admin.begin() as connection:
             connection.exec_driver_sql(candidate_ddl(),execution_options={'no_parameters':True})
         with admin.connect() as connection:

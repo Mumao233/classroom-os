@@ -445,8 +445,6 @@ def test_composed_media_and_billing_migration_candidate(pg,tmp_path):
     admin=database=None
     migrations=tmp_path/'migrations'
     shutil.copytree(ROOT/'web/backend/migrations',migrations)
-    for filename in ('0009_private_media.py','0009_private_media.sql'):
-        shutil.copyfile(ROOT/'work/pr11a/integration-inputs'/filename,migrations/'versions'/filename)
     candidate=migrations/'versions/pr11a_review_candidate.py'
     candidate.write_text("from alembic import op\nfrom classroom_web.infrastructure.billing_schema import candidate_ddl,integration_ddl\n"
         "revision='pr11a_review_candidate'\ndown_revision='0009_private_media'\nbranch_labels=None\ndepends_on=None\n"
