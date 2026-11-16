@@ -20,9 +20,9 @@ test('actual 200% text: dashboard content and mobile navigation remain readable 
   await page.setViewportSize({ width: 320, height: 800 });
   await page.goto('http://127.0.0.1:19309/');
   await expect(page.getByText('Mock API 已连接')).toBeVisible();
-  const title = page.getByRole('heading', { name: /下午好/ });
+  const title = page.getByRole('heading', { name: /你好/ });
   const course = page.getByRole('heading', { name: '线性代数', exact: true });
-  const body = page.getByText('为接下来的课堂留好位置。');
+  const body = page.getByText(/开始课堂不会自动开麦/);
   const nav = page.getByRole('navigation', { name: '移动主导航' });
   const label = nav.getByRole('link', { name: '课程' }).locator('span');
   const targets = [title, course, body, label];

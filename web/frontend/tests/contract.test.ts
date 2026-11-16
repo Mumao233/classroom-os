@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { coursePage, coursePages, meta, semesterPage, unauthenticated } from '../src/mock/fixtures';
 import { eventScripts } from '../src/mock/event-scripts';
+import { createMockBackend, mockIds } from '../src/mock/backend';
 
 const source = resolve(process.cwd(), '../../docs/web-alpha/architecture/contracts');
 const read = (name: string) => JSON.parse(readFileSync(resolve(source, name), 'utf8'));
@@ -51,5 +52,57 @@ describe('scripted mock event envelopes', () => {
     expect(validate(missingCursor)).toBe(false);
     const frame = structuredClone(eventScripts.upload[0]);
     expect(validate({ ...frame, data: { ...frame.data, durable: true } })).toBe(false);
+  });
+});
+
+describe('PR-09b stateful mock responses conform to the approved contract', () => {
+  const schema = (name: string) => ajv.compile({ $ref: `https://classroom.invalid/openapi#/components/schemas/${name}` });
+  let n = 0;
+  const key = () => `00000000-0000-4000-8000-${String(++n).padStart(12, '0')}`;
+  const check = (name: string, value: unknown) => { const validate = schema(name); expect(validate(value), `${name}: ${JSON.stringify(validate.errors)}`).toBe(true); };
+  for (const account of ['A', 'B'] as const) {
+    it(`account ${account}: every read endpoint returns its schema`, () => {
+      const backend = createMockBackend();
+      const get = (path: string, query = '') => backend.handle(account, 'GET', path, new URLSearchParams(query), undefined, null)!;
+      for (const [path, name] of [['/me', 'User'], ['/me/preferences', 'Preferences'], ['/me/quota', 'QuotaView'], ['/me/sessions', 'DeviceSessionPage'], ['/me/devices', 'TrustedDevicePage'], ['/semesters', 'SemesterPage'], ['/courses', 'CoursePage'], ['/class-sessions', 'ClassSessionPage'], ['/review-documents', 'ReviewDocumentPage'], ['/notifications', 'NotificationPage']] as const) {
+        const reply = get(path); expect(reply.status).toBe(200); check(name, reply.body);
+      }
+      for (const query of ['archived=true', 'sort=name', 'q=x']) check('CoursePage', get('/courses', query).body);
+      const courses = (get('/courses').body as { items: Array<{ id: string; semester_id: string }> }).items;
+      for (const course of courses) {
+        check('Course', get(`/courses/${course.id}`).body);
+        check('CourseMaterialPage', get(`/courses/${course.id}/materials`).body);
+        check('DeletionPreview', get(`/courses/${course.id}/deletion-preview`).body);
+        check('Semester', get(`/semesters/${course.semester_id}`).body);
+        check('DeletionPreview', get(`/semesters/${course.semester_id}/deletion-preview`).body);
+      }
+      for (const item of (get('/class-sessions').body as { items: Array<{ id: string }> }).items) { check('ClassSession', get(`/class-sessions/${item.id}`).body); check('QuestionPage', get('/questions', `class_session_id=${item.id}`).body); }
+    });
+  }
+  it('write responses and every error envelope conform, including CAS and deletion', () => {
+    const backend = createMockBackend();
+    const call = (method: string, path: string, body: unknown) => backend.handle('A', method, path, new URLSearchParams(), body, key())!;
+    const semester = call('POST', '/semesters', { name: '新学期', academic_year: null, starts_on: '2027-02-20', ends_on: '2027-07-01' }); check('Semester', semester.body);
+    const created = call('POST', '/courses', { semester_id: (semester.body as { id: string }).id, name: '线性代数' }); expect(created.status).toBe(201); check('Course', created.body);
+    const id = (created.body as { id: string }).id;
+    check('Course', call('PATCH', `/courses/${id}`, { base_revision: 1, name: '改名', archived: true }).body);
+    check('Semester', call('PATCH', `/semesters/${mockIds.fall}`, { base_revision: 1, academic_year: '2026-2027' }).body);
+    check('CourseMaterial', call('POST', `/courses/${mockIds.la}/materials`, { base_revision: 2, syllabus: 's', glossary: [{ term: 't', meaning: 'm', language: 'zh' }], language: 'zh' }).body);
+    const session = (backend.handle('A', 'GET', '/class-sessions', new URLSearchParams(), undefined, null)!.body as { items: Array<{ id: string; revision: number }> }).items[0];
+    check('ClassSession', call('PATCH', `/class-sessions/${session.id}`, { base_revision: session.revision, title: '改名' }).body);
+    check('User', call('PATCH', '/me', { base_revision: 1, nickname: '新昵称' }).body);
+    check('Preferences', call('PATCH', '/me/preferences', { base_revision: 1, reading_font_px: 20 }).body);
+    check('Acknowledged', call('POST', '/me/sessions/a1000000-0000-4000-8000-000000000002/revoke', {}).body);
+    const preview = backend.handle('A', 'GET', `/courses/${mockIds.mp}/deletion-preview`, new URLSearchParams(), undefined, null)!.body as { confirmation_token: string };
+    check('Deletion', call('POST', `/courses/${mockIds.mp}/delete`, { base_revision: 1, mode: 'cascade', confirmation_token: preview.confirmation_token }).body);
+    for (const reply of [call('PATCH', `/courses/${mockIds.la}`, { base_revision: 99 }), call('POST', '/courses', { name: '' }), call('GET', `/courses/${mockIds.mp}`, undefined), call('POST', `/courses/${mockIds.ds}/delete`, { base_revision: 1, mode: 'cascade', confirmation_token: 'x' }), call('PATCH', '/me', { base_revision: 1, email: 'x@example.invalid' })]) {
+      expect(reply.status).toBeGreaterThanOrEqual(400); check('Error', reply.body);
+    }
+  });
+  it('strict schemas would reject an invented field, so passing above proves none were added', () => {
+    const backend = createMockBackend();
+    const course = backend.handle('A', 'GET', `/courses/${mockIds.la}`, new URLSearchParams(), undefined, null)!.body as Record<string, unknown>;
+    expect(schema('Course')({ ...course, description: 'not in contract' })).toBe(false);
+    expect(schema('Course')({ ...course, language: 'fr' })).toBe(false);
   });
 });

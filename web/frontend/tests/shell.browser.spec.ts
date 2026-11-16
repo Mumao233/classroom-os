@@ -16,7 +16,7 @@ test('unmatched business request fails closed and known mock response is returne
     return { known, missing };
   });
   expect(result.known.next_cursor).toBeNull();
-  expect(result.known.items.map((item: { name: string }) => item.name)).toEqual(['线性代数', '数据结构与算法分析（双语）', '大学物理 II']);
+  expect(result.known.items.map((item: { name: string }) => item.name)).toEqual(['线性代数', '数据结构与算法分析（双语）', '大学物理 II', '线性代数']);
   expect(result.missing).toBe(0);
 });
 
@@ -128,7 +128,7 @@ test('active class navigation retains upload failure; account switch clears disp
   await expect(page.getByRole('region', { name: '模拟课堂状态' })).toContainText('上传 · 失败');
   await page.getByRole('button', { name: '切换模拟账号 A' }).click();
   await expect(page.getByRole('heading', { name: /陈同学/ })).toBeVisible();
-  await expect(page.getByText('组合数学（模拟账号 B）')).toBeVisible();
+  await expect(page.getByRole('heading', { name: '组合数学（模拟账号 B）', exact: true })).toBeVisible();
   await expect(page.getByText('线性代数')).toHaveCount(0);
   await expect(page.getByRole('region', { name: '模拟课堂状态' })).toHaveCount(0);
 });
@@ -142,7 +142,7 @@ test('late A request does not restore A page after switching to B', async ({ pag
   await expect(page.getByText('Mock API 已连接')).toBeVisible();
   await page.waitForTimeout(1500); // The browser-test fixture has a fixed 1200 ms delay.
   await expect(page.getByRole('heading', { name: /陈同学/ })).toBeVisible();
-  await expect(page.getByText('组合数学（模拟账号 B）')).toBeVisible();
+  await expect(page.getByRole('heading', { name: '组合数学（模拟账号 B）', exact: true })).toBeVisible();
   await expect(page.getByText('线性代数')).toHaveCount(0);
   await expect(page.getByText('Mock API 已连接')).toBeVisible();
 });
@@ -370,8 +370,9 @@ test('event scripts project distinct transcript, upload, AI, deletion and lease 
   await expect(result).not.toContainText('不应复活');
   await page.getByRole('navigation', { name: '主导航', exact: true }).getByRole('link', { name: '首页' }).click();
   await expect(page.getByRole('heading', { name: '模拟课堂已撤权' })).toBeVisible();
-  await expect(page.getByText('线性代数 · 特征值与特征向量')).toHaveCount(0);
-  await expect(page.getByText('线性代数 · 转写已完成')).toHaveCount(0);
+  // PR-09b: the revoked classroom is no longer offered as a continue entry.
+  await expect(page.getByTestId('continue')).toHaveAttribute('data-kind', 'revoked');
+  await expect(page.getByTestId('continue').getByRole('link', { name: /继续复习|返回课堂/ })).toHaveCount(0);
 });
 
 test('individual mock events keep temporary transcript and frame acknowledgement distinct from durable results', async ({ page }) => {
@@ -409,7 +410,7 @@ test('revocation destroys account display and mock subscription; B can start cle
   await expect(page.getByRole('region', { name: '模拟课堂状态' })).toHaveCount(0);
   await expect.poll(() => page.evaluate(async () => (await fetch('/api/web/v1/courses')).status)).toBe(401);
   await page.getByRole('button', { name: '进入模拟账号 B' }).click();
-  await expect(page.getByText('组合数学（模拟账号 B）')).toBeVisible();
+  await expect(page.getByRole('heading', { name: '组合数学（模拟账号 B）', exact: true })).toBeVisible();
   await expect(page.getByText('线性代数', { exact: true })).toHaveCount(0);
   await expect(page.getByRole('region', { name: '模拟事件结果' })).toContainText('正式片段：无');
 });
@@ -426,6 +427,6 @@ test('revocation while A request is in flight cannot restore data after its late
   await expect(page.getByRole('heading', { name: '模拟会话已撤销' })).toBeVisible();
   await expect(page.getByText('线性代数', { exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: '进入模拟账号 B' }).click();
-  await expect(page.getByText('组合数学（模拟账号 B）')).toBeVisible();
+  await expect(page.getByRole('heading', { name: '组合数学（模拟账号 B）', exact: true })).toBeVisible();
   await expect(page.getByText('线性代数', { exact: true })).toHaveCount(0);
 });

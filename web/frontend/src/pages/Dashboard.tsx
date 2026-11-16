@@ -1,37 +1,143 @@
-import { IconArrowRight, IconBolt, IconBook2, IconCalendar, IconCheck, IconChevronRight, IconCircleCheck, IconCloudCheck, IconFileText, IconMicrophone, IconSparkles } from '@tabler/icons-react';
+import type { ReactNode } from 'react';
+import { IconArrowRight, IconBolt, IconBook2, IconCalendar, IconChevronRight, IconFileText, IconListCheck, IconMicrophone, IconTimeline } from '@tabler/icons-react';
 import { Link } from 'react-router';
-import type { components } from '../generated/openapi';
-import styles from '../app/Shell.module.css';
+import { activityItems, chooseContinueEntry, deriveTodos, EXPIRY_WARNING_MS, formatDate, formatDateTime, recentSessions, type ContinueEntry } from '../domain/dashboard';
+import { defaultSemester } from '../domain/courses';
+import { useAppData, useClassSessions, useCourses, useMe, useNotifications, useQuestionsFor, useReviewDocuments, useSemesters } from '../features/data';
+import { Badge, CourseGlyph, coverClass, DataSourceNote, Empty, FlowSummaryView, Loading, OfflineBanner, QueryError } from './common';
+import shell from '../app/Shell.module.css';
+import styles from './pages.module.css';
 
-type Props = { empty: boolean; onStart: () => void; active: boolean; account: 'A' | 'B'; coursePage: components['schemas']['CoursePage']; classroomDeleted: boolean };
+const zhDate = (now: number) => new Intl.DateTimeFormat('zh-CN', { month: 'long', day: 'numeric', weekday: 'long', timeZone: 'Asia/Shanghai' }).format(new Date(now));
+const dayOf = (now: number) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date(now));
+const todoLabel = { conflict: '冲突', failed: '失败', unknown: '待核对', unsynced: '未同步', expiring: '临近到期', not_understood: '未懂' } as const;
 
-const courseDetails = [
-  { initial: 'LA', title: '线性代数', info: '周二 · 周四 · 12 节课堂', recent: '最近 10月27日', tone: 'blue', status: '已同步' },
-  { initial: 'DS', title: '数据结构与算法分析（双语）', info: '周三 · 9 节课堂', recent: '最近 10月25日', tone: 'teal', status: '1 段待上传' },
-  { initial: 'MP', title: '大学物理 II', info: '周一 · 周五 · 15 节课堂', recent: '最近 10月24日', tone: 'violet', status: '已同步' },
-];
+/**
+ * UI-DASH-01…09. Module order is fixed for both empty and populated states:
+ * 继续学习 → 快速开始 → 最近课程 → 待处理 → 学习动态. Every value comes from a server record or
+ * the account runtime; nothing is invented to fill space (CF-09).
+ */
+export function Dashboard() {
+  const app = useAppData();
+  const me = useMe();
+  const semesters = useSemesters();
+  const active = useCourses({});
+  const archived = useCourses({ archived: true });
+  const sessions = useClassSessions();
+  const documents = useReviewDocuments({ kind: 'note' });
+  const notifications = useNotifications();
+  const allCourses = [...(active.data?.items ?? []), ...(archived.data?.items ?? [])];
+  const recent = recentSessions(sessions.data?.items ?? [], allCourses, 5);
+  const questions = useQuestionsFor(recent.map(item => item.id));
+  const core = [semesters, active, archived, sessions];
+  // A failed background refetch (e.g. offline) keeps showing what was already read.
+  const failed = core.find(query => query.isError && !query.data);
+  if (failed) return <main id="main-content" className={shell.page} tabIndex={-1}><Heading /><OfflineBanner scope="只能显示本次页面已读取的内容。" /><QueryError error={failed.error} retry={() => core.forEach(query => void query.refetch())} /></main>;
+  if (core.some(query => query.isPending)) return <main id="main-content" className={shell.page} tabIndex={-1}><Heading /><Loading label="正在读取学习记录…" /></main>;
 
-export function Dashboard({ empty, onStart, active, account, coursePage, classroomDeleted }: Props) {
-  const courses = coursePage.items.map((course, index) => {
-    const detail = account === 'A' ? courseDetails.find(item => item.title === course.name) : undefined;
-    return detail ?? { initial: course.icon_token || '课', title: course.name, info: `${course.class_session_count} 节课堂`, recent: '模拟课程', tone: ['blue', 'teal', 'violet'][index % 3], status: '已同步' };
-  });
-  return <main id="main-content" className={styles.page} tabIndex={-1}>
-    <div className={styles.pageHeading}><div><p className={styles.eyebrow}>YOUR LEARNING SPACE</p><h1>下午好，{account === 'A' ? '林同学' : '陈同学'} <span aria-hidden="true">✳</span></h1><p>2026 秋季学期 <span aria-hidden="true">·</span> 第 9 周</p></div><span className={styles.dayLabel}><IconCalendar size={17} /> 10月28日，星期三</span></div>
-    {empty ? <section className={`${styles.panel} ${styles.empty}`}><div className={styles.emptyIcon}><IconBook2 size={27}/></div><h2>从第一门课程开始</h2><p>创建课程后，课堂和学习资料会在这里汇集。</p><Link className={styles.primaryButton} to="/courses/new">创建第一门课程 <IconArrowRight size={17}/></Link></section> : account === 'B' ? <section className={`${styles.panel} ${styles.empty}`}><h2>模拟账号 B 的课程</h2><p>以下内容来自当前账号的合成响应。</p>{courses.map(course => <Link key={course.title} to="/courses">{course.title}</Link>)}</section> : classroomDeleted ? <section className={`${styles.panel} ${styles.empty}`}><h2>模拟课堂已撤权</h2><p>该课堂的正文和学习动态已从当前展示中移除。</p><Link className={styles.secondaryButton} to="/courses">返回课程</Link></section> : <>
-      <div className={styles.heroGrid}>
-        <section className={`${styles.panel} ${styles.continueCard}`}>
-          <div className={styles.sectionLabel}><IconBook2 size={17}/> 继续学习 <span className={styles.subtleTag}>最近课堂</span></div>
-          <div className={styles.heroBody}><div><p className={styles.heroKicker}>线性代数 / 第 12 讲</p><h2><span className={styles.desktopCourseName}>线性代数 · </span>特征值与特征向量</h2><p className={styles.heroMeta}><span><IconCalendar size={15}/> 10月27日课堂</span><span><IconFileText size={15}/> 转写 48 段</span><span><IconSparkles size={15}/> 候选总结待查看</span></p></div><span className={styles.heroArt} aria-hidden="true">✳</span></div>
-          <div className={styles.progress} aria-label="示意复习进度"><span /></div>
-          <div className={styles.heroActions}><Link to="/review" className={styles.primaryButton}>继续复习 <IconArrowRight size={17}/></Link><Link to="/classrooms/mock/record" className={styles.secondaryButton}><IconFileText size={17}/> 查看原文</Link></div>
+  const now = app.now();
+  const courses = active.data!.items;
+  const isNew = courses.length === 0 && archived.data!.items.length === 0;
+  const entry = chooseContinueEntry({ capture: app.capture, localRisk: app.localRisk, sessions: sessions.data!.items, courses: allCourses, documents: documents.data?.items ?? [] });
+  const todos = deriveTodos({ sessions: sessions.data!.items, courses: allCourses, questions: questions.items, now });
+  const lastByCourse = new Map<string, (typeof recent)[number]>();
+  for (const item of recentSessions(sessions.data!.items, allCourses, 1000)) if (!lastByCourse.has(item.course_id)) lastByCourse.set(item.course_id, item);
+  const recentCourses = [...courses].sort((a, b) => (b.last_class_session_at ?? '').localeCompare(a.last_class_session_at ?? '') || (a.id < b.id ? -1 : 1)).slice(0, 3);
+  const semester = defaultSemester(semesters.data!.items);
+  const today = dayOf(now);
+  const week = semester?.starts_on && semester.ends_on && today >= semester.starts_on && today <= semester.ends_on
+    ? Math.floor((Date.parse(`${today}T00:00:00Z`) - Date.parse(`${semester.starts_on}T00:00:00Z`)) / 604800000) + 1 : null;
+  const activity = activityItems(notifications.data?.items ?? []);
+
+  return <main id="main-content" className={shell.page} tabIndex={-1} data-testid="dashboard">
+    <Heading name={me.data?.nickname} detail={<>{semester ? <>{semester.name}{week ? ` · 第 ${week} 周` : ''}</> : '尚未创建学期'} <span aria-hidden="true">·</span> {zhDate(now)}</>} />
+    <div className={styles.stack}>
+      <OfflineBanner scope="首页只显示本次已读取的课程与课堂元数据；不能开始新课堂或修改内容。" />
+      <DataSourceNote />
+      <div className={styles.dashGrid}>
+        <section className={styles.panel} aria-labelledby="dash-continue" data-module="continue">
+          <div className={styles.sectionHead}><h2 id="dash-continue"><IconBook2 size={18} aria-hidden="true" /> 继续学习</h2></div>
+          <ContinueModule entry={entry} isNew={isNew} />
         </section>
-        <section className={`${styles.panel} ${styles.quickCard}`}><h2 className={styles.sectionLabel}><IconBolt size={17}/> 快速开始</h2><h2 className={styles.desktopSrOnly}>准备好开始了吗？</h2><div className={styles.quickIntro}><span className={styles.quickIcon}><IconMicrophone size={24}/></span><div><h2>准备好开始了吗？</h2><p>为接下来的课堂留好位置。</p></div></div><button type="button" className={styles.primaryButton} onClick={onStart}><IconMicrophone size={18}/> {active ? '返回模拟课堂' : '开始模拟课堂'}</button><Link to="/courses/new" className={styles.secondaryButton}>＋ 新建课程</Link><p className={styles.note}>ⓘ 仅为开发模拟，不会访问麦克风或产生费用。</p></section>
+        <section className={styles.panel} aria-labelledby="dash-quick" data-module="quick">
+          <div className={styles.sectionHead}><h2 id="dash-quick"><IconBolt size={18} aria-hidden="true" /> 快速开始</h2></div>
+          <QuickStart hasCourse={courses.length > 0} />
+        </section>
       </div>
-      <h2 className={styles.desktopSrOnly}>最近课程</h2><div className={styles.sectionTitle}><div><p className={styles.eyebrow}>YOUR COURSES</p><h2>最近课程</h2></div><Link to="/courses">查看全部 <IconChevronRight size={16}/></Link></div>
-      <div className={styles.courseGrid}>{courses.map(course => <Link to="/courses" className={`${styles.courseCard} ${styles.panel}`} key={course.initial}><div className={`${styles.courseCover} ${styles[course.tone]}`}><span className={styles.courseGlyph} aria-hidden="true">✳</span></div><div className={styles.courseContent}><span className={styles.courseInitial}>{course.initial}</span><h3>{course.title}</h3><p>{course.info}</p><div className={styles.courseFooter}><span>{course.recent}</span><span className={course.status === '已同步' ? styles.success : styles.warning}><IconCloudCheck size={15}/> {course.status}</span></div></div></Link>)}</div>
-      <div className={styles.lowerGrid}><section className={styles.panel}><div className={styles.panelHeader}><h2><IconFileText size={18}/> 待处理</h2><Link to="/tasks">全部 <IconChevronRight size={15}/></Link></div><div className={styles.listRow}><span className={styles.listIcon}><IconSparkles size={17}/></span><div><strong>线性代数 · 课堂总结</strong><p>候选内容待查看</p></div><Link to="/review">查看</Link></div><div className={styles.listRow}><span className={styles.listIcon}><IconFileText size={17}/></span><div><strong>大学物理 · 课堂总结</strong><p>有一项待核对</p></div><Link to="/tasks">查看</Link></div></section>
-      <section className={styles.panel}><div className={styles.panelHeader}><h2><IconBolt size={18}/> 学习动态</h2><Link to="/notifications">通知 <IconChevronRight size={15}/></Link></div><div className={styles.listRow}><span className={styles.listIcon}><IconCircleCheck size={17}/></span><div><strong>线性代数 · 转写已完成</strong><p>10月27日</p></div><IconCheck size={18}/></div><div className={styles.listRow}><span className={styles.listIcon}><IconFileText size={17}/></span><div><strong>大学物理 · 课堂已结束</strong><p>10月24日</p></div><IconCheck size={18}/></div></section></div>
-    </>}
+      <section className={styles.panel} aria-labelledby="dash-recent" data-module="recent">
+        <div className={styles.sectionHead}><h2 id="dash-recent">最近课程</h2>{!isNew && <Link to="/courses">查看全部 <IconChevronRight size={14} aria-hidden="true" /></Link>}</div>
+        {recentCourses.length === 0 ? <Empty title="还没有课程记录" description={isNew ? '创建课程后，真实的课堂记录会显示在这里。' : '当前没有进行中的课程；已归档课程可在课程页查看。'} /> :
+          <div className={styles.cards}>{recentCourses.map(course => {
+            const last = lastByCourse.get(course.id);
+            return <Link key={course.id} to={`/courses/${course.id}/overview`} className={styles.card}>
+              <div className={`${styles.cover} ${coverClass(course.color_token)}`} />
+              <div className={styles.cardBody}><CourseGlyph course={course} /><h3 className={styles.cardTitle}>{course.name}</h3>
+                <p className={styles.cardMeta}>{course.class_session_count} 节课堂</p>
+                <p className={styles.cardMeta}>{last ? <>最近：{last.title || '未命名课堂'} · {formatDate(last.started_at ?? last.created_at)}</> : '还没有课堂记录'}</p>
+                {last && <FlowSummaryView flows={last.flows} />}
+              </div>
+            </Link>;
+          })}</div>}
+      </section>
+      <div className={styles.lowerGrid}>
+        <section className={styles.panel} aria-labelledby="dash-todo" data-module="todo">
+          <div className={styles.sectionHead}><h2 id="dash-todo"><IconListCheck size={18} aria-hidden="true" /> 待处理</h2></div>
+          {questions.error && <p className={`${styles.small} ${styles.warning}`}>部分课堂的疑问暂时无法读取，待办可能不完整。</p>}
+          {todos.length === 0 ? <Empty title="没有需要处理的事项" description="未同步、冲突、失败、未懂和临近到期的原音会在这里出现。" /> :
+            <ul className={styles.list} data-testid="todo-list">{todos.slice(0, 6).map(todo => <li key={todo.id} className={styles.listItem} data-kind={todo.kind}>
+              <Badge tone={todo.kind === 'not_understood' || todo.kind === 'expiring' ? 'info' : todo.kind === 'failed' ? 'danger' : 'warning'}>{todoLabel[todo.kind]}</Badge>
+              <div><strong>{todo.title}</strong><p>{todo.detail}</p></div><Link to={todo.to} aria-label={`定位：${todo.title}，${todoLabel[todo.kind]}`}>定位</Link></li>)}</ul>}
+          {todos.some(todo => todo.kind === 'expiring') && <p className={`${styles.small} ${styles.muted}`}>“临近到期”指 {EXPIRY_WARNING_MS / 3600000} 小时内将自动删除的原音（产品参数）。</p>}
+        </section>
+        <section className={styles.panel} aria-labelledby="dash-activity" data-module="activity">
+          <div className={styles.sectionHead}><h2 id="dash-activity"><IconTimeline size={18} aria-hidden="true" /> 学习动态</h2>{activity.length > 0 && <Link to="/notifications">通知 <IconChevronRight size={14} aria-hidden="true" /></Link>}</div>
+          {notifications.isError && !notifications.data ? <QueryError error={notifications.error} /> : notifications.isPending ? <Loading label="正在读取动态…" /> :
+            activity.length === 0 ? <Empty title="还没有学习动态" description="课堂处理完成、冲突和提醒等真实记录会显示在这里。" /> :
+            <ul className={styles.list}>{activity.map(item => <li key={item.id} className={styles.listItem}>
+              <div><strong>{item.label}</strong><p>{formatDateTime(item.at)}{item.resolved ? ' · 已解决' : item.read ? ' · 已读，尚未解决' : ''}</p></div>
+              {item.severity !== 'info' && !item.resolved && <Badge tone="warning">需要关注</Badge>}</li>)}</ul>}
+        </section>
+      </div>
+    </div>
   </main>;
+}
+
+function Heading({ name, detail }: { name?: string; detail?: ReactNode }) {
+  return <div className={styles.heading}><div className={styles.wrap}><h1>{name ? `你好，${name}` : '学习首页'}</h1>{detail && <p><IconCalendar size={14} aria-hidden="true" /> {detail}</p>}</div></div>;
+}
+
+function ContinueModule({ entry, isNew }: { entry: ContinueEntry; isNew: boolean }) {
+  const app = useAppData();
+  if (app.classroomRevoked && !app.capture.active) return <div data-testid="continue" data-kind="revoked"><h3 className={styles.continueTitle}>模拟课堂已撤权</h3><p className={styles.muted}>该课堂的正文和学习动态已从当前展示中移除，不再提供进入入口。</p><Link className={styles.buttonSecondary} to="/courses">返回课程</Link></div>;
+  switch (entry.kind) {
+    case 'capture': return <div data-testid="continue" data-kind="capture"><Badge tone="recording">● 正在采集</Badge><h3 className={styles.continueTitle}>{entry.title ?? '进行中的课堂'}</h3><p className={styles.muted}>采集优先于其他入口。返回课堂查看五项状态或停止采集。</p>
+      <Link className={styles.button} to={entry.classSessionId ? `/classrooms/${entry.classSessionId}/live` : '/classrooms'}>返回课堂 <IconArrowRight size={16} aria-hidden="true" /></Link></div>;
+    case 'local_risk': return <div data-testid="continue" data-kind="local_risk"><Badge tone={entry.risk.kind === 'unsaved' ? 'danger' : 'warning'}>{entry.risk.kind === 'unsaved' ? '! 尚未安全保存' : '! 仅本机保存'}</Badge><h3 className={styles.continueTitle}>先处理未保存的内容</h3><p className={styles.muted}>{entry.risk.detail}</p>
+      <Link className={styles.button} to="/classrooms">前往处理 <IconArrowRight size={16} aria-hidden="true" /></Link></div>;
+    case 'class_session': return <div data-testid="continue" data-kind="class_session"><p className={`${styles.small} ${styles.muted}`}>最近课堂 · <Link to={`/courses/${entry.course.id}/overview`}>{entry.course.name}</Link></p>
+      <h3 className={styles.continueTitle}>{entry.course.name} · {entry.session.title || '未命名课堂'}</h3>
+      <p className={`${styles.small} ${styles.muted}`}>{formatDateTime(entry.session.started_at ?? entry.session.created_at)}</p>
+      <FlowSummaryView flows={entry.session.flows} />
+      <div className={styles.row} style={{ marginTop: 14 }}><Link className={styles.button} to={`/classrooms/${entry.session.id}/review`}>继续复习 <IconArrowRight size={16} aria-hidden="true" /></Link><Link className={styles.buttonSecondary} to={`/classrooms/${entry.session.id}/record`}><IconFileText size={16} aria-hidden="true" /> 查看记录</Link></div></div>;
+    case 'note': return <div data-testid="continue" data-kind="note"><p className={`${styles.small} ${styles.muted}`}>最近笔记 · {entry.course.name}</p><h3 className={styles.continueTitle}>{entry.document.title || '未命名笔记'}</h3>
+      <p className={`${styles.small} ${styles.muted}`}>更新于 {formatDateTime(entry.document.updated_at)}</p>
+      <Link className={styles.button} to={`/review/items/${entry.document.id}`}>继续编辑 <IconArrowRight size={16} aria-hidden="true" /></Link></div>;
+    default: return isNew
+      ? <div data-testid="continue" data-kind="new"><h3 className={styles.continueTitle}>从第一门课程开始</h3><p className={styles.muted}>创建课程后，课堂和学习资料会在这里汇集。首页不会预填示例课堂。</p>{app.online ? <Link className={styles.button} to="/courses/new">创建第一门课程 <IconArrowRight size={16} aria-hidden="true" /></Link> : <p className={styles.small}>联网后可以创建第一门课程。</p>}</div>
+      : <div data-testid="continue" data-kind="none"><h3 className={styles.continueTitle}>还没有课堂记录</h3><p className={styles.muted}>开始第一节课堂后，这里会显示最近的课堂或笔记。</p></div>;
+  }
+}
+
+function QuickStart({ hasCourse }: { hasCourse: boolean }) {
+  const app = useAppData();
+  const canStart = app.capture.active || (app.online && hasCourse && !app.classroomRevoked);
+  return <div className={styles.stack}>
+    {app.onQuickStart
+      ? canStart
+        ? <button type="button" className={styles.button} onClick={app.onQuickStart}><IconMicrophone size={17} aria-hidden="true" /> {app.capture.active ? '返回模拟课堂' : '开始模拟课堂'}</button>
+        : <p className={`${styles.small} ${styles.muted}`}>{app.classroomRevoked ? '该模拟课堂已撤权，不能重新开始。' : !app.online ? '离线时不能开始课堂。' : '开始课堂前需要先创建一门课程。'}</p>
+      : <Link className={styles.button} to="/classrooms">进入课堂准备</Link>}
+    {app.online ? <Link to="/courses/new" className={styles.buttonSecondary}>＋ 新建课程</Link> : <span className={`${styles.small} ${styles.muted}`}>离线时不能新建课程。</span>}
+    <p className={`${styles.small} ${styles.muted}`}>开始课堂不会自动开麦或扣除 AI 次数。{app.onQuickStart ? '当前为开发模拟，不访问麦克风。' : ''}</p>
+  </div>;
 }

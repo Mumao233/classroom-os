@@ -1,11 +1,24 @@
 import { delay, http, HttpResponse, passthrough } from 'msw';
 import { setupWorker } from 'msw/browser';
-import { coursePages, meta, semesterPage, unauthenticated } from './fixtures';
+import { meta, unauthenticated } from './fixtures';
+import { createMockBackend, type MockDataset } from './backend';
 
 const headers = { 'Cache-Control': 'no-store' };
 // Development-only in-memory session identity; never a new HTTP field or real credential.
 let mockAccount: 'A' | 'B' | null = 'A';
+let mockOffline = false;
+const backend = createMockBackend();
 export function setMockAccount(account: 'A' | 'B' | null) { mockAccount = account; }
+/** Simulated loss of connectivity: every business request fails like a network error. */
+export function setMockOffline(offline: boolean) { mockOffline = offline; }
+/** MOCK-01 uses an empty account; other scenarios use the seeded synthetic records. */
+export function setMockDataset(account: 'A' | 'B', dataset: MockDataset) { backend.reset(account, dataset); }
+/** Dev panel helper: another device updates a record so CAS conflicts can be reproduced. */
+export function bumpMockRecord(kind: 'semester' | 'course' | 'class_session', id: string, change: Record<string, unknown> = {}) {
+  if (mockAccount) backend.bumpElsewhere(mockAccount, kind, id, change);
+}
+// Development/test hook only (this module never ships in production builds).
+(globalThis as { __classroomMock?: unknown }).__classroomMock = { bump: bumpMockRecord };
 function viteAsset(request: Request) {
   const url = new URL(request.url);
   return url.origin === location.origin && request.method === 'GET' &&
@@ -14,14 +27,23 @@ function viteAsset(request: Request) {
 }
 const worker = setupWorker(
   http.get('/api/web/v1/meta', () => HttpResponse.json(meta, { headers })),
-  http.get('/api/web/v1/courses', async () => {
+  http.all('/api/web/v1/*', async ({ request }) => {
+    if (mockOffline) return HttpResponse.error();
     const requestAccount = mockAccount;
     if (!requestAccount) return HttpResponse.json(unauthenticated, { status: 401, headers });
+    const url = new URL(request.url);
+    const path = url.pathname.slice('/api/web/v1'.length);
     // Browser-test-only timing control; it never changes the HTTP contract.
-    if (localStorage.getItem('mock-test-delay') === '1') await delay(1200);
-    return HttpResponse.json(coursePages[requestAccount], { headers });
+    if (path === '/courses' && localStorage.getItem('mock-test-delay') === '1') await delay(1200);
+    let body: unknown = undefined;
+    if (request.method !== 'GET') {
+      try { body = await request.json(); } catch { body = undefined; }
+    }
+    // Computed for the account that sent the request; a switch meanwhile is rejected by the client epoch.
+    const reply = backend.handle(requestAccount, request.method, path, url.searchParams, body, request.headers.get('Idempotency-Key'));
+    if (!reply) return HttpResponse.error();
+    return HttpResponse.json(reply.body as Record<string, unknown>, { status: reply.status, headers });
   }),
-  http.get('/api/web/v1/semesters', () => mockAccount ? HttpResponse.json(semesterPage, { headers }) : HttpResponse.json(unauthenticated, { status: 401, headers })),
   // Explicit catch-all is essential: throwing in onUnhandledRequest alone can
   // fall back to the network in the browser worker.
   http.all('*', ({ request }) => viteAsset(request) ? passthrough() : HttpResponse.error()),
