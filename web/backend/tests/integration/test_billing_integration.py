@@ -13,6 +13,7 @@ import pyotp
 import pytest
 import sqlalchemy as sa
 from fastapi.testclient import TestClient
+from conftest import migrated_database
 
 from classroom_web.application.billing import BillingService
 from classroom_web.application.billing_browser import BillingAdmin, BillingBrowser
@@ -32,6 +33,13 @@ ROOT = Path(__file__).resolve().parents[4]
 spec = importlib.util.spec_from_file_location('pr11a_contract_candidate',ROOT/'tools/pr11a/contract_candidate.py')
 contract_candidate = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(contract_candidate)
+
+
+@pytest.fixture(scope='module')
+def pg():
+    """Keep billing tables and function grants out of formal schema regressions."""
+    with migrated_database() as database:
+        yield database
 
 
 @pytest.fixture(scope='module')
