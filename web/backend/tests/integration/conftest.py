@@ -1,6 +1,7 @@
 """Disposable PostgreSQL-only fixtures; never accept an arbitrary application DB."""
 from __future__ import annotations
 
+from contextlib import contextmanager
 import os
 from pathlib import Path
 import re
@@ -17,6 +18,10 @@ import sqlalchemy as sa
 # explicitly; everywhere else, including CI, the module is not collected at all, so it
 # counts neither as passed nor as skipped.
 collect_ignore = [] if os.environ.get("PR03B_REAL_BROWSER") == "1" else ["test_auth_browser.py"]
+# PR-04a's owned object-service runner explicitly enables its additional service suite.
+if os.environ.get("PR04A_OBJECT_INTEGRATION") != "1":
+    collect_ignore.append("test_private_media.py")
+    collect_ignore.append("test_media_stream_lifecycle.py")
 # Manual recovery talks to its control plane over a Windows named pipe authenticated by the
 # kernel (recovery_transport_windows.py), and every case in that module needs it. The feature
 # is Windows-only and stays disabled; on other systems the module is likewise not collected.
@@ -54,8 +59,9 @@ def migration_config(url, location=None):
     return cfg
 
 
-@pytest.fixture(scope="session")
-def pg():
+@contextmanager
+def migrated_database():
+    """Own a fresh migrated database and runtime login for one test scope."""
     supplied = os.environ.get("PR02A_TEST_ADMIN_URL")
     if not supplied:
         pytest.fail("PR02A_TEST_ADMIN_URL must identify the isolated synthetic PostgreSQL cluster")
@@ -101,6 +107,12 @@ def pg():
             connection.exec_driver_sql(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
             connection.exec_driver_sql(f'DROP ROLE IF EXISTS "{login}"')
         control.dispose()
+
+
+@pytest.fixture(scope="session")
+def pg():
+    with migrated_database() as database:
+        yield database
 
 
 @pytest.fixture

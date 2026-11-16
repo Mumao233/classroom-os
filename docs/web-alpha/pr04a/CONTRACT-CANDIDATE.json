@@ -1,0 +1,43 @@
+{
+  "work_package": "PR-04a",
+  "status": "review_candidate",
+  "base_version": "0.2.0",
+  "candidate_version": "0.2.1",
+  "base_openapi_sha256": "7432ba27581f3d44690138b5606ec61c4008579cb049a6c2dfc20737ea3a6a7a",
+  "changes": [
+    {
+      "path": "/media/{asset_id}/content",
+      "method": "get",
+      "request": {"header": "Range", "optional": true, "forms": ["bytes=first-last", "bytes=first-", "bytes=-suffix"], "maximum_ranges": 1},
+      "responses": {
+        "200": {"body": "binary", "headers": ["Cache-Control: no-store", "Accept-Ranges: bytes", "Content-Length", "Content-Disposition: attachment", "X-Content-Type-Options: nosniff"]},
+        "206": {"body": "binary", "headers": ["Content-Range: bytes first-last/length", "Content-Length", "Cache-Control: no-store", "Accept-Ranges: bytes"]},
+        "416": {"body": "Error", "code": "VALIDATION_FAILED", "headers": ["Content-Range: bytes */length", "Cache-Control: no-store"]}
+      },
+      "range_policy": "single byte range, suffix and open-ended supported, end clipped to object length, invalid/multiple/unsatisfiable rejected after authorization",
+      "if_range_policy": "ignored, current immutable representation is used for the requested Range",
+      "authorization": "current session, owner, purpose, exact asset revision, expiry and ancestor revocation on every request and every bounded storage block"
+    },
+    {
+      "path": "/media/{asset_id}/access",
+      "method": "post",
+      "ticket_policy": "opaque reusable ticket within its lifetime, bound to one current session, security epoch, resource revision and download purpose",
+      "replay_policy": "reauthorize-and-reissue",
+      "receipt": "asset_id reference only, secret ticket omitted",
+      "migration": "dedicated media_tickets table, existing authentication challenges retain their existing semantics"
+    }
+  ],
+  "cache_policy": "no-store remains the exact public response value defined by 0.2.0; authorization applies to every read",
+  "data_mapping": {
+    "frozen_model": "domain-model.json media_assets",
+    "http_projection": {"size_bytes": "byte_length", "status": "state"},
+    "status_projection": {"staging": "staging", "verified": "staging", "committed": "available unless access_revoked_at is set", "delete_pending": "pending_delete", "delete_failed": "delete_failed", "deleted": "deleted"},
+    "implementation_additions": ["media_assets.object_etag", "media_uploads", "media_tickets"],
+    "retention": "unassigned is an explicit pending policy marker; audio commit remains disabled until PR-04b supplies an approved policy authority",
+    "first_cloud_received_at": "preserved from the immutable object's storage LastModified, including database-failure recovery"
+  },
+  "compatibility": "existing JSON DTOs and upload paths remain compatible; additional binary responses require consumer Range handling; no generated frontend type change before contract review",
+  "consumers": ["PR-09b", "PR-10a", "PR-10b", "PR-05b", "PR-04b"],
+  "positive_cases": ["whole object", "bytes=0-0", "bytes=4-", "bytes=-3", "end clipped to length", "repeat ticket with active session", "fresh ticket on idempotent access retry"],
+  "negative_cases": ["multiple ranges", "suffix zero", "range beyond length", "foreign owner", "missing/revoked session", "expired ticket", "expired/revoked asset", "changed revision", "ancestor tombstone"]
+}

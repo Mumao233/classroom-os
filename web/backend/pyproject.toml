@@ -8,6 +8,7 @@ version = "0.1.0a1"
 description = "Independent Classroom OS Web data foundation"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+  "boto3==1.44.3",
   "SQLAlchemy==2.0.46",
   "alembic==1.18.4",
   "psycopg[binary]==3.3.3",
