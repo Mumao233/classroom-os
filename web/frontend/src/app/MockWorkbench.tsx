@@ -12,7 +12,7 @@ import { AppDataProvider, type AppData } from '../features/data';
 import type { LocalRisk } from '../domain/dashboard';
 import { Catalog } from '../ui';
 import { useMockRuntime } from '../mock/runtime';
-import { setMockAccount, setMockDataset, setMockOffline } from '../mock/start';
+import { isMockOffline, setMockAccount, setMockDataset, setMockOffline } from '../mock/start';
 import { eventScripts, type EventScriptName } from '../mock/event-scripts';
 import { createApiClient } from '../api/client';
 import styles from './Shell.module.css';
@@ -47,7 +47,8 @@ function MockWorkbenchContent({ runtime }: { runtime: ReturnType<typeof useMockR
   const [systemNight, setSystemNight] = useState(() => matchMedia('(prefers-color-scheme: dark)').matches);
   const [eventScript, setEventScript] = useState<EventScriptName>('transcript');
   const [eventStep, setEventStep] = useState(0);
-  const [mockOffline, setMockOfflineState] = useState(false);
+  // Seeded from the transport so an account-epoch remount never shows online while requests fail.
+  const [mockOffline, setMockOfflineState] = useState(isMockOffline);
   // Connectivity in the preview comes only from the simulated toggle: navigator.onLine is
   // false on an offline machine that still serves loopback, and "online" never proves the
   // service is reachable (02 §9 ConnectivityPort). Real reachability is per request.

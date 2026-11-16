@@ -98,6 +98,7 @@ function seedA(dataset: MockDataset): Store {
     questions: [
       { ...base(uuid('f0000000', 1), '2026-10-27T06:40:00Z'), class_session_id: s(1), task_id: uuid('f1000000', 1), source_snapshot_id: uuid('f2000000', 1), question: '为什么特征向量不唯一？', answer_markdown: '合成回答：任意非零倍数仍满足定义。', state: 'succeeded', understood: false },
       { ...base(uuid('f0000000', 2), '2026-10-27T06:50:00Z'), class_session_id: s(1), task_id: uuid('f1000000', 2), source_snapshot_id: uuid('f2000000', 2), question: '特征值可以是复数吗？', answer_markdown: '合成回答：可以。', state: 'succeeded', understood: true },
+      { ...base(uuid('f0000000', 3), '2026-10-10T02:10:00Z'), class_session_id: s(7), task_id: uuid('f1000000', 3), source_snapshot_id: uuid('f2000000', 3), question: '高斯面为什么可以任意选？', answer_markdown: '合成回答：只要包围同样的电荷。', state: 'succeeded', understood: false },
     ],
     notifications: [
       { id: uuid('90000000', 1), kind: 'task_completed', severity: 'info', object_id: null, read_at: null, resolved_at: '2026-10-27T08:00:00Z', created_at: '2026-10-27T08:00:00Z', message_code: 'review_summary.completed' },
@@ -413,8 +414,9 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
     handle,
     reset(account: MockAccountKey, dataset: MockDataset = 'seeded') { stores[account] = account === 'A' ? seedA(dataset) : seedB(); },
     /** Test helper: simulate a write by "another device" so CAS conflicts are reproducible. */
-    bumpElsewhere(account: MockAccountKey, kind: 'semester' | 'course' | 'class_session', id: string, change: Record<string, unknown> = {}) {
+    bumpElsewhere(account: MockAccountKey, kind: 'semester' | 'course' | 'class_session' | 'preferences', id: string, change: Record<string, unknown> = {}) {
       const store = stores[account];
+      if (kind === 'preferences') store.preferences = { ...store.preferences, ...change, revision: store.preferences.revision + 1 } as S['Preferences'];
       if (kind === 'semester') store.semesters = store.semesters.map(item => item.id === id ? touch({ ...item, ...change }) : item);
       if (kind === 'course') store.courses = store.courses.map(item => item.id === id ? touch({ ...item, ...change }) : item);
       if (kind === 'class_session') store.sessions = store.sessions.map(item => item.id === id ? touch({ ...item, ...change }) : item);

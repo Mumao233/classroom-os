@@ -79,6 +79,8 @@ test.describe('PR-09b Dashboard', () => {
     for (const kind of ['conflict', 'failed', 'unknown', 'expiring', 'not_understood']) await expect(todos.locator(`li[data-kind="${kind}"]`).first()).toBeVisible();
     await expect(todos).toContainText('AI 结果未知，可能已计费');
     await expect(todos).toContainText('未懂：为什么特征向量不唯一？');
+    // An unresolved question on an older class (not among the five shown) is still a todo.
+    await expect(todos).toContainText('未懂：高斯面为什么可以任意选？');
     await todos.locator('li[data-kind="failed"]').getByRole('link').click();
     await expect(page).toHaveURL(/\/classrooms\/c0000000-0000-4000-8000-000000000004\/processing$/);
   });
@@ -117,6 +119,10 @@ test.describe('PR-09b Dashboard', () => {
     await expect(page.getByRole('heading', { name: '线性代数', level: 1 })).toBeVisible();
     await expect(page.getByRole('button', { name: /归档/ })).toHaveCount(0);
     await shot(page, 'course-detail-offline');
+    // UI and transport share one connectivity state across an account switch.
+    await page.getByRole('button', { name: '切换模拟账号 A' }).click();
+    await expect(page.getByLabel('模拟离线')).toBeChecked();
+    await expect(page.getByTestId('offline-banner')).toBeVisible();
   });
 });
 
@@ -273,8 +279,22 @@ test.describe('PR-09b Courses', () => {
     await page.getByLabel('术语 2', { exact: true }).fill('eigenvector');
     await page.getByLabel('释义 2', { exact: true }).fill('特征向量');
     await page.getByRole('button', { name: '保存资料' }).click();
-    await expect(page.getByRole('status').filter({ hasText: '已保存到云端（版本 3）' })).toBeVisible();
+    const savedNotice = page.getByRole('status').filter({ hasText: '已保存到云端（版本 3）' });
+    await expect(savedNotice).toBeVisible();
+    await page.getByRole('textbox', { name: '课程大纲', exact: true }).fill('尚未保存的修改');
+    await expect(savedNotice).toHaveCount(0);
     await expect(page.getByText('课件照片和板书图片在各自课堂中上传与管理')).toBeVisible();
+  });
+
+  test('changing review filters keeps the course-list return context', async ({ page }) => {
+    await ready(page, '/courses?view=list&sort=name');
+    await page.getByTestId('course-table').getByRole('link', { name: '线性代数', exact: true }).click();
+    await page.getByRole('navigation', { name: '课程内容' }).getByRole('link', { name: '复习' }).click();
+    await page.getByLabel('类型').selectOption('card');
+    await expect(page).toHaveURL(/kind=card/);
+    await page.getByRole('link', { name: '← 课程列表' }).click();
+    await expect(page).toHaveURL(/view=list/);
+    await expect(page).toHaveURL(/sort=name/);
   });
 
   test('A/B isolation: B sees only its own courses and cannot open A’s course URL', async ({ page }) => {
@@ -310,6 +330,20 @@ test.describe('PR-09b Settings', () => {
     await expect(page).toHaveURL(/\/settings\/appearance$/);
   });
 
+  test('a preference conflict keeps the draft and needs an explicit choice', async ({ page }) => {
+    await ready(page, '/settings/ai');
+    const language = page.getByLabel('解释语言');
+    await language.selectOption('en');
+    await page.evaluate(() => (globalThis as unknown as { __classroomMock: { bump: (k: string, i: string, c: object) => void } }).__classroomMock.bump('preferences', '', { automatic_explanation: false }));
+    await page.getByTestId('ai-preferences').getByRole('button', { name: '保存' }).click();
+    await expect(page.getByTestId('conflict-panel')).toBeVisible();
+    await expect(language).toHaveValue('en');
+    await page.getByRole('button', { name: '以我的修改覆盖最新版本' }).click();
+    await expect(page.getByTestId('conflict-panel')).toHaveCount(0);
+    await expect(language).toHaveValue('en');
+    await expect(page.getByTestId('ai-preferences').getByRole('button', { name: '保存' })).toBeDisabled();
+  });
+
   test('profile and reading preference save with revisions; theme switch keeps an active capture', async ({ page }) => {
     await ready(page);
     await page.getByRole('button', { name: '开始模拟课堂' }).click();
@@ -317,6 +351,8 @@ test.describe('PR-09b Settings', () => {
     await page.getByLabel('昵称').fill('林同学（改）');
     await page.getByRole('button', { name: '保存' }).click();
     await expect(page.getByText('已保存。')).toBeVisible();
+    await page.getByLabel('昵称').fill('林同学（再改）');
+    await expect(page.getByText('已保存。')).toHaveCount(0);
     await page.getByRole('link', { name: '主题与阅读' }).click();
     await page.getByLabel('Nebula Night').check();
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'night');

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Navigate, NavLink, useParams } from 'react-router';
 import { useMutation } from '@tanstack/react-query';
 import type { components } from '../../generated/openapi';
@@ -60,12 +60,13 @@ function ProfileForm({ user }: { user: S['User'] }) {
   const invalidate = useInvalidateAccount();
   const [base, setBase] = useState(user.revision);
   const [values, setValues] = useState({ nickname: user.nickname, school: user.school, major: user.major });
-  const [saved, setSaved] = useState(false);
+  const [acked, setAcked] = useState<typeof values | null>(null);
+  const saved = acked !== null && (['nickname', 'school', 'major'] as const).every(key => acked[key] === values[key].trim());
   const [latest, setLatest] = useState<number | null>(null);
   const save = useMutation({
     mutationFn: (revision: number) => api.updateProfile({ base_revision: revision, nickname: values.nickname.trim(), school: values.school.trim(), major: values.major.trim() }),
-    onSuccess: async next => { setBase(next.revision); setSaved(true); setLatest(null); await invalidate(); },
-    onError: async error => { setSaved(false); if (isConflict(error)) setLatest((await api.me()).revision); },
+    onSuccess: async next => { setBase(next.revision); setAcked({ nickname: next.nickname, school: next.school, major: next.major }); setLatest(null); await invalidate(); },
+    onError: async error => { setAcked(null); if (isConflict(error)) setLatest((await api.me()).revision); },
   });
   const field = (key: keyof typeof values, label: string, max: number) => <div className={styles.field}><label htmlFor={`profile-${key}`}>{label}</label><input id={`profile-${key}`} value={values[key]} maxLength={max} onChange={event => setValues({ ...values, [key]: event.target.value })} /></div>;
   return <form className={`${styles.panel} ${styles.form}`} onSubmit={event => { event.preventDefault(); save.mutate(base); }} aria-label="个人资料">
@@ -130,20 +131,46 @@ function Appearance({ theme, setTheme, effects, setEffects }: { theme: Theme; se
         <label className={styles.choice} key={item.value}><input type="radio" name="theme" value={item.value} checked={theme === item.value} onChange={() => setTheme(item.value)} /><span><strong>{item.title}</strong><br /><small className={styles.muted}>{item.desc}</small></span></label>)}</div></section>
     <section className={styles.panel}><h2>视觉效果</h2><p className={`${styles.small} ${styles.muted}`}>减少透明、模糊与动画效果，同时保留所有功能。</p>
       <label className={styles.choice}><input type="checkbox" checked={effects === 'reduced'} onChange={event => setEffects(event.target.checked ? 'reduced' : 'normal')} /> 低特效模式</label></section>
-    {preferences.isError ? <QueryError error={preferences.error} /> : preferences.isPending ? <Loading label="正在读取阅读偏好…" /> : <ReadingForm key={preferences.data.revision} preferences={preferences.data} />}
+    {preferences.isError ? <QueryError error={preferences.error} /> : preferences.isPending ? <Loading label="正在读取阅读偏好…" /> : <ReadingForm preferences={preferences.data} />}
   </>;
 }
 function ReadingForm({ preferences }: { preferences: S['Preferences'] }) {
   const { api, online } = useAppData();
   const invalidate = useInvalidateAccount();
   const [size, setSize] = useState(preferences.reading_font_px);
-  const save = useMutation({ mutationFn: () => api.updatePreferences({ base_revision: preferences.revision, reading_font_px: size }), onSuccess: () => invalidate(), onError: async error => { if (isConflict(error)) await invalidate(); } });
+  const cas = usePreferenceBase(preferences, size !== preferences.reading_font_px);
+  const save = useMutation({ mutationFn: (revision: number) => api.updatePreferences({ base_revision: revision, reading_font_px: size }), onSuccess: async next => { cas.acknowledge(next); await invalidate(); }, onError: cas.onError });
   return <section className={styles.panel}><h2>阅读字号</h2>
     <div className={styles.field}><label htmlFor="reading-size">正文与字幕字号：{size}px</label><input id="reading-size" type="range" min={14} max={32} step={1} value={size} onChange={event => setSize(Number(event.target.value))} /></div>
     <p style={{ fontSize: size, lineHeight: 1.7 }} className={styles.wrap}>示例：特征向量在线性变换下只被拉伸或压缩。</p>
-    {save.isError && <p role="alert" className={styles.error}>{isConflict(save.error) ? '偏好已在其他设备更新，已载入最新值，请再次确认。' : describeError(save.error)}</p>}
-    <button type="button" className={styles.button} disabled={!online || save.isPending || size === preferences.reading_font_px} onClick={() => save.mutate()}>保存字号</button>
+    {cas.latest ? <PreferenceConflict onKeep={() => save.mutate(cas.takeLatest())} onDiscard={() => { setSize(cas.latest!.reading_font_px); cas.takeLatest(); save.reset(); }} />
+      : save.isError && <p role="alert" className={styles.error}>{describeError(save.error)}</p>}
+    <button type="button" className={styles.button} disabled={!online || save.isPending || size === preferences.reading_font_px} onClick={() => save.mutate(cas.base)}>保存字号</button>
   </section>;
+}
+
+/**
+ * CAS base for a preference form that stays mounted: an unedited form follows the latest
+ * revision; an edited one keeps its base so another device's change surfaces as a conflict
+ * with an explicit keep-mine / load-latest choice instead of silently dropping the draft.
+ */
+function usePreferenceBase(preferences: S['Preferences'], dirty: boolean) {
+  const { api } = useAppData();
+  const [base, setBase] = useState(preferences.revision);
+  const [latest, setLatest] = useState<S['Preferences'] | null>(null);
+  useEffect(() => { if (!dirty && !latest) setBase(preferences.revision); }, [dirty, latest, preferences.revision]);
+  return {
+    base, latest,
+    acknowledge: (next: S['Preferences']) => { setBase(next.revision); setLatest(null); },
+    onError: async (error: unknown) => { if (isConflict(error)) setLatest(await api.preferences()); },
+    takeLatest: () => { const revision = latest?.revision ?? base; setBase(revision); setLatest(null); return revision; },
+  };
+}
+function PreferenceConflict({ onKeep, onDiscard }: { onKeep: () => void; onDiscard: () => void }) {
+  return <div className={`${styles.banner} ${styles.bannerWarning}`} role="alert" data-testid="conflict-panel"><div className={styles.stack}>
+    <strong>偏好已在其他设备更新，你的修改仍保留。</strong>
+    <div className={styles.row}><button type="button" className={styles.button} onClick={onKeep}>以我的修改覆盖最新版本</button>
+      <button type="button" className={styles.buttonSecondary} onClick={onDiscard}>放弃我的修改，载入最新版本</button></div></div></div>;
 }
 
 /** CF-15: allowed preferences only — no platform key, provider URL, model or BYOK fields. */
@@ -151,20 +178,22 @@ function AiPreferences() {
   const preferences = usePreferences();
   if (preferences.isError) return <QueryError error={preferences.error} retry={() => void preferences.refetch()} />;
   if (preferences.isPending) return <Loading label="正在读取 AI 偏好…" />;
-  return <AiForm key={preferences.data.revision} preferences={preferences.data} />;
+  return <AiForm preferences={preferences.data} />;
 }
 function AiForm({ preferences }: { preferences: S['Preferences'] }) {
   const { api, online } = useAppData();
   const invalidate = useInvalidateAccount();
   const [language, setLanguage] = useState(preferences.explanation_language);
   const [automatic, setAutomatic] = useState(preferences.automatic_explanation);
-  const save = useMutation({ mutationFn: () => api.updatePreferences({ base_revision: preferences.revision, explanation_language: language, automatic_explanation: automatic }), onSuccess: () => invalidate(), onError: async error => { if (isConflict(error)) await invalidate(); } });
   const changed = language !== preferences.explanation_language || automatic !== preferences.automatic_explanation;
-  return <form className={`${styles.panel} ${styles.form}`} onSubmit={event => { event.preventDefault(); save.mutate(); }} aria-label="AI 使用偏好" data-testid="ai-preferences">
+  const cas = usePreferenceBase(preferences, changed);
+  const save = useMutation({ mutationFn: (revision: number) => api.updatePreferences({ base_revision: revision, explanation_language: language, automatic_explanation: automatic }), onSuccess: async next => { cas.acknowledge(next); await invalidate(); }, onError: cas.onError });
+  return <form className={`${styles.panel} ${styles.form}`} onSubmit={event => { event.preventDefault(); save.mutate(cas.base); }} aria-label="AI 使用偏好" data-testid="ai-preferences">
     <div className={styles.field}><label htmlFor="ai-language">解释语言</label><select id="ai-language" value={language} onChange={event => setLanguage(event.target.value as S['Preferences']['explanation_language'])}><option value="auto">跟随课堂</option><option value="zh">中文</option><option value="en">英文</option></select></div>
     <label className={styles.choice}><input type="checkbox" checked={automatic} onChange={event => setAutomatic(event.target.checked)} aria-describedby="ai-auto-hint" /> <span>课堂中自动解释<br /><small id="ai-auto-hint" className={styles.muted}>默认关闭。开启后每次自动解释都计入个人互动额度，额度不足时停止。</small></span></label>
     <p className={`${styles.small} ${styles.muted}`}>模型服务和密钥由平台在服务端统一管理，学生账号不配置模型地址或密钥，也不支持自带 API Key。</p>
-    {save.isError && <p role="alert" className={styles.error}>{isConflict(save.error) ? '偏好已在其他设备更新，已载入最新值，请再次确认。' : describeError(save.error)}</p>}
+    {cas.latest ? <PreferenceConflict onKeep={() => save.mutate(cas.takeLatest())} onDiscard={() => { setLanguage(cas.latest!.explanation_language); setAutomatic(cas.latest!.automatic_explanation); cas.takeLatest(); save.reset(); }} />
+      : save.isError && <p role="alert" className={styles.error}>{describeError(save.error)}</p>}
     <div><button type="submit" className={styles.button} disabled={!online || save.isPending || !changed}>保存</button></div>
   </form>;
 }

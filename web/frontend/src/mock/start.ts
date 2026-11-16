@@ -11,10 +11,11 @@ const backend = createMockBackend();
 export function setMockAccount(account: 'A' | 'B' | null) { mockAccount = account; }
 /** Simulated loss of connectivity: every business request fails like a network error. */
 export function setMockOffline(offline: boolean) { mockOffline = offline; }
+export function isMockOffline() { return mockOffline; }
 /** MOCK-01 uses an empty account; other scenarios use the seeded synthetic records. */
 export function setMockDataset(account: 'A' | 'B', dataset: MockDataset) { backend.reset(account, dataset); }
 /** Dev panel helper: another device updates a record so CAS conflicts can be reproduced. */
-export function bumpMockRecord(kind: 'semester' | 'course' | 'class_session', id: string, change: Record<string, unknown> = {}) {
+export function bumpMockRecord(kind: 'semester' | 'course' | 'class_session' | 'preferences', id: string, change: Record<string, unknown> = {}) {
   if (mockAccount) backend.bumpElsewhere(mockAccount, kind, id, change);
 }
 // Development/test hook only (this module never ships in production builds).

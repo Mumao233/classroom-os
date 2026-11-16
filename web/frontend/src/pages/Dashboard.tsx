@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { IconArrowRight, IconBolt, IconBook2, IconCalendar, IconChevronRight, IconFileText, IconListCheck, IconMicrophone, IconTimeline } from '@tabler/icons-react';
 import { Link } from 'react-router';
-import { activityItems, chooseContinueEntry, deriveTodos, EXPIRY_WARNING_MS, formatDate, formatDateTime, recentSessions, type ContinueEntry } from '../domain/dashboard';
+import { activityItems, chooseContinueEntry, deriveTodos, EXPIRY_WARNING_MS, formatDate, formatDateTime, liveSessions, recentSessions, type ContinueEntry } from '../domain/dashboard';
 import { defaultSemester } from '../domain/courses';
 import { useAppData, useClassSessions, useCourses, useMe, useNotifications, useQuestionsFor, useReviewDocuments, useSemesters } from '../features/data';
 import { Badge, CourseGlyph, coverClass, DataSourceNote, Empty, FlowSummaryView, Loading, OfflineBanner, QueryError } from './common';
@@ -27,8 +27,8 @@ export function Dashboard() {
   const documents = useReviewDocuments({ kind: 'note' });
   const notifications = useNotifications();
   const allCourses = [...(active.data?.items ?? []), ...(archived.data?.items ?? [])];
-  const recent = recentSessions(sessions.data?.items ?? [], allCourses, 5);
-  const questions = useQuestionsFor(recent.map(item => item.id));
+  // Unresolved questions come from every live loaded classroom, not just the five shown (UI-DASH-06).
+  const questions = useQuestionsFor(liveSessions(sessions.data?.items ?? [], allCourses).map(item => item.id));
   const core = [semesters, active, archived, sessions];
   // A failed background refetch (e.g. offline) keeps showing what was already read.
   const failed = core.find(query => query.isError && !query.data);
@@ -40,7 +40,7 @@ export function Dashboard() {
   const isNew = courses.length === 0 && archived.data!.items.length === 0;
   const entry = chooseContinueEntry({ capture: app.capture, localRisk: app.localRisk, sessions: sessions.data!.items, courses: allCourses, documents: documents.data?.items ?? [] });
   const todos = deriveTodos({ sessions: sessions.data!.items, courses: allCourses, questions: questions.items, now });
-  const lastByCourse = new Map<string, (typeof recent)[number]>();
+  const lastByCourse = new Map<string, ReturnType<typeof recentSessions>[number]>();
   for (const item of recentSessions(sessions.data!.items, allCourses, 1000)) if (!lastByCourse.has(item.course_id)) lastByCourse.set(item.course_id, item);
   const recentCourses = [...courses].sort((a, b) => (b.last_class_session_at ?? '').localeCompare(a.last_class_session_at ?? '') || (a.id < b.id ? -1 : 1)).slice(0, 3);
   const semester = defaultSemester(semesters.data!.items);

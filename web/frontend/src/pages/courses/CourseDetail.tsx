@@ -188,14 +188,17 @@ function MaterialEditor({ material }: { material: S['CourseMaterial'] }) {
   const [language, setLanguage] = useState(material.language);
   const [glossary, setGlossary] = useState<S['GlossaryTerm'][]>(material.glossary);
   const [latest, setLatest] = useState<S['CourseMaterial'] | null>(null);
-  const [saved, setSaved] = useState(false);
+  // The saved notice applies only while the draft still equals what the server acknowledged.
+  const [acked, setAcked] = useState<S['CourseMaterial'] | null>(null);
+  const draftKey = (value: Pick<S['CourseMaterial'], 'syllabus' | 'glossary' | 'language'>) => JSON.stringify([value.syllabus, value.language, value.glossary.filter(term => term.term.trim()).map(term => [term.term, term.meaning, term.language])]);
+  const saved = acked !== null && draftKey(acked) === draftKey({ syllabus, glossary, language });
   const save = useMutation({
     mutationFn: (revision: number) => api.writeMaterial(material.course_id, { base_revision: revision, syllabus, glossary: glossary.filter(term => term.term.trim()), language }),
-    onSuccess: async next => { setBase(next.revision); setLatest(null); setSaved(true); await invalidate(); },
-    onError: async error => { setSaved(false); if (isConflict(error)) setLatest((await api.materials(material.course_id)).items[0] ?? null); },
+    onSuccess: async next => { setBase(next.revision); setLatest(null); setAcked(next); await invalidate(); },
+    onError: async error => { setAcked(null); if (isConflict(error)) setLatest((await api.materials(material.course_id)).items[0] ?? null); },
   });
   const invalidTerm = glossary.some(term => term.term.length > 160 || term.meaning.length > 1000);
-  return <form className={`${styles.panel} ${styles.form}`} style={{ maxWidth: 'none' }} onSubmit={event => { event.preventDefault(); setSaved(false); save.mutate(base); }} aria-labelledby="mat-heading">
+  return <form className={`${styles.panel} ${styles.form}`} style={{ maxWidth: 'none' }} onSubmit={event => { event.preventDefault(); setAcked(null); save.mutate(base); }} aria-labelledby="mat-heading">
     <h3 id="mat-heading">课程大纲与术语词表</h3>
     <div className={styles.field}><label htmlFor="mat-syllabus">课程大纲</label><textarea id="mat-syllabus" value={syllabus} maxLength={120000} onChange={event => setSyllabus(event.target.value)} aria-describedby="mat-syllabus-hint" /><span id="mat-syllabus-hint" className={styles.hint}>可留空，之后再补。</span></div>
     <div className={styles.field}><label htmlFor="mat-language">资料语言</label><select id="mat-language" value={language} onChange={event => setLanguage(event.target.value as S['CourseMaterial']['language'])} aria-describedby="mat-language-hint">{(Object.keys(languageLabels) as Array<keyof typeof languageLabels>).map(key => <option key={key} value={key}>{languageLabels[key]}</option>)}</select>
@@ -220,13 +223,14 @@ function MaterialEditor({ material }: { material: S['CourseMaterial'] }) {
 
 /** UI-COURSE-10 / UI-REVIEW-02 (course part): filters the shared review objects; no copies. */
 function ReviewTab({ course }: { course: S['Course'] }) {
+  const location = useLocation();
   const [params, setParams] = useSearchParams();
   const kind = (['summary', 'card', 'note'] as const).find(value => value === params.get('kind'));
   const understood = params.get('understood') === 'true' ? true : params.get('understood') === 'false' ? false : undefined;
   const documents = useReviewDocuments({ course_id: course.id, kind, understood });
   const sessions = useClassSessions(course.id);
   const sessionTitle = new Map((sessions.data?.items ?? []).map(item => [item.id, item.title || '未命名课堂']));
-  const set = (key: string, value: string) => { const next = new URLSearchParams(params); if (value) next.set(key, value); else next.delete(key); setParams(next, { replace: true }); };
+  const set = (key: string, value: string) => { const next = new URLSearchParams(params); if (value) next.set(key, value); else next.delete(key); setParams(next, { replace: true, state: location.state }); };
   return <section className={styles.panel}>
     <div className={styles.toolbar}>
       <div className={styles.field}><label htmlFor="review-kind">类型</label><select id="review-kind" value={kind ?? ''} onChange={event => set('kind', event.target.value)}><option value="">全部</option><option value="summary">课堂总结</option><option value="card">复习卡片</option><option value="note">个人笔记</option></select></div>
