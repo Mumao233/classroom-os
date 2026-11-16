@@ -67,10 +67,16 @@ def failure(error,request_id):
         headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'})
 
 
-def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admission=None):
+def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admission=None,billing=None,billing_admin=None):
     parsed=urlsplit(origin)
     if parsed.scheme!='https' or not parsed.netloc or parsed.path or parsed.query or parsed.fragment or parsed.username:raise ValueError('one exact HTTPS origin is required')
     if contract.get('info',{}).get('version')!='0.2.0':raise ValueError('approved contract 0.2.0 required')
+    if billing_admin is not None and not contract.get('x-pr11a-candidate'):
+        raise ValueError('billing administration requires its explicit contract candidate')
+    if billing_admin is not None:
+        if auth.admin_reauth is not None and auth.admin_reauth is not billing_admin:
+            raise ValueError('an existing admin reauth delegate must be coordinated')
+        auth.admin_reauth=billing_admin
     workers=ThreadPoolExecutor(max_workers=64,thread_name_prefix='auth-ingress');slots=threading.BoundedSemaphore(64)
     @asynccontextmanager
     async def lifespan(_):
@@ -107,7 +113,15 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
            '/me/sessions':lambda c,p:auth.list_contexts(c,'sessions',p.get('cursor'),p.get('limit')),
            '/me/devices':lambda c,p:auth.list_contexts(c,'devices',p.get('cursor'),p.get('limit'))}
 
-    def dispatch(path,ctx,body,key,params):
+    def dispatch(path,ctx,body,key,params,method):
+        if path=='/me/quota' and billing is not None:return billing.quota(ctx)
+        if path=='/tasks/{task_id}/cancel' and billing is not None:return billing.cancel(ctx,params['task_id'],key)
+        if billing_admin is not None:
+            if path=='/admin/users/{user_id}/quota':return billing_admin.user_quota(ctx,params['user_id'])
+            if path=='/admin/usage':return billing_admin.read(ctx,'usage',params.get('period_start'))
+            if path=='/admin/switches':
+                return billing_admin.read(ctx,'switches') if method=='get' else billing_admin.apply(ctx,'adminUpdateSwitches',body,key)
+            if path=='/admin/quota-adjustments':return billing_admin.apply(ctx,'adminAdjustQuota',body,key)
         if path in reads:return reads[path](ctx,params)
         if path=='/auth/login':return auth.login(ctx,body)
         if path=='/auth/login/mfa':return auth.login_mfa(ctx,body,key)
@@ -149,6 +163,8 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
         '/auth/password/forgot','/auth/password/reset','/auth/email/confirm','/auth/recovery/enroll','/auth/recovery/confirm','/ws-tickets',
         '/me/sessions/{session_id}/revoke','/me/devices/{device_id}/revoke'}
     if business is not None:selected.add('/courses/{course_id}')
+    if billing is not None:selected.update(('/me/quota','/tasks/{task_id}/cancel'))
+    if billing_admin is not None:selected.update(('/admin/switches','/admin/usage','/admin/quota-adjustments','/admin/users/{user_id}/quota'))
     def endpoint(path,method,operation):
         success=next(k for k in operation['responses'] if k.startswith('2'))
         response_schema=operation['responses'][success]['content']['application/json']['schema']
@@ -158,6 +174,16 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
             entered=time.monotonic();deadline=entered+5;deadline_token=DEADLINE.set(deadline);dispatched=False
             try:
                 secure(request,write=method!='get');ctx=request_context(request);key=None;body={};params=dict(request.path_params)
+                if path in ('/me/quota','/admin/switches','/admin/users/{user_id}/quota') and method=='get' and request.url.query:
+                    raise AuthRejected('VALIDATION_FAILED',422)
+                if path=='/admin/usage':
+                    pairs=list(request.query_params.multi_items())
+                    if pairs:
+                        if len(pairs)!=1 or pairs[0][0]!='period_start' or not re.fullmatch(r'\d{4}-\d{2}-01',pairs[0][1]):raise AuthRejected('VALIDATION_FAILED',422)
+                        try:
+                            from zoneinfo import ZoneInfo
+                            params['period_start']=datetime.fromisoformat(pairs[0][1]).replace(tzinfo=ZoneInfo('Asia/Shanghai')).isoformat()
+                        except ValueError:raise AuthRejected('VALIDATION_FAILED',422) from None
                 if path=='/courses/{course_id}':
                     pairs=list(request.query_params.multi_items())
                     if pairs:
@@ -187,7 +213,7 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
                 if not slots.acquire(False):raise AuthRejected('RATE_LIMITED',429)
                 context=copy_context()
                 def work():
-                    try:remaining();return dispatch(path,ctx,body,key,params)
+                    try:remaining();return dispatch(path,ctx,body,key,params,method)
                     finally:slots.release()
                 try:future=workers.submit(context.run,work)
                 except BaseException:slots.release();raise
@@ -214,7 +240,8 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
     for path in selected:
         if path not in contract['paths']:raise ValueError('route absent from approved contract: '+path)
         for method,operation in contract['paths'][path].items():
-            if method in ('get','post'):app.add_api_route(PREFIX+path,endpoint(path,method,operation),methods=[method.upper()])
+            if method in ('get','post') or (path=='/admin/switches' and method=='patch' and billing_admin is not None):
+                app.add_api_route(PREFIX+path,endpoint(path,method,operation),methods=[method.upper()])
 
     @app.websocket(PREFIX+'/ws/events')
     async def events(ws:WebSocket):
