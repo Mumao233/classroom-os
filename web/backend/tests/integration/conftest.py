@@ -1,6 +1,7 @@
 """Disposable PostgreSQL-only fixtures; never accept an arbitrary application DB."""
 from __future__ import annotations
 
+from contextlib import contextmanager
 import os
 from pathlib import Path
 import re
@@ -58,8 +59,9 @@ def migration_config(url, location=None):
     return cfg
 
 
-@pytest.fixture(scope="session")
-def pg():
+@contextmanager
+def migrated_database():
+    """Own a fresh migrated database and runtime login for one test scope."""
     supplied = os.environ.get("PR02A_TEST_ADMIN_URL")
     if not supplied:
         pytest.fail("PR02A_TEST_ADMIN_URL must identify the isolated synthetic PostgreSQL cluster")
@@ -105,6 +107,12 @@ def pg():
             connection.exec_driver_sql(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
             connection.exec_driver_sql(f'DROP ROLE IF EXISTS "{login}"')
         control.dispose()
+
+
+@pytest.fixture(scope="session")
+def pg():
+    with migrated_database() as database:
+        yield database
 
 
 @pytest.fixture

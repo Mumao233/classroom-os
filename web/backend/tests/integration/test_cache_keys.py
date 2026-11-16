@@ -11,6 +11,7 @@ from uuid import UUID, uuid4
 import pytest
 import sqlalchemy as sa
 from fastapi.testclient import TestClient
+from conftest import migrated_database
 
 from classroom_web.application.cache_keys import CacheKeyService
 from classroom_web.domain.data import OwnerContext, Resource
@@ -22,6 +23,13 @@ from test_authentication import auth, login, post, PASSWORD, BASE, install_facto
 ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(ROOT / "tools/pr05a/formal"))
 from candidate import candidate_contract, candidate_sql
+
+
+@pytest.fixture(scope="module")
+def pg():
+    """Keep candidate DDL and identity function overlays local to this module."""
+    with migrated_database() as database:
+        yield database
 
 
 @pytest.fixture(scope="module")
@@ -379,13 +387,21 @@ def test_expired_real_reauth_proof_cannot_release_a_key(cache):
 def test_real_tls_browser_cookie_cache_unlock_and_device_revocation(cache, tmp_path):
     import os
     import subprocess
+    import shutil
+    import signal
     import threading
     import time
     import uvicorn
     from fastapi.responses import HTMLResponse
     from test_auth_browser import _certificate
 
-    dependency = Path(os.environ['PR05A_DEPENDENCY_ROOT'])
+    dependency = Path(os.environ.get('PR05A_DEPENDENCY_ROOT', ROOT))
+    node = shutil.which('node') or str(dependency / 'work/pr03b/vmware-broker/payload/node/node.exe')
+    browsers = os.environ.get('PLAYWRIGHT_BROWSERS_PATH') or str(dependency / 'work/pr03b/vmware-broker/payload/ms-playwright')
+    module = dependency / 'web/frontend/node_modules/@playwright/test/index.mjs'
+    assert Path(node).is_file() and module.is_file() and Path(browsers).is_dir(), 'prepare Node, Playwright and Chromium first'
+    output = Path(os.environ.get('PR05A_REVIEW_OUTPUT', tmp_path))
+    output.mkdir(parents=True, exist_ok=True)
     cert, key, pin = _certificate(tmp_path, 'cache-formal', uuid4().hex[:12])
     import socket
     with socket.socket() as listener:
@@ -404,14 +420,13 @@ def test_real_tls_browser_cookie_cache_unlock_and_device_revocation(cache, tmp_p
     assert server.started
     env = {**os.environ, 'PR05A_EMAIL': cache.a.email, 'PR05A_PASSWORD': PASSWORD,
         'PR05A_ORIGIN': origin, 'PR05A_PIN': pin, 'PR05A_BROWSER_PROFILE': str(tmp_path / 'browser-profile'),
-        'PR05A_PLAYWRIGHT_MODULE': str(dependency / 'web/frontend/node_modules/@playwright/test/index.mjs'),
-        'PLAYWRIGHT_BROWSERS_PATH': str(dependency / 'work/pr03b/vmware-broker/payload/ms-playwright')}
+        'PR05A_PLAYWRIGHT_MODULE': str(module), 'PLAYWRIGHT_BROWSERS_PATH': browsers}
     process = None
     try:
         with (tmp_path / 'browser-stderr.log').open('w', encoding='utf-8') as stderr:
-            process = subprocess.Popen([str(dependency / 'work/pr03b/vmware-broker/payload/node/node.exe'),
+            process = subprocess.Popen([node,
                 str(ROOT / 'tools/pr05a/formal/browser.mjs')], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                stderr=stderr, env=env, text=True, encoding='utf-8')
+                stderr=stderr, env=env, text=True, encoding='utf-8', start_new_session=os.name != 'nt')
             ready = process.stdout.readline()
             assert ready, (tmp_path / 'browser-stderr.log').read_text(encoding='utf-8')
             device = json.loads(ready)['device_id']
@@ -422,10 +437,13 @@ def test_real_tls_browser_cookie_cache_unlock_and_device_revocation(cache, tmp_p
         assert process.returncode == 0, (tmp_path / 'browser-stderr.log').read_text(encoding='utf-8')
         result = json.loads(stdout.strip().splitlines()[-1])
         assert result['real_device_revoke_blocks_old_unlock']
-        (Path(os.environ['PR05A_REVIEW_OUTPUT']) / 'browser.json').write_text(json.dumps(result, indent=2), encoding='utf-8')
+        (output / 'browser.json').write_text(json.dumps(result, indent=2), encoding='utf-8')
     finally:
         if process is not None and process.poll() is None:
-            subprocess.run(['taskkill', '/PID', str(process.pid), '/T', '/F'], capture_output=True, check=False)
+            if os.name == 'nt':
+                subprocess.run(['taskkill', '/PID', str(process.pid), '/T', '/F'], capture_output=True, check=False)
+            else:
+                os.killpg(process.pid, signal.SIGKILL)
             process.wait(timeout=10)
         server.should_exit = True
         thread.join(timeout=5)
