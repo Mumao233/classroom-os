@@ -67,7 +67,7 @@ def failure(error,request_id):
         headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'})
 
 
-def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admission=None,billing=None,billing_admin=None):
+def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admission=None,cache=None,media=None,media_spool_directory=None,billing=None,billing_admin=None):
     parsed=urlsplit(origin)
     if parsed.scheme!='https' or not parsed.netloc or parsed.path or parsed.query or parsed.fragment or parsed.username:raise ValueError('one exact HTTPS origin is required')
     if contract.get('info',{}).get('version')!='0.2.0':raise ValueError('approved contract 0.2.0 required')
@@ -114,6 +114,8 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
            '/me/devices':lambda c,p:auth.list_contexts(c,'devices',p.get('cursor'),p.get('limit'))}
 
     def dispatch(path,ctx,body,key,params,method):
+        if cache is not None and path in ('/me/cache-unlock','/me/cache-recover'):
+            return cache.release(ctx,body,key,recovery=path=='/me/cache-recover')
         if path=='/me/quota' and billing is not None:return billing.quota(ctx)
         if path=='/tasks/{task_id}/cancel' and billing is not None:return billing.cancel(ctx,params['task_id'],key)
         if billing_admin is not None:
@@ -165,6 +167,10 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
     if business is not None:selected.add('/courses/{course_id}')
     if billing is not None:selected.update(('/me/quota','/tasks/{task_id}/cancel'))
     if billing_admin is not None:selected.update(('/admin/switches','/admin/usage','/admin/quota-adjustments','/admin/users/{user_id}/quota'))
+    if cache is not None:
+        selected.add('/me/cache-unlock')
+        if cache.allow_recovery and contract.get('x-pr05a-candidate') is True:
+            selected.add('/me/cache-recover')
     def endpoint(path,method,operation):
         success=next(k for k in operation['responses'] if k.startswith('2'))
         response_schema=operation['responses'][success]['content']['application/json']['schema']
@@ -242,6 +248,11 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
         for method,operation in contract['paths'][path].items():
             if method in ('get','post') or (path=='/admin/switches' and method=='patch' and billing_admin is not None):
                 app.add_api_route(PREFIX+path,endpoint(path,method,operation),methods=[method.upper()])
+
+    if media is not None:
+        from .media_http import register_media
+        register_media(app,media=media,contract=contract,secure=secure,request_context=request_context,
+                       check=check,body_for=body_for,failure=failure,spool_directory=media_spool_directory)
 
     @app.websocket(PREFIX+'/ws/events')
     async def events(ws:WebSocket):

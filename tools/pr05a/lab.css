@@ -1,0 +1,7 @@
+body { margin: 0; background: #f2f4f6; color: #182126; font: 17px/1.6 system-ui, sans-serif; }
+main { max-width: 900px; margin: 6vh auto; padding: 28px; background: white; border-radius: 12px; }
+h1 { font-size: 28px; }
+.actions { display: flex; flex-wrap: wrap; gap: 10px; }
+button { padding: 10px 14px; background: #174c45; color: white; border: 0; border-radius: 6px; cursor: pointer; font: inherit; }
+button:focus-visible { outline: 3px solid #bf6b16; outline-offset: 3px; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; }
