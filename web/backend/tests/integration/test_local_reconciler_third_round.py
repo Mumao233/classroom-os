@@ -528,10 +528,10 @@ def test_four_definer_owners_have_exact_restricted_flags_membership_and_acl(pg):
 
 SELECT_COLUMNS = {
     I: {"users": "id state deleted_at normalized_email email_verified_at password_hash"},
-    M: {"tasks": "id owner_id kind lease_token state not_before lease_expires_at updated_at error_code",
+    M: {"tasks": "id owner_id kind lease_token state not_before lease_expires_at updated_at error_code schema_version",
         "task_attempts": "id owner_id task_id attempt_number raw_output_ref submitted_at provider_request_id provider_outcome state",
         "provider_results": "id owner_id attempt_id validation_status conflict_sha256"},
-    P: {"tasks": "id owner_id kind state lease_token lease_expires_at revision class_session_id not_before error_code may_have_charged",
+    P: {"tasks": "id owner_id kind state lease_token lease_expires_at revision class_session_id not_before error_code may_have_charged schema_version",
         "task_attempts": "id owner_id task_id attempt_number raw_output_ref provider_outcome state finished_at",
         "provider_results": "id owner_id attempt_id raw_output validation_status conflict_sha256",
         "semesters": "id owner_id deleted_at revision", "courses": "id owner_id semester_id deleted_at revision",

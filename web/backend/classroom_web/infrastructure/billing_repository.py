@@ -148,7 +148,11 @@ class PgBillingRepository:
     def reserve(self, request: ReservationRequest):
         request.validate()
         reference = input_reference(request.input_ref)
-        request_hash = fingerprint(json.loads(json_value(asdict(request))))
+        canonical = asdict(request)
+        if request.schema_version == '1':
+            canonical.pop('schema_version')
+            canonical.pop('plan_id')
+        request_hash = fingerprint(json.loads(json_value(canonical)))
         old = self.tx.receipts.lock_and_get('reserveBilling', request.op_id, request_hash)
         if old:
             self.tx.tasks.get(old['resource_id'])
@@ -175,7 +179,8 @@ class PgBillingRepository:
                 raise BillingBlocked('summary child requires the existing submitted root operation')
         task = self.tx.tasks.enqueue(request.purpose, reference, op_id=request.op_id,
             operation='enqueueBudgetTask', class_session_id=request.class_session_id,
-            parent_task_id=root['task_id'] if request.quota_root_id is not None else None)
+            parent_task_id=root['task_id'] if request.quota_root_id is not None else None,
+            schema_version=request.schema_version, plan_id=request.plan_id)
         identity = uuid4()
         self._rows('''INSERT INTO public.quota_reservations(id,owner_id,task_id,quota_root_id,period_start,
             purpose,state,pool,reserved_microyuan,maximum_units,price_id,expires_at)

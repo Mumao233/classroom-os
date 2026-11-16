@@ -18,6 +18,7 @@ from conftest import migrated_database
 from classroom_web.application.billing import BillingService
 from classroom_web.application.billing_browser import BillingAdmin, BillingBrowser
 from classroom_web.application.billing_tasks import BillingTaskLifecycle
+from classroom_web.application.qa_browser import QaBrowser
 from classroom_web.application.task_worker import MockProvider, TaskWorker
 from classroom_web.domain.auth import BrowserContext
 from classroom_web.domain.billing import ReservationRequest, Usage
@@ -25,6 +26,7 @@ from classroom_web.domain.data import OwnerContext
 from classroom_web.entrypoints.http import create_app
 from classroom_web.infrastructure.billing_control import BillingMaintenance, PgBillingAdminRepository
 from classroom_web.infrastructure.billing_schema import candidate_ddl, integration_ddl
+from classroom_web.infrastructure.qa_repository import PgQaRepository
 from classroom_web.infrastructure.task_scheduler import PgTaskScheduler
 from classroom_web.test_support import SYNTHETIC_PASSWORD
 from test_authentication import auth, install_factor, PASSWORD, BASE
@@ -33,6 +35,9 @@ ROOT = Path(__file__).resolve().parents[4]
 spec = importlib.util.spec_from_file_location('pr11a_contract_candidate',ROOT/'tools/pr11a/contract_candidate.py')
 contract_candidate = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(contract_candidate)
+qa_spec = importlib.util.spec_from_file_location('pr07a_billing_contract_candidate', ROOT/'tools/pr07a/contract_candidate.py')
+qa_contract_candidate = importlib.util.module_from_spec(qa_spec)
+qa_spec.loader.exec_module(qa_contract_candidate)
 
 
 @pytest.fixture(scope='module')
@@ -98,6 +103,22 @@ def fee_api(fee_control,auth):
         yield SimpleNamespace(client=client,a=a,c=c,browser=browser,admin=admin,contract=candidate)
     with c.pg.admin.begin() as connection:
         connection.execute(sa.text("UPDATE tasks SET not_before=clock_timestamp()+interval '365 days' WHERE owner_id=:owner"),{'owner':a.uid})
+
+
+@pytest.fixture
+def qa_fee_api(fee_api):
+    api = fee_api
+    config = dict(enabled=False, billing_required=False, price_id=None,
+                  price_version='synthetic-no-charge', maximum_cost_microyuan=0,
+                  input_token_budget=8192, max_output_tokens=1024,
+                  destination=dict(provider='fake', model='qa-deterministic-v1', region='synthetic',
+                                   configuration_revision='pr07a-fake-1'))
+    qa = QaBrowser(auth=api.a.service, database=api.c.pg.db, config=config)
+    contract = qa_contract_candidate.build(api.contract)
+    app = create_app(auth=api.a.service, contract=contract, origin='https://testserver',
+                     billing=api.browser, qa=qa)
+    with TestClient(app, base_url='https://testserver') as client:
+        yield SimpleNamespace(client=client, a=api.a, c=api.c, qa=qa)
 
 
 def sign_in(api, *, administrator=False):
@@ -181,6 +202,73 @@ def fee_snapshot(api, row):
         return connection.execute(sa.text('''SELECT r.state,r.attempt_id,r.settled_microyuan,e.held,e.unknown,e.settled,
             t.state AS task_state FROM quota_reservations r JOIN billing_control.exposures e ON e.reservation_id=r.id
             JOIN tasks t ON t.id=r.task_id WHERE r.id=:id'''),row).mappings().one()
+
+
+def test_disabled_qa_preserves_billing_task_cancellation(qa_fee_api):
+    api = qa_fee_api
+    session, _ = sign_in(api)
+    row = reserve(api, session)
+    before = fee_snapshot(api, row)
+    assert before['state'] == 'reserved' and before['held'] == 100
+    response = api.client.post(BASE+f"/tasks/{row['task_id']}/cancel", json={}, headers=headers(session))
+    assert response.status_code == 200, response.text
+    assert response.json()['state'] == 'cancelled'
+    after = fee_snapshot(api, row)
+    assert after['task_state'] == 'cancelled' and after['state'] == 'released'
+    assert (after['held'], after['unknown'], after['settled']) == (0, 0, 0)
+
+
+def test_disabled_qa_rejects_qa_task_cancellation_without_mutation(qa_fee_api):
+    api = qa_fee_api
+    session, _ = sign_in(api)
+    with api.c.pg.db.transaction(OwnerContext(api.a.uid)) as tx:
+        semester = tx.catalog.create_semester('Synthetic QA cancellation semester')
+        course = tx.catalog.create_course(semester.id, 'Synthetic QA cancellation course')
+        classroom = tx.catalog.create_class_session(course.id, 'Synthetic QA cancellation classroom')
+        PgQaRepository(tx).add_source(classroom.id, kind='transcript_segment', object_id=uuid4(),
+                                     text='边际成本是增加一单位产量带来的额外成本。', start_ms=1000, end_ms=3000)
+    api.qa.config['enabled'] = True
+    request = dict(kind='ai_question', scope='all', question='边际成本是什么？', seen_sources=[],
+                   include_images=False, accept_partial_scope=True, anchor_ms=120000)
+    response = api.client.post(BASE+f'/class-sessions/{classroom.id}/generation-plans',
+                               json=request, headers=headers(session))
+    assert response.status_code == 201, response.text
+    plan = response.json()
+    response = api.client.post(BASE+f"/generation-plans/{plan['id']}/execute", headers=headers(session),
+        json=dict(plan_sha256=plan['plan_sha256'],
+                  confirmed_destination_revision=plan['destination']['configuration_revision'],
+                  confirm_send=True, confirm_images=False, confirm_original_snapshot=False,
+                  confirm_partial_scope=True))
+    assert response.status_code == 202, response.text
+    task_id = response.json()['id']
+    with api.c.pg.admin.connect() as connection:
+        before = connection.scalar(sa.text('SELECT row_to_json(t) FROM tasks t WHERE id=:id'), dict(id=task_id))
+    assert before['schema_version'] == 'pr07a-1' and before['state'] == 'queued'
+    api.qa.config['enabled'] = False
+    response = api.client.post(BASE+f'/tasks/{task_id}/cancel', json={}, headers=headers(session))
+    assert response.status_code == 503, response.text
+    assert response.json()['error']['code'] == 'SERVICE_DISABLED'
+    with api.c.pg.admin.connect() as connection:
+        after = connection.scalar(sa.text('SELECT row_to_json(t) FROM tasks t WHERE id=:id'), dict(id=task_id))
+    assert after == before
+
+
+@pytest.mark.parametrize('denial, status', (('missing_csrf', 403), ('revoked_session', 401)))
+def test_disabled_qa_billing_fallback_keeps_authentication_guards(qa_fee_api, denial, status):
+    api = qa_fee_api
+    session, _ = sign_in(api)
+    row = reserve(api, session)
+    before = fee_snapshot(api, row)
+    request_headers = headers(session)
+    if denial == 'missing_csrf':
+        request_headers.pop('X-CSRF-Token')
+    else:
+        with api.c.pg.admin.begin() as connection:
+            connection.execute(sa.text('UPDATE users SET security_epoch=security_epoch+1 WHERE id=:id'),
+                               dict(id=api.a.uid))
+    response = api.client.post(BASE+f"/tasks/{row['task_id']}/cancel", json={}, headers=request_headers)
+    assert response.status_code == status, response.text
+    assert fee_snapshot(api, row) == before
 
 
 @pytest.mark.parametrize('resume', ('worker', 'maintenance'))
@@ -455,7 +543,7 @@ def test_composed_media_and_billing_migration_candidate(pg,tmp_path):
     shutil.copytree(ROOT/'web/backend/migrations',migrations)
     candidate=migrations/'versions/pr11a_review_candidate.py'
     candidate.write_text("from alembic import op\nfrom classroom_web.infrastructure.billing_schema import candidate_ddl,integration_ddl\n"
-        "revision='pr11a_review_candidate'\ndown_revision='0009_private_media'\nbranch_labels=None\ndepends_on=None\n"
+        "revision='pr11a_review_candidate'\ndown_revision='pr07a_001'\nbranch_labels=None\ndepends_on=None\n"
         "def upgrade():\n    op.get_bind().execution_options(no_parameters=True).exec_driver_sql(candidate_ddl()+integration_ddl())\n"
         "def downgrade():\n    raise RuntimeError('preserve billing history')\n",encoding='utf-8')
     try:

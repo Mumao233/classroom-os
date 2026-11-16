@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import replace
+from types import SimpleNamespace
 from uuid import UUID, uuid4
 
 import sqlalchemy as sa
@@ -128,13 +129,24 @@ class PgTaskRepository:
         return result
 
     def enqueue(self, kind, input_ref, *, op_id, operation='enqueueTask',
-                class_session_id=None, parent_task_id=None, priority=0):
+                class_session_id=None, parent_task_id=None, priority=0,
+                schema_version='1', plan_id=None):
         if kind not in KINDS or type(priority) is not int or not -100 <= priority <= 100:
             raise ValueError('invalid task kind or priority')
+        if schema_version not in ('1', 'pr07a-1'):
+            raise ValueError('unsupported task schema version')
+        if schema_version == 'pr07a-1' and (kind != 'ai_question' or plan_id is None or class_session_id is None):
+            raise ValueError('question tasks require their generation plan')
+        if schema_version == '1' and plan_id is not None:
+            raise ValueError('legacy tasks cannot reference question plans')
         reference = input_reference(input_ref)
-        request_hash = fingerprint({'kind': kind, 'input_ref': reference,
+        request = {'kind': kind, 'input_ref': reference,
             'class_session_id': str(class_session_id) if class_session_id else None,
-            'parent_task_id': str(parent_task_id) if parent_task_id else None, 'priority': priority})
+            'parent_task_id': str(parent_task_id) if parent_task_id else None, 'priority': priority}
+        # Historical receipts retain their original canonical representation.
+        if schema_version != '1':
+            request.update(schema_version=schema_version, plan_id=str(plan_id))
+        request_hash = fingerprint(request)
         old = self.receipts.lock_and_get(operation, op_id, request_hash)
         if old:
             # Authorize the current lineage before returning even a minimized receipt.
@@ -146,7 +158,8 @@ class PgTaskRepository:
                 raise ValueError('child task must have same classroom')
         row = self.connection.execute(tables['tasks'].insert().values(
             id=uuid4(), owner_id=self.owner_id, kind=kind, state='queued', input_ref=reference,
-            schema_version='1', class_session_id=class_session_id, parent_task_id=parent_task_id,
+            schema_version=schema_version, plan_id=plan_id,
+            class_session_id=class_session_id, parent_task_id=parent_task_id,
             priority=priority, not_before=sa.func.clock_timestamp()).returning(tables['tasks'])).mappings().one()
         task = Task(**row)
         self.receipts.store_task(operation, op_id, request_hash, task)
@@ -200,6 +213,19 @@ class PgTaskRepository:
         ).values(state='submitting', submitted_at=sa.func.clock_timestamp(), provider_outcome='unknown'))
         self._write(task, may_have_charged=True)
 
+    def fail_unsent(self, task_id, lease_token, worker, error_code):
+        """Record a permanent local preflight failure without claiming a send."""
+        if error_code not in ('PROVIDER_CONFIG_CHANGED', 'QA_CONFIGURATION_INVALID'):
+            raise ValueError('unsupported preflight error')
+        task = self._fenced(task_id, lease_token, worker)
+        history = self._history(task_id)
+        if task.may_have_charged or any(self._submitted(item) for item in history):
+            raise UnsafeRetry('submitted work cannot be failed as unsent')
+        self._cancel_unsent(history)
+        return self._write(task, state='failed', error_code=error_code,
+            completed_at=sa.func.clock_timestamp(), leased_by=None, lease_expires_at=None,
+            lease_token=task.lease_token + 1)
+
     def store_result(self, task_id, attempt_id, raw_output):
         task = self._load(task_id, lock=True)
         attempt = next((item for item in self._history(task_id) if item.id == attempt_id), None)
@@ -242,6 +268,14 @@ class PgTaskRepository:
         return self._finish_result(task, attempt, validator)
 
     def _finish_result(self, task, attempt, validator):
+        question = None
+        if task.schema_version == 'pr07a-1':
+            from .qa_repository import PgQaRepository
+
+            transaction = SimpleNamespace(connection=self.connection, catalog=self.catalog,
+                tasks=self, events=self.events, receipts=self.receipts)
+            question = PgQaRepository(transaction)
+            validator = question.validator(task.id)
         attempt_id = attempt.id
         t = tables['provider_results']
         row = self.connection.execute(self._query('provider_results', attempt.raw_output_ref)
@@ -257,6 +291,11 @@ class PgTaskRepository:
             valid = True
         except (ValueError, TypeError, RecursionError):
             payload, valid = None, False
+        if valid and question is not None:
+            question.finish(task, payload)
+        # Completion of any durable result closes every unused plan, including
+        # legacy multi-attempt histories without an explicit cancellation.
+        self._cancel_unsent(self._history(task.id))
         self.connection.execute(t.update().where(t.c.id == row['id'], t.c.owner_id == self.owner_id)
             .values(validation_status='valid' if valid else 'invalid',
                     validated_payload=payload if valid else sa.null()))

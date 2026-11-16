@@ -1,8 +1,8 @@
 """PR-02b execution metadata, separate from the PR-02a catalog table registry.
 
 The adjacent Alembic SQL is a frozen snapshot; it never imports this module.
-Plan/media references remain constrained NULL until their owning migrations add
-the real owner-composite foreign keys. Task revision/updated_at support the
+Question plans use their owner-composite foreign key. Media references remain
+constrained NULL until their owning migrations add the real foreign keys. Task revision/updated_at support the
 already frozen Task DTO and task.changed event contract.
 """
 import sqlalchemy as sa
@@ -25,7 +25,7 @@ operation_receipts = sa.Table("operation_receipts", metadata, *_base(owner=True)
     sa.CheckConstraint("request_hash ~ '^[0-9a-f]{64}$'", name="hash"),
     sa.CheckConstraint("char_length(operation) BETWEEN 1 AND 100", name="operation"),
     sa.CheckConstraint("response_status BETWEEN 100 AND 599", name="response_status"),
-    sa.CheckConstraint("resource_type IN ('task','semester','course','class_session','course_material_version','media_asset','media_upload')",
+    sa.CheckConstraint("resource_type IN ('task','semester','course','class_session','course_material_version','media_asset','media_upload','generation_plan','question')",
                        name="resource_type"),
     sa.CheckConstraint("jsonb_typeof(response_body) = 'object' AND pg_column_size(response_body) <= 4096",
                        name="bounded_response"),
@@ -56,15 +56,24 @@ tasks = sa.Table("tasks", metadata, *_base(owner=True),
     sa.UniqueConstraint("owner_id", "plan_id", name="uq_task_plan"),
     _parent("tasks", "class_session_id", "class_sessions"),
     _parent("tasks", "parent_task_id", "tasks"),
+    sa.ForeignKeyConstraint(["owner_id", "plan_id"],
+        ["generation_plans.owner_id", "generation_plans.id"], name="fk_tasks_qa_plan",
+        deferrable=True, initially="DEFERRED"),
+    sa.ForeignKeyConstraint(["owner_id", "plan_id", "class_session_id"],
+        ["generation_plans.owner_id", "generation_plans.id", "generation_plans.class_session_id"],
+        name="fk_tasks_qa_plan_lineage", deferrable=True, initially="DEFERRED"),
     sa.CheckConstraint("state IN ('queued','running','succeeded','failed','unknown','cancel_requested','cancelled')",
                        name="state"),
     sa.CheckConstraint("kind IN ('asr_live','asr_retranscribe','ai_question','ai_explanation','review_summary','export','import','delete')",
                        name="kind"),
     sa.CheckConstraint("revision >= 1 AND lease_token >= 0", name="counters"),
-    sa.CheckConstraint("plan_id IS NULL", name="plan_not_implemented"),
+    sa.CheckConstraint("(schema_version='1' AND plan_id IS NULL) OR "
+                       "(schema_version='pr07a-1' AND plan_id IS NOT NULL "
+                       "AND class_session_id IS NOT NULL AND kind='ai_question')",
+                       name="qa_plan"),
     sa.CheckConstraint("jsonb_typeof(input_ref) = 'object' AND pg_column_size(input_ref) <= 16384",
                        name="bounded_input"),
-    sa.CheckConstraint("schema_version = '1'", name="schema_version"),
+    sa.CheckConstraint("schema_version IN ('1','pr07a-1')", name="schema_version"),
     sa.CheckConstraint("leased_by IS NULL OR char_length(leased_by) BETWEEN 1 AND 100", name="worker"),
     sa.CheckConstraint("error_code IS NULL OR char_length(error_code) <= 64", name="error_code"),
     sa.CheckConstraint("(leased_by IS NULL) = (lease_expires_at IS NULL)", name="lease_pair"),
@@ -164,3 +173,6 @@ sa.Index("ix_outbox_publication", outbox_events.c.published_at, outbox_events.c.
 
 tables = {table.name: table for table in (operation_receipts, tasks, task_attempts,
           provider_results, owner_event_counters, outbox_events)}
+
+# Register the owning plan table after task metadata exists for the circular FK.
+from . import qa_schema  # noqa: E402,F401
