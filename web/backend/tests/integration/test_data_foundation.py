@@ -38,7 +38,8 @@ def test_only_required_tables_and_contract_columns_exist(pg):
     # Additive PR-02b tables are required too; every original catalog column
     # assertion below remains unchanged and full metadata still must match.
     auth_tables={'devices','auth_sessions','auth_challenges','reauth_proofs','mfa_credentials','recovery_code_groups','mfa_recovery_codes','email_actions','preauth_receipts'}
-    assert set(inspector.get_table_names()) == expected | set(task_tables) | set(identity_tables) | auth_tables | {"alembic_version"}
+    media_tables={'media_assets','media_uploads','media_tickets'}
+    assert set(inspector.get_table_names()) == expected | set(task_tables) | set(identity_tables) | auth_tables | media_tables | {"alembic_version"}
     contract = json.loads((ROOT / "docs/web-alpha/architecture/contracts/domain-model.json").read_text("utf-8"))
     for table in contract["tables"]:
         if table["name"] in expected:
@@ -48,8 +49,8 @@ def test_only_required_tables_and_contract_columns_exist(pg):
                 assert actual[column["name"]]["nullable"] == column["nullable"]
     with pg.admin.connect() as connection:
         # This original gate still compares every legacy metadata object.
-        # New 0007 objects have independent real-PG constraints/ACL tests.
-        differences = compare_metadata(MigrationContext.configure(connection,opts={'include_object':lambda obj,name,kind,reflected,compare_to:not(kind=='table' and name in auth_tables)}), metadata)
+        # Auth and media SQL objects have independent real-PG columns/constraints/ACL checks.
+        differences = compare_metadata(MigrationContext.configure(connection,opts={'include_object':lambda obj,name,kind,reflected,compare_to:not(kind=='table' and name in auth_tables|media_tables)}), metadata)
     assert differences == []
 
 

@@ -1,0 +1,277 @@
+{
+  "package": "PR-04a",
+  "base": "81ab191b1f33de2371567eccd0ef9589d12483c2",
+  "contract": "0.2.0",
+  "migration": "0009_private_media",
+  "runs": [
+    {
+      "mode": "full",
+      "request": "pr04a-20261115-124239-63f2fbd6",
+      "guest_run": "fb6ae29dcd2c45ae9dcd42b08e5f3bbd",
+      "began_utc": "2026-11-15T12:47:02.9647963Z",
+      "ended_utc": "2026-11-15T12:52:13.9524713Z",
+      "source": {
+        "base": "81ab191b1f33de2371567eccd0ef9589d12483c2",
+        "verified_files": 657,
+        "source_zip_sha256": "0c3b7dc38617e1abc38d9f3433c75693312491cec326b27c1a842e1e731a0fbf"
+      },
+      "result": {
+        "run": "fb6ae29dcd2c45ae9dcd42b08e5f3bbd",
+        "commands": [
+          [
+            "J:\\class-assistant\\worktrees\\web-pr03b-sessions\\work\\pr03b\\toolchains\\pg17.11-win64-53b5364a5a04e8ec\\runtime\\Library\\bin\\initdb.exe",
+            "-D",
+            "C:\\j\\class-assistant\\worktrees\\web-pr04a-storage\\work\\pr04a\\fb6ae29dcd2c45ae9dcd42b08e5f3bbd\\pg",
+            "-U",
+            "pr02a_admin_fb6ae29dcd2c",
+            "-A",
+            "trust",
+            "--encoding=UTF8",
+            "--locale=C"
+          ],
+          [
+            "J:\\class-assistant\\worktrees\\web-pr03b-sessions\\work\\pr03b\\toolchains\\pg17.11-win64-53b5364a5a04e8ec\\runtime\\Library\\bin\\pg_ctl.exe",
+            "-D",
+            "C:\\j\\class-assistant\\worktrees\\web-pr04a-storage\\work\\pr04a\\fb6ae29dcd2c45ae9dcd42b08e5f3bbd\\pg",
+            "-l",
+            "C:\\j\\class-assistant\\worktrees\\web-pr04a-storage\\outputs\\pr03a\\third-round\\pr04a-fb6ae29dcd2c45ae9dcd42b08e5f3bbd.log",
+            "-o",
+            "-h 127.0.0.1 -p 62304 -c max_connections=100 -c log_statement=none -c log_min_error_statement=panic -c log_parameter_max_length=0 -c log_parameter_max_length_on_error=0",
+            "-w",
+            "-t",
+            "20",
+            "start"
+          ],
+          [
+            "C:\\j\\class-assistant\\worktrees\\web-pr04a-storage\\work\\pr04a\\seaweedfs\\weed.exe",
+            "server",
+            "-ip=127.0.0.1",
+            "-ip.bind=127.0.0.1",
+            "-dir=C:\\j\\class-assistant\\worktrees\\web-pr04a-storage\\work\\pr04a\\fb6ae29dcd2c45ae9dcd42b08e5f3bbd\\objects",
+            "-master.port=29594",
+            "-volume.port=29595",
+            "-filer",
+            "-filer.port=29596",
+            "-s3",
+            "-s3.port=29597",
+            "-s3.config=C:\\j\\class-assistant\\worktrees\\web-pr04a-storage\\work\\pr04a\\fb6ae29dcd2c45ae9dcd42b08e5f3bbd\\s3.json",
+            "-volume.max=128",
+            "-master.volumeSizeLimitMB=64",
+            "-master.telemetry=false",
+            "-s3.port.iceberg=0",
+            "-s3.port.lance=0",
+            "-s3.iam=false"
+          ],
+          [
+            "J:\\class-assistant\\worktrees\\web-pr04a-storage\\work\\pr04a\\venv\\Scripts\\python.exe",
+            "-B",
+            "-m",
+            "pytest",
+            "tests",
+            "-q",
+            "--basetemp=C:\\j\\class-assistant\\worktrees\\web-pr04a-storage\\work\\pr04a\\fb6ae29dcd2c45ae9dcd42b08e5f3bbd\\pytest",
+            "-o",
+            "cache_dir=C:\\j\\class-assistant\\worktrees\\web-pr04a-storage\\work\\pr04a\\fb6ae29dcd2c45ae9dcd42b08e5f3bbd\\cache",
+            "--junitxml=C:\\j\\class-assistant\\worktrees\\web-pr04a-storage\\outputs\\pr04a\\fb6ae29dcd2c45ae9dcd42b08e5f3bbd.xml"
+          ],
+          [
+            "J:\\class-assistant\\worktrees\\web-pr03b-sessions\\work\\pr03b\\toolchains\\pg17.11-win64-53b5364a5a04e8ec\\runtime\\Library\\bin\\pg_ctl.exe",
+            "-D",
+            "C:\\j\\class-assistant\\worktrees\\web-pr04a-storage\\work\\pr04a\\fb6ae29dcd2c45ae9dcd42b08e5f3bbd\\pg",
+            "-m",
+            "fast",
+            "-w",
+            "-t",
+            "20",
+            "stop"
+          ]
+        ],
+        "test_exit": 0,
+        "pg_stop_exit": 0,
+        "object_process_stopped": true,
+        "object_service": "SeaweedFS 4.53",
+        "postgres": "17.11",
+        "synthetic_only": true,
+        "work": "C:\\j\\class-assistant\\worktrees\\web-pr04a-storage\\work\\pr04a\\fb6ae29dcd2c45ae9dcd42b08e5f3bbd",
+        "pg_log": "C:\\j\\class-assistant\\worktrees\\web-pr04a-storage\\outputs\\pr03a\\third-round\\pr04a-fb6ae29dcd2c45ae9dcd42b08e5f3bbd.log",
+        "suite": {
+          "junit_cases": 619,
+          "bad": 0,
+          "required_media_cases": 15,
+          "observed_media_cases": 15,
+          "all_media_cases_executed": true
+        }
+      },
+      "broker_output": "J:\\class-assistant\\worktrees\\web-pr03b-sessions\\work\\pr03b\\vmware-broker\\runs\\ca05e178d36f45c6b6f4229d8688c9dd",
+      "host_source_manifest": "J:\\class-assistant\\worktrees\\web-pr04a-storage\\outputs\\pr04a\\full-SOURCE.json",
+      "host_source_archive": "J:\\class-assistant\\worktrees\\web-pr04a-storage\\outputs\\pr04a\\full-source.zip"
+    },
+    {
+      "mode": "boundary",
+      "request": "pr04a-20261115-124422-18767e59",
+      "guest_run": "ff64c84532934f24a757f27cada5941c",
+      "began_utc": "2026-11-15T12:52:13.9582141Z",
+      "ended_utc": "2026-11-15T12:52:54.8586423Z",
+      "source": {
+        "base": "81ab191b1f33de2371567eccd0ef9589d12483c2",
+        "verified_files": 657,
+        "source_zip_sha256": "840bb525eb8afaa80d14fce790d281550e52b3a9a5f7998bea219317d5827e25"
+      },
+      "result": {
+        "run": "ff64c84532934f24a757f27cada5941c",
+        "commands": [
+          [
+            "J:\\class-assistant\\worktrees\\web-pr03b-sessions\\work\\pr03b\\toolchains\\pg17.11-win64-53b5364a5a04e8ec\\runtime\\Library\\bin\\initdb.exe",
+            "-D",
+            "C:\\j\\class-assistant\\worktrees\\web-pr04a-storage\\work\\pr04a\\ff64c84532934f24a757f27cada5941c\\pg",
+            "-U",
+            "pr02a_admin_ff64c8453293",
+            "-A",
+            "trust",
+            "--encoding=UTF8",
+            "--locale=C"
+          ],
+          [
+            "J:\\class-assistant\\worktrees\\web-pr03b-sessions\\work\\pr03b\\toolchains\\pg17.11-win64-53b5364a5a04e8ec\\runtime\\Library\\bin\\pg_ctl.exe",
+            "-D",
+            "C:\\j\\class-assistant\\worktrees\\web-pr04a-storage\\work\\pr04a\\ff64c84532934f24a757f27cada5941c\\pg",
+            "-l",
+            "C:\\j\\class-assistant\\worktrees\\web-pr04a-storage\\outputs\\pr03a\\third-round\\pr04a-ff64c84532934f24a757f27cada5941c.log",
+            "-o",
+            "-h 127.0.0.1 -p 50111 -c max_connections=100 -c log_statement=none -c log_min_error_statement=panic -c log_parameter_max_length=0 -c log_parameter_max_length_on_error=0",
+            "-w",
+            "-t",
+            "20",
+            "start"
+          ],
+          [
+            "C:\\j\\class-assistant\\worktrees\\web-pr04a-storage\\work\\pr04a\\seaweedfs\\weed.exe",
+            "server",
+            "-ip=127.0.0.1",
+            "-ip.bind=127.0.0.1",
+            "-dir=C:\\j\\class-assistant\\worktrees\\web-pr04a-storage\\work\\pr04a\\ff64c84532934f24a757f27cada5941c\\objects",
+            "-master.port=27702",
+            "-volume.port=27703",
+            "-filer",
+            "-filer.port=27704",
+            "-s3",
+            "-s3.port=27705",
+            "-s3.config=C:\\j\\class-assistant\\worktrees\\web-pr04a-storage\\work\\pr04a\\ff64c84532934f24a757f27cada5941c\\s3.json",
+            "-volume.max=128",
+            "-master.volumeSizeLimitMB=64",
+            "-master.telemetry=false",
+            "-s3.port.iceberg=0",
+            "-s3.port.lance=0",
+            "-s3.iam=false"
+          ],
+          [
+            "J:\\class-assistant\\worktrees\\web-pr04a-storage\\work\\pr04a\\venv\\Scripts\\python.exe",
+            "-B",
+            "-m",
+            "pytest",
+            "tests/unit/test_media_ranges.py",
+            "tests/integration/test_private_media.py",
+            "-q",
+            "--basetemp=C:\\j\\class-assistant\\worktrees\\web-pr04a-storage\\work\\pr04a\\ff64c84532934f24a757f27cada5941c\\pytest",
+            "-o",
+            "cache_dir=C:\\j\\class-assistant\\worktrees\\web-pr04a-storage\\work\\pr04a\\ff64c84532934f24a757f27cada5941c\\cache",
+            "--junitxml=C:\\j\\class-assistant\\worktrees\\web-pr04a-storage\\outputs\\pr04a\\ff64c84532934f24a757f27cada5941c.xml"
+          ],
+          [
+            "J:\\class-assistant\\worktrees\\web-pr03b-sessions\\work\\pr03b\\toolchains\\pg17.11-win64-53b5364a5a04e8ec\\runtime\\Library\\bin\\pg_ctl.exe",
+            "-D",
+            "C:\\j\\class-assistant\\worktrees\\web-pr04a-storage\\work\\pr04a\\ff64c84532934f24a757f27cada5941c\\pg",
+            "-m",
+            "fast",
+            "-w",
+            "-t",
+            "20",
+            "stop"
+          ]
+        ],
+        "test_exit": 0,
+        "pg_stop_exit": 0,
+        "object_process_stopped": true,
+        "object_service": "SeaweedFS 4.53",
+        "postgres": "17.11",
+        "synthetic_only": true,
+        "work": "C:\\j\\class-assistant\\worktrees\\web-pr04a-storage\\work\\pr04a\\ff64c84532934f24a757f27cada5941c",
+        "pg_log": "C:\\j\\class-assistant\\worktrees\\web-pr04a-storage\\outputs\\pr03a\\third-round\\pr04a-ff64c84532934f24a757f27cada5941c.log",
+        "suite": {
+          "junit_cases": 38,
+          "bad": 0,
+          "required_media_cases": 16,
+          "observed_media_cases": 16,
+          "all_media_cases_executed": true
+        }
+      },
+      "broker_output": "J:\\class-assistant\\worktrees\\web-pr03b-sessions\\work\\pr03b\\vmware-broker\\runs\\a1e2d56fcc7d4ca9aa6474d741d84c41",
+      "host_source_manifest": "J:\\class-assistant\\worktrees\\web-pr04a-storage\\outputs\\pr04a\\boundary-SOURCE.json",
+      "host_source_archive": "J:\\class-assistant\\worktrees\\web-pr04a-storage\\outputs\\pr04a\\boundary-source.zip"
+    }
+  ],
+  "application_code_identical_between_final_runs": true,
+  "final_snapshot_current_files_match": true,
+  "only_snapshot_difference": [
+    "web/backend/tests/integration/test_private_media.py"
+  ],
+  "full_primary_passed": 619,
+  "full_subtests_passed": 29,
+  "boundary_primary_passed": 38,
+  "failure_error_skip": 0,
+  "archive_recovery": {
+    "status": "verified",
+    "host_path": "J:\\class-assistant\\worktrees\\web-pr04a-storage\\outputs\\pr04a\\evidence.zip",
+    "guest_path": "C:\\j\\class-assistant\\worktrees\\web-pr04a-storage\\outputs\\pr04a\\evidence.zip",
+    "sha256": "e41dcde62f9e414dc21fd5f4c7bdd8ab51c439818a1623d40bb26ae7fd8058b4",
+    "entries": 75,
+    "all_entry_hashes_match": true,
+    "junit": {
+      "fb6ae29dcd2c45ae9dcd42b08e5f3bbd": {
+        "primary_cases": 619,
+        "bad": 0,
+        "suite_attributes": [
+          {
+            "name": "pytest",
+            "errors": "0",
+            "failures": "0",
+            "skipped": "0",
+            "tests": "648",
+            "time": "287.818",
+            "timestamp": "2026-11-15T04:47:20.960029-08:00",
+            "hostname": "Test"
+          }
+        ]
+      },
+      "ff64c84532934f24a757f27cada5941c": {
+        "primary_cases": 38,
+        "bad": 0,
+        "suite_attributes": [
+          {
+            "name": "pytest",
+            "errors": "0",
+            "failures": "0",
+            "skipped": "0",
+            "tests": "38",
+            "time": "18.016",
+            "timestamp": "2026-11-15T04:52:32.423843-08:00",
+            "hostname": "Test"
+          }
+        ]
+      }
+    },
+    "collect_request": "pr04a-evidence-collect-20261115-01",
+    "copy_request": "pr04a-evidence-copy-20261115-01"
+  },
+  "source_match_scope": "Every file listed in the final tested snapshot matches the current tree. Validation and handoff documents were added afterwards.",
+  "static_validation": {
+    "markdown_links": 20,
+    "python_ast_files": 109,
+    "powershell_parse": "passed",
+    "diff_check": "passed",
+    "frontend_unchanged": true,
+    "contract_checks": 9,
+    "frozen_contract_unchanged": true
+  },
+  "changed_files_manifest": "J:\\class-assistant\\worktrees\\web-pr04a-storage\\outputs\\pr04a\\candidate-files.json"
+}
