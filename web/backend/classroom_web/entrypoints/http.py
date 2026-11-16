@@ -67,7 +67,7 @@ def failure(error,request_id):
         headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'})
 
 
-def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admission=None,cache=None):
+def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admission=None,cache=None,media=None,media_spool_directory=None):
     parsed=urlsplit(origin)
     if parsed.scheme!='https' or not parsed.netloc or parsed.path or parsed.query or parsed.fragment or parsed.username:raise ValueError('one exact HTTPS origin is required')
     if contract.get('info',{}).get('version')!='0.2.0':raise ValueError('approved contract 0.2.0 required')
@@ -221,6 +221,11 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
         if path not in contract['paths']:raise ValueError('route absent from approved contract: '+path)
         for method,operation in contract['paths'][path].items():
             if method in ('get','post'):app.add_api_route(PREFIX+path,endpoint(path,method,operation),methods=[method.upper()])
+
+    if media is not None:
+        from .media_http import register_media
+        register_media(app,media=media,contract=contract,secure=secure,request_context=request_context,
+                       check=check,body_for=body_for,failure=failure,spool_directory=media_spool_directory)
 
     @app.websocket(PREFIX+'/ws/events')
     async def events(ws:WebSocket):

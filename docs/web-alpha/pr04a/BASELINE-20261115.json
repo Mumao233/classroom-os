@@ -1,0 +1,82 @@
+{
+  "package": "PR-04a",
+  "base": "81ab191b1f33de2371567eccd0ef9589d12483c2",
+  "head": "81ab191b1f33de2371567eccd0ef9589d12483c2",
+  "branch": "feature/web-pr04a-storage",
+  "worktree": "J:\\class-assistant\\worktrees\\web-pr04a-storage",
+  "recorded_utc": "2026-11-15T11:49:58.0751861Z",
+  "contract_version": "0.2.0",
+  "contract_sha256": "7432ba27581f3d44690138b5606ec61c4008579cb049a6c2dfc20737ea3a6a7a",
+  "migration": "0009_private_media",
+  "down_revision": "0008_manual_recovery",
+  "files": [
+    {
+      "path": "docs/web-alpha/pr04a/PREPARATION-20261115.md",
+      "sha256": "d4e966b973e54918f316274a75fdb062da55c445fa9d05bfd954ba4e64e5d333"
+    },
+    {
+      "path": "tools/pr04a/prepare_payload.py",
+      "sha256": "0ed4f70bc504e1ae4e93564a7fff4612640b1203816ee3bef5fdc3462a8a00e4"
+    },
+    {
+      "path": "tools/pr04a/run_guest.py",
+      "sha256": "29461cf522c41e9c66d9665b1fb4cea675ff620e6e35fb55b6d144586c436807"
+    },
+    {
+      "path": "web/backend/classroom_web/application/media.py",
+      "sha256": "a496ee36324a681904e8a7647eb2bcd6770ead3999bb06552a8d593826958b5f"
+    },
+    {
+      "path": "web/backend/classroom_web/domain/media.py",
+      "sha256": "c27a65c9551453fb6fc84e73ed355b69adb59cf7119d3001830cbf9a4d1a9f86"
+    },
+    {
+      "path": "web/backend/classroom_web/entrypoints/http.py",
+      "sha256": "de3312fd80de7e66fa6a72aa61410a705bc16bb765ad2aea91804071c25b19e0"
+    },
+    {
+      "path": "web/backend/classroom_web/entrypoints/media_http.py",
+      "sha256": "da01c0e8d73a6b500177da0bd36d4437f565ad6766031db6bbec689b2773702e"
+    },
+    {
+      "path": "web/backend/classroom_web/infrastructure/database.py",
+      "sha256": "e66eb2cadc9975547f22b372624d69ccdf7fe3f1055ba3568895abba3722f6b1"
+    },
+    {
+      "path": "web/backend/classroom_web/infrastructure/media_repository.py",
+      "sha256": "55d2ab1ce3d9c6b98f1f69970ef6617287d17274d432ee7894a18367eb791d0a"
+    },
+    {
+      "path": "web/backend/classroom_web/infrastructure/object_store.py",
+      "sha256": "90c9ddbf690838611330e9015429e0a4e0c916972d65a317292ea44a893be347"
+    },
+    {
+      "path": "web/backend/migrations/versions/0009_private_media.py",
+      "sha256": "edc2e21c1cc96fc897585e67912cda43dba1234dc558efc48245634d148cf3dc"
+    },
+    {
+      "path": "web/backend/migrations/versions/0009_private_media.sql",
+      "sha256": "11bff833b449f36fde8feca7cd6f9dcac6d0491e6d0b8094f774bfaee4c8f3cc"
+    },
+    {
+      "path": "web/backend/pyproject.toml",
+      "sha256": "0d964fb9c0c5b1f3ad4fbfde3bd21e37ef356600c293a62ef2710aa2c6ac03ed"
+    },
+    {
+      "path": "web/backend/requirements.lock",
+      "sha256": "e462625e48edb2fed6c1330f939b1da782fe2a43c499e6a4fd9c981515e76bc8"
+    },
+    {
+      "path": "web/backend/tests/integration/conftest.py",
+      "sha256": "8d0c4e57d3d8f0cbaf70370c4559d0acb48ecda6250fc0ba98684078684ec210"
+    },
+    {
+      "path": "web/backend/tests/integration/test_private_media.py",
+      "sha256": "2df1104873c9688d49f432b1c2fbd2db9d58a239983ca85af05605cb3616ad4c"
+    },
+    {
+      "path": "web/backend/tests/unit/test_media_ranges.py",
+      "sha256": "359bd699ebe16e879c231be5b288d9ec4a82138a99e70e7685483e012dcb36c3"
+    }
+  ]
+}
