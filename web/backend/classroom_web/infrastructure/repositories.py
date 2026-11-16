@@ -212,7 +212,7 @@ class PgTombstoneRepository:
         row = self.catalog._tombstone(resource, resource_id)
         return Tombstone(**row) if row else None
 
-    def revoke(self, resource, resource_id, base_revision, ledger_sequence, erasure_epoch=1):
+    def revoke(self, resource, resource_id, base_revision, ledger_sequence, erasure_epoch=1, *, request_id=None):
         resource = Resource(resource)
         from ..domain.policies import base_revision as validate_revision
         validate_revision(base_revision)
@@ -222,7 +222,11 @@ class PgTombstoneRepository:
         current = self.catalog._load(resource, resource_id, write=True)
         if current.revision != base_revision:
             raise RevisionConflict(current.revision)
-        request_id = uuid4()
+        # PR-04b supplies the identity derived from its replayable deletion intent.
+        if request_id is None:
+            request_id = uuid4()
+        elif not isinstance(request_id, UUID):
+            raise ValueError("deletion request identity must be a UUID")
         self.connection.execute(insert(tables["deletion_requests"]).values(
             id=request_id, owner_id=self.catalog.owner_id, scope_type=resource.value,
             scope_id=resource_id, state="access_revoked",

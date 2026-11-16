@@ -22,6 +22,10 @@ collect_ignore = [] if os.environ.get("PR03B_REAL_BROWSER") == "1" else ["test_a
 if os.environ.get("PR04A_OBJECT_INTEGRATION") != "1":
     collect_ignore.append("test_private_media.py")
     collect_ignore.append("test_media_stream_lifecycle.py")
+# PR-04b's runner owns two object services (media and the independent ledger) and enables these.
+if os.environ.get("PR04B_DELETION_INTEGRATION") != "1":
+    collect_ignore.append("test_deletion_lifecycle.py")
+    collect_ignore.append("test_deletion_restore.py")
 # Manual recovery talks to its control plane over a Windows named pipe authenticated by the
 # kernel (recovery_transport_windows.py), and every case in that module needs it. The feature
 # is Windows-only and stays disabled; on other systems the module is likewise not collected.
