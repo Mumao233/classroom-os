@@ -18,21 +18,29 @@ from ..domain.tasks import validate_json_output
 
 def _check_request(request: ProviderRequest, *, context_limit: int, output_limit: int):
     entries = request.selection.entries
-    if (not isinstance(request.question, str) or not request.question.strip()
+    if (request.purpose not in ('ai_question', 'review_summary', 'review_cards')
+            or not isinstance(request.question, str) or not request.question.strip()
             or len(request.question) > 12_000 or not 1 <= len(entries) <= 64
             or type(request.max_output_tokens) is not int
             or not 1 <= request.max_output_tokens <= output_limit
-            or request.selection.token_bound != input_token_bound(request.question, entries)
+            or request.selection.token_bound != input_token_bound(
+                request.question, entries, purpose=request.purpose)
             or request.selection.token_bound + request.max_output_tokens > context_limit):
         raise ProviderFailure('INVALID_REQUEST', retryable=False, may_have_charged=False)
     classrooms = {entry.source.class_session_id for entry in entries}
-    if len(classrooms) != 1:
+    if (len(classrooms) != 1 or any(not isinstance(entry.alias, str) for entry in entries)
+            or len({entry.alias for entry in entries}) != len(entries)):
         raise ProviderFailure('INVALID_REQUEST', retryable=False, may_have_charged=False)
     for index, entry in enumerate(entries, 1):
-        if (entry.alias != f'S{index}' or entry.source.owner_id != request.owner_id
+        valid_alias = entry.alias == f'S{index}' if request.purpose == 'ai_question' else (
+            isinstance(entry.alias, str) and re.fullmatch(r'S[1-9][0-9]{0,2}', entry.alias)
+            and int(entry.alias[1:]) <= 512)
+        if (not valid_alias or entry.source.owner_id != request.owner_id
                 or not 0 <= entry.excerpt_start < entry.excerpt_end <= len(entry.source.text)
                 or entry.excerpt != entry.source.text[entry.excerpt_start:entry.excerpt_end]
-                or entry.token_bound != len(entry.excerpt.encode('utf-8'))):
+                or entry.token_bound != len(entry.excerpt.encode('utf-8'))
+                or (request.purpose != 'ai_question' and (
+                    entry.excerpt_start != 0 or entry.excerpt_end != len(entry.source.text)))):
             raise ProviderFailure('INVALID_REQUEST', retryable=False, may_have_charged=False)
     if request.cancel_event is not None and request.cancel_event.is_set():
         raise ProviderFailure('CANCELLED', retryable=False, may_have_charged=False)
@@ -56,9 +64,8 @@ class FakeProvider:
         # behavior. Citation resolution is exercised independently by the worker.
         output = self.output
         if output is None:
-            output = json.dumps(dict(answer_markdown='合成课堂回答。',
-                                     source_ids=[entry.alias for entry in request.selection.entries]),
-                                ensure_ascii=False, separators=(',', ':'))
+            output = json.dumps(self.default_output(request), ensure_ascii=False,
+                                separators=(',', ':'))
         usage = None
         if not self.missing_usage:
             usage = Usage(provider_request_id='fake-' + str(request.attempt_id), meter='tokens',
@@ -66,6 +73,10 @@ class FakeProvider:
                                                       output_tokens=min(32, request.max_output_tokens)),
                           final=True)
         return ProviderReply(raw_output=output, usage=usage)
+
+    def default_output(self, request: ProviderRequest) -> dict:
+        return dict(answer_markdown='合成课堂回答。',
+                    source_ids=[entry.alias for entry in request.selection.entries])
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -183,7 +194,8 @@ class OpenAIProvider:
         transport = self._transport
         if transport is None:
             transport = httpx.AsyncHTTPTransport(retries=0)
-        payload = dict(model=config.model, messages=messages_for(request.question, request.selection.entries),
+        payload = dict(model=config.model, messages=messages_for(
+                           request.question, request.selection.entries, purpose=request.purpose),
                        max_tokens=request.max_output_tokens, stream=False,
                        response_format=dict(type='json_object'), tool_choice='none')
         headers = {'Authorization': 'Bearer ' + config.api_key,

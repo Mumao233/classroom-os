@@ -34,6 +34,10 @@ def _stamp(value):
 
 
 class PgQaRepository:
+    task_kind = 'ai_question'
+    schema_version = 'pr07a-1'
+    select_context = staticmethod(select_context)
+
     def __init__(self, tx):
         self.tx = tx
         self.connection = tx.connection
@@ -216,10 +220,10 @@ class PgQaRepository:
         old = self.tx.receipts.lock_and_get('prepareGeneration', op_id, digest)
         if old:
             return self.plan(old['resource_id'])
-        if (request.get('kind') != 'ai_question' or request.get('include_images') is not False
+        if (request.get('kind') != self.task_kind or request.get('include_images') is not False
                 or request.get('scope') not in ('all', 'recent30', 'recent120', 'range')):
             raise QaRejected('UNSUPPORTED_SCOPE', 422)
-        question = request.get('question')
+        question = self.prompt(request)
         if not isinstance(question, str) or not question.strip() or len(question) > 12000:
             raise QaRejected('VALIDATION_FAILED', 422)
         count = self._rows('''SELECT count(*) AS n FROM operation_receipts WHERE owner_id=:owner
@@ -248,7 +252,8 @@ class PgQaRepository:
             sources = [by_id[reference['id']] for reference in seen]
         known_end = max((source.end_ms for source in sources if source.end_ms is not None), default=0)
         anchor = request.get('anchor_ms', known_end)
-        selection = select_context(sources, question=question, owner_id=self.owner_id,
+        self.validate_target(class_session_id, request)
+        selection = self.select_context(sources, question=question, owner_id=self.owner_id,
             class_session_id=class_session_id, asked_at=asked_at, scope=request['scope'],
             anchor_ms=anchor, start_ms=request.get('start_ms'), end_ms=request.get('end_ms'),
             input_token_budget=config['input_token_budget'], max_output_tokens=config['max_output_tokens'])
@@ -277,11 +282,27 @@ class PgQaRepository:
                 start=entry.excerpt_start, end=entry.excerpt_end, tokens=entry.token_bound)
         plan_hash = _hash(dict(snapshot_hash=snapshot_hash, request=request, config=config))
         self._rows('''INSERT INTO generation_plans(id,owner_id,class_session_id,snapshot_id,kind,plan_hash,request,config,expires_at)
-            VALUES(:id,:owner,:classroom,:snapshot,'ai_question',:digest,CAST(:request AS jsonb),CAST(:config AS jsonb),:expires)''',
+            VALUES(:id,:owner,:classroom,:snapshot,:kind,:digest,CAST(:request AS jsonb),CAST(:config AS jsonb),:expires)''',
             id=plan_id, classroom=class_session_id, snapshot=snapshot_id, digest=plan_hash,
-            request=_json(request), config=_json(config), expires=asked_at+timedelta(minutes=10))
+            kind=self.task_kind, request=_json(request), config=_json(config), expires=asked_at+timedelta(minutes=10))
         self._remember('prepareGeneration', op_id, digest, 'generation_plan', plan_id, 201)
+        self.prepared_plan(plan_id, selection, request, config)
         return self.plan(plan_id)
+
+    def prepared_plan(self, plan_id, selection, request, config):
+        """Persist specialized execution units in the same preparation transaction."""
+
+    def prompt(self, request):
+        return request.get('question')
+
+    def validate_target(self, class_session_id, request):
+        """Specialized generators can authorize a frozen destination document."""
+
+    def _plan_row(self, plan_id, *, lock=False):
+        row = self._one('generation_plans', plan_id, lock=lock)
+        if row['kind'] != self.task_kind:
+            raise QaRejected('SOURCE_UNAVAILABLE', 404)
+        return row
 
     @staticmethod
     def _item_dto(entry):
@@ -309,15 +330,15 @@ class PgQaRepository:
                     created_at=_stamp(row['created_at']), items=items)
 
     def plan(self, plan_id):
-        row = self._one('generation_plans', plan_id)
+        row = self._plan_row(plan_id)
         snapshot = self.snapshot(row['snapshot_id'])
         config = row['config']
         changed = any(self._one('qa_sources', UUID(item['source_id']))['current_revision_id'] != UUID(item['revision_id'])
                       for item in snapshot['items'])
         return dict(id=str(plan_id), class_session_id=str(row['class_session_id']), kind=row['kind'],
             plan_sha256=row['plan_hash'], source_snapshot=snapshot, audio_manifest_sha256=None,
-            audio_chunk_ids=[], destination=config['destination'], prompt_version='pr07a-1',
-            output_schema_version='pr07a-1', price_version=config['price_version'], estimated_batches=1,
+            audio_chunk_ids=[], destination=config['destination'], prompt_version=self.schema_version,
+            output_schema_version=self.schema_version, price_version=config['price_version'], estimated_batches=1,
             maximum_cost_microyuan=str(config['maximum_cost_microyuan']), quota_units=1,
             expires_at=_stamp(row['expires_at']), source_status='changed' if changed else 'unchanged',
             contains_images=False)
@@ -327,9 +348,9 @@ class PgQaRepository:
         self._serialize()
         digest = _hash(dict(plan_id=str(plan_id), body=body))
         old = self.tx.receipts.lock_and_get('executeGeneration', op_id, digest)
-        row = self._one('generation_plans', plan_id)
+        row = self._plan_row(plan_id)
         self._snapshot_row(row['snapshot_id'])
-        row = self._one('generation_plans', plan_id, lock=True)
+        row = self._plan_row(plan_id, lock=True)
         if old:
             return self.tx.tasks.get(old['resource_id'])
         if row['consumed_task_id'] is not None:
@@ -346,7 +367,8 @@ class PgQaRepository:
                 or (plan['source_status'] == 'changed' and body.get('confirm_original_snapshot') is not True)
                 or (not plan['source_snapshot']['scope_complete'] and body.get('confirm_partial_scope') is not True)):
             raise QaRejected('CONFIRMATION_REQUIRED', 409)
-        active = self._rows('''SELECT count(*) AS n FROM tasks WHERE owner_id=:owner AND schema_version='pr07a-1'
+        self.validate_target(row['class_session_id'], row['request'])
+        active = self._rows('''SELECT count(*) AS n FROM tasks WHERE owner_id=:owner AND schema_version IN ('pr07a-1','pr07b-1')
             AND state IN ('queued','running','unknown','cancel_requested')''').one()['n']
         if active >= 4:
             raise QaRejected('RATE_LIMITED', 429)
@@ -360,27 +382,40 @@ class PgQaRepository:
                     or price.model != destination['model'] or price.region != destination['region']
                     or price.revision != config['price_version']):
                 raise QaRejected('PLAN_CHANGED', 409)
-            reservation = self.tx.billing.reserve(ReservationRequest(op_id=plan_id, purpose='ai_question',
+            reservation = self.tx.billing.reserve(ReservationRequest(op_id=plan_id, purpose=self.task_kind,
                 price_id=UUID(config['price_id']), maximum_units={'input_tokens': config['input_token_budget'],
                     'output_tokens': config['max_output_tokens']}, task_max_microyuan=config['maximum_cost_microyuan'],
-                input_ref=reference, class_session_id=classroom.id, schema_version='pr07a-1', plan_id=plan_id))
+                input_ref=reference, class_session_id=classroom.id, schema_version=self.schema_version, plan_id=plan_id))
             task = self.tx.tasks.get(reservation['task_id'])
         else:
-            task = self.tx.tasks.enqueue('ai_question', reference, op_id=plan_id, operation='enqueueQuestion',
-                class_session_id=classroom.id, schema_version='pr07a-1', plan_id=plan_id)
+            task = self.tx.tasks.enqueue(self.task_kind, reference, op_id=plan_id,
+                operation='enqueueQuestion' if self.task_kind == 'ai_question' else 'enqueueReview',
+                class_session_id=classroom.id, schema_version=self.schema_version, plan_id=plan_id)
         self._rows('''UPDATE generation_plans SET consumed_task_id=:task,consumed_at=clock_timestamp()
             WHERE owner_id=:owner AND id=:id''', id=plan_id, task=task.id)
-        self._rows('''INSERT INTO questions(id,owner_id,class_session_id,snapshot_id,task_id,prompt)
-            VALUES(:id,:owner,:classroom,:snapshot,:task,:prompt)''', id=uuid4(), classroom=classroom.id,
-            snapshot=row['snapshot_id'], task=task.id, prompt=row['request']['question'])
+        self.created_task(task, row)
         self._remember('executeGeneration', op_id, digest, 'task', task.id, 202)
         return task
 
+    def created_task(self, task, plan):
+        self._rows('''INSERT INTO questions(id,owner_id,class_session_id,snapshot_id,task_id,prompt)
+            VALUES(:id,:owner,:classroom,:snapshot,:task,:prompt)''', id=uuid4(), classroom=task.class_session_id,
+            snapshot=plan['snapshot_id'], task=task.id, prompt=plan['request']['question'])
+
+    def cancel(self, task_id, op_id):
+        return self.tx.tasks.cancel(task_id, op_id)
+
+    def reconcile(self, task_id, op_id):
+        return self.tx.tasks.reconcile_result(task_id, op_id)
+
+    def synchronization_ids(self, task_id):
+        return [task_id]
+
     def worker_input(self, task_id):
         task = self.tx.tasks.get(task_id)
-        if task.schema_version != 'pr07a-1' or task.plan_id is None:
+        if task.schema_version != self.schema_version or task.plan_id is None:
             raise QaRejected('SOURCE_UNAVAILABLE', 404)
-        row = self._one('generation_plans', task.plan_id)
+        row = self._plan_row(task.plan_id)
         if task.class_session_id != row['class_session_id'] or row['consumed_task_id'] != task_id:
             raise QaRejected('SOURCE_UNAVAILABLE', 404)
         selection = self._selection(row['snapshot_id'])
@@ -390,7 +425,7 @@ class PgQaRepository:
             if reservation is None:
                 raise QaRejected('BILLING_UNAVAILABLE', 503)
             reservation_id = reservation['id']
-        return dict(question=row['request']['question'], request=row['request'], selection=selection,
+        return dict(question=self.prompt(row['request']), request=row['request'], selection=selection,
                     config=row['config'], destination=row['config']['destination'], reservation_id=reservation_id)
 
     def validator(self, task_id):
@@ -479,9 +514,11 @@ class PgQaRepository:
 
     def task_view(self, task_id):
         task = self.tx.tasks.get(task_id)
-        plan = self._one('generation_plans', task.plan_id)
+        if task.schema_version != self.schema_version:
+            raise QaRejected('SOURCE_UNAVAILABLE', 404)
+        plan = self._plan_row(task.plan_id)
         self._snapshot_row(plan['snapshot_id'])
-        question = self._rows('SELECT id FROM questions WHERE owner_id=:owner AND task_id=:task', task=task_id).one_or_none()
+        result_id = self.result_id(task_id)
         attempt = self.tx.tasks._attempt(task_id)
         settled = None
         if plan['config']['billing_required']:
@@ -493,7 +530,11 @@ class PgQaRepository:
             state=task.state, attempt_id=str(attempt.id) if attempt else None,
             parent_task_id=str(task.parent_task_id) if task.parent_task_id else None,
             completed_units=1 if task.state=='succeeded' else 0, total_units=1, error_code=task.error_code,
-            result_id=str(question['id']) if question and task.state=='succeeded' else None,
+            result_id=str(result_id) if result_id and task.state=='succeeded' else None,
             source_snapshot_id=str(plan['snapshot_id']), provider_outcome=attempt.provider_outcome if attempt else 'not_submitted',
             maximum_cost_microyuan=str(plan['config']['maximum_cost_microyuan']), settled_cost_microyuan=settled,
             may_have_charged=task.may_have_charged)
+
+    def result_id(self, task_id):
+        row = self._rows('SELECT id FROM questions WHERE owner_id=:owner AND task_id=:task', task=task_id).one_or_none()
+        return row['id'] if row else None

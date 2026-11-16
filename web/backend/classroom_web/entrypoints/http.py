@@ -63,11 +63,12 @@ def request_context(request):
 
 def failure(error,request_id):
     return JSONResponse(status_code=error.status,content={'error':dict(code=error.code,message='Request could not be completed.',request_id=request_id,
-        retryable=error.status in (429,503) and error.code!='RESULT_UNKNOWN',retry_after_seconds=None,current_revision=None,conflict_id=None,task_id=None)},
+        retryable=error.status in (429,503) and error.code!='RESULT_UNKNOWN',retry_after_seconds=None,
+        current_revision=getattr(error,'current_revision',None),conflict_id=getattr(error,'conflict_id',None),task_id=None)},
         headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'})
 
 
-def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admission=None,cache=None,media=None,media_spool_directory=None,billing=None,billing_admin=None,qa=None):
+def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admission=None,cache=None,media=None,media_spool_directory=None,billing=None,billing_admin=None,qa=None,review=None):
     parsed=urlsplit(origin)
     if parsed.scheme!='https' or not parsed.netloc or parsed.path or parsed.query or parsed.fragment or parsed.username:raise ValueError('one exact HTTPS origin is required')
     if contract.get('info',{}).get('version')!='0.2.0':raise ValueError('approved contract 0.2.0 required')
@@ -75,12 +76,21 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
         raise ValueError('billing administration requires its explicit contract candidate')
     if qa is not None and contract.get('x-pr07a-candidate') != 'pr07a-1':
         raise ValueError('QA requires its explicit PR-07a contract candidate')
+    if review is not None and contract.get('x-pr07b-candidate') != 'pr07b-1':
+        raise ValueError('Review requires its explicit PR-07b contract candidate')
     qa_paths = {
         '/class-sessions/{class_session_id}/generation-plans',
         '/generation-plans/{plan_id}', '/generation-plans/{plan_id}/execute',
         '/source-snapshots/{snapshot_id}', '/questions', '/questions/{question_id}',
         '/tasks/{task_id}', '/tasks/{task_id}/cancel', '/tasks/{task_id}/reconcile',
-    } if qa is not None else set()
+    } if qa is not None or review is not None else set()
+    review_paths = {
+        '/review-documents', '/review-documents/{document_id}',
+        '/review-documents/{document_id}/revisions',
+        '/review-documents/{document_id}/personal-revisions',
+        '/review-documents/{document_id}/adopt', '/review-revisions/{revision_id}',
+        '/tasks/{task_id}/raw-output',
+    } if review is not None else set()
     if billing_admin is not None:
         if auth.admin_reauth is not None and auth.admin_reauth is not billing_admin:
             raise ValueError('an existing admin reauth delegate must be coordinated')
@@ -107,6 +117,9 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
     async def body_for(request,schema):
         if request.headers.get('content-type','').split(';')[0].strip().lower()!='application/json' or request.headers.get('content-encoding','identity')!='identity':raise AuthRejected('VALIDATION_FAILED',422)
         limit=32768 if request.url.path==PREFIX+'/auth/reauth' else 16384
+        if review is not None and (request.url.path == PREFIX+'/review-documents'
+                or re.fullmatch(re.escape(PREFIX)+r'/review-documents/[0-9a-fA-F-]{36}/personal-revisions', request.url.path)):
+            limit=2_000_000
         length=request.headers.get('content-length')
         if length is not None and (not length.isdecimal() or int(length)>limit):raise AuthRejected('VALIDATION_FAILED',422)
         data=bytearray()
@@ -122,8 +135,11 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
            '/me/devices':lambda c,p:auth.list_contexts(c,'devices',p.get('cursor'),p.get('limit'))}
 
     def dispatch(path,ctx,body,key,params,method,operation_id):
+        if path in review_paths:
+            return review.dispatch(operation_id,ctx,body,key,params,billing_fallback=billing)
         if path in qa_paths:
-            return qa.dispatch(operation_id,ctx,body,key,params,billing_fallback=billing)
+            service = review if review is not None else qa
+            return service.dispatch(operation_id,ctx,body,key,params,billing_fallback=billing)
         if cache is not None and path in ('/me/cache-unlock','/me/cache-recover'):
             return cache.release(ctx,body,key,recovery=path=='/me/cache-recover')
         if path=='/me/quota' and billing is not None:return billing.quota(ctx)
@@ -176,6 +192,7 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
         '/me/sessions/{session_id}/revoke','/me/devices/{device_id}/revoke'}
     if business is not None:selected.add('/courses/{course_id}')
     selected.update(qa_paths)
+    selected.update(review_paths)
     if billing is not None:selected.update(('/me/quota','/tasks/{task_id}/cancel'))
     if billing_admin is not None:selected.update(('/admin/switches','/admin/usage','/admin/quota-adjustments','/admin/users/{user_id}/quota'))
     if cache is not None:
@@ -191,6 +208,26 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
             entered=time.monotonic();deadline=entered+5;deadline_token=DEADLINE.set(deadline);dispatched=False
             try:
                 secure(request,write=method!='get');ctx=request_context(request);key=None;body={};params=dict(request.path_params)
+                if path in review_paths and method == 'get':
+                    query_schemas = {item['name']: item['schema'] for item in operation.get('parameters', [])
+                                     if item.get('in') == 'query'}
+                    pairs = list(request.query_params.multi_items())
+                    if len({name for name, _ in pairs}) != len(pairs):
+                        raise AuthRejected('VALIDATION_FAILED', 422)
+                    for name, value in pairs:
+                        if name not in query_schemas:
+                            raise AuthRejected('VALIDATION_FAILED', 422)
+                        query_schema = query_schemas[name]
+                        if query_schema.get('type') == 'integer':
+                            if not value.isascii() or not value.isdecimal() or len(value) > 16:
+                                raise AuthRejected('VALIDATION_FAILED', 422)
+                            value = int(value)
+                        elif query_schema.get('type') == 'boolean':
+                            if value not in ('true', 'false'):
+                                raise AuthRejected('VALIDATION_FAILED', 422)
+                            value = value == 'true'
+                        check(query_schema, value)
+                        params[name] = value
                 if path in qa_paths and method == 'get':
                     pairs = list(request.query_params.multi_items())
                     allowed = {'class_session_id', 'cursor', 'limit'} if path == '/questions' else set()
@@ -278,7 +315,9 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
     for path in selected:
         if path not in contract['paths']:raise ValueError('route absent from approved contract: '+path)
         for method,operation in contract['paths'][path].items():
-            if method in ('get','post') or (path=='/admin/switches' and method=='patch' and billing_admin is not None):
+            if (method in ('get','post')
+                    or (path=='/admin/switches' and method=='patch' and billing_admin is not None)
+                    or (path in review_paths and method=='patch')):
                 app.add_api_route(PREFIX+path,endpoint(path,method,operation),methods=[method.upper()])
 
     if media is not None:

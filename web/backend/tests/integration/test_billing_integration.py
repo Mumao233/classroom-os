@@ -543,7 +543,7 @@ def test_composed_media_and_billing_migration_candidate(pg,tmp_path):
     shutil.copytree(ROOT/'web/backend/migrations',migrations)
     candidate=migrations/'versions/pr11a_review_candidate.py'
     candidate.write_text("from alembic import op\nfrom classroom_web.infrastructure.billing_schema import candidate_ddl,integration_ddl\n"
-        "revision='pr11a_review_candidate'\ndown_revision='pr07a_001'\nbranch_labels=None\ndepends_on=None\n"
+        "revision='pr11a_review_candidate'\ndown_revision='pr07b_001'\nbranch_labels=None\ndepends_on=None\n"
         "def upgrade():\n    op.get_bind().execution_options(no_parameters=True).exec_driver_sql(candidate_ddl()+integration_ddl())\n"
         "def downgrade():\n    raise RuntimeError('preserve billing history')\n",encoding='utf-8')
     try:
