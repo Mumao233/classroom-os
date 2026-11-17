@@ -8,10 +8,16 @@ $brokerRoot = 'J:\class-assistant\worktrees\web-pr03b-sessions'
 $broker = Join-Path $brokerRoot 'work/pr03b/vmware-broker'
 $destination = Join-Path $root "outputs/pr05b/runs/$Tag"
 $null = New-Item -ItemType Directory -Force -Path $destination
-$job = "$Tag-collect-" + [Guid]::NewGuid().ToString('N').Substring(0,6)
-& (Join-Path $brokerRoot 'tools/pr03b/vmware/submit.ps1') -Id $job -Kind copyFrom -GuestPath "C:\j\class-assistant\worktrees\pr05b-runs\$Tag\evidence.zip" -TimeoutSeconds 60
-if ($LASTEXITCODE -ne 0) { throw 'Evidence copy failed' }
-Copy-Item -LiteralPath (Join-Path $broker "incoming/$job/evidence.zip") -Destination (Join-Path $destination 'evidence.zip')
+$prior = Get-ChildItem -LiteralPath (Join-Path $broker 'done') -Filter "$Tag-collect-*.result.json" |
+    Sort-Object LastWriteTime -Descending | Select-Object -First 1
+$copied = if ($prior) { Get-Content -LiteralPath $prior.FullName -Raw | ConvertFrom-Json } else { $null }
+if (-not $copied.Result.Succeeded) {
+    $job = "$Tag-collect-" + [Guid]::NewGuid().ToString('N').Substring(0,6)
+    & (Join-Path $brokerRoot 'tools/pr03b/vmware/submit.ps1') -Id $job -Kind copyFrom -GuestPath "C:\j\class-assistant\worktrees\pr05b-runs\$Tag\evidence.zip" -TimeoutSeconds 60
+    $copied = Get-Content -LiteralPath (Join-Path $broker "done/$job.result.json") -Raw | ConvertFrom-Json
+}
+if (-not $copied.Result.Succeeded) { throw 'Evidence copy failed' }
+Copy-Item -LiteralPath $copied.Result.HostPath -Destination (Join-Path $destination 'evidence.zip')
 foreach ($name in @('source.zip','SOURCE.json')) {
     Copy-Item -LiteralPath (Join-Path $broker "$Tag/$name") -Destination (Join-Path $destination $name)
 }

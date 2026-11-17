@@ -6,6 +6,8 @@
 
 正式迁移保持单链 `0010_deletion_lifecycle → 0011_cache_keys → 0012_capture_recovery`。0011 将既有 PR-05a 正式候选迁入 Alembic，并包含验证时间在 policy 锁后重查的修复。与 PR-08a 共享 OpenAPI 0.2.1 的 unlockCache 合约及生成文件。两方谁先合并，另一方同步 main 后重新核对唯一 head。
 
+主控 INTEGRATION-001 对 A `783b733` 与 B `e576dfa` 的 merge-tree 预检发现两处测试文本冲突，分别为 `test_capture_migration.py` 的 add/add 和 `test_data_foundation.py` 的内容冲突。合流时保留 A 的严格断言版本，其中完整包含 B 的 0011/cache_keys 断言，另加 0012 升级与九张 capture 表的列校验。业务与公开合约预检可自动合流。实际同步后仍需运行迁移、这两个测试、公开合约、身份缓存和 04b 回归。
+
 0012 保留冻结表名和公开 DTO，增加内部 capture policy、epoch progress、recovery grant 和 chunk receipt 状态。owner RLS、组合外键、身份不可变和单调触发器约束状态。媒体 audio commit 由绝对关闭约束升级为默认关闭的策略触发器，04b 原 retention 触发器继续执行。
 
 锁顺序为 auth/user、catalog ancestors、capture policy/owner advisory/lease、epoch/consents、chunk/media、owner event counter。05a recording-key authorizer 在既有 auth/reauth/cache policy/catalog 前缀后取得 capture 锁。capture 路径没有反向获取 proof/cache 锁。
