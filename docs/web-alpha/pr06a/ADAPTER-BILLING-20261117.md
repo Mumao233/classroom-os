@@ -11,9 +11,11 @@
 
 ## 合成计量与 PostgreSQL 验证
 
-三项合成价目使用 `audio_duration_ms`（仅配额，微元单价 0）、`input_tokens`、`output_tokens`。测试按独立数值造数，验证价目键集合与预留、累计量集合完全一致。`Usage` 中的 `meter` 是一次累计用量流标签，`quantities` 保存独立的各项值。正向场景预留 750 ms、60 输入 Token 和 40 输出 Token，预留 180 合成微元。已知累计金额从 36 到 48 合成微元，日／月最终扣减量同为 630 ms。负对照覆盖仅 Token 价目、回滚、重复许可、耗尽 meter、同 revision 冲突、累计回退和错误请求归属。测试的配额时长、供应商 ID 和价格均为合成事实。 [PG 用例](../../../web/backend/tests/integration/test_pr06a_dashscope_billing.py) · [计量定义](../../../web/backend/classroom_web/domain/billing.py)
+三项合成价目使用 `audio_duration_ms`（仅配额，微元单价 0）、`input_tokens`、`output_tokens`。`Usage` 中的 `meter` 是一次累计用量流标签，`quantities` 保存独立的各项值。PG 用例预留 750 ms、60 输入 Token 和 40 输出 Token，预留 180 合成微元。测试按适配器已确认发送的样本数独立计算 500 ms 配额，从适配器发出的实际 `asr.usage` 读取计量版本、请求 ID、输入和输出量。已知累计金额从 36 到 48 合成微元，日／月最终扣减量同为 500 ms。负对照覆盖仅 Token 价目、回滚、重复许可、耗尽 meter、同 revision 冲突、累计回退和错误请求归属。测试的样本、供应商 ID 和价格均为合成事实。 [PG 用例](../../../web/backend/tests/integration/test_pr06a_dashscope_billing.py) · [计量定义](../../../web/backend/classroom_web/domain/billing.py)
 
-线上事件的可信高水位、发生冲突的字段和最终计量需要单独留证。累计量按请求归属，重复包只应计一次。缺最终量时保留此前已知金额和残余敞口；完整、可归属的晚到凭证可按更高版本核对。超出上界需停止新音频并提交费用异常证据，后续正式费用结算由账本的调整机制和核对流程处理。`PgBillingRepository.reconcile` 会记录实际可证实的超额风险；申请接入时仍要由组合层区分供应商高水位、待核数据及可结算最终值。 [费用操作契约](../architecture/06-COST-OPERATIONS.md)
+可信累计用量以单请求为单位，从 revision 1 开始，每次接受新的累计量或确认最终用量时递增。完全重复的累计包只产生一条 `asr.usage`。即使 Token 数完全相同，可信的最终计量也有独立 revision。PG 用例验证用相同 revision 重放观察的幂等性。正式接入需要保留原计量身份及版本，避免迟到凭证碰到早期已写入的同版本数据。
+
+供应商已结束且识别证据完整时，缺失或无效的终态 usage 会保留识别结果，同时费用仍待核对。此前已知金额和残余敞口继续保留，完整、可归属的迟到凭证可按更高版本核对。类型合法但超出 permit 上界或回退的累计量会产生 `asr.usage_anomaly`，包含观测的 Token 数和相应上界。异常观察保留给费用核对，此前可信高水位继续有效。非终态计量异常会停止新发送。`PgBillingRepository.reconcile` 会记录实际可证实的超额风险，正式组合层需要先核实该凭证的归属和可结算状态。 [适配器](../../../web/backend/classroom_web/asr_dashscope/adapter.py) · [费用操作契约](../architecture/06-COST-OPERATIONS.md)
 
 ## 真实 POC 仍需核对
 

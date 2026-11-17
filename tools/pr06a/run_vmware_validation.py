@@ -15,6 +15,14 @@ import xml.etree.ElementTree as ET
 import zipfile
 
 
+def has_pytest_diagnostic(failure, expected):
+    """Pytest prefixes rendered exceptions with E, separately from source."""
+    if failure is None:
+        return False
+    diagnostic = re.compile(r'E[ \t]+' + re.escape(expected))
+    return any(diagnostic.fullmatch(line) for line in (failure.text or '').splitlines())
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--root', type=Path, required=True)
@@ -62,6 +70,20 @@ def main():
                         package.write(path, path.relative_to(root).as_posix())
         print('evidence_sha256', hashlib.sha256(archive.read_bytes()).hexdigest(), flush=True)
 
+    def finalize():
+        report['source_mismatches_after'] = [name for name, digest in manifest['files_sha256'].items()
+            if not (root / name).is_file() or hashlib.sha256((root / name).read_bytes()).hexdigest() != digest]
+        report['passed'] = (all(step['exit_code'] == 0 for step in report['steps'])
+                            and not report['source_mismatches_after'])
+        has_skips = any(step.get('summary', {}).get('skipped', 0) for step in report['steps'])
+        report['complete_without_skips'] = report['passed'] and not has_skips
+        report['status'] = 'failed'
+        if report['passed']:
+            report['status'] = 'passed_with_skips' if has_skips else 'passed'
+        preserve_evidence()
+        print(json.dumps(report), flush=True)
+        return 0 if report['passed'] else 1
+
     def run(name, command, timeout=300, child_environment=None):
         command = [str(value) for value in command]
         try:
@@ -89,7 +111,10 @@ def main():
         return result
 
     backend = root / 'web/backend'
+    package = backend / 'classroom_web/asr_dashscope'
     suite = backend / 'tests/asr_dashscope'
+    billing_targets = [backend / 'tests/integration/test_pr06a_billing_gate.py',
+                       backend / 'tests/integration/test_pr06a_dashscope_billing.py']
     scratch = root / 'work/pr06a/dashscope-tests'
     guard = scratch / 'guard'
     guard.mkdir(parents=True, exist_ok=False)
@@ -98,8 +123,19 @@ def main():
     probe = run('dashscope-network-guard', [sys.executable, '-B', '-c',
         "import sys; sys.audit('socket.connect', None, ('198.51.100.1', 443))"],
         child_environment=guarded)
-    report['steps'][-1]['exit_code'] = int(
-        probe.returncode != 1 or 'PR-02b tests deny non-loopback' not in probe.stderr)
+    guard_step = report['steps'][-1]
+    denial = 'PermissionError: PR-02b tests deny non-loopback network connections'
+    if probe.returncode != 1 or denial not in probe.stderr.splitlines():
+        guard_step.update(exit_code=1, validation_error='Offline network guard denial was not verified')
+        return finalize()
+    guard_step['exit_code'] = 0
+
+    def require_files(name, *paths):
+        missing = [path.relative_to(root).as_posix() for path in paths if not path.is_file()]
+        if missing:
+            report['steps'].append(dict(name=name, exit_code=1, missing=missing,
+                validation_error='Required files absent from source snapshot'))
+        return not missing
 
     def dashscope_pytest(name, target, env):
         junit = output / (name + '.xml')
@@ -118,22 +154,46 @@ def main():
             skipped=sum(case.find('skipped') is not None for case in cases))
         return result, step, cases
 
-    suite_environment = dict(guarded, PYTHONPATH=os.pathsep.join((guarded['PYTHONPATH'], str(backend))))
-    _, suite_step, suite_cases = dashscope_pytest('dashscope', suite, suite_environment)
-    if not suite_cases or any(suite_step['summary'][part] for part in ('failures', 'errors', 'skipped')):
-        suite_step.update(exit_code=1, validation_error='Protocol suite must complete without failures, errors or skips')
+    if require_files('dashscope', package / 'adapter.py', package / 'wire.py',
+                     suite / 'test_adapter.py', suite / 'test_wire.py'):
+        suite_environment = dict(guarded, PYTHONPATH=os.pathsep.join((guarded['PYTHONPATH'], str(backend))))
+        _, suite_step, suite_cases = dashscope_pytest('dashscope', suite, suite_environment)
+        if not suite_cases or any(suite_step['summary'][part] for part in ('failures', 'errors', 'skipped')):
+            suite_step['exit_code'] = 1
+            suite_step.setdefault('validation_error', 'Protocol suite must complete without failures, errors or skips')
+
+    expected_terminal_failure = 'AssertionError: post-terminal transcript escaped'
+    displayed = ET.Element('failure')
+    displayed.text = 'E       ' + expected_terminal_failure
+    source_only = ET.Element('failure', message=expected_terminal_failure)
+    source_only.text = ('>       assert empty, "post-terminal transcript escaped"\n'
+                        'E       AssertionError: a different failure')
+    diagnostic_control = dict(
+        accepts_expected_diagnostic=has_pytest_diagnostic(displayed, expected_terminal_failure),
+        rejects_assertion_source_and_xml_summary=not has_pytest_diagnostic(source_only, expected_terminal_failure),
+        rejects_inexact_diagnostic=not has_pytest_diagnostic(displayed, 'AssertionError: post-terminal'))
+    report['steps'].append(dict(name='dashscope-mutation-diagnostic-selfcheck',
+                                exit_code=int(not all(diagnostic_control.values())),
+                                checks=diagnostic_control))
 
     def negative_control(name, source, needle, replacement, node, expected_failure):
+        if not require_files(name, package / source, suite / node.split('::', 1)[0]):
+            return
         shadow = scratch / (name + '-source')
-        shutil.copytree(backend / 'classroom_web', shadow / 'classroom_web')
+        try:
+            original = (package / source).read_bytes()
+        except OSError as error:
+            report['steps'].append(dict(name=name, exit_code=1, source=source,
+                                        validation_error=type(error).__name__))
+            return
         target = shadow / 'classroom_web/asr_dashscope' / source
-        original = target.read_bytes()
         before, after = needle.encode(), replacement.encode()
         if original.count(before) != 1:
             report['steps'].append(dict(name=name, exit_code=1,
                 validation_error='Expected exactly one matching mutation point in ' + source))
             return
         mutant = original.replace(before, after)
+        shutil.copytree(backend / 'classroom_web', shadow / 'classroom_web')
         target.write_bytes(mutant)
         env = dict(guarded, PYTHONPATH=os.pathsep.join((guarded['PYTHONPATH'], str(shadow), str(backend))))
         result, step, cases = dashscope_pytest(name, str(suite / node), env)
@@ -142,9 +202,9 @@ def main():
             mutant_sha256=hashlib.sha256(mutant).hexdigest(), before=needle, after=replacement,
             expected_failure=expected_failure)
         observed = cases[0].find('failure') if len(cases) == 1 else None
-        step['exit_code'] = int(result.returncode != 1 or observed is None
-            or step['summary'] != dict(tests_run=1, failures=1, errors=0, skipped=0)
-            or expected_failure not in (observed.get('message', '') + (observed.text or '')))
+        step['exit_code'] = int(result.returncode != 1
+            or step.get('summary') != dict(tests_run=1, failures=1, errors=0, skipped=0)
+            or not has_pytest_diagnostic(observed, expected_failure))
         if step['exit_code']:
             step['validation_error'] = 'Selected test must fail against the mutation for the expected reason'
 
@@ -152,16 +212,17 @@ def main():
         'if uid(header.get("task_id")) != uid(provider_task_id):',
         'if not uid(header.get("task_id")):',
         'test_wire.py::test_task_identity_must_be_the_one_canonical_uuid_for_this_connection'
-        '[fb1b224a-c3bb-4504-9518-72a77b1190dc]', 'DID NOT RAISE')
+        '[fb1b224a-c3bb-4504-9518-72a77b1190dc]', 'Failed: DID NOT RAISE ProtocolError')
     negative_control('dashscope-mutant-real-mode', 'adapter.py',
         "if config.get('mode', 'synthetic') != 'synthetic':", 'if False:',
-        'test_adapter.py::test_real_mode_rejected_before_connect_even_with_permit', 'DID NOT RAISE')
+        'test_adapter.py::test_real_mode_rejected_before_connect_even_with_permit',
+        'Failed: DID NOT RAISE ProtocolError')
 
     negative_control('dashscope-mutant-post-terminal', 'adapter.py',
         '    def _accept(self, event):\n        if self._state in _TERMINAL:\n            return\n',
         '    def _accept(self, event):\n',
         'test_adapter.py::test_ready_reader_cannot_change_a_closed_stream_or_append_after_terminal'
-        '[result-generated]', 'post-terminal transcript escaped')
+        '[result-generated]', expected_terminal_failure)
 
     binding = dict(head_sha=manifest['base_sha'], patch_sha256=manifest['source_zip_sha256'])
     for stage in ('candidate', 'trusted'):
@@ -189,13 +250,15 @@ def main():
         counts.update({name: int(value) for name, value in
                        re.findall(r'(failures|errors|skipped)=(\d+)', outcome)})
         report['steps'][-1]['summary'] = counts
-    if not args.full:
+    billing_paths = []
+    for path in billing_targets:
+        if require_files(path.stem, path):
+            billing_paths.extend(('--test-target', path.relative_to(backend).as_posix()))
+    if not args.full and billing_paths:
         pg = Path('J:/class-assistant/worktrees/web-pr03b-sessions/work/pr03b/toolchains')
         pg = pg / 'pg17.11-win64-53b5364a5a04e8ec/runtime/Library/bin'
         run('billing-defaults', [sys.executable, '-I', '-X', 'utf8', '-B', 'tools/pr11a/run_tests.py',
-            '--pg-bin', pg, '--suite', 'billing', '--test-target',
-            'tests/integration/test_pr06a_billing_gate.py', '--test-target',
-            'tests/integration/test_pr06a_dashscope_billing.py'], timeout=300)
+            '--pg-bin', pg, '--suite', 'billing', *billing_paths], timeout=300)
     if args.full:
         run('backend', [sys.executable, '-I', '-X', 'utf8', '-B', 'tools/pr07b/run_combined.py',
                        '--root', root, '--auth-browser', '--deps', args.deps], timeout=2400)
@@ -207,18 +270,7 @@ def main():
         run('legacy', [args.legacy_python, '-X', 'utf8', '-B', 'tools/pr00/run_checks.py',
             '--node', node, '--powershell', 'powershell.exe',
             '--output-dir', root / 'work/pr00/pr06a-validation'], timeout=1500)
-    report['source_mismatches_after'] = [name for name, digest in manifest['files_sha256'].items()
-        if not (root / name).is_file() or hashlib.sha256((root / name).read_bytes()).hexdigest() != digest]
-    report['passed'] = (all(step['exit_code'] == 0 for step in report['steps'])
-                        and not report['source_mismatches_after'])
-    has_skips = any(step.get('summary', {}).get('skipped', 0) for step in report['steps'])
-    report['complete_without_skips'] = report['passed'] and not has_skips
-    report['status'] = 'failed'
-    if report['passed']:
-        report['status'] = 'passed_with_skips' if has_skips else 'passed'
-    preserve_evidence()
-    print(json.dumps(report), flush=True)
-    return 0 if report['passed'] else 1
+    return finalize()
 
 
 if __name__ == '__main__':

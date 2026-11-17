@@ -5,7 +5,7 @@ from dataclasses import dataclass, fields
 from ..asr_sim.simulator import ProtocolError, identity, uid, validate_frame
 from .billing import StreamIdentity, SyntheticRequestPermit
 from .transport import AuthenticationRejected, Transport
-from .wire import TokenUsage, UsageError, finish_task, parse_event, run_task
+from .wire import TokenUsage, UsageError, WireEvent, finish_task, parse_event, run_task
 
 
 @dataclass(frozen=True)
@@ -50,13 +50,15 @@ class DashScopeAdapter:
         self._state = 'idle'
         self._disposed = False
         self._loop = None
-        self._session_deadline = None
+        self._session_deadline = self._finish_deadline = None
         self._identity = None
         self._event_batch = []
         self._write_lock = asyncio.Lock()
         self._terminal_event = asyncio.Event()
         self._reader = self._writer = self._finisher = self._closer = None
         self._run_attempted = self._finish_attempted = False
+        self._finish_dispatched = False
+        self._pending_terminal: WireEvent | None = None
         self._attempted_ranges = []
         self._sent_ranges = []
         self._request_id = None
@@ -64,8 +66,10 @@ class DashScopeAdapter:
         self._latest_id = 0
         self._sentences = {}
         self._seen_partials = {}
+        self._seen_results: set[WireEvent] = set()
         self._usage = None
         self._usage_final = False
+        self._usage_revision = 0
         self._provider_terminal = None
         self._close_error = None
 
@@ -147,6 +151,8 @@ class DashScopeAdapter:
                 raise ProtocolError('start closed')
             async with self._timeout(self._deadlines.initialize) as limit:
                 await self._write(self._send_run, expires_at=limit.when())
+                if self._state != 'starting':
+                    raise ProtocolError('start closed')
                 self._reader = asyncio.create_task(self._read(expires_at=limit.when()))
                 try:
                     self._accept(await self._reader)
@@ -162,7 +168,9 @@ class DashScopeAdapter:
             await self.aclose()
             raise
         except Exception as exc:
-            if isinstance(exc, AuthenticationRejected) and phase == 'connect':
+            if self._provider_terminal == 'task-failed':
+                reason = 'task_failed'
+            elif isinstance(exc, AuthenticationRejected) and phase == 'connect':
                 reason = 'authentication_rejected'
             elif isinstance(exc, TimeoutError):
                 reason = phase + '_timeout'
@@ -207,6 +215,7 @@ class DashScopeAdapter:
     async def finish(self):
         self._verify_loop()
         if self._state == 'streaming':
+            self._finish_deadline = min(self._loop.time() + self._deadlines.finish, self._session_deadline)
             self._state = 'draining'
             self._finisher = asyncio.create_task(self._finish())
         elif self._state != 'draining' and self._state not in _TERMINAL:
@@ -222,10 +231,12 @@ class DashScopeAdapter:
 
     async def _finish(self):
         try:
-            async with self._timeout(self._deadlines.finish) as limit:
+            async with self._timeout(self._deadlines.finish, expires_at=self._finish_deadline) as limit:
                 async with self._write_lock:
                     if self._state == 'draining':
                         await self._write(self._send_finish, expires_at=limit.when())
+                        self._finish_dispatched = True
+                        self._confirm_pending_terminal()
                 await self._terminal_event.wait()
         except Exception as exc:
             reason = 'finish_timeout' if isinstance(exc, TimeoutError) else 'finish_failed'
@@ -284,6 +295,7 @@ class DashScopeAdapter:
             async with limit:
                 self._writer = asyncio.create_task(invoke())
                 await self._writer
+                self._require_time(limit.when())
         except asyncio.CancelledError:
             if asyncio.current_task().cancelling():
                 raise
@@ -302,7 +314,7 @@ class DashScopeAdapter:
 
     async def _read_events(self):
         try:
-            while self._state not in _TERMINAL:
+            while self._state not in _TERMINAL and self._pending_terminal is None:
                 self._accept(await self._read())
         except asyncio.CancelledError:
             self._stop_unconfirmed('receive_failed')
@@ -321,41 +333,81 @@ class DashScopeAdapter:
             return
         if self._state == 'starting' and event.kind not in ('task-started', 'task-failed'):
             raise ProtocolError('provider event before task-started')
-        if event.kind == 'task-finished' and (self._state != 'draining' or not self._finish_attempted):
-            raise ProtocolError('provider finished before finish-task')
+        if event.kind == 'task-started':
+            if self._state == 'starting':
+                self._state = 'streaming'
+                self._emit('asr.started')
+            return
+        if event.kind == 'task-failed':
+            self._provider_terminal = event.kind
+            self._stop('failed', 'task_failed')
+            return
+        if event.kind == 'task-finished':
+            if self._state != 'draining' or not self._finish_attempted:
+                raise ProtocolError('provider finished before finish-task')
+            self._provider_terminal = event.kind
+            self._pending_terminal = event
+            self._confirm_pending_terminal()
+            return
+
+        # Compare a normalized packet, including its usage. An exact replay can
+        # arrive after newer cumulative readings; only new evidence can regress.
+        if event in self._seen_results:
+            return
         if event.request_id is not None:
             if self._request_id is not None and event.request_id != self._request_id:
                 raise ProtocolError('provider request identity changed')
             self._request_id = event.request_id
         if event.usage is not None:
-            self._accept_usage(event.usage, final=event.kind == 'task-finished')
-        if event.kind == 'task-started' and self._state == 'starting':
-            self._state = 'streaming'
-            self._emit('asr.started')
-        elif event.kind == 'task-failed':
-            self._provider_terminal = event.kind
-            self._stop('failed', 'task_failed')
-        elif event.kind == 'task-finished':
-            self._provider_terminal = event.kind
-            if not self._sentences or any(not sentence.final for sentence, _ in self._sentences.values()):
-                self._stop('unknown', 'incomplete_transcript')
-            else:
-                self._stop('succeeded', 'task_finished')
-        elif event.sentence is not None:
+            self._accept_usage(event.usage, final=False)
+        if event.sentence is not None:
             self._accept_sentence(event.sentence)
+        self._seen_results.add(event)
+
+    def _confirm_pending_terminal(self):
+        if self._state != 'draining' or self._pending_terminal is None:
+            return
+        if self._loop.time() >= self._finish_deadline:
+            self._stop_unconfirmed('finish_timeout')
+            return
+        if not self._finish_dispatched:
+            return
+        event, self._pending_terminal = self._pending_terminal, None
+        if event.usage_issue:
+            self._usage_anomaly('invalid_terminal_usage', final=True)
+        elif event.usage is not None:
+            try:
+                self._accept_usage(event.usage, final=True)
+            except UsageError:
+                # The terminal separately proves that delivery of recognition ended.
+                pass
+        if not self._sentences or any(not sentence.final for sentence, _ in self._sentences.values()):
+            self._stop('unknown', 'incomplete_transcript')
+        else:
+            self._stop('succeeded', 'task_finished')
 
     def _accept_usage(self, usage, *, final):
         if (usage.input_tokens > self._permit.input_tokens_limit
-                or usage.output_tokens > self._permit.output_tokens_limit
-                or self._usage is not None and (
-                    usage.input_tokens < self._usage.input_tokens
-                    or usage.output_tokens < self._usage.output_tokens)):
-            raise UsageError('cumulative usage outside permitted bounds')
+                or usage.output_tokens > self._permit.output_tokens_limit):
+            self._usage_anomaly('overrun', usage, final=final)
+            raise UsageError('cumulative usage exceeds permitted bounds')
+        if self._usage is not None and (usage.input_tokens < self._usage.input_tokens
+                                        or usage.output_tokens < self._usage.output_tokens):
+            self._usage_anomaly('regression', usage, final=final)
+            raise UsageError('cumulative usage regressed')
         if usage != self._usage or final and not self._usage_final:
             self._usage = usage
             self._usage_final = final
+            self._usage_revision += 1
             self._emit('asr.usage', input_tokens=usage.input_tokens, output_tokens=usage.output_tokens,
-                       final=final)
+                       revision=self._usage_revision, final=final)
+
+    def _usage_anomaly(self, reason, observed=None, *, final):
+        self._emit('asr.usage_anomaly', reason=reason, final=final,
+                   observed_input_tokens=observed.input_tokens if observed is not None else None,
+                   observed_output_tokens=observed.output_tokens if observed is not None else None,
+                   input_tokens_limit=self._permit.input_tokens_limit,
+                   output_tokens_limit=self._permit.output_tokens_limit)
 
     def _accept_sentence(self, sentence):
         number = sentence.sentence_id
@@ -403,6 +455,9 @@ class DashScopeAdapter:
     def _stop(self, state, reason):
         if self._state in _TERMINAL:
             return
+        if self._pending_terminal is not None:
+            self._usage_anomaly('unconfirmed_finish_dispatch', self._pending_terminal.usage, final=True)
+            self._pending_terminal = None
         self._state = state
         self._emit('asr.terminal', state=state, reason=reason,
                    provider_terminal=self._provider_terminal, billing_pending=self.billing_pending)

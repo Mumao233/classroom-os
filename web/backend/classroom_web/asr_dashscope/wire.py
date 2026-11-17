@@ -38,6 +38,7 @@ class WireEvent:
     request_id: str | None = field(default=None, repr=False)
     sentence: Sentence | None = None
     usage: TokenUsage | None = None
+    usage_issue: bool = False
 
 
 def run_task(provider_task_id: str) -> dict:
@@ -184,7 +185,12 @@ def parse_event(raw: str, provider_task_id: str) -> WireEvent:
         _text(header.get("error_message"), MAX_TEXT_CHARS)
         return WireEvent(kind)
     if kind == "task-finished":
-        return WireEvent(kind, usage=_usage(payload))
+        # The validated task-finished envelope confirms recognition ended.
+        # Invalid metering remains pending on that same request.
+        try:
+            return WireEvent(kind, usage=_usage(payload))
+        except UsageError:
+            return WireEvent(kind, usage_issue=True)
 
     output = _object(payload.get("output"))
     sentence, heartbeat = _sentence(output.get("sentence"))

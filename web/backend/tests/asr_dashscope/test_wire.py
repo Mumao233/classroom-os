@@ -100,6 +100,7 @@ def test_terminal_usage_requires_actual_token_evidence(usage, expected):
     assert parse("task-finished") == WireEvent("task-finished")
 
 
+@pytest.mark.parametrize("kind", ["result-generated", "task-finished"])
 @pytest.mark.parametrize("usage", [
     None,
     "sensitive-text",
@@ -111,10 +112,20 @@ def test_terminal_usage_requires_actual_token_evidence(usage, expected):
     {"input_tokens": 4, "output_tokens": 0, "total_tokens": 5},
     {"duration": "2"},
 ])
-def test_malformed_usage_is_flagged_and_redacted(usage):
-    with pytest.raises(UsageError) as exc:
-        parse("task-finished", {"usage": usage})
-    assert "sensitive-text" not in str(exc.value)
+def test_malformed_usage_is_flagged_and_redacted(kind, usage):
+    if kind == "task-finished":
+        event = parse(kind, {"output": {}, "usage": usage})
+        assert event == WireEvent("task-finished", usage_issue=True)
+        assert "sensitive-text" not in repr(event)
+    else:
+        with pytest.raises(UsageError) as exc:
+            parse(kind, {**result(), "usage": usage})
+        assert "sensitive-text" not in str(exc.value)
+
+
+def test_malformed_terminal_usage_does_not_bypass_task_identity():
+    with pytest.raises(ProtocolError, match="task identity mismatch"):
+        parse("task-finished", {"usage": {"input_tokens": 4}}, task_id=OTHER_TASK)
 
 
 @pytest.mark.parametrize("nested", [

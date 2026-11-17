@@ -22,7 +22,7 @@
 
 `header.task_id` 是该供应商连接的任务关联值，`output.request_id` 为可选供应商请求标识。两者可能恰好相同，始终按不同来源处理。本地 `task_id`、`attempt_id`、`stream_id` 分别在应用侧归属。`segment_id` 由本地 stream 和供应商句子编号稳定派生。官方样例显示同一个 `sentence_id` 的 `begin_time` 可从 0 ms 更新到 160 ms，保持句子身份并允许时间修订。供应商未提供 revision。适配器按首次出现的句号从 1 连续递增验证，并在连接内生成 revision。已见 partial 的原样重现按重放丢弃，供应商缺少修订序号时无法区分它和一次恰好回到相同内容的新更新。已接受的 final 不被后续 partial 改写，同一句的冲突 final 会终止该流并保留先前证据。稳定重放和持久版本归 PR-06b。[服务端事件](https://help.aliyun.com/zh/model-studio/qwen-audio-asr-streaming-server-events) · [项目接口与数据流](../architecture/04-CONTRACTS-FLOWS.md)
 
-3.1 的计费用量为 `input_tokens` 与 `output_tokens` 两个非负累计值。若给出 `total_tokens`，应等于两项之和。仅有秒数 `duration` 时保留计费待核状态；`duration` 是官方 3.0 的计费字段。已见高水位保留在原任务上，回退、冲突、超限和缺少最终用量均保留核对证据。真实账单的最低计费、取整和 Token 保守上界仍待验证。终态或已收到的 final 候选均无法单独释放费用预留。内部 billing_pending 只描述供应商识别和最终 Token 证据是否齐全，账本结算仍归事务调用方。[服务端事件](https://help.aliyun.com/zh/model-studio/qwen-audio-asr-streaming-server-events) · [真实接口验证计划](REAL-API-PLAN-20261117.md) · [费用契约](../architecture/06-COST-OPERATIONS.md)
+3.1 的计费用量为 `input_tokens` 与 `output_tokens` 两个非负累计值。若给出 `total_tokens`，应等于两项之和。仅有秒数 `duration` 时保留计费待核状态；`duration` 是官方 3.0 的计费字段。已见高水位保留在原任务上。相同规范化结果包的重放不会把较早用量当作回退。`asr.usage` 为每个新观察或最终性变化分配递增 revision；回退和超限的完整数量另外保留为 `asr.usage_anomaly`。确认识别终态后，缺失或异常的终态用量继续等待核对。真实账单的最低计费、取整和 Token 保守上界仍待验证。终态或已收到的 final 候选均无法单独释放费用预留。内部 billing_pending 只描述供应商识别和最终 Token 证据是否齐全，账本结算仍归事务调用方。[服务端事件](https://help.aliyun.com/zh/model-studio/qwen-audio-asr-streaming-server-events) · [真实接口验证计划](REAL-API-PLAN-20261117.md) · [费用契约](../architecture/06-COST-OPERATIONS.md)
 
 ## 五方法与调用顺序
 
@@ -33,7 +33,7 @@
 | `await start(config)` | 完成身份、配置与离线许可门禁，建连和 `run-task` 发送后等到匹配的启动确认。 |
 | `await send(frame)` | 串行核对 PCM 和已授权范围，发出或可能发出的范围归属于原尝试；I/O 结果未明时保留 `unknown`，本连接不重送。 |
 | `await finish()` | 停止新发送，在本连接至多发一次 `finish-task`，接收剩余识别事件和终态。明确拒绝和无证据终态分别保留。 |
-| `events()` | 批量返回内部 `asr.started`、`asr.partial`、`asr.final_candidate`、`asr.usage`、`asr.terminal`。`asr.final_candidate` 从 wire 取句尾，持久事务完成后才有可公布的 final。 |
+| `events()` | 批量返回内部 `asr.started`、`asr.partial`、`asr.final_candidate`、`asr.usage`、`asr.usage_anomaly`、`asr.terminal`。`asr.final_candidate` 从 wire 取句尾，持久事务完成后才有可公布的 final。 |
 | `query(receipt)` | `unsupported`，保留原任务和费用状态。 |
 
 供应商毫秒时间轴从连接开始的音频计算，本轮以首个已提交样本为基点加 `wire_ms × 16`。可空的 partial 结束时间留在内部证据中，最终课堂时间还需用 PR-05b 的采样与 epoch 映射。公开 `transcript.partial` 规约没有 `end_ms`，`transcript.final` 要求持久 `event_id`、`cursor`、`segment_revision_id` 和 `transcript_version_id`，候选适配器不直接发布公开浏览器事件。连接中断、超时或协议歧义后，保留已确认的文本和可疑发送边界供原尝试核对。[事件 Schema](../architecture/contracts/events.schema.json) · [采样时间轴与状态](../architecture/04-CONTRACTS-FLOWS.md)

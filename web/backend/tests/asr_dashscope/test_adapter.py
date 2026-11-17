@@ -119,7 +119,7 @@ async def test_full_duplex_multiple_frames_stable_identity_and_tail_final():
     revised = result(cfg, begin=1, text='第一段')
     confirmed = result(cfg, begin=2, end=10, final=True, text='第一段。', usage=usage(10, 6))
     await adapter.send(pcm(1600))
-    for event in (wire(cfg, 'task-started'), partial, partial, revised, partial, confirmed, confirmed, revised):
+    for event in (wire(cfg, 'task-started'), partial, partial, revised, partial, confirmed, partial, confirmed, revised):
         peer.feed_json(event)
     await adapter.send(pcm(1760))
     one, two = await asyncio.gather(adapter.finish(), adapter.finish())
@@ -142,8 +142,8 @@ async def test_full_duplex_multiple_frames_stable_identity_and_tail_final():
     assert finals[0]['provider_request_id'] == 'provider-request'
     assert all(row[key] == cfg[key] for row in finals for key in cfg)
     assert all(not {'cursor', 'event_id', 'transcript_version_id'} & row.keys() for row in finals)
-    assert [(row['input_tokens'], row['output_tokens'], row['final'])
-            for row in just(events, 'asr.usage')] == [(3, 1, False), (10, 6, False), (17, 9, True)]
+    assert [(row['input_tokens'], row['output_tokens'], row['revision'], row['final'])
+            for row in just(events, 'asr.usage')] == [(3, 1, 1, False), (10, 6, 2, False), (17, 9, 3, True)]
     assert just(events, 'asr.terminal')[0]['provider_terminal'] == 'task-finished'
     assert adapter.usage == TokenUsage(17, 9) and not adapter.billing_pending
     assert adapter.events() == []
@@ -304,6 +304,7 @@ async def test_start_failures_are_bounded_and_errors_are_redacted(failure, reaso
         await adapter.start(cfg)
     terminal, = just(adapter.events(), 'asr.terminal')
     assert (terminal['reason'], adapter.state) == (reason, state)
+    assert str(caught.value) == reason
     assert 'fixture-secret' not in str(caught.value) + repr(terminal) + caplog.text
     assert len(peer.sent_json) == (0 if failure in ('authentication', 'handshake', 'connect_timeout') else 1)
     assert adapter.query({'stream_id': cfg['stream_id']}) == {'status': 'unsupported'}
@@ -372,6 +373,15 @@ async def test_stream_fault_preserves_final_attempt_and_trusted_usage(fault, sta
     assert terminal['reason'] == reason
     assert terminal['billing_pending']
     assert adapter.usage == TokenUsage(10, 8)
+    if fault == 'usage_overflow':
+        anomaly, = just(events, 'asr.usage_anomaly')
+        assert anomaly['reason'] == 'overrun' and not anomaly['final']
+        assert (anomaly['observed_input_tokens'], anomaly['observed_output_tokens']) == (61, 10)
+        assert (anomaly['input_tokens_limit'], anomaly['output_tokens_limit']) == (60, 40)
+        assert all(anomaly[key] == cfg[key] for key in cfg)
+    if fault == 'usage_regression':
+        anomaly, = just(events, 'asr.usage_anomaly')
+        assert (anomaly['reason'], anomaly['observed_output_tokens']) == ('regression', 7)
     assert adapter.attempted_ranges == adapter.sent_ranges == ((0, 160),)
     assert len(peer.sent_binary) == 1 and len(peer.sent_json) == 1
     assert 'receiver-secret' not in repr(events) + caplog.text
@@ -668,4 +678,122 @@ async def test_first_sentence_must_start_at_one():
     await wait_state(adapter, 'unknown')
     assert (await adapter.finish())['state'] == 'unknown'
     assert not just(adapter.events(), 'asr.final_candidate')
+    assert_clean(peer)
+
+@pytest.mark.parametrize('dispatch', ['succeeds', 'fails', 'timeout'])
+@offline
+async def test_terminal_waits_for_confirmed_finish_dispatch(dispatch):
+    class HeldDispatchPeer(ScriptedPeer):
+        writing = asyncio.Event()
+        release_write = asyncio.Event()
+        read_terminal = asyncio.Event()
+
+        async def send_json(self, message):
+            if message['header']['action'] == 'finish-task':
+                self.writing.set()
+                await self.release_write.wait()
+                if dispatch == 'fails':
+                    raise RuntimeError('finish dispatch failed')
+            await super().send_json(message)
+
+        async def receive_text(self):
+            raw = await super().receive_text()
+            if '"task-finished"' in raw:
+                self.read_terminal.set()
+            return raw
+
+    cfg = config()
+    peer = HeldDispatchPeer()
+    adapter = await open_adapter(cfg, peer, deadlines=Deadlines(finish=.15 if dispatch == 'timeout' else 2))
+    await adapter.send(pcm())
+    peer.feed_json(result(cfg, end=5, final=True, usage=usage(5, 1)))
+    finish = asyncio.create_task(adapter.finish())
+    await peer.writing.wait()
+    peer.feed_json(wire(cfg, 'task-finished', usage=usage(7, 1)))
+    await peer.read_terminal.wait()
+    assert adapter.state == 'draining' and len(peer.sent_json) == 1
+    assert adapter.usage == TokenUsage(5, 1) and adapter.billing_pending
+    if dispatch != 'timeout':
+        peer.release_write.set()
+    reply = await finish
+    events = adapter.events()
+    terminal, = just(events, 'asr.terminal')
+    assert terminal['provider_terminal'] == 'task-finished'
+    if dispatch == 'succeeds':
+        assert reply['state'] == 'succeeded' and not adapter.billing_pending
+        assert peer.sent_json[-1]['header']['action'] == 'finish-task'
+        assert adapter.usage == TokenUsage(7, 1)
+        assert not just(events, 'asr.usage_anomaly')
+    else:
+        assert reply['state'] == 'unknown' and adapter.billing_pending
+        assert adapter.usage == TokenUsage(5, 1) and len(peer.sent_json) == 1
+        anomaly, = just(events, 'asr.usage_anomaly')
+        assert (anomaly['reason'], anomaly['observed_input_tokens']) == ('unconfirmed_finish_dispatch', 7)
+    assert_clean(peer)
+
+
+@pytest.mark.parametrize('terminal_usage,reason,observed', [
+    ({'input_tokens': 7}, 'invalid_terminal_usage', None),
+    (usage(4, 1), 'regression', 4),
+    (usage(61, 1), 'overrun', 61),
+])
+@offline
+async def test_recognition_terminal_survives_malformed_or_conflicting_usage(terminal_usage, reason, observed):
+    cfg = config()
+    peer = ScriptedPeer([wire(cfg, 'task-finished', usage=terminal_usage)])
+    adapter = await open_adapter(cfg, peer)
+    await adapter.send(pcm())
+    peer.feed_json(result(cfg, end=5, final=True, usage=usage(5, 1)))
+    assert (await adapter.finish())['state'] == 'succeeded'
+    assert adapter.billing_pending and adapter.usage == TokenUsage(5, 1)
+    events = adapter.events()
+    assert len(just(events, 'asr.final_candidate')) == 1
+    terminal, = just(events, 'asr.terminal')
+    assert terminal['provider_terminal'] == 'task-finished' and terminal['billing_pending']
+    accepted, = just(events, 'asr.usage')
+    assert (accepted['revision'], accepted['final']) == (1, False)
+    anomaly, = just(events, 'asr.usage_anomaly')
+    assert (anomaly['reason'], anomaly['observed_input_tokens'], anomaly['final']) == (reason, observed, True)
+    assert_clean(peer)
+
+
+@offline
+async def test_close_after_run_write_cannot_start_an_acknowledgement_read():
+    class CloseDuringRunPeer(ScriptedPeer):
+        reading = 0
+
+        async def send_json(self, message):
+            await super().send_json(message)
+            self.owner_close = asyncio.create_task(adapter.aclose())
+
+        async def receive_text(self):
+            self.reading += 1
+            await asyncio.Event().wait()
+
+    cfg = config()
+    peer = CloseDuringRunPeer()
+    adapter = DashScopeAdapter(peer, permit=permit_for(cfg))
+    with pytest.raises(ProtocolError):
+        await asyncio.wait_for(adapter.start(cfg), 1)
+    await peer.owner_close
+    assert adapter.state == 'unknown' and peer.reading == 0
+    assert len(peer.sent_json) == 1
+    assert_clean(peer)
+
+
+@offline
+async def test_finish_deadline_is_checked_before_a_ready_terminal_can_succeed():
+    cfg = config()
+    peer = ScriptedPeer()
+    adapter = await open_adapter(cfg, peer)
+    await adapter.send(pcm())
+    peer.feed_json(result(cfg, end=5, final=True, usage=usage(5, 1)))
+    finish = asyncio.create_task(adapter.finish())
+    await peer.finish_sent.wait()
+    adapter._finish_deadline = asyncio.get_running_loop().time() - 1
+    peer.feed_json(wire(cfg, 'task-finished', usage=usage(7, 1)))
+    assert (await finish)['state'] == 'unknown'
+    assert adapter.billing_pending and adapter.usage == TokenUsage(5, 1)
+    terminal, = just(adapter.events(), 'asr.terminal')
+    assert terminal['reason'] == 'finish_timeout'
     assert_clean(peer)
