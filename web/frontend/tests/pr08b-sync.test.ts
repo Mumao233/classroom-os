@@ -26,6 +26,7 @@ class MemoryCache extends EventTarget implements SyncCache {
   denied = false;
   recoveryHeads = new Map<string, number>();
   lock() { this.events.push('lock'); this.dispatchEvent(new Event('locked')); }
+  lockForDeletion() { this.events.push('peer-lock'); this.lock(); }
   close() { this.lock(); }
   async unlockScope() { this.events.push('unlock'); }
   async reconcileLearning(projections: S['BootstrapProjection'][], options: { preserveKeys?: boolean } = {}) {

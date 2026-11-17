@@ -390,6 +390,104 @@ try {
         recovery: [['REJECTED MERGE UNIQUE INPUT', 'Synthetic personal note']], remaining: 1, reusedRecovery: true });
     }
   });
+  await test('rejected-personal-merge-retains-its-exact-revision-authority', async () => {
+    const result = await page.evaluate(async () => {
+      const name = 'pr08b-rejected-merge-exact-authority';
+      const reference = await editable(name);
+      const merged = operation('Body based on a separately revocable revision', 2);
+      merged.payload.base_content_revision_id = ids.revisionB;
+      const resolve = transport.resolve.bind(transport);
+      transport.resolve = (id, body, key) => {
+        if (body.resolution === 'edited_merge') {
+          throw Object.assign(new Error('Rejected merge'), { code: 'VALIDATION_FAILED', status: 422 });
+        }
+        return resolve(id, body, key);
+      };
+      await runtime.resolve(reference, { resolution: 'edited_merge', base_revision: 2, merged_operation: merged }, 2);
+      await runtime.resolve(reference, { resolution: 'use_server', base_revision: 2 }, 3);
+      const [draft] = await runtime.readConflictDrafts(reference);
+      if (draft.body !== merged.payload.body_markdown || draft.reference.contentRevisionId !== ids.revisionB) {
+        throw new Error('Recovered merge did not retain its exact revision');
+      }
+      const [before] = await records(name);
+      transport.revokedRevisions.add(ids.revisionB);
+      await expectCode(runtime.readConflictDrafts(reference), 'AUTHORITY_UNAVAILABLE');
+      await runtime.unlock('synthetic-password');
+      const states = (await runtime.listConflictDraftSources()).map(value => value.state);
+      const [after] = await records(name);
+      return { states, sameId: before.id === after.id,
+        sameCiphertext: JSON.stringify([...new Uint8Array(before.ciphertext)]) === JSON.stringify([...new Uint8Array(after.ciphertext)]) };
+    });
+    assert.deepEqual(result, { states: ['restricted'], sameId: true, sameCiphertext: true });
+  });
+  await test('legacy-pending-decisions-resolve-only-through-their-exact-receipts', async () => {
+    const runScenario = scenario => page.evaluate(async scenario => {
+      const name = `pr08b-legacy-decision-${scenario}`;
+      const limits = { draftOperations: scenario === 'multiple' ? 3 : 2 };
+      const reference = await editable(name, limits);
+      const conflict = await runtime.inspectConflict(reference);
+      const first = { resolution: 'copy_to_new_note', base_revision: 2, destination_class_session_id: ids.classroom };
+      const replacement = { resolution: 'use_server', base_revision: 2 };
+      const saveLegacy = async (body, generation) => {
+        const opId = crypto.randomUUID();
+        const operation = { ...conflict.local_operation, op_id: opId, base_revision: body.base_revision,
+          payload: { ...conflict.local_operation.payload, base_revision: body.base_revision } };
+        const requestHash = await lib.syncFingerprint({ conflict_id: conflict.id, body });
+        const legacy = { ...reference, operationId: opId, revision: body.base_revision, generation };
+        const envelope = { schema: 1, kind: 'resolve', operation, original: reference, conflictId: conflict.id, resolution: body, requestHash };
+        await cache.put(legacy, new TextEncoder().encode(JSON.stringify(envelope)));
+        return { ...legacy, requestHash };
+      };
+      const old = await saveLegacy(first, 2);
+      if (scenario === 'multiple') await saveLegacy(replacement, 3);
+      const receipts = [...transport.receipts]; const conflicts = [...transport.conflicts];
+      runtime.close();
+      await create(name, limits, {}, 'drafts', { receipts, conflicts });
+      const send = transport.resolve.bind(transport);
+      const fetchConflict = transport.conflict.bind(transport);
+      const posts = [];
+      let gone = false;
+      let rejected = false;
+      let reauthorized = false;
+      let replacedBeforeSend = false;
+      transport.conflict = async id => {
+        if (rejected && id === conflict.id) reauthorized = true;
+        return fetchConflict(id);
+      };
+      transport.resolve = async (id, body, key) => {
+        posts.push({ resolution: body.resolution, key });
+        if (key === old.operationId) {
+          if (gone) { rejected = true; throw Object.assign(new Error('Destination gone'), { code: 'GONE', status: 410 }); }
+          throw Object.assign(new Error('Lost old response'), { code: 'RESULT_UNKNOWN' });
+        }
+        const persisted = await records(name);
+        replacedBeforeSend = persisted.length === 2 && persisted.every(value => value.header.operationId !== old.operationId)
+          && persisted.some(value => value.header.operationId === reference.operationId)
+          && persisted.some(value => value.header.operationId === key && value.header.generation === 3
+            && value.header.resolutionOf?.operationId === reference.operationId);
+        return send(id, body, key);
+      };
+      await expectCode(runtime.resolve(reference, replacement, 2), 'RESULT_UNKNOWN');
+      if (scenario === 'multiple') {
+        await runtime.flush();
+        return { posted: posts.length, retained: (await records(name)).length };
+      }
+      const noReboundBeforeProof = posts.length === 1 && posts[0].key === old.operationId && (await records(name)).length === 2;
+      if (scenario === 'applied') {
+        transport.receipts.set(old.operationId, { op_id: old.operationId, operation: 'resolveConflict', request_sha256: old.requestHash,
+          status: 'applied', object_id: crypto.randomUUID(), revision: 3, conflict_id: null, task_id: null });
+        transport.conflicts.get(conflict.id).resolved = true;
+      } else gone = true;
+      await runtime.resolve(reference, replacement, 2);
+      return { noReboundBeforeProof, reauthorized, replacedBeforeSend, postKinds: posts.map(value => value.resolution),
+        pending: runtime.snapshot().pending.length, retained: (await records(name)).length };
+    }, scenario);
+    assert.deepEqual(await runScenario('multiple'), { posted: 0, retained: 3 });
+    assert.deepEqual(await runScenario('applied'), { noReboundBeforeProof: true, reauthorized: false, replacedBeforeSend: false,
+      postKinds: ['copy_to_new_note'], pending: 0, retained: 0 });
+    assert.deepEqual(await runScenario('gone'), { noReboundBeforeProof: true, reauthorized: true, replacedBeforeSend: true,
+      postKinds: ['copy_to_new_note', 'copy_to_new_note', 'use_server'], pending: 0, retained: 0 });
+  });
   await test('bootstrap-authority-loss-retains-ciphertext-and-blocks-replay', async () => {
     const result = await page.evaluate(async () => {
       await create('pr08b-authority');
@@ -830,6 +928,13 @@ try {
         for (const reference of [original, legacy, editor]) {
           await expectCode(ordinary.acknowledgeDraft(exact(reference), reference.operationId), 'SYNC_AUTHORITY_REQUIRED');
         }
+        const forgedEditor = { ...editor, generation: editor.generation + 1 };
+        await expectCode(Promise.resolve().then(() => ordinary.saveRecoveryDraft(forgedEditor, encode({ body: 'FOREIGN EDIT' }))),
+          'SYNC_AUTHORITY_REQUIRED');
+        await expectCode(ordinary.put(forgedEditor, encode({ body: 'FOREIGN EDIT' })), 'SYNC_AUTHORITY_REQUIRED');
+        await expectCode(ordinary.put({ ...legacy, generation: legacy.generation + 1 }, encode(envelope)), 'SYNC_AUTHORITY_REQUIRED');
+        await expectCode(ordinary.put({ ...learning, verifiedAt: Date.now() }, encode({ body: 'FOREIGN LEARNING' })),
+          'SYNC_AUTHORITY_REQUIRED');
         const normal = { ...original, objectId: crypto.randomUUID(), operationId: crypto.randomUUID() };
         const bytes = encode({ schema: 1, kind: 'write', text: 'UNSTRUCTURED PR-08a DRAFT' });
         const forged = { ...legacy, operationId: crypto.randomUUID(), generation: 3,
@@ -844,6 +949,61 @@ try {
       } finally { ordinary.close(); }
     });
     assert.deepEqual(result, { genericBody: 'UNSTRUCTURED PR-08a DRAFT', pendingGenericCount: 1, unchanged: true });
+  });
+  await test('deletion-locks-matching-peer-before-detail-even-when-observer-starts-locked', async () => {
+    const other = await context.newPage();
+    try {
+      await install(other);
+      const name = 'pr08b-deletion-peer-lock';
+      await page.evaluate(name => create(name), name);
+      await other.evaluate(async name => {
+        await create(name);
+        window.visibleDraft = await runtime.enqueue(operation('PEER PRIVATE TEXT'), ancestry, 1);
+        await runtime.readDraft(visibleDraft);
+        window.otherNamespaceLocks = 0;
+        window.otherNamespaceCache = new NativeTrustedCache({ enabled: true, databaseName: name,
+          limits: { draftBytes: 100000, draftOperations: 5, recordingBytes: 100000 } });
+        otherNamespaceCache.bind({ ownerId: crypto.randomUUID(), deviceId: ids.device, sessionId: ids.session });
+        otherNamespaceCache.addEventListener('locked', () => { otherNamespaceLocks++; });
+        await otherNamespaceCache.unlockScope('drafts');
+      }, name);
+
+      await page.evaluate(() => {
+        cache.lock();
+        window.deletionPage = { items: [{ event_id: crypto.randomUUID(), object_type: 'deletion',
+          object_id: ids.deletion, revision: 1, deleted: true }], next_cursor: 'after-committed-tombstone', has_more: false };
+        window.deletionDetail = transport.deletion.bind(transport);
+        transport.pages.push(deletionPage);
+        transport.deletion = () => new Promise((_, reject) => {
+          window.failDeletionDetail = () => reject(Object.assign(new Error('Synthetic offline deletion detail'), { code: 'STORAGE_UNAVAILABLE' }));
+        });
+        window.lockedObservation = runtime.unlock('synthetic-password').catch(error => error.code);
+      });
+      await page.waitForFunction(() => !!window.failDeletionDetail);
+      await other.waitForFunction(() => !runtime.snapshot().unlocked);
+      assert.deepEqual(await other.evaluate(async () => {
+        await expectCode(runtime.readDraft(visibleDraft), 'LOCKED');
+        return { otherNamespaceLocks };
+      }), { otherNamespaceLocks: 0 });
+
+      const recovery = await page.evaluate(async () => {
+        const before = runtime.snapshot().cursor;
+        failDeletionDetail();
+        const code = await lockedObservation;
+        const afterFailure = runtime.snapshot().cursor;
+        transport.deletion = deletionDetail;
+        transport.pages.push(deletionPage);
+        await runtime.unlock('synthetic-password');
+        return { before, afterFailure, code, afterTombstone: runtime.snapshot().cursor,
+          pending: runtime.snapshot().pending.map(value => value.state) };
+      });
+      assert.deepEqual(recovery, { before: 'watermark-0', afterFailure: 'watermark-0', code: 'STORAGE_UNAVAILABLE',
+        afterTombstone: 'after-committed-tombstone', pending: ['restricted'] });
+      assert.equal((await page.evaluate(name => records(name), name)).length, 1);
+    } finally {
+      await other.evaluate(() => { window.runtime?.close(); window.otherNamespaceCache?.close(); }).catch(() => {});
+      await other.close();
+    }
   });
   await test('ordinary-change-preserves-unsent-merge-body-and-note-after-reopen', async () => {
     await page.evaluate(() => editable('pr08b-editor-ordinary', {}, true));
@@ -1108,7 +1268,7 @@ try {
   await context.close();
   await new Promise(resolve => server.close(resolve));
   await writeFile(join(output, 'sync-browser.json'), JSON.stringify({ chromium: browserVersion, synthetic_transport: true,
-    native_crypto_indexeddb: true, results, passed: results.length === 48 && results.every(result => result.passed) }, null, 2));
+    native_crypto_indexeddb: true, results, passed: results.length === 51 && results.every(result => result.passed) }, null, 2));
 }
 console.log(JSON.stringify({ tests: results.length, passed: results.filter(result => result.passed).length, results }));
-if (results.length !== 48 || results.some(result => !result.passed)) process.exitCode = 1;
+if (results.length !== 51 || results.some(result => !result.passed)) process.exitCode = 1;
