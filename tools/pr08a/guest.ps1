@@ -12,6 +12,7 @@ if ((Get-FileHash "$root\work\pr08a\source.zip").Hash.ToLowerInvariant() -ne $So
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 [IO.Compression.ZipFile]::ExtractToDirectory("$root\work\pr08a\source.zip", $root)
 $manifest = Get-Content -LiteralPath "$share\SOURCE.json" -Raw -Encoding UTF8 | ConvertFrom-Json
+if ($manifest.PSObject.Properties.Name -contains 'combined_capture') { $env:PR08A_COMBINED = '1' }
 foreach ($file in $manifest.files_sha256.PSObject.Properties) {
     if ((Get-FileHash -LiteralPath (Join-Path $root $file.Name)).Hash.ToLowerInvariant() -ne $file.Value) { throw "Source mismatch $($file.Name)" }
 }

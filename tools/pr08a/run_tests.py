@@ -52,6 +52,8 @@ def main():
     execute([node, root / 'tools/pr08a/build.mjs'], 'bundle')
     if results['bundle'] == 0:
         execute([node, root / 'tools/pr08a/browser.mjs'], 'browser')
+        if os.environ.get('PR08A_COMBINED') == '1':
+            execute([node, root / 'tools/pr08a/combined-browser.mjs'], 'combined-browser')
     if os.environ.get('PR08A_BROWSER_ONLY') == '1':
         report = {'package': 'PR-08a', 'mode': 'native-browser-only', 'results': results, 'commands': commands,
                   'passed': results == {'bundle': 0, 'browser': 0}, 'synthetic_only': True}
@@ -88,6 +90,8 @@ def main():
                     'tests/integration/test_capture_migration.py', 'tests/unit/test_pr07b_contract.py',
                     'tests/integration/test_authentication.py::test_additive_auth_migration_has_one_head_repeat_and_forced_RLS',
                     'tests/integration/test_billing_integration.py::test_composed_media_and_billing_migration_candidate',
+                    'tests/integration/test_data_foundation.py::test_only_required_tables_and_contract_columns_exist',
+                    'tests/integration/test_data_foundation.py::test_runtime_role_is_restricted_and_force_rls_is_enabled',
                     'tests/integration/test_authentication.py::test_real_login_cookie_context_logout_and_revoked_cookie',
                     'tests/integration/test_authentication.py::test_bound_reauth_changes_password_and_revokes_existing_session']
         execute([sys.executable, '-B', '-m', 'pytest', *selected, '-q', '-rA', '--basetemp=' + str(args.output / 'pytest'),

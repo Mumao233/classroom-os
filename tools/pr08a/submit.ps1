@@ -1,6 +1,6 @@
 #requires -Version 7.0
 [CmdletBinding()]
-param([Parameter(Mandatory)][ValidatePattern('^pr08a-[a-zA-Z0-9-]+$')][string]$RunId, [switch]$BrowserOnly)
+param([Parameter(Mandatory)][ValidatePattern('^pr08a-[a-zA-Z0-9-]+$')][string]$RunId, [switch]$BrowserOnly, [string]$CaptureSource)
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).Path
 $brokerRoot = 'J:\class-assistant\worktrees\web-pr03b-sessions'
@@ -9,6 +9,11 @@ $payload = Join-Path $broker $RunId
 if (Test-Path -LiteralPath $payload) { throw 'Run id already used' }
 & python -B (Join-Path $root 'tools\pr04b\prepare_payload.py') $payload 'J:\class-assistant\worktrees\web-pr07b-summary-versions\work\pr07b\validation-wheels'
 if ($LASTEXITCODE -ne 0) { throw 'Preparation failed' }
+if ($CaptureSource) {
+    if ($BrowserOnly) { throw 'Combined verification includes the complete frontend checks' }
+    & python -B (Join-Path $root 'tools\pr08a\prepare_combined.py') $payload $CaptureSource
+    if ($LASTEXITCODE -ne 0) { throw 'Combined source preparation failed' }
+}
 $hash = (Get-FileHash -LiteralPath "$payload\source.zip").Hash.ToLowerInvariant()
 $script = Join-Path $broker "scripts\$RunId.ps1"
 $browserFlag = if ($BrowserOnly) { '$true' } else { '$false' }

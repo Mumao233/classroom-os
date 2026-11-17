@@ -10,8 +10,11 @@ if (!modules || !output) throw new Error('Guest modules and output are required'
 const require = createRequire(realpathSync(join(modules, 'vite', 'package.json')));
 const { build } = require('esbuild');
 mkdirSync(output, { recursive: true });
+const captureExport = process.env.PR08A_COMBINED === '1'
+  ? "export { CaptureRuntime } from './src/capture/runtime'; export { CaptureError } from './src/capture/ports';"
+  : '';
 await build({
-  stdin: { contents: `export { AuthClient } from './src/api/auth-client'; export { TrustedCache } from './src/cache/trusted-cache'; export { openCacheDatabase } from './src/cache/indexed-db';`,
+  stdin: { contents: `export { AuthClient } from './src/api/auth-client'; export { TrustedCache } from './src/cache/trusted-cache'; export { openCacheDatabase } from './src/cache/indexed-db'; ${captureExport}`,
     resolveDir: join(root, 'web/frontend'), loader: 'ts' },
   bundle: true, format: 'esm', platform: 'browser', target: 'es2022', nodePaths: [modules],
   outfile: join(output, 'cache.js'), sourcemap: false,
