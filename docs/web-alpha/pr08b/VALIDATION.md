@@ -31,6 +31,8 @@
 | `pr08b-frontend-20261117-07` | R5 编辑恢复复验 | 排队期间发现默认缓存删除的迟到恢复密文边界，确认尚未执行后取消。原队列、源码包与取消记录保留 | `b13a4686aac50f676bbff0f981298edfb3cdad249f5310ef651db1b65101ad71` |
 | `pr08b-full-20261117-04` | 完整 Web 复验 | 1297 项，1280 passed / 0 failures / 17 errors / 0 skipped。17 个错误均在 capture 模块共享对象服务的启动前置阶段，原并发删除与 33 个 PR-08b 函数通过 | `83c68ae9cec949b140de9b76cfb4444414d30098b6aa9926ef97b9b1f6d78dd2` |
 | `pr08b-frontend-20261117-08` | R5 编辑恢复复验 | Vitest 332/332、PostgreSQL 与正式浏览器 46/46、缓存及组合浏览器均通过。同步原生浏览器 43 passed / 1 failed，合成 resolve 回执误绑定另一文档，运行时正确保留未确认操作 | `0d0ac1fcc358d3747c3ea9c3f59d13617f9ef4b71213ad7ebc7791dffba97183` |
+| `pr08b-frontend-20261117-09` | 最终前端与正式接口复验 | 全部通过。Vitest 332/332、同步原生浏览器 44/44、缓存 28/28、组合 11/11、PostgreSQL 与正式浏览器 46/46，契约、类型、lint、生成类型及构建全退出 0 | `7b145b73010ad8bb5bb002db865e69555df92d12409252388954083724a93c4d` |
+| `pr08b-capture-20261117-01` | 对象端口与捕获模块补验 | 真实端口冲突候选被拒绝，两个服务均就绪，原 capture 模块 17/17 通过，含真实 Chromium PCM/WSS，0 failures / errors / skipped | `7b145b73010ad8bb5bb002db865e69555df92d12409252388954083724a93c4d` |
 
 第二次运行的证据归档 SHA-256 为 `a20eaee07743f52d51f690a0db5dabe79bda7268e9c37b443c4b8162ab1c81db`。来宾 PostgreSQL 正常停止，退出码 0，受管对象服务残留进程数为 0。新增同步和正式 HTTP 浏览器路径仍有失败，后续运行负责验证修复。
 
@@ -79,11 +81,19 @@ full03 证据 SHA-256 为 `7e19f14d4a294e63c115b432da5012e54ded5f231857898c438b6
 
 `pr08b-lock-01` 复用 full03 冻结源码，对原并发删除用例执行五轮，30 个请求全部通过。原 500 ms 阈值、产品代码和测试断言保持原值。20 ms 采样记录认证会话行锁及 transactionid 等待，各轮账本追加耗时 31–32 ms，最长 submit 为 93–156 ms，服务残留为 0。证据 SHA-256 为 `45fcdb9d10704fb43d2e14b7ea4a8d0d90446b8e3aa3d6b55d2d42ee1bce93e8`。该诊断未复现 full03 的 503，既有认证与删除事务持锁边界仍作为并发可用性风险保留。0014 仅在首次删除提交时增加一个事件，复用事务已持有的 owner counter 锁，实际新增耗时尚未独立量化。
 
-Astra 对 `c711458` 的增量复审新增 R5（P2），普通 Review 事件引起锁定时，尚未确认的手动合并输入缺少独立加密恢复。该项正在修复，后续以新的 VMware 前端和正式浏览器阶段验证。
+Astra 对 `c711458` 的增量复审新增 R5（P2），普通 Review 事件引起锁定时，尚未确认的手动合并输入缺少独立加密恢复。后续补齐独立恢复记录、准确 ACK、重新发现、锁后失败状态和删除屏障，最终验证见 frontend09。
 
 full04 证据 SHA-256 为 `6729fa56025dde9aaed0ba4a4c9ad6cd53ac80ca73b12ebc16381a083c4e3870`，服务残留为 0。对象服务日志明确记录同一夹具的 media gRPC 已占用 32727，提前分配端口的 ledger 又使用 32727 作为 S3 端口，启动时 bind 失败。夹具改为 media 完成启动后再构造并启动 ledger，保留原就绪检查、断言、超时和启动失败清理。后续补验覆盖全部 17 个受影响用例。
 
 frontend08 证据 SHA-256 为 `22c3d4a28885eefacbca941b2f04f13bac117d4bc506df19b9fbcf169943f4e9`，服务残留为 0。唯一原生失败来自第二文档的合成 resolve 仍硬编码第一文档 ID。夹具改为读取准确 conflict 的对象 ID，并在删除前增加成功 ACK 的强断言。最终恢复记录数与空 pending 的断言继续保留。真实 HTTP/PostgreSQL 的普通远端更新、独有合并输入重开恢复、零自动提交和撤权拒读已在该轮通过。
+
+frontend09 证据 SHA-256 为 `8b12945f630d97a09eac1bcf32e54738b34715fc8292f1021669fa2d2a359f9c`，全部步骤退出 0，服务残留为 0。44 个原生场景覆盖锁定期间的加密完成、配额和存储失败、多标签分支、迟到 ACK、原操作消失后的重新发现、默认删除阻止迟到密文、显式保留和跨对象隔离。正式浏览器连接真实会话、HTTP、PostgreSQL 与 IndexedDB，验证独有正文和个人补充在普通远端更新后重开恢复，云端内容维持另一设备提交值，撤权后恢复入口拒读。
+
+capture01 证据 SHA-256 为 `c53863a4737dcf65fcb472a717b3bea3a69c9c3547b7a04abd3c44e51ee87ffa`，全部步骤退出 0，服务残留为 0。真实服务使用 media 基端口 22727，ledger 先尝试 32724，其 S3 端口 32727 被已运行的 media gRPC 拒绝，随后使用 35500 正常启动。该验证直接调用修复后的原夹具，原 17 项 capture 测试全部执行并通过。
+
+逐名核对 full04 的 17 个 setup error 与 capture01 的 17 个通过用例，集合完全一致。full04 的 1251 个已通过父用例和 29 个子测试，加上上述补验，共覆盖 1268 个父用例与 29 个子测试，合计 1297 项。full04 的原失败状态继续保留。两个快照的 139 个后端生产文件字节一致，204 个后端文件仅 `deletion_support.py` 的夹具启动顺序发生变化。逐项核对见本机 `COVERAGE-RECONCILIATION.json` 与 `SOURCE-COMPARISON.json`。
+
+最终前端执行 `./tools/pr08b/submit.ps1 -Mode frontend -RunId pr08b-frontend-20261117-09` 并通过对应 collect 入口回收。捕获补验通过既有 VMware broker 执行真实端口探针及原 `pytest tests/integration/test_capture_recovery.py`，完整命令、参数、解释器、工作目录和退出码保存于该阶段 `run.json`。本包最终功能源码与测试修复基点为 `2a7fa90`，其后交接收尾仅修改文档。
 
 完整本机证据保存在 `outputs/pr08b/<RunId>/`。已取消运行保留 `cancellation.json` 与原排队文件。失败运行保留原 JUnit、日志和归档。
 
@@ -95,7 +105,8 @@ frontend08 证据 SHA-256 为 `22c3d4a28885eefacbca941b2f04f13bac117d4bc506df19b
 
 旧产品六个 JavaScript 文件 `app.js`、`pcm-worklet.js`、`study-cache.js`、`review-render.js`、`review.js`、`portable-reader.js` 的语法检查全部退出 0。`setup.ps1`、`start.ps1`、`stop.ps1` 仅解析并通过，记录见 `legacy-static.json`。修正旧 Web 回归基线后，再次完成 393 文件 AST 与差异检查。
 
-## 尚待完成
+## 验收边界
 
-- 完成 Astra 修复的正式浏览器与完整 Web 复验，再进行独立增量复审。
-- 以最终源码和证据提交 Draft PR。
+- 本次 VMware 分阶段覆盖已闭环，独立结论见 [Astra 复审](ASTRA-REVIEW.md) 和 [风险闭环](REVIEW-CLOSEOUT.md)。GitHub CI 的实时结果以 Draft PR checks 为准。
+- 既有认证会话 500 ms 行锁超时保留为并发可用性 P2，五轮诊断及后续完整运行通过，长事务与账本延迟下的容量边界仍待专项验证。
+- HTTPS 浏览器使用测试证书 SPKI pin，系统证书链与 hostname 验证覆盖有限。原 Windows 回归使用缩短后的测试路径。当前交付为默认关闭的同步模块和冲突组件，后续页面接入、生产启用及数据库正文物理清理沿用既有范围。

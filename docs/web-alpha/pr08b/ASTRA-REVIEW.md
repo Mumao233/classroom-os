@@ -154,3 +154,67 @@ VMware 回归应在真实浏览器中输入独有的合并正文和个人补充�
 本审查者读取了 `pr08b-lock-01` 的运行记录和五份锁采样。五轮均保留原断言和500ms时限，每轮用例通过。30次submit记录耗时62–156ms，五次ledger append耗时31–32ms，等待关系指向auth_sessions，诊断未记录错误。这些结果说明受控样本中未复现超时，不证明较慢ledger或较高负载下仍可满足时限。
 
 此项按P2影响等级保留为已观测的既有并发可用性残余，不计入已修复的R1–R5。后续完整新快照仍须通过原门禁。即使通过，也只支持08b当前范围的审查结论，不关闭同会话长事务和并发容量的生产验收边界。现阶段没有依据要求在08b内重构认证架构或放宽原测试阈值。
+
+## R5 最终修复的静态复审
+
+本轮检查最终生产冻结提交 `9029e2eadca39536125017428f031a81032ede23`，开始时工作树干净。中间提交 `3435ab7c273238418446acee0e6e6c0396430b0d` 的恢复链路已经审查，随后又补齐默认删除与迟到恢复写入的边界。此节只记录静态结论，VMware最终结果另列。
+
+手动合并正文和个人补充现在保存为独立 `sync_editor_recovery` 密文，不进入自动发送队列。编辑流使用独立随机ID和递增generation，同一流的旧快照在事务内替换，其他流及原操作保留。加密在授权有效时同步发起；锁定后只允许已发起的密文写入完成，不重新取得密钥、不恢复明文。存储失败保留有上限的待重试密文，界面区分保存中、成功和失败；同步校验错误及锁后失败不会被空重试误报为已保存。
+
+恢复读取重新核对准确conflict、原操作指纹和来源权限。原操作已经ACK后，新页面可通过 `ConflictRecoveryList` 发现并查看未提交输入，不依赖旧页面内存引用。被墓碑阻止的一条记录只显示受限状态，不阻断其他仍有权访问的恢复项。显式解决只确认清理实际提交且正文、补充、来源及冲突均匹配的恢复引用；采用云端或另存为新笔记不清理未提交的手动输入。持久化的流head与准确generation ACK阻止旧完成覆盖新稿。
+
+复审期间还确认了默认 `applyDeletion` 的删除回归风险：其原先只更新普通namespace generation，迟到恢复密文可能重新写入。最终修复给墓碑保存retainDrafts语义，在同一写事务中拒绝匹配且不保留草稿的恢复；缺省及历史墓碑视为不保留，重复true事件不能削弱已有false。恢复header的 `recoverySourceObjectId` 进入AES-GCM AAD并与密文source绑定，使原对象和祖先删除都能匹配。删除A不会丢弃另一对象B已经开始加密的唯一输入；显式保留仍只保留密文，读取继续被GONE拒绝。显式purge保留独立的全namespace恢复generation屏障。
+
+最终增量未发现新的静态阻断项。已检查新增原生浏览器用例代码覆盖普通设备更新后的正文/补充恢复、真实加密迟到、purge、存储失败重试、同步失败、配额、独立分支、真正包含旧恢复引用的迟到ACK、两种非合并处理后的实际页面重载，以及默认/显式保留与对象/祖先删除组合。这些代码检查不等于44项用例已经运行通过。
+
+本审查者已将frontend08的SOURCE清单中304个Web及PR-08a/08b工具文件与冻结版本逐项计算SHA-256比较，0差异；后端204个文件与full04复用的full03快照也全部一致。full03回收归档另已独立重算：source为 `83c68ae9cec949b140de9b76cfb4444414d30098b6aa9926ef97b9b1f6d78dd2`，evidence为 `7e19f14d4a294e63c115b432da5012e54ded5f231857898c438b6b4696381769`。full03失败记录仍保留，不能被后续结果覆盖。
+
+### full04 完整运行的环境错误
+
+full04同样不能记录为全套通过。独立解析实际JUnit得到1268父用例、29子测试，0 failure、17 error、0 skipped。17项均属于既有 `tests.integration.test_capture_recovery`，共享services fixture在ledger.start阶段退出，测试正文未得到验证。`object-35a375daa1ea43cc839e9785e142be9a-ledger-seaweed-1.log:60`明确记录SeaweedFS S3 API绑定 `127.0.0.1:32727` 失败，错误为端口已被占用。原并发删除用例本次无失败，但不因此关闭前述P2。
+
+full04的source归档独立重算仍为 `83c68ae9cec949b140de9b76cfb4444414d30098b6aa9926ef97b9b1f6d78dd2`，evidence为 `6729fa56025dde9aaed0ba4a4c9ad6cd53ac80ca73b12ebc16381a083c4e3870`，cleanup残留0。此处有明确环境故障证据，仍需在相同产品和测试源码上补验受影响的完整capture模块，保留原17项错误及补验边界，不能把分阶段补验描述成full04一次全绿。
+
+### frontend08 的实测结果及夹具补正
+
+frontend08未全过：本审查者读取run、JUnit、Vitest和原生浏览器报告，实际332项前端单元用例、46个PostgreSQL/浏览器父用例均通过；原生同步浏览器44项中43项通过。唯一失败为 `fresh-discovery-keeps-authorized-orphan-visible-beside-tombstoned-ancestry`，已正确恢复正常分支并标记受限分支，但预期pending=0/count=2，实际pending=2/count=4。静态核对发现合成transport.resolve把第二文档的回执object_id固定返回第一文档ID，产品准确回执检查正确保留了未确认操作，测试前提未成立。
+
+正式HTTP/PostgreSQL浏览器报告确认两个已认证设备间普通更新后，唯一未提交合并正文及个人补充可恢复，云端仍为第二设备的内容，恢复未自动发送；随后撤权清除界面，并拒绝重新读取。frontend08的cleanup残留0。独立重算source为 `0d0ac1fcc358d3747c3ea9c3f59d13617f9ef4b71213ad7ebc7791dffba97183`，evidence为 `22c3d4a28885eefacbca941b2f04f13bac117d4bc506df19b9fbcf169943f4e9`。
+
+后续冻结提交 `2a7fa90c08559ff7ff07eb82c78a307b7c7024be` 仅补正测试夹具：合成回执使用当前conflict.object_id，并先断言两个文档的原操作均已ACK；对象存储fixture先启动media绑定端口，再构造并启动ledger，避免两者在尚未绑定时选中重叠端口。源码审查未见放宽产品判断、断言或测试阈值，生产代码仍为9029e2e。最终结论待frontend09及受影响capture模块补验；不要求用删除失败历史或强行重复整个完整运行来替代分阶段证据。
+
+### frontend09 最终前端证据
+
+已独立核验frontend09，所有运行命令退出0。实际JUnit为46个父节点，0 failure/error/skipped，33个PR-08b必需函数及认证浏览器均执行。Vitest日志为332项通过；原生同步浏览器44/44、原PR-08a缓存28/28、PR-05b/08a联合缓存11/11全部通过。增强正式浏览器再次记录普通第二设备更新后的正文和个人补充恢复、无自动提交、部分来源撤权后的清除和拒读。cleanup残留0。
+
+source SHA-256独立重算为 `7b145b73010ad8bb5bb002db865e69555df92d12409252388954083724a93c4d`；evidence为 `8b12945f630d97a09eac1bcf32e54738b34715fc8292f1021669fa2d2a359f9c`。SOURCE标注base为2a7fa90。本审查者还对304个Web及08a/08b工具文件同时核对当前文件、清单和source.zip内实际条目，散列0差异。
+
+这些结果支持R5的最终修复及R1–R4未回退。capture补验尚待最后单列，frontend09通过不倒写full04或frontend08的原失败。
+
+## 最终增量结论
+
+**PR-08b当前工作包范围受限通过，可交付Draft PR审阅。** 最终审查提交为 `2a7fa90c08559ff7ff07eb82c78a307b7c7024be`，生产代码冻结于9029e2e；其后两项夹具补正已在VMware补验。上面的“请求修改”和“待验证”均保留为对应旧快照的历史结论。本结论不授权合并、部署、生产迁移或启用同步。
+
+| 发现 | 最终状态与依据 |
+|---|---|
+| R1 · P1 | 已闭环。准确revision/conflict授权、锁定及epoch拒绝迟到响应；frontend09真实HTTP/PostgreSQL验证A仍可见、B及冲突拒读、界面清除、同一缓存重开后受限。R5恢复机制未放宽读取权限。 |
+| R2 · P2 | 已闭环。按resolution分配课程锁，去除无关Review锁；真实两连接三模式回归执行通过，最终后端生产文件与该快照一致。 |
+| R3 · P2 | 已闭环。来源锁在owner counter前取得，补齐流程不重新发现锁依赖；真实PostgreSQL等待关系及并发撤权回归通过。 |
+| R4 · P2 | 已闭环。请求base、冻结冲突版本和当前CAS三方一致；三种旧冲突换base尝试均被拒绝且内容未改变，最终回归通过。 |
+| R5 · P2 | 已闭环。未确认合并输入独立加密保存、可发现恢复、准确ACK、锁后失败提示及重试；普通更新恢复、撤权拒读、迟到完成、独立分支、purge及按对象删除屏障均由frontend09实测覆盖。 |
+
+### capture补验和完整清单对账
+
+本审查者独立读取capture01的run、JUnit、真实浏览器报告、port-probe及cleanup。17个capture父用例全部通过，0 failure/error/skipped；与full04的17个setup-error逐一按class/name比较，缺失0、额外0。真实浏览器包含合成PCM经native worklet转换、HTTPS身份、WSS durable ACK、离线停止后恢复、两设备接管及旧fence拒绝；没有使用真实麦克风、付费API或外部请求。
+
+端口诊断调用实际fixture和原分配器，仅控制随机候选值：media先绑定22727起的端口组，ledger的32724候选因32727与media的gRPC范围冲突被真实socket bind拒绝，随后35500候选成功，两项SeaweedFS服务均就绪。诊断脚本散列已与DIAGNOSTIC清单核对，未放宽业务断言。所有命令退出0，cleanup残留0。
+
+capture01的source归档与frontend09完全相同，独立重算SHA-256为 `7b145b73010ad8bb5bb002db865e69555df92d12409252388954083724a93c4d`，evidence为 `c53863a4737dcf65fcb472a717b3bea3a69c9c3547b7a04abd3c44e51ee87ffa`。与full04的后端清单比较，唯一变化是已审查的 `tests/integration/deletion_support.py` 夹具；139个后端生产文件未变。full04已通过部分加上capture01逐项补验，分阶段覆盖1268父用例和29子测试的完整清单。**没有一次完整运行1297项全绿的记录；full03的1失败、full04的17错误和frontend08的1失败全部保留。**
+
+### 保留的限制
+
+full03观测到的同会话并发删除503仍是独立的P2可用性残余。现有500ms认证会话锁和长事务路径未在本包内改动；五轮诊断和full04成功不能证明根因消失，也不构成生产并发容量验收。此项不计入已关闭的R1–R5。
+
+同步默认关闭，交付的是已验证的认证工厂和可复用交互组件，不能表述为生产业务入口已上线。公开HTTP仍为0.2.1并显式组合既有PR-07b overlay；来源墓碑/RLS不等于Review/QA正文物理擦除。没有本轮远程CI、合并或生产验证证明。旧产品回归仍使用此前已独立核对且源码未变的legacy02记录，不能与本轮前端或capture用例合并重复计数。
+
+本审查者全程只执行源码静态分析、归档散列、证据解析及diff检查；功能执行来自VMware代理回收材料，未在宿主执行功能测试。最终报告更新后再次执行 `git diff --check`，结果为0。
