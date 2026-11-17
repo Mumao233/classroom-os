@@ -13,6 +13,8 @@ export type CacheReference = {
   objectType?: string;
   /** Exact review body authority; separate from the document projection's CAS revision. */
   contentRevisionId?: string;
+  recoveryFor?: string;
+  recoveryConflictId?: string;
 };
 export type CacheWrite = CacheReference & {
   ancestry: CacheAncestry;
@@ -60,7 +62,7 @@ export type CipherRecord = CacheMetadata & {
   nonce: Uint8Array<ArrayBuffer>;
   ciphertext: ArrayBuffer;
 };
-export type NamespaceState = { id: string; generation: number };
+export type NamespaceState = { id: string; generation: number; recoveryGeneration?: number };
 export type Tombstone = { id: string; namespace: string; kind: string; objectId: string };
 
 export const LEARNING_LIMITS = Object.freeze({ ageMs: 14 * 24 * 60 * 60 * 1000, classes: 20, bytes: 50_000_000 });

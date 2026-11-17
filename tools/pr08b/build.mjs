@@ -16,7 +16,7 @@ export { TrustedCache } from './src/cache/trusted-cache';
 export { openCacheDatabase } from './src/cache/indexed-db';
 export { OfflineSyncRuntime } from './src/sync/runtime';
 export { AuthenticatedSyncClient, syncFingerprint } from './src/sync/client';
-export { ConflictPanel } from './src/sync/ConflictPanel';
+export { ConflictPanel, ConflictRecoveryList } from './src/sync/ConflictPanel';
 export { default as React } from 'react';
 export { createRoot } from 'react-dom/client';`,
     resolveDir: join(root, 'web/frontend'), loader: 'ts',

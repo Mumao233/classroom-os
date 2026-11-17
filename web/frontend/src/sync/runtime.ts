@@ -8,11 +8,15 @@ type Projection = S['BootstrapProjection'];
 export type SyncState = 'local_only' | 'syncing' | 'synced' | 'conflict' | 'failed' | 'restricted';
 export type PendingDraft = { reference: CacheWrite; state: SyncState; conflictId: string | null; error: string | null };
 export type LearningReference = CacheReference & { scope: 'learning'; objectType: Projection['object_type']; ancestry: CacheAncestry };
+export type ConflictDraft = { reference: CacheWrite; body: string; note: string };
+export type ConflictDraftSource = { source: CacheWrite | null; reference?: CacheWrite; state: 'available' | 'restricted' };
+type EditorEnvelope = { schema: 1; kind: 'editor_recovery'; source: CacheWrite; conflictId: string; sourceHash: string; body: string; note: string };
 type WriteEnvelope = { schema: 1; kind: 'write'; operation: SyncOperation; requestHash: string; batchId: string; supersedes?: CacheWrite[] };
 type ResolutionEnvelope = {
   schema: 1; kind: 'resolve'; operation: SyncOperation; requestHash: string;
   conflictId: string; resolution: SyncResolution; original: CacheWrite;
   supersedes?: CacheWrite[];
+  recoveryReferences?: CacheWrite[];
 };
 type Envelope = WriteEnvelope | ResolutionEnvelope;
 type ReceiptBinding = {
@@ -28,6 +32,8 @@ export interface SyncCache extends EventTarget {
   reconcileLearning(projections: Projection[], options?: { preserveKeys?: boolean }): Promise<void>;
   pendingDraftReferences(): Promise<CacheWrite[]>;
   put(write: CacheWrite, plaintext: Uint8Array): Promise<void>;
+  saveRecoveryDraft(write: CacheWrite, plaintext: Uint8Array): Promise<void>;
+  retryRecoveryDrafts(): Promise<Array<{ objectId: string; error?: unknown }>>;
   read(reference: CacheReference): Promise<Uint8Array | null>;
   acknowledgeDraft(reference: CacheReference, operationId: string): Promise<void>;
   applyDeletion(notice: DeletionNotice, options: { retainDrafts: true }): Promise<void>;
@@ -75,6 +81,9 @@ export class OfflineSyncRuntime extends EventTarget {
   private metadataDirty = false;
   private rows = new Map<string, PendingDraft>();
   private bindings = new Map<string, ReceiptBinding>();
+  private editorSaves = new Set<Promise<void>>();
+  private editorErrors = new Map<string, unknown>();
+  private editorGenerations = new Map<string, number>();
   private readonly onLocked = () => {
     this.epoch++;
     this.unlocked = false;
@@ -286,6 +295,7 @@ export class OfflineSyncRuntime extends EventTarget {
     const references = await this.cache.pendingDraftReferences();
     this.current(epoch);
     for (const reference of references) {
+      if (reference.objectType === 'sync_editor_recovery') continue;
       if (!this.permitted(reference)) { this.row(reference, 'restricted', 'AUTHORITY_UNAVAILABLE'); continue; }
       try { await this.load(reference); this.current(epoch); this.row(reference, 'local_only'); }
       catch (error) { this.current(epoch); this.row(reference, ['GONE', 'AUTHORITY_UNAVAILABLE'].includes(errorCode(error)) ? 'restricted' : 'failed', errorCode(error)); }
@@ -417,6 +427,128 @@ export class OfflineSyncRuntime extends EventTarget {
     return structuredClone(envelope.operation);
   }
 
+  /** Accept input only while authorized; the cache immediately starts write-only encryption. */
+  saveConflictDraft(source: CacheWrite, body: string, note: string, editorId: string, generation: number): Promise<CacheWrite> {
+    try { return this.startConflictDraft(source, body, note, editorId, generation); }
+    catch (error) { this.editorErrors.set(editorId, error); throw error; }
+  }
+
+  private startConflictDraft(source: CacheWrite, body: string, note: string, editorId: string, generation: number): Promise<CacheWrite> {
+    this.current(this.epoch);
+    const original = structuredClone(source);
+    const row = this.rows.get(keyOf(original));
+    const binding = this.bindings.get(keyOf(original));
+    if (!uuid(editorId) || !positive(generation) || generation <= (this.editorGenerations.get(editorId) ?? 0)
+      || !row?.conflictId || !binding || typeof body !== 'string' || typeof note !== 'string'
+      || body.length > 120000 || note.length > 12000
+      || !this.exactAuthority.has(JSON.stringify(['conflict', original.objectId, row.conflictId]))) throw new SyncError('INVALID_RESOLUTION');
+    this.editorGenerations.set(editorId, generation);
+    const reference: CacheWrite = { scope: 'drafts', objectType: 'sync_editor_recovery', objectId: editorId, revision: original.revision,
+      generation, operationId: this.newId(), ancestry: structuredClone(original.ancestry), recoveryFor: original.operationId, recoveryConflictId: row.conflictId };
+    const bytes = encoder.encode(JSON.stringify({ schema: 1, kind: 'editor_recovery', source: original, conflictId: row.conflictId,
+      sourceHash: binding.requestHash, body, note } satisfies EditorEnvelope));
+    let writing: Promise<void>;
+    try { writing = this.cache.saveRecoveryDraft(reference, bytes); }
+    catch (error) { this.editorErrors.set(editorId, error); throw error; }
+    finally { bytes.fill(0); }
+    const tracked = writing.then(() => { if (this.editorGenerations.get(editorId) === generation) this.editorErrors.delete(editorId); }, error => {
+      if (this.editorGenerations.get(editorId) === generation) this.editorErrors.set(editorId, error);
+      throw error;
+    });
+    this.editorSaves.add(tracked);
+    void tracked.finally(() => this.editorSaves.delete(tracked)).catch(() => undefined);
+    // The result contains routing metadata only; ciphertext completion never reopens the view.
+    return tracked.then(() => structuredClone(reference));
+  }
+
+  async awaitEditorDraftSaves(): Promise<void> {
+    await Promise.all([...this.editorSaves]);
+    if (this.editorErrors.size) throw this.editorErrors.values().next().value;
+  }
+
+  async retryEditorDraftSaves(): Promise<void> {
+    await Promise.allSettled([...this.editorSaves]);
+    for (const result of await this.cache.retryRecoveryDrafts()) {
+      if (result.error) this.editorErrors.set(result.objectId, result.error);
+      else this.editorErrors.delete(result.objectId);
+    }
+    if (this.editorErrors.size) throw this.editorErrors.values().next().value;
+  }
+
+  async readConflictDrafts(source: CacheWrite): Promise<ConflictDraft[]> {
+    const epoch = this.epoch;
+    this.current(epoch);
+    const original = structuredClone(source);
+    if (!this.permitted(original)) throw new SyncError('AUTHORITY_UNAVAILABLE');
+    const references = await this.cache.pendingDraftReferences();
+    this.current(epoch);
+    const drafts: ConflictDraft[] = [];
+    for (const reference of references.filter(value => value.objectType === 'sync_editor_recovery' && value.recoveryFor === original.operationId)) {
+      const saved = await this.readEditorEnvelope(reference, epoch);
+      if (!saved) continue;
+      if (keyOf(saved.source) !== keyOf(original)
+        || saved.source.operationId !== original.operationId || reference.recoveryConflictId !== saved.conflictId
+        || typeof saved.body !== 'string' || typeof saved.note !== 'string') throw new SyncError('CORRUPT_DRAFT');
+      const conflict = await this.fetchConflict(saved.conflictId, original.objectId, epoch);
+      await this.authorizeOperation(conflict.local_operation, epoch);
+      if (await syncFingerprint(conflict.local_operation) !== saved.sourceHash) throw new SyncError('CORRUPT_DRAFT');
+      this.current(epoch);
+      drafts.push({ reference: structuredClone(reference), body: saved.body, note: saved.note });
+    }
+    this.current(epoch);
+    return drafts;
+  }
+
+  /** Find retained editor branches after reload without relying on an in-memory original outbox ref. */
+  async listConflictDraftSources(): Promise<ConflictDraftSource[]> {
+    const epoch = this.epoch;
+    this.current(epoch);
+    const references = await this.cache.pendingDraftReferences();
+    this.current(epoch);
+    const sources = new Map<string, ConflictDraftSource>();
+    for (const reference of references.filter(value => value.objectType === 'sync_editor_recovery')) {
+      let saved: EditorEnvelope | null;
+      try { saved = await this.readEditorEnvelope(reference, epoch); }
+      catch (error) {
+        this.current(epoch);
+        if (!['GONE', 'KEY_REQUIRED'].includes(errorCode(error))) throw error;
+        sources.set(`restricted:${reference.objectId}`, { source: null, reference: structuredClone(reference), state: 'restricted' });
+        continue;
+      }
+      if (!saved) continue;
+      const key = JSON.stringify([keyOf(saved.source), saved.source.operationId]);
+      if (sources.has(key)) continue;
+      let state: 'available' | 'restricted' = 'available';
+      try {
+        if (!this.permitted(saved.source)) throw new SyncError('AUTHORITY_UNAVAILABLE');
+        const conflict = await this.fetchConflict(saved.conflictId, saved.source.objectId, epoch);
+        await this.authorizeOperation(conflict.local_operation, epoch);
+        if (await syncFingerprint(conflict.local_operation) !== saved.sourceHash) throw new SyncError('CORRUPT_DRAFT');
+      } catch (error) {
+        this.current(epoch);
+        if (!['AUTHORITY_UNAVAILABLE', 'GONE'].includes(errorCode(error))) throw error;
+        state = 'restricted';
+      }
+      this.current(epoch);
+      sources.set(key, { source: structuredClone(saved.source), state });
+    }
+    this.current(epoch);
+    return [...sources.values()];
+  }
+
+  private async readEditorEnvelope(reference: CacheWrite, epoch: number): Promise<EditorEnvelope | null> {
+    const bytes = await this.cache.read(reference);
+    try {
+      this.current(epoch);
+      if (!bytes) return null;
+      const saved = JSON.parse(decoder.decode(bytes)) as EditorEnvelope;
+      if (saved.kind !== 'editor_recovery' || saved.schema !== 1 || !saved.source || !uuid(saved.source.operationId)
+        || saved.source.operationId !== reference.recoveryFor || saved.conflictId !== reference.recoveryConflictId
+        || typeof saved.sourceHash !== 'string' || typeof saved.body !== 'string' || typeof saved.note !== 'string') throw new SyncError('CORRUPT_DRAFT');
+      return saved;
+    } finally { bytes?.fill(0); }
+  }
+
   private learningAllowed(reference: LearningReference, epoch: number, learningEpoch: number) {
     this.sameEpoch(epoch);
     const projection = this.projections.get(reference.objectId);
@@ -511,7 +643,7 @@ export class OfflineSyncRuntime extends EventTarget {
     if (this.metadataDirty) await this.refreshChangedMetadata();
     this.current(epoch);
     const known = [...this.rows.values()].map(value => structuredClone(value.reference));
-    const references = await this.cache.pendingDraftReferences();
+    const references = (await this.cache.pendingDraftReferences()).filter(value => value.objectType !== 'sync_editor_recovery');
     this.current(epoch);
     const persisted = new Set(references.map(keyOf));
     for (const reference of known) {
@@ -595,6 +727,10 @@ export class OfflineSyncRuntime extends EventTarget {
     this.validateReceipt(receipt, this.receiptBinding(envelope));
     if (receipt.status === 'applied') {
       if (envelope.kind === 'resolve') {
+        for (const recovery of envelope.recoveryReferences ?? []) {
+          await this.cache.acknowledgeDraft(recovery, recovery.operationId!);
+          this.current(epoch);
+        }
         for (const superseded of envelope.supersedes ?? []) {
           await this.cache.acknowledgeDraft(superseded, superseded.operationId!);
           this.current(epoch);
@@ -672,11 +808,14 @@ export class OfflineSyncRuntime extends EventTarget {
   }
 
   /** Each explicit resolution is itself persisted before sending, so an unknown response is recoverable. */
-  async resolve(reference: CacheWrite, resolution: SyncResolution, generation: number): Promise<void> {
+  async resolve(reference: CacheWrite, resolution: SyncResolution, generation: number, recoveryReferences: CacheWrite[] = []): Promise<void> {
     const epoch = this.epoch;
     this.current(epoch);
     const original = structuredClone(reference);
     const body = structuredClone(resolution);
+    // Other resolutions do not submit the manually edited recovery body, so its ciphertext stays.
+    const requestedRecoveries = body.resolution === 'edited_merge' ? structuredClone(recoveryReferences) : [];
+    const recoveries: CacheWrite[] = [];
     const originalEnvelope = await this.load(original);
     this.current(epoch);
     const conflict = await this.inspectConflict(original);
@@ -690,6 +829,28 @@ export class OfflineSyncRuntime extends EventTarget {
     }
     if (body.resolution === 'copy_to_new_note' && (!uuid(body.destination_class_session_id)
       || this.projections.get(body.destination_class_session_id)?.object_type !== 'class_session')) throw new SyncError('INVALID_RESOLUTION');
+    const sourceReferences = new Map([original, ...(originalEnvelope.supersedes ?? [])].map(value => [value.operationId, value]));
+    const sourceOperations = new Set(sourceReferences.keys());
+    if (requestedRecoveries.some(value => value.objectType !== 'sync_editor_recovery' || !sourceOperations.has(value.recoveryFor)
+      || !uuid(value.operationId) || !positive(value.generation))) throw new SyncError('INVALID_RESOLUTION');
+    for (const recovery of requestedRecoveries) {
+      const saved = await this.readEditorEnvelope(recovery, epoch);
+      if (!saved) continue;
+      const expectedSource = sourceReferences.get(saved.source.operationId);
+      if (!expectedSource || keyOf(expectedSource) !== keyOf(saved.source)) throw new SyncError('INVALID_RESOLUTION');
+      const frozenConflict = await this.fetchConflict(saved.conflictId, saved.source.objectId, epoch);
+      await this.authorizeOperation(frozenConflict.local_operation, epoch);
+      if (await syncFingerprint(frozenConflict.local_operation) !== saved.sourceHash) throw new SyncError('CORRUPT_DRAFT');
+      const merged = body.merged_operation!;
+      let included = false;
+      if (merged.object_type === 'personal_revision') included = saved.body === merged.payload.body_markdown && saved.note === merged.payload.personal_note;
+      else if (saved.note === '') {
+        try { included = await syncFingerprint({ ...JSON.parse(saved.body), base_revision: body.base_revision }) === await syncFingerprint(merged.payload); }
+        catch { /* Invalid or differing recovery text remains independently recoverable. */ }
+      }
+      this.current(epoch);
+      if (included) recoveries.push(recovery);
+    }
     const opId = this.newId();
     const operation = structuredClone(conflict.local_operation);
     operation.op_id = opId;
@@ -697,7 +858,7 @@ export class OfflineSyncRuntime extends EventTarget {
     operation.payload.base_revision = body.base_revision;
     const pending = { ...original, revision: body.base_revision, generation, operationId: opId };
     const envelope: ResolutionEnvelope = { schema: 1, kind: 'resolve', operation, conflictId: conflict.id, resolution: body, original,
-      requestHash: await syncFingerprint({ conflict_id: conflict.id, body }), supersedes: originalEnvelope.supersedes };
+      requestHash: await syncFingerprint({ conflict_id: conflict.id, body }), supersedes: originalEnvelope.supersedes, recoveryReferences: recoveries };
     this.current(epoch);
     await this.persist(pending, envelope);
     this.current(epoch);

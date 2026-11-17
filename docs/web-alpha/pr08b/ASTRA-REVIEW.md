@@ -107,3 +107,50 @@
 原04b物理清理主要覆盖媒体对象及其生命周期，不包含数据库 Review/QA 正文的全面物理擦除。08b 新增 conflict/local_operation/server_content 当前依赖墓碑和 RLS 撤权、保留不可变恢复证据；本报告不将“访问不可见”称为“数据库正文物理删除完成”。后续物理保留期限和清理方案仍需在对应授权范围处理。
 
 所有本次修复应保持非生产、无付费调用、独立分支和唯一草稿不静默丢弃的边界。初审仅新增本报告，未提交、推送、创建 PR、修改 main 或改变运行开关。
+
+## 对 c711458 的增量复审
+
+本轮继续由同一独立 Astra 代理审查，基于初审提交 `325d687bb13ecb5165379a0c27cd2b8f3525df53`，检查修复提交 `c71145836f0a6f4a2deb0ffe2ea7c1126c843a17`。开始时已确认 HEAD 和干净工作树。上面的初审发现保留为历史记录。
+
+R1–R4 的修复已经在源码和定向 VMware 证据中得到验证，但本轮发现了修复引入的 R5。**c711458 仍请求修改，不能放行。** 完整 Web 的 full03 结果尚待回收，不能提前记为通过。
+
+| 初审项 | 增量核对结果 |
+|---|---|
+| R1 | runtime 复用既有准确 revision、note 和 conflict GET，授权只在当前解锁周期内复用，lock 清除授权集合。Review learning 的 contentRevisionId 进入认证 header，读取和 hydrate 都核对准确版本。受保护文档事件使在途返回失效。正式浏览器验证了文档及 A 版本仍为200、B版本及冲突为404、面板清除，以及同一 IndexedDB 重新打开后草稿 restricted 且拒读。原撤权漏洞已修复，但新的无条件锁定行为引出 R5。 |
+| R2 | 课程 edited_merge 不再获取 Review 序列锁。use_server 和 copy_to_new_note 采用课程共享锁冻结 CAS，避免与直接 create_note 的共享祖先锁形成环。三种模式的真实两连接 barrier 用例均在 frontend06 的 JUnit 中执行并通过。 |
+| R3 | 新冲突在 _append/_advance/_event 前读取并锁定准确云端来源，将已读取的 DTO 或明确的 None 传给补齐步骤。sentinel 区分“未读”和“已读但不可见”，不会在持 counter 后再次发现来源依赖。历史收据补齐保留准确历史版本偏移。真实 PostgreSQL 用例通过 pg_blocking_pids 确认来源锁等待，最终完成写入与撤权。 |
+| R4 | 服务端同时要求请求 base、冻结 server_revision 和锁定后的当前 CAS 一致。三种模式使用旧 conflict_id 换新 base 均被拒绝，文档、正文、resolution 数量不变。新比较随后可以成功解决，异类型 merge 仍拒绝。 |
+
+本轮还核对了启用同步必须装配已启用 ReviewBrowser 的启动检查，避免精确授权端点缺失。没有新增公开 HTTP schema，默认关闭和既有 PR-07b overlay 的边界保持不变。
+
+### R5 · P2：普通文档事件会清空尚未确认的唯一手动合并输入
+
+发现基于 `c711458`。主要位置是 `web/frontend/src/sync/runtime.ts:237` 和 `web/frontend/src/sync/ConflictPanel.tsx:35-47`，提交路径位于同组件 `:59-75`。
+
+用户在 ConflictPanel 中输入新的合并正文或个人补充，但尚未点击“确认处理”。这些输入目前只保存在 React state，只有 submit 才会通过 runtime.resolve 持久化。另一设备正常更新同一 Review 文档，或者此前冲突产生的事件尚未消费，都会触发新增的无条件 cache.lock。组件的 locked handler 随即清空 body 和 note。
+
+这不需要发生来源撤权。重新解锁后，服务器和原 outbox 只有原提交，无法恢复用户刚输入的唯一合并内容。保留原冲突草稿并不能证明保留了这次新输入。原生用例 `partial-source-revocation-clears-conflict-and-restricts-draft-after-unlock-and-page-reload` 虽然输入了 `SOURCE B UNSENT MERGE`，但只断言它从界面消失及原草稿仍在，没有验证新输入进入了加密恢复记录。
+
+建议在用户编辑过程中提供独立的加密本地恢复，不把未确认编辑当作可自动发送的解决操作。普通更新或撤权导致明文失效时，应保留这份唯一密文。重新授权后恢复允许访问的编辑内容，撤权后继续保持 restricted，不能为了保存输入而继续展示失权明文。也可以采用经过准确授权重核的普通变化处理，但必须证明既不重新引入 R1，也不丢失尚未确认的输入。
+
+VMware 回归应在真实浏览器中输入独有的合并正文和个人补充，再由另一设备正常更新对象。消费事件、重新解锁并重新打开同一缓存后，必须能够恢复这两项输入，且没有自动提交或覆盖云端。另测撤权时只留密文、迟到写入、存储失败和后续 generation，不能只验证原始 draft 仍存在。
+
+### 本轮证据
+
+已独立读取 `pr08b-frontend-20261117-06` 的 run.json、JUnit、Vitest 日志、原生与正式浏览器报告和 cleanup.json。全部步骤退出0，JUnit实际46个父节点，无 failure、error 或 skipped。33个 PR-08b 函数均有执行记录，包含 R2 三种模式、R3 锁序、R4 再次 CAS、R1 部分来源撤权及启用入口检查。Vitest为323项通过，同步原生浏览器29项通过，原08a和联合缓存阶段均退出0。正式浏览器报告记录部分来源撤权清面板和重开后拒读，cleanup残留为0。
+
+本审查者重新计算 frontend06 的 source.zip SHA-256，得到 `04bed6a56cac8f7edde88aacbcadcea556764b4899cc0d7d94a764fd8413a8aa`。evidence.zip 为 `156a63f3227ef19fa7487801fdc77b6d50ed092014391adb5c19db4a7c32d023`，均与提供的记录一致。
+
+267个 Web 源码、迁移和测试文件分别与 frontend06、full03 的 SOURCE.json 逐项比较，两组均0差异。此时 full03 的 source.zip 和运行证据尚未回收，因此仅核对其源码清单，未声称独立核验该阶段归档或测试结果。另核对133个旧产品源码、测试、static、启动器和 requirements 文件，与 legacy02 的清单均一致。历史525主用例、171子测试、九套Node和DPAPI证据仍只对应其实际运行快照。
+
+本轮仍只执行宿主只读静态分析、文件散列、证据解析和 git diff --check，没有在宿主跑功能测试，也未独立启动新的 VMware 运行。R5 已交实现方修复，后续结论需新的冻结提交和回归证据。
+
+### full03 回收后的并发可用性观测
+
+随后回收的 `pr08b-full-20261117-03` 没有全过。run.json 记录1297项，其中1268父用例和29子测试，1项失败、0错误、0跳过。失败的是既有 `test_concurrent_and_repeated_deletes_of_one_object_are_one_request`，六个并发删除响应为 `[202,202,202,503,202,202]`。PostgreSQL日志138–141行记录 `identity_api.validate_session` 在 `auth_sessions FOR UPDATE` 等待超过锁时限。
+
+认证仓储的500ms lock_timeout、该会话锁和删除事务路径相对main没有改动。08b增加目录事件会参与原owner counter，但当前观测不足以把此次超时认定为08b新引入的锁环。也不能因随后重跑通过，就把它记作根因已经修复。
+
+本审查者读取了 `pr08b-lock-01` 的运行记录和五份锁采样。五轮均保留原断言和500ms时限，每轮用例通过。30次submit记录耗时62–156ms，五次ledger append耗时31–32ms，等待关系指向auth_sessions，诊断未记录错误。这些结果说明受控样本中未复现超时，不证明较慢ledger或较高负载下仍可满足时限。
+
+此项按P2影响等级保留为已观测的既有并发可用性残余，不计入已修复的R1–R5。后续完整新快照仍须通过原门禁。即使通过，也只支持08b当前范围的审查结论，不关闭同会话长事务和并发容量的生产验收边界。现阶段没有依据要求在08b内重构认证架构或放宽原测试阈值。

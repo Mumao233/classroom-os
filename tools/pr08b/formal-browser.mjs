@@ -148,6 +148,49 @@ try {
   await page.getByRole('textbox', { name: '合并正文', exact: true }).waitFor();
   const partialText = scenario.partial.operation.payload.body_markdown;
   assert((await page.locator('body').innerText()).includes(partialText));
+  const unsentBody = 'Unique manual merge remains local across an ordinary remote update.';
+  const unsentNote = 'Unique personal explanation that has never been submitted.';
+  await page.getByRole('textbox', { name: '合并正文', exact: true }).fill(unsentBody);
+  await page.getByRole('textbox', { name: '个人补充', exact: true }).fill(unsentNote);
+  await page.evaluate(() => window.partialSync.awaitEditorDraftSaves());
+  const partialCurrent = await other.evaluate(id => window.auth.request(`/review-documents/${id}`), scenario.partial.document_id);
+  const ordinaryRemote = operation(partialCurrent, 'An ordinary update from the other authenticated device.');
+  const ordinaryResult = await other.evaluate(operation => window.auth.request('/sync/operations',
+    { operations: [operation] }, { key: crypto.randomUUID() }), ordinaryRemote);
+  assert.equal(ordinaryResult.receipts[0].status, 'applied');
+  await page.evaluate(() => window.partialSync.pollChanges());
+  await page.waitForFunction(() => !window.partialSync.snapshot().unlocked);
+  await page.getByRole('status').filter({ hasText: '同步已锁定，请重新验证身份。' }).waitFor();
+  assert.equal(await page.getByRole('textbox').count(), 0);
+  assert.equal((await page.locator('body').innerText()).includes(unsentBody), false);
+  await page.evaluate(async password => {
+    const { React, createRoot, ConflictPanel } = await import('/sync.js');
+    window.partialRoot.unmount();
+    window.partialSync.close();
+    window.partialSync = window.auth.createOfflineSync({ enabled: true, databaseName: 'pr08b-partial-revocation',
+      limits: { draftBytes: 2_000_000, draftOperations: 30, recordingBytes: 1_000_000 } });
+    await window.partialSync.unlock(password);
+    await window.partialSync.flush();
+    const reference = window.partialSync.snapshot().pending[0].reference;
+    const mount = document.createElement('main');
+    document.body.append(mount);
+    window.partialRoot = createRoot(mount);
+    window.partialRoot.render(React.createElement(ConflictPanel, {
+      runtime: window.partialSync, reference, generation: 2,
+    }));
+  }, credentials.password);
+  await page.waitForFunction(({ body, note }) => {
+    const inputs = document.querySelectorAll('textarea');
+    return inputs.length === 2 && inputs[0].value === body && inputs[1].value === note;
+  }, { body: unsentBody, note: unsentNote });
+  const afterRecovery = await other.evaluate(async id => {
+    const document = await window.auth.request(`/review-documents/${id}`);
+    const revision = await window.auth.request(`/review-revisions/${document.latest_personal_revision_id}`);
+    return { revision: document.revision, body: revision.body_markdown };
+  }, scenario.partial.document_id);
+  assert.equal(afterRecovery.revision, ordinaryResult.receipts[0].revision);
+  assert.equal(afterRecovery.body, ordinaryRemote.payload.body_markdown);
+  assert.equal(await page.evaluate(() => window.partialSync.snapshot().pending.length), 1);
   const revoked = await page.evaluate(async () => {
     const response = await fetch('/test/revoke-partial-source', { method: 'POST' });
     return response.ok && (await response.json()).revoked;
@@ -190,6 +233,9 @@ try {
   assert.equal(await page.evaluate(async reference => {
     try { await window.partialSync.readDraft(reference); return false; } catch { return true; }
   }, partialReference), true);
+  assert.equal(await page.evaluate(async reference => {
+    try { await window.partialSync.readConflictDrafts(reference); return false; } catch { return true; }
+  }, partialReference), true);
   await page.evaluate(() => window.partialSync.close());
   await page.evaluate(password => window.sync.unlock(password), credentials.password);
 
@@ -227,6 +273,8 @@ try {
     actual_http_postgres: true, native_crypto_indexeddb: true, two_authenticated_devices: true,
     offline_refresh_recovery: true, lost_ack_idempotency: true, cas_conflict_preserved: true,
     explicit_resolution: true, actual_conflict_panel: true,
+    unconfirmed_merge_survives_remote_update_and_reopen: true, unconfirmed_merge_never_auto_submitted: true,
+    unconfirmed_merge_denied_after_source_revocation: true,
     partial_source_revocation_clears_view: true, partial_source_revocation_survives_reopen: true,
     deletion_blocks_replay: true, device_revocation_locks: true }));
 } finally {

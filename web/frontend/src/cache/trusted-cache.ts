@@ -15,7 +15,7 @@ const equalBytes = (left: Uint8Array, right: Uint8Array) => left.length === righ
 const aad = (header: CacheHeader) => encoder.encode(canonicalize(header) ?? '');
 const slot = (scope: CacheScope, classroom: string | null) => JSON.stringify([scope, scope === 'recording_recovery' ? classroom : null]);
 const recordingId = (descriptor: AudioDescriptor) => JSON.stringify([descriptor.class_session_id, descriptor.capture_epoch_id, descriptor.seq]);
-type MemoryKey = { key: CryptoKey; id: string; version: number; deadline: number; wallDeadline: number; generation: number };
+type MemoryKey = { key: CryptoKey; id: string; version: number; deadline: number; wallDeadline: number; generation: number; recoveryGeneration: number };
 type Authorized = { localGeneration: number; namespace: string; identity: CacheIdentity; key: MemoryKey };
 
 /** Production adapter. Only ciphertext and minimal routing metadata enter IndexedDB. */
@@ -28,6 +28,7 @@ export class TrustedCache extends EventTarget {
   private channel: BroadcastChannel | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private barrier: Promise<void> = Promise.resolve();
+  private recoveryPending = new Map<string, { record: CipherRecord; recoveryGeneration: number }>();
   private readonly databaseName: string;
   private readonly hide = () => this.lock();
 
@@ -75,7 +76,7 @@ export class TrustedCache extends EventTarget {
       const request = store.get(namespace);
       request.onsuccess = () => {
         const state = request.result as NamespaceState | undefined;
-        store.put({ id: namespace, generation: (state?.generation ?? 0) + 1 });
+        store.put({ ...state, id: namespace, generation: (state?.generation ?? 0) + 1 });
         done();
       };
     }));
@@ -111,6 +112,10 @@ export class TrustedCache extends EventTarget {
     const attempt = (this.unlockAttempts.get(keySlot) ?? 0) + 1;
     this.unlockAttempts.set(keySlot, attempt);
     const persistedGeneration = await this.namespaceGeneration(namespace);
+    const recoveryGeneration = await cacheTransaction<number>(this.databaseName, 'readonly', (tx, done) => {
+      const request = tx.objectStore('namespaces').get(namespace);
+      request.onsuccess = () => done((request.result as NamespaceState | undefined)?.recoveryGeneration ?? 0);
+    });
     const startedWall = Date.now();
     const started = performance.now();
     const grant = await issue();
@@ -131,7 +136,7 @@ export class TrustedCache extends EventTarget {
     if (performance.now() >= deadline || Date.now() >= wallDeadline) throw new CacheError('LOCKED');
     if (await this.namespaceGeneration(namespace) !== persistedGeneration) throw new CacheError('STALE_OPERATION');
     if (generation !== this.localGeneration || this.unlockAttempts.get(keySlot) !== attempt) throw new CacheError('STALE_OPERATION');
-    this.keys.set(keySlot, { key, id: grant.key_id, version: grant.key_epoch, deadline, wallDeadline, generation: persistedGeneration });
+    this.keys.set(keySlot, { key, id: grant.key_id, version: grant.key_epoch, deadline, wallDeadline, generation: persistedGeneration, recoveryGeneration });
     this.scheduleExpiry();
     this.dispatchEvent(new Event('unlocked'));
   }
@@ -213,6 +218,75 @@ export class TrustedCache extends EventTarget {
 
   async put(write: CacheWrite, plaintext: Uint8Array): Promise<void> {
     return this.store(write, plaintext, false);
+  }
+
+  /** Write-only recovery: authorization and encryption start synchronously, before any lock.
+   * Only the resulting ciphertext may complete afterward. It never releases plaintext or a key.
+   */
+  saveRecoveryDraft(write: CacheWrite, plaintext: Uint8Array): Promise<void> {
+    const snapshot = structuredClone(write);
+    this.validate(snapshot);
+    if (snapshot.scope !== 'drafts' || snapshot.objectType !== 'sync_editor_recovery' || !snapshot.recoveryFor || !snapshot.recoveryConflictId) throw new CacheError('INVALID_INPUT');
+    const auth = this.authorized('drafts', null);
+    const header: CacheHeader = { ...snapshot, ownerId: auth.identity.ownerId, deviceId: auth.identity.deviceId,
+      keyId: auth.key.id, keyVersion: auth.key.version, schema: 2 };
+    const nonce = crypto.getRandomValues(new Uint8Array(12));
+    const copy = new Uint8Array(plaintext);
+    let encrypted: Promise<ArrayBuffer>;
+    try { encrypted = crypto.subtle.encrypt({ name: 'AES-GCM', iv: nonce, additionalData: aad(header) }, auth.key.key, copy); }
+    finally { copy.fill(0); }
+    const namespace = auth.namespace;
+    const recoveryGeneration = auth.key.recoveryGeneration;
+    return encrypted.then(ciphertext => this.retainRecovery({ record: { id: recordId(namespace, header), namespace, header, nonce, ciphertext,
+      bytes: ciphertext.byteLength + nonce.byteLength + aad(header).byteLength, accessedAt: Date.now() }, recoveryGeneration }));
+  }
+
+  private async retainRecovery(value: { record: CipherRecord; recoveryGeneration: number }): Promise<void> {
+    const { record } = value;
+    const stream = JSON.stringify([record.namespace, record.header.objectId]);
+    const newer = this.recoveryPending.get(stream);
+    if (newer && newer.record.header.generation > record.header.generation) return;
+    const others = [...this.recoveryPending.entries()].filter(([id]) => id !== stream).map(([, item]) => item.record);
+    if (!this.options.limits || others.length >= this.options.limits.draftOperations
+      || others.reduce((sum, item) => sum + item.bytes, record.bytes) > this.options.limits.draftBytes) throw new CacheError('QUOTA_EXCEEDED');
+    this.recoveryPending.set(stream, value);
+    try {
+      await cacheTransaction<void>(this.databaseName, 'readwrite', (tx, done, fail) => {
+        const state = tx.objectStore('namespaces').get(record.namespace);
+        state.onsuccess = () => {
+          if (((state.result as NamespaceState | undefined)?.recoveryGeneration ?? 0) !== value.recoveryGeneration) { fail(new CacheError('STALE_OPERATION')); return; }
+          const heads = tx.objectStore('namespaces');
+          const headId = `${record.namespace}:recovery:${record.header.objectId}`;
+          const head = heads.get(headId);
+          head.onsuccess = () => {
+          if (((head.result as NamespaceState | undefined)?.generation ?? 0) >= record.header.generation) { done(); return; }
+          const request = tx.objectStore('metadata').index('pool').getAll([record.namespace, 'drafts']);
+          request.onsuccess = () => {
+            const own = request.result as CacheMetadata[];
+            const versions = own.filter(item => item.header.objectType === 'sync_editor_recovery' && item.header.objectId === record.header.objectId);
+            if (versions.some(item => item.header.generation >= record.header.generation)) { done(); return; }
+            try { this.makeRoom(tx, own.filter(item => !versions.includes(item)), record); }
+            catch (error) { fail(error as CacheError); return; }
+            for (const version of versions) deleteCacheRecord(tx, version.id);
+            tx.objectStore('nonces').add({ id: `${record.header.keyId}:${Array.from(record.nonce).join('.')}`, namespace: record.namespace });
+            heads.put({ id: headId, generation: record.header.generation });
+            putCacheRecord(tx, record); done();
+          };
+          };
+        };
+      }); // Intentionally not tracked: only pre-authorized ciphertext append can survive a lock.
+      if (this.recoveryPending.get(stream) === value) this.recoveryPending.delete(stream);
+    } catch (error) {
+      if (error instanceof CacheError && error.code === 'STALE_OPERATION' && this.recoveryPending.get(stream) === value) this.recoveryPending.delete(stream);
+      throw error;
+    }
+  }
+
+  async retryRecoveryDrafts(): Promise<Array<{ objectId: string; error?: unknown }>> {
+    return Promise.all([...this.recoveryPending.values()].map(async value => {
+      try { await this.retainRecovery(value); return { objectId: value.record.header.objectId }; }
+      catch (error) { return { objectId: value.record.header.objectId, error }; }
+    }));
   }
 
   private async store(write: CacheWrite, plaintext: Uint8Array, ordered: boolean): Promise<void> {
@@ -390,7 +464,7 @@ export class TrustedCache extends EventTarget {
       tx.objectStore('tombstones').put(tombstone);
       const states = tx.objectStore('namespaces');
       const state = states.get(namespace);
-      state.onsuccess = () => states.put({ id: namespace, generation: ((state.result as NamespaceState | undefined)?.generation ?? 0) + 1 });
+      state.onsuccess = () => states.put({ ...(state.result as NamespaceState | undefined), id: namespace, generation: ((state.result as NamespaceState | undefined)?.generation ?? 0) + 1 });
       const request = tx.objectStore('metadata').index('namespace').getAll(namespace);
       request.onsuccess = () => {
         for (const record of request.result as CacheMetadata[]) {
@@ -449,6 +523,18 @@ export class TrustedCache extends EventTarget {
     const namespace = namespaceOf(identity);
     await this.invalidate();
     await cacheTransaction<void>(this.databaseName, 'readwrite', (tx, done) => {
+      const states = tx.objectStore('namespaces');
+      const state = states.get(namespace);
+      state.onsuccess = () => states.put({ ...(state.result as NamespaceState | undefined), id: namespace,
+        generation: (state.result as NamespaceState | undefined)?.generation ?? 0,
+        recoveryGeneration: ((state.result as NamespaceState | undefined)?.recoveryGeneration ?? 0) + 1 });
+      const heads = states.openCursor();
+      heads.onsuccess = () => {
+        const cursor = heads.result;
+        if (!cursor) return;
+        if (String(cursor.primaryKey).startsWith(`${namespace}:recovery:`)) cursor.delete();
+        cursor.continue();
+      };
       const records = tx.objectStore('metadata').index('namespace').openKeyCursor(namespace);
       records.onsuccess = () => {
         const cursor = records.result;

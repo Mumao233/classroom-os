@@ -54,7 +54,7 @@ async function install(target = page) {
     }
     class Transport {
       constructor(options = {}) {
-        this.receipts = new Map(); this.pushes = []; this.resolutions = []; this.mode = 'apply'; this.pages = [];
+        this.receipts = new Map(options.receipts ?? []); this.conflicts = new Map(options.conflicts ?? []); this.conflictByOp = new Map(); this.pushes = []; this.resolutions = []; this.mode = 'apply'; this.pages = [];
         this.revokedRevisions = new Set(options.revokedRevisions ?? []);
         this.conflictsRevoked = options.conflictsRevoked ?? false;
         this.revisionReads = [];
@@ -72,7 +72,7 @@ async function install(target = page) {
         const projection = this.projections.find(value => value.object_id === id && value.object_type === 'review_document');
         if (!projection) throw Object.assign(new Error('Document missing'), { code: 'NOT_FOUND' });
         return { id, revision: projection.revision, created_at: projection.updated_at, updated_at: projection.updated_at,
-          class_session_id: ids.classroom, kind: 'note', title: 'Synthetic personal note', adopted_revision_id: null,
+          class_session_id: projection.parent_id, kind: 'note', title: 'Synthetic personal note', adopted_revision_id: null,
           latest_personal_revision_id: null, candidate_revision_ids: [], understood: false, source_status: 'unchanged' };
       }
       async reviewRevision(id) {
@@ -88,25 +88,28 @@ async function install(target = page) {
       }
       async receipt(id) { if (!this.receipts.has(id)) throw Object.assign(new Error('Missing'), { code: 'NOT_FOUND' }); return structuredClone(this.receipts.get(id)); }
       async makeReceipt(operation, kind = 'syncOperation', value = operation) {
+        if (this.mode === 'conflict' && !this.conflictByOp.has(operation.op_id)) this.conflictByOp.set(operation.op_id, crypto.randomUUID());
         return { op_id: operation.op_id, operation: kind, request_sha256: await lib.syncFingerprint(value),
           status: this.mode === 'conflict' ? 'conflict' : 'applied', object_id: operation.object_id,
-          revision: this.serverRevision, conflict_id: this.mode === 'conflict' ? ids.conflict : null, task_id: null };
+          revision: this.serverRevision, conflict_id: this.mode === 'conflict' ? this.conflictByOp.get(operation.op_id) : null, task_id: null };
       }
       async push(operation, batchId) {
         this.pushes.push({ operation: structuredClone(operation), batchId });
         const receipt = await this.makeReceipt(operation);
         this.receipts.set(operation.op_id, receipt);
-        if (this.mode === 'conflict') this.conflictValue = { id: ids.conflict, object_id: ids.document,
+        if (this.mode === 'conflict') { this.conflictValue = { id: receipt.conflict_id, object_id: operation.object_id,
           base_revision: operation.base_revision, server_revision: this.serverRevision, local_operation: structuredClone(operation),
-          server_content: { body_markdown: 'SYNTHETIC CLOUD TEXT' }, resolved: false };
+          server_content: { body_markdown: 'SYNTHETIC CLOUD TEXT' }, resolved: false }; this.conflicts.set(receipt.conflict_id, this.conflictValue); }
         if (this.mode === 'unknown') throw Object.assign(new Error('Synthetic response loss'), { code: 'RESULT_UNKNOWN' });
         if (this.mode === 'delay') await new Promise(resolve => { this.release = resolve; });
         if (this.mode === 'invalid') receipt.request_sha256 = '0'.repeat(64);
         return { receipts: [structuredClone(receipt)], cursor: 'unconsumed-server-hint' };
       }
-      async conflict() {
+      async conflict(id) {
         if (this.conflictsRevoked) throw Object.assign(new Error('Conflict missing'), { code: 'NOT_FOUND' });
-        return structuredClone(this.conflictValue);
+        const conflict = this.conflicts.get(id);
+        if (!conflict) throw Object.assign(new Error('Conflict missing'), { code: 'NOT_FOUND' });
+        return structuredClone(conflict);
       }
       async resolve(id, body, opId) {
         this.resolutions.push({ id, body: structuredClone(body), opId });
@@ -115,6 +118,7 @@ async function install(target = page) {
           status: 'applied', object_id: body.resolution === 'copy_to_new_note' ? crypto.randomUUID() : ids.document,
           revision: 3, conflict_id: null, task_id: null };
         this.receipts.set(opId, receipt);
+        if (this.conflicts.has(id)) this.conflicts.get(id).resolved = true;
         return receipt;
       }
     }
@@ -142,6 +146,19 @@ async function install(target = page) {
         });
       } finally { database.close(); }
     };
+    window.editable = async (name, limits = {}, mountPanel = false) => {
+      await create(name, limits); transport.mode = 'conflict';
+      const reference = await runtime.enqueue(operation('ORIGINAL FROZEN INPUT'), ancestry, 1);
+      await runtime.flush(); await runtime.inspectConflict(reference);
+      if (mountPanel) { const mount = document.createElement('div'); document.body.append(mount);
+        window.uiRoot = lib.createRoot(mount); uiRoot.render(lib.React.createElement(lib.ConflictPanel, { runtime, reference, generation: 2 })); }
+      return reference;
+    };
+    window.delayEncryption = () => {
+      window.nativeEncrypt = crypto.subtle.encrypt.bind(crypto.subtle); window.encryptedReleases = [];
+      crypto.subtle.encrypt = (...args) => nativeEncrypt(...args).then(ciphertext => new Promise(resolve => encryptedReleases.push(() => resolve(ciphertext))));
+    };
+    window.restoreEncryption = () => { if (window.nativeEncrypt) { crypto.subtle.encrypt = nativeEncrypt; window.nativeEncrypt = null; } };
   });
 }
 
@@ -149,7 +166,7 @@ async function test(name, run) {
   const started = Date.now();
   try { await run(); results.push({ name, passed: true, elapsed_ms: Date.now() - started }); }
   catch (error) { results.push({ name, passed: false, elapsed_ms: Date.now() - started, error: error.message }); }
-  finally { await page.evaluate(() => { window.uiRoot?.unmount(); window.uiRoot = null; window.runtime?.close(); }).catch(() => {}); }
+  finally { await page.evaluate(() => { if (window.nativeTransaction) { IDBDatabase.prototype.transaction = nativeTransaction; window.nativeTransaction = null; } window.restoreEncryption?.(); window.encryptedReleases?.forEach(release => release()); window.uiRoot?.unmount(); window.uiRoot = null; window.runtime?.close(); }).catch(() => {}); }
 }
 
 try {
@@ -334,12 +351,12 @@ try {
     });
     await page.getByRole('heading', { name: '云端版本 2' }).waitFor();
     await page.getByRole('textbox', { name: '合并正文', exact: true }).fill('UNSENT PRIVATE EDIT');
-    await page.evaluate(() => cache.lock());
+    await page.evaluate(async () => { cache.lock(); await runtime.awaitEditorDraftSaves(); });
     await page.getByRole('status').filter({ hasText: '同步已锁定，请重新验证身份。' }).waitFor();
     assert.equal(await page.locator('textarea').count(), 0);
     assert.equal((await page.locator('body').innerText()).includes('UI PRIVATE LOCK SENTINEL'), false);
     assert.equal((await page.locator('body').innerText()).includes('UNSENT PRIVATE EDIT'), false);
-    assert.equal(await page.evaluate(async () => (await records('pr08b-ui-lock')).length), 1);
+    assert.equal(await page.evaluate(async () => (await records('pr08b-ui-lock')).length), 2);
   });
   await test('conflict-panel-rechecks-new-cloud-cas-and-preserves-merge-input', async () => {
     await page.evaluate(async () => {
@@ -397,6 +414,7 @@ try {
     });
     await page.getByRole('heading', { name: '云端版本 2' }).waitFor();
     await page.getByRole('textbox', { name: '合并正文', exact: true }).fill('REVOKED UNSENT INPUT');
+    await page.evaluate(() => runtime.awaitEditorDraftSaves());
     await page.evaluate(async () => {
       transport.projections = transport.projections.filter(value => value.object_id !== ids.document);
       transport.bootstrap = async () => ({ projection_complete: true, maximum_projection_count: 10000,
@@ -413,7 +431,7 @@ try {
     assert.equal(visible.includes('REVOKED UNSENT INPUT'), false);
     assert.deepEqual(await page.evaluate(async () => ({ unlocked: runtime.snapshot().unlocked,
       records: (await records('pr08b-bootstrap-revocation')).length, pushes: transport.pushes.length })),
-    { unlocked: false, records: 1, pushes: 1 });
+    { unlocked: false, records: 2, pushes: 1 });
   });
   await test('partial-source-revocation-clears-conflict-and-restricts-draft-after-unlock-and-page-reload', async () => {
     const reference = await page.evaluate(async () => {
@@ -429,6 +447,7 @@ try {
     await page.getByRole('heading', { name: '云端版本 2' }).waitFor();
     assert.equal((await page.locator('body').innerText()).includes('REVOKED SOURCE B BODY'), true);
     await page.getByRole('textbox', { name: '合并正文', exact: true }).fill('SOURCE B UNSENT MERGE');
+    await page.evaluate(() => runtime.awaitEditorDraftSaves());
     await page.evaluate(async () => {
       transport.revokedRevisions.add(ids.revisionB); transport.conflictsRevoked = true;
       transport.pages.push({ items: [{ event_id: crypto.randomUUID(), object_id: ids.document,
@@ -448,7 +467,7 @@ try {
         documentVisible: (await transport.document(ids.document)).id === ids.document,
         allowedBody: (await runtime.readReviewRevision(ids.document, ids.revisionA)).body_markdown };
     }, reference);
-    assert.deepEqual(reopened, { state: 'restricted', records: 1, documentVisible: true, allowedBody: 'AUTHORIZED SOURCE A BODY' });
+    assert.deepEqual(reopened, { state: 'restricted', records: 2, documentVisible: true, allowedBody: 'AUTHORIZED SOURCE A BODY' });
     await page.reload();
     await install();
     const restarted = await page.evaluate(async reference => {
@@ -461,7 +480,7 @@ try {
         rejectedRevisionRead: transport.revisionReads.includes(ids.revisionB),
         leaked: JSON.stringify(stored).includes('SOURCE B UNIQUE DRAFT') };
     }, reference);
-    assert.deepEqual(restarted, { state: 'restricted', records: 2, allowedText: 'SOURCE A VALID DRAFT', rejectedRevisionRead: true, leaked: false });
+    assert.deepEqual(restarted, { state: 'restricted', records: 3, allowedText: 'SOURCE A VALID DRAFT', rejectedRevisionRead: true, leaked: false });
   });
   await test('partial-source-event-rejects-a-late-exact-revision-response', async () => {
     await page.evaluate(async () => {
@@ -644,6 +663,182 @@ try {
       revisionWriteCode: 'REVISION_CONFLICT', revisionReadCode: 'REVISION_CONFLICT', tamperedCode: 'CORRUPT_RECORD',
       text: 'TYPED LEARNING CONTENT', count: 1 });
   });
+  await test('ordinary-change-preserves-unsent-merge-body-and-note-after-reopen', async () => {
+    await page.evaluate(() => editable('pr08b-editor-ordinary', {}, true));
+    await page.getByRole('textbox', { name: '合并正文', exact: true }).fill('UNSENT ORDINARY MERGE');
+    await page.getByRole('textbox', { name: '个人补充', exact: true }).fill('UNSENT ORDINARY NOTE');
+    await page.evaluate(async () => {
+      await runtime.awaitEditorDraftSaves();
+      transport.pages.push({ items: [{ event_id: crypto.randomUUID(), object_id: ids.document, object_type: 'review_document', revision: 1, deleted: false }], next_cursor: 'ordinary-editor-change', has_more: false });
+      await runtime.pollChanges();
+    });
+    await page.getByRole('status').filter({ hasText: '同步已锁定' }).waitFor();
+    assert.equal(await page.locator('textarea').count(), 0);
+    await page.evaluate(async () => {
+      await runtime.unlock('synthetic-password'); await runtime.flush(); uiRoot.unmount();
+      const mount = document.createElement('div'); document.body.append(mount); uiRoot = lib.createRoot(mount);
+      uiRoot.render(lib.React.createElement(lib.ConflictPanel, { runtime, reference: runtime.snapshot().pending[0].reference, generation: 2 }));
+    });
+    await page.getByRole('textbox', { name: '合并正文', exact: true }).waitFor();
+    assert.equal(await page.getByRole('textbox', { name: '合并正文', exact: true }).inputValue(), 'UNSENT ORDINARY MERGE');
+    assert.equal(await page.getByRole('textbox', { name: '个人补充', exact: true }).inputValue(), 'UNSENT ORDINARY NOTE');
+    assert.deepEqual(await page.evaluate(async () => ({ pending: runtime.snapshot().pending.length, records: (await records('pr08b-editor-ordinary')).length, resolutions: transport.resolutions.length })), { pending: 1, records: 2, resolutions: 0 });
+  });
+  await test('recovery-native-encryption-completes-after-lock-without-plaintext-reopening', async () => {
+    await page.evaluate(async () => {
+      window.editorSource = await editable('pr08b-editor-crypto-lock'); delayEncryption();
+      window.editorSave = runtime.saveConflictDraft(editorSource, 'RACING CRYPTO BODY', 'RACING CRYPTO NOTE', crypto.randomUUID(), 1);
+    });
+    await page.waitForFunction(() => encryptedReleases.length === 1);
+    const result = await page.evaluate(async () => {
+      cache.lock(); restoreEncryption(); encryptedReleases.shift()(); await editorSave; await runtime.awaitEditorDraftSaves();
+      const stored = await records('pr08b-editor-crypto-lock'); const locked = !runtime.snapshot().unlocked;
+      await expectCode(runtime.readConflictDrafts(editorSource), 'LOCKED');
+      await runtime.unlock('synthetic-password'); await runtime.flush();
+      const [saved] = await runtime.readConflictDrafts(editorSource);
+      return { locked, count: stored.length, leaked: JSON.stringify(stored).includes('RACING CRYPTO'), body: saved.body, note: saved.note };
+    });
+    assert.deepEqual(result, { locked: true, count: 2, leaked: false, body: 'RACING CRYPTO BODY', note: 'RACING CRYPTO NOTE' });
+  });
+  await test('explicit-purge-blocks-delayed-recovery-ciphertext-resurrection', async () => {
+    await page.evaluate(async () => {
+      const source = await editable('pr08b-editor-purge'); delayEncryption();
+      window.editorSave = runtime.saveConflictDraft(source, 'PURGED UNIQUE INPUT', 'PURGED NOTE', crypto.randomUUID(), 1).then(() => 'saved', error => error.code);
+    });
+    await page.waitForFunction(() => encryptedReleases.length === 1);
+    const result = await page.evaluate(async () => {
+      await cache.purge(); restoreEncryption(); encryptedReleases.shift()(); const code = await editorSave;
+      let retryCode = null; try { await runtime.retryEditorDraftSaves(); } catch (error) { retryCode = error.code; }
+      return { code, retryCode, count: (await records('pr08b-editor-purge')).length };
+    });
+    assert.deepEqual(result, { code: 'STALE_OPERATION', retryCode: 'STALE_OPERATION', count: 0 });
+  });
+  await test('locked-editor-reports-idb-failure-and-retries-only-retained-ciphertext', async () => {
+    await page.evaluate(async () => { await editable('pr08b-editor-idb-failure', {}, true); delayEncryption(); });
+    await page.getByRole('textbox', { name: '合并正文', exact: true }).fill('IDB FAILURE UNIQUE INPUT');
+    await page.waitForFunction(() => encryptedReleases.length === 1);
+    await page.evaluate(() => {
+      window.nativeTransaction = IDBDatabase.prototype.transaction;
+      IDBDatabase.prototype.transaction = function(...args) { if (args[1] === 'readwrite') throw new DOMException('Synthetic quota', 'QuotaExceededError'); return nativeTransaction.apply(this, args); };
+      cache.lock(); restoreEncryption(); encryptedReleases.shift()();
+    });
+    await page.getByRole('status').filter({ hasText: '合并输入尚未保存' }).waitFor();
+    assert.equal(await page.locator('textarea').count(), 0);
+    await page.evaluate(() => { IDBDatabase.prototype.transaction = nativeTransaction; window.nativeTransaction = null; });
+    await page.getByRole('button', { name: '重试保存合并输入', exact: true }).click();
+    await page.getByRole('status').filter({ hasText: '合并输入已加密保存在本机' }).waitFor();
+    assert.equal(await page.locator('textarea').count(), 0);
+    assert.deepEqual(await page.evaluate(async () => ({ locked: !runtime.snapshot().unlocked, count: (await records('pr08b-editor-idb-failure')).length })), { locked: true, count: 2 });
+  });
+  await test('synchronous-save-failure-remains-visible-after-lock-and-empty-retry', async () => {
+    await page.evaluate(async () => {
+      await editable('pr08b-editor-sync-failure', {}, true);
+      cache.saveRecoveryDraft = () => { throw Object.assign(new Error('Synthetic rejected persistence'), { code: 'QUOTA_EXCEEDED' }); };
+    });
+    await page.getByRole('textbox', { name: '合并正文', exact: true }).fill('NOT ENCRYPTED UNIQUE INPUT');
+    await page.getByRole('status').filter({ hasText: '合并输入尚未保存' }).waitFor();
+    await page.evaluate(() => cache.lock());
+    await page.getByRole('button', { name: '重试保存合并输入', exact: true }).click();
+    await page.getByRole('status').filter({ hasText: '合并输入尚未保存' }).waitFor();
+    assert.equal(await page.locator('textarea').count(), 0);
+    assert.equal(await page.getByRole('status').filter({ hasText: '合并输入已加密保存在本机' }).count(), 0);
+    assert.equal(await page.evaluate(async () => (await records('pr08b-editor-sync-failure')).length), 1);
+  });
+  await test('editor-stream-replacement-bounds-quota-and-keeps-concurrent-branches', async () => {
+    await page.evaluate(async () => {
+      window.editorSource = await editable('pr08b-editor-streams', { draftOperations: 3 }, true);
+      window.editorStream = crypto.randomUUID(); delayEncryption();
+      window.editorSave = runtime.saveConflictDraft(editorSource, 'SLOW OLDER INPUT', '', editorStream, 1);
+    });
+    await page.waitForFunction(() => encryptedReleases.length === 1);
+    const result = await page.evaluate(async () => {
+      restoreEncryption();
+      for (let generation = 2; generation <= 22; generation++) await runtime.saveConflictDraft(editorSource, 'LATEST INPUT ' + generation, '', editorStream, generation);
+      encryptedReleases.shift()(); await editorSave;
+      await runtime.saveConflictDraft(editorSource, 'OTHER TAB UNIQUE INPUT', '', crypto.randomUUID(), 1);
+      let quota = null; try { await runtime.saveConflictDraft(editorSource, 'THIRD BRANCH', '', crypto.randomUUID(), 1); } catch (error) { quota = error.code; }
+      const drafts = await runtime.readConflictDrafts(editorSource);
+      uiRoot.unmount(); const mount = document.createElement('div'); document.body.append(mount); uiRoot = lib.createRoot(mount);
+      uiRoot.render(lib.React.createElement(lib.ConflictPanel, { runtime, reference: editorSource, generation: 2 }));
+      return { quota, count: (await records('pr08b-editor-streams')).length, generations: drafts.map(value => value.reference.generation).sort((a,b)=>a-b), bodies: drafts.map(value => value.body).sort() };
+    });
+    assert.deepEqual(result, { quota: 'QUOTA_EXCEEDED', count: 3, generations: [1,22], bodies: ['LATEST INPUT 22', 'OTHER TAB UNIQUE INPUT'] });
+    await page.getByRole('combobox', { name: '本机合并草稿', exact: true }).waitFor();
+    assert.equal(await page.getByRole('textbox', { name: '合并正文', exact: true }).inputValue(), 'ORIGINAL FROZEN INPUT');
+  });
+  await test('old-resolution-ack-preserves-and-discovers-a-later-editor-generation', async () => {
+    await page.evaluate(async () => {
+      window.editorSource = await editable('pr08b-editor-late-ack'); window.editorStream = crypto.randomUUID();
+      const first = await runtime.saveConflictDraft(editorSource, 'SUBMITTED BODY', 'SUBMITTED NOTE', editorStream, 1);
+      const local = await runtime.readDraft(editorSource); const resolve = transport.resolve.bind(transport);
+      transport.resolve = async (...args) => { await new Promise(release => { window.releaseResolution = release; }); return resolve(...args); };
+      window.resolvingEditor = runtime.resolve(editorSource, { base_revision: 2, resolution: 'edited_merge', merged_operation: { ...local, op_id: crypto.randomUUID(), base_revision: 2,
+        payload: { ...local.payload, base_revision: 2, body_markdown: 'SUBMITTED BODY', personal_note: 'SUBMITTED NOTE' } } }, 2, [first]);
+    });
+    await page.waitForFunction(() => typeof window.releaseResolution === 'function');
+    const result = await page.evaluate(async () => {
+      const resolution = runtime.snapshot().pending.find(value => value.reference.revision === 2).reference;
+      const envelope = JSON.parse(new TextDecoder().decode(await cache.read(resolution)));
+      if (envelope.recoveryReferences.length !== 1 || envelope.recoveryReferences[0].generation !== 1) throw new Error('Test did not bind the older recovery ACK');
+      await runtime.saveConflictDraft(editorSource, 'LATE UNIQUE BODY', 'LATE UNIQUE NOTE', editorStream, 2);
+      releaseResolution(); await resolvingEditor;
+      const [source] = await runtime.listConflictDraftSources(); const [draft] = await runtime.readConflictDrafts(source.source);
+      return { pending: runtime.snapshot().pending.length, count: (await records('pr08b-editor-late-ack')).length, body: draft.body, note: draft.note, state: source.state };
+    });
+    assert.deepEqual(result, { pending: 0, count: 1, body: 'LATE UNIQUE BODY', note: 'LATE UNIQUE NOTE', state: 'available' });
+  });
+  for (const mode of ['use_server', 'copy_to_new_note']) {
+    await test('nonmerge-' + mode + '-retains-discoverable-input-after-real-page-reload', async () => {
+      const database = 'pr08b-editor-reopen-' + mode;
+      await page.evaluate(name => editable(name, {}, true), database);
+      await page.getByRole('textbox', { name: '合并正文', exact: true }).fill('UNSUBMITTED NONMERGE BODY');
+      await page.getByRole('textbox', { name: '个人补充', exact: true }).fill('UNSUBMITTED NONMERGE NOTE');
+      await page.evaluate(() => runtime.awaitEditorDraftSaves());
+      await page.locator(`input[value="${mode}"]`).check();
+      if (mode === 'copy_to_new_note') await page.getByRole('textbox', { name: '目标课堂', exact: true }).fill('10000000-0000-4000-8000-000000000006');
+      await page.getByRole('button', { name: '确认处理', exact: true }).click();
+      await page.getByRole('textbox', { name: '保留的合并正文', exact: true }).waitFor();
+      assert.equal(await page.getByRole('textbox', { name: '保留的合并正文', exact: true }).inputValue(), 'UNSUBMITTED NONMERGE BODY');
+      const serverState = await page.evaluate(() => ({ receipts: [...transport.receipts], conflicts: [...transport.conflicts] }));
+      await page.reload(); await install();
+      await page.evaluate(async ({ database, serverState }) => {
+        await create(database, {}, {}, 'drafts', serverState);
+        if (runtime.snapshot().pending.length !== 0) throw new Error('Editor recovery entered the sending queue');
+        const mount = document.createElement('div'); document.body.append(mount); window.uiRoot = lib.createRoot(mount);
+        uiRoot.render(lib.React.createElement(lib.ConflictRecoveryList, { runtime }));
+      }, { database, serverState });
+      await page.getByRole('button', { name: '查看本机合并草稿 1', exact: true }).click();
+      await page.getByRole('textbox', { name: '保留的合并正文', exact: true }).waitFor();
+      assert.equal(await page.getByRole('textbox', { name: '保留的合并正文', exact: true }).inputValue(), 'UNSUBMITTED NONMERGE BODY');
+      assert.equal(await page.getByRole('textbox', { name: '保留的个人补充', exact: true }).inputValue(), 'UNSUBMITTED NONMERGE NOTE');
+    });
+  }
+  await test('fresh-discovery-keeps-authorized-orphan-visible-beside-tombstoned-ancestry', async () => {
+    const result = await page.evaluate(async () => {
+      const first = await editable('pr08b-editor-deleted-sibling');
+      await runtime.saveConflictDraft(first, 'DELETED CLASS INPUT', '', crypto.randomUUID(), 1);
+      const secondClass = crypto.randomUUID(), secondDocument = crypto.randomUUID();
+      const stamp = new Date().toISOString();
+      transport.projections.push({ object_type: 'class_session', object_id: secondClass, parent_id: ids.course, revision: 1, adopted_revision_id: null, updated_at: stamp },
+        { object_type: 'review_document', object_id: secondDocument, parent_id: secondClass, revision: 1, adopted_revision_id: null, updated_at: stamp });
+      await runtime.unlock('synthetic-password'); await runtime.flush();
+      const op = { ...operation('SECOND ORIGINAL'), object_id: secondDocument };
+      const second = await runtime.enqueue(op, { ...ancestry, classSessionId: secondClass }, 1);
+      await runtime.flush(); await runtime.inspectConflict(second);
+      await runtime.saveConflictDraft(second, 'AUTHORIZED OTHER CLASS INPUT', '', crypto.randomUUID(), 1);
+      await runtime.resolve(first, { base_revision: 2, resolution: 'use_server' }, 2);
+      await runtime.resolve(second, { base_revision: 2, resolution: 'use_server' }, 2);
+      await cache.applyDeletion({ object_type: 'class_session', object_id: ids.classroom, deletion_id: crypto.randomUUID(), state: 'access_revoked' }, { retainDrafts: true });
+      transport.projections = transport.projections.filter(value => ![ids.classroom, ids.document].includes(value.object_id));
+      const server = transport; runtime.close(); await create('pr08b-editor-deleted-sibling'); runtime.close();
+      runtime = new lib.OfflineSyncRuntime(cache, server, { enabled: true }); await runtime.unlock('synthetic-password');
+      const sources = await runtime.listConflictDraftSources(); const available = sources.find(value => value.state === 'available');
+      const [draft] = await runtime.readConflictDrafts(available.source);
+      return { pending: runtime.snapshot().pending.length, states: sources.map(value => value.state).sort(), body: draft.body,
+        restrictedSource: sources.find(value => value.state === 'restricted').source, count: (await records('pr08b-editor-deleted-sibling')).length };
+    });
+    assert.deepEqual(result, { pending: 0, states: ['available', 'restricted'], body: 'AUTHORIZED OTHER CLASS INPUT', restrictedSource: null, count: 2 });
+  });
   await test('second-tab-reconciles-an-operation-already-acknowledged-in-first-tab', async () => {
     const other = await context.newPage();
     try {
@@ -670,7 +865,7 @@ try {
   await context.close();
   await new Promise(resolve => server.close(resolve));
   await writeFile(join(output, 'sync-browser.json'), JSON.stringify({ chromium: browserVersion, synthetic_transport: true,
-    native_crypto_indexeddb: true, results, passed: results.length === 29 && results.every(result => result.passed) }, null, 2));
+    native_crypto_indexeddb: true, results, passed: results.length === 39 && results.every(result => result.passed) }, null, 2));
 }
 console.log(JSON.stringify({ tests: results.length, passed: results.filter(result => result.passed).length, results }));
-if (results.length !== 29 || results.some(result => !result.passed)) process.exitCode = 1;
+if (results.length !== 39 || results.some(result => !result.passed)) process.exitCode = 1;

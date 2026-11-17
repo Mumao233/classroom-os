@@ -47,6 +47,14 @@ Review 学习副本还需提供 `contentRevisionId`，并由准确内容版本�
 
 `ConflictPanel` 为课堂与 Review 编辑器提供冲突交互组件，接受 runtime、准确 reference、下一 editor generation 和可选目标课堂列表。组件展示本机提交与冻结云端版本，支持手动合并、明确采用云端及另存新笔记。云端再次变化时，用户可显式重新核对。旧分支和新输入在服务器确认解决前持续保留。
 
+受保护 Review 文档的普通变化也会触发锁定，包含本设备尚未消费的提交事件。界面清除明文，用户重新解锁后继续比较。这是当前精确授权核验采用的保守处理。
+
+尚未确认的合并正文与个人补充使用独立加密恢复记录，每个编辑会话保留自己的最新快照。恢复记录具有原冲突、原操作和准确版本绑定，后台同步只发送已经显式提交的操作。已在授权期间开始的加密可以在锁定后完成密文保存，显式清空缓存的独立持久代次阻止迟到写入恢复已清除的记录。存储失败需要界面显示保存状态并重试，读取恢复内容继续要求准确授权。多个编辑会话的恢复分支由用户选择。
+
+消费者先完成 `unlock` 和 `flush`，再用恢复队列中的准确引用挂载冲突组件。`awaitEditorDraftSaves()` 等待已开始的保存，失败时由 `retryEditorDraftSaves()` 重试保留的密文。明确采用云端或另存新笔记后，尚未提交的手动合并输入继续保留，组件提供查看与复制区域。只有实际包含在手动合并请求内的准确恢复 generation 可随成功收据清理。
+
+解锁后的页面可同时挂载 `ConflictRecoveryList`。它通过 `listConflictDraftSources()` 从加密存储重新发现恢复记录，原操作已确认或页面重开后仍能找到有权读取的输入。单项失权显示受限状态，其他有权分支继续可用。
+
 ```tsx
 <ConflictPanel
   runtime={sync}
@@ -54,6 +62,7 @@ Review 学习副本还需提供 `contentRevisionId`，并由准确内容版本�
   generation={nextEditorGeneration}
   destinations={authorizedClassrooms}
 />
+<ConflictRecoveryList runtime={sync} />
 ```
 
 本包提供认证工厂和可挂载的冲突交互组件。现有产品入口为 AuthWorkbench，课程与 Review 演示页面使用 mock。09b 课程及偏好消费者的后续联调、10a 课堂页面和 10b Review 页面接入沿用实施图与前端交接的安排。PR-08b 的正式浏览器验证直接挂载同一组件，联通真实会话、HTTP、PostgreSQL 与加密缓存。

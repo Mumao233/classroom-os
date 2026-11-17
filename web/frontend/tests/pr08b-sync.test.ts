@@ -23,6 +23,7 @@ class MemoryCache extends EventTarget implements SyncCache {
   records = new Map<string, { reference: CacheWrite; bytes: Uint8Array }>();
   events: string[] = [];
   denied = false;
+  recoveryHeads = new Map<string, number>();
   lock() { this.events.push('lock'); this.dispatchEvent(new Event('locked')); }
   close() { this.lock(); }
   async unlockScope() { this.events.push('unlock'); }
@@ -40,6 +41,14 @@ class MemoryCache extends EventTarget implements SyncCache {
     if (previous && (JSON.stringify(previous.reference) !== JSON.stringify(reference) || Buffer.compare(previous.bytes, bytes))) throw new SyncError('REVISION_CONFLICT');
     this.records.set(key(reference), { reference: structuredClone(reference), bytes: new Uint8Array(bytes) });
   }
+  async saveRecoveryDraft(reference: CacheWrite, bytes: Uint8Array) {
+    if (this.denied) throw new SyncError('QUOTA_EXCEEDED');
+    if ((this.recoveryHeads.get(reference.objectId) ?? 0) >= reference.generation) return;
+    this.recoveryHeads.set(reference.objectId, reference.generation);
+    for (const [id, record] of this.records) if (record.reference.objectType === 'sync_editor_recovery' && record.reference.objectId === reference.objectId) this.records.delete(id);
+    this.records.set(key(reference), { reference: structuredClone(reference), bytes: new Uint8Array(bytes) });
+  }
+  async retryRecoveryDrafts() { return []; }
   async read(reference: CacheReference) { const value = this.records.get(key(reference)); return value ? new Uint8Array(value.bytes) : null; }
   async acknowledgeDraft(reference: CacheReference, opId: string) {
     const value = this.records.get(key(reference));
@@ -77,6 +86,17 @@ function fixture() {
   };
   const runtime = new OfflineSyncRuntime(cache, transport, { enabled: true, newId: () => id(sequence++) });
   return { cache, runtime, transport, received, receipts, setProjections: (value: S['BootstrapProjection'][]) => { projections = value; } };
+}
+
+async function editableConflict(op: SyncOperation = operation()) {
+  const f = fixture();
+  if (op.object_type === 'personal_revision') f.setProjections([projection(id(100), 'review_document')]);
+  await f.runtime.unlock(''); const reference = await f.runtime.enqueue(op, ancestry, 1);
+  f.receipts.set(op.op_id, await receipt(op, 'conflict'));
+  f.transport.conflict = async () => ({ id: id(300), object_id: id(100), base_revision: 1, server_revision: 2, local_operation: op,
+    server_content: { id: id(100) } as S['Course'], resolved: false });
+  await f.runtime.flush(); await f.runtime.inspectConflict(reference);
+  return { ...f, reference };
 }
 
 describe('PR-08b encrypted operation queue', () => {
@@ -463,5 +483,110 @@ describe('PR-08b encrypted operation queue', () => {
     let hydrated = false;
     await expect(f.runtime.cacheLearning(reference, async () => { hydrated = true; return { objectId: id(100), revision: 1, bytes: new Uint8Array() }; })).rejects.toMatchObject({ code: 'AUTHORITY_UNAVAILABLE' });
     expect(hydrated).toBe(false);
+  });
+
+  it('stores only the latest editor snapshot without altering or sending the frozen original operation', async () => {
+    const f = await editableConflict();
+    await f.runtime.saveConflictDraft(f.reference, 'first', 'first note', id(900), 1);
+    await f.runtime.saveConflictDraft(f.reference, 'unique latest body', 'unique latest note', id(900), 2);
+    await f.runtime.awaitEditorDraftSaves(); await f.runtime.flush();
+    expect(f.cache.records.size).toBe(2); expect(f.runtime.snapshot().pending).toHaveLength(1); expect(f.received).toHaveLength(0);
+    expect(await f.runtime.readDraft(f.reference)).toEqual(operation());
+    expect(await f.runtime.readConflictDrafts(f.reference)).toMatchObject([{ body: 'unique latest body', note: 'unique latest note' }]);
+  });
+
+  it('restores unsent merge input after an ordinary remote event locks the view', async () => {
+    const f = await editableConflict(personalOperation());
+    await f.runtime.saveConflictDraft(f.reference, 'UNSUBMITTED UNIQUE MERGE', 'UNSUBMITTED UNIQUE NOTE', id(900), 1);
+    f.transport.changes = async () => ({ items: [{ event_id: id(822), object_type: 'review_document', object_id: id(100), revision: 1, deleted: false }], next_cursor: 'ordinary-update', has_more: false });
+    await f.runtime.pollChanges();
+    await expect(f.runtime.readConflictDrafts(f.reference)).rejects.toMatchObject({ code: 'LOCKED' });
+    f.transport.changes = async () => ({ items: [], next_cursor: 'ordinary-update', has_more: false });
+    await f.runtime.unlock(''); await f.runtime.flush();
+    expect(await f.runtime.readConflictDrafts(f.reference)).toMatchObject([{ body: 'UNSUBMITTED UNIQUE MERGE', note: 'UNSUBMITTED UNIQUE NOTE' }]);
+    expect(f.runtime.snapshot().pending).toHaveLength(1); expect(f.received).toHaveLength(0);
+  });
+
+  it('retains unsent merge ciphertext but refuses recovery after exact source revocation', async () => {
+    const f = await editableConflict(personalOperation());
+    await f.runtime.saveConflictDraft(f.reference, 'B SOURCE UNIQUE MERGE', 'B SOURCE UNIQUE NOTE', id(900), 1);
+    f.cache.lock(); f.transport.reviewRevision = async () => { throw new SyncError('NOT_FOUND'); };
+    await f.runtime.unlock('');
+    await expect(f.runtime.readConflictDrafts(f.reference)).rejects.toMatchObject({ code: 'AUTHORITY_UNAVAILABLE' });
+    expect(f.cache.records.size).toBe(2); expect(f.runtime.snapshot().pending[0].state).toBe('restricted');
+  });
+
+  it('keeps independent editor branches for explicit recovery and never automatically flushes them', async () => {
+    const f = await editableConflict();
+    await f.runtime.saveConflictDraft(f.reference, 'TAB A UNIQUE', 'note A', id(900), 1);
+    await f.runtime.saveConflictDraft(f.reference, 'TAB B UNIQUE', 'note B', id(901), 1);
+    await f.runtime.flush();
+    expect((await f.runtime.readConflictDrafts(f.reference)).map(value => value.body).sort()).toEqual(['TAB A UNIQUE', 'TAB B UNIQUE']);
+    expect(f.received).toHaveLength(0); expect(f.runtime.snapshot().pending).toHaveLength(1); expect(f.cache.records.size).toBe(3);
+  });
+
+  it('keeps a later editor generation when an old explicit resolution receipt arrives', async () => {
+    const f = await editableConflict(personalOperation(null));
+    const first = await f.runtime.saveConflictDraft(f.reference, 'submitted merge', 'submitted note', id(900), 1);
+    const resolve = f.transport.resolve;
+    let finish!: () => void; let started!: () => void;
+    const sending = new Promise<void>(accept => { started = accept; });
+    f.transport.resolve = async (...args) => { started(); await new Promise<void>(accept => { finish = accept; }); return resolve(...args); };
+    const local = personalOperation(null);
+    const resolving = f.runtime.resolve(f.reference, { base_revision: 2, resolution: 'edited_merge', merged_operation: { ...local, op_id: id(3), base_revision: 2,
+      payload: { ...local.payload, base_revision: 2, body_markdown: 'submitted merge', personal_note: 'submitted note' } } as SyncOperation }, 2, [first]);
+    await sending;
+    const savedResolution = [...f.cache.records.values()].map(value => JSON.parse(new TextDecoder().decode(value.bytes))).find(value => value.kind === 'resolve');
+    expect(savedResolution.recoveryReferences).toEqual([first]);
+    const newer = await f.runtime.saveConflictDraft(f.reference, 'LATER UNIQUE MERGE', 'LATER UNIQUE NOTE', id(900), 2);
+    finish(); await resolving;
+    expect(f.cache.records.size).toBe(1); expect(await f.cache.read(newer)).not.toBeNull();
+    expect(await f.runtime.readConflictDrafts(f.reference)).toMatchObject([{ body: 'LATER UNIQUE MERGE', note: 'LATER UNIQUE NOTE' }]);
+    expect(f.runtime.snapshot().pending).toEqual([]);
+  });
+
+  it('discovers orphan recovery in a fresh runtime without a retained source reference', async () => {
+    const f = await editableConflict();
+    const saved = await f.runtime.saveConflictDraft(f.reference, 'UNSUBMITTED ORPHAN', 'ORPHAN NOTE', id(900), 1);
+    await f.runtime.resolve(f.reference, { base_revision: 2, resolution: 'use_server' }, 2, [saved]);
+    f.runtime.close(); const next = new OfflineSyncRuntime(f.cache, f.transport, { enabled: true }); await next.unlock('');
+    expect(next.snapshot().pending).toEqual([]);
+    const sources = await next.listConflictDraftSources(); expect(sources).toHaveLength(1); expect(sources[0].state).toBe('available');
+    expect(await next.readConflictDrafts(sources[0].source!)).toMatchObject([{ body: 'UNSUBMITTED ORPHAN', note: 'ORPHAN NOTE' }]);
+  });
+
+  it('does not let one tombstoned recovery hide another authorized branch from discovery', async () => {
+    const f = await editableConflict();
+    const deleted = await f.runtime.saveConflictDraft(f.reference, 'RESTRICTED BRANCH', '', id(900), 1);
+    await f.runtime.saveConflictDraft(f.reference, 'AVAILABLE BRANCH', '', id(901), 1);
+    const read = f.cache.read.bind(f.cache);
+    f.cache.read = async reference => { if (reference.objectId === deleted.objectId) throw new SyncError('GONE'); return read(reference); };
+    f.runtime.close(); const next = new OfflineSyncRuntime(f.cache, f.transport, { enabled: true }); await next.unlock('');
+    const sources = await next.listConflictDraftSources();
+    expect(sources.map(value => value.state).sort()).toEqual(['available', 'restricted']);
+    expect(sources.find(value => value.state === 'restricted')?.source).toBeNull();
+  });
+
+  it('reports failed editor persistence without acknowledging it as saved', async () => {
+    const f = await editableConflict();
+    await f.runtime.saveConflictDraft(f.reference, 'saved earlier', 'saved note', id(900), 1); f.cache.denied = true;
+    await expect(f.runtime.saveConflictDraft(f.reference, 'unsaved later', 'unsaved note', id(900), 2)).rejects.toMatchObject({ code: 'QUOTA_EXCEEDED' });
+    await expect(f.runtime.awaitEditorDraftSaves()).rejects.toMatchObject({ code: 'QUOTA_EXCEEDED' });
+    expect(await f.runtime.readConflictDrafts(f.reference)).toMatchObject([{ body: 'saved earlier' }]);
+  });
+
+  it('tracks write-only encrypted recovery completion across a lock without reopening the view', async () => {
+    const f = await editableConflict();
+    const save = f.cache.saveRecoveryDraft.bind(f.cache);
+    let finish!: () => void;
+    f.cache.saveRecoveryDraft = (reference, bytes) => {
+      const copy = new Uint8Array(bytes);
+      return new Promise<void>(resolve => { finish = () => { void save(reference, copy).then(resolve); copy.fill(0); }; });
+    };
+    const saving = f.runtime.saveConflictDraft(f.reference, 'RACING UNIQUE INPUT', 'RACING UNIQUE NOTE', id(900), 1);
+    f.cache.lock(); finish(); await saving; await f.runtime.awaitEditorDraftSaves();
+    expect(f.runtime.snapshot().unlocked).toBe(false); expect(f.cache.records.size).toBe(2);
+    await f.runtime.unlock(''); await f.runtime.flush();
+    expect(await f.runtime.readConflictDrafts(f.reference)).toMatchObject([{ body: 'RACING UNIQUE INPUT', note: 'RACING UNIQUE NOTE' }]);
   });
 });

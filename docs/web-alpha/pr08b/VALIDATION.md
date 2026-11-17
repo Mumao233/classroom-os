@@ -27,6 +27,7 @@
 | `pr08b-frontend-20261117-04` | Astra 修复复验 | Vitest 323/323、同步原生浏览器 29/29、缓存 28/28 与组合 11/11 通过。PostgreSQL 45 passed / 1 failed，新增锁序与冻结 CAS 用例通过，正式浏览器在首次离线入队前尚未读取准确 base 版本 | `cc49a90224ef81505bf8b23cd8bfc2bc3f04d4e14befd995c87fe4a9191faf32` |
 | `pr08b-frontend-20261117-05` | Astra 修复复验 | 单元、原生浏览器和其他后端测试通过。正式浏览器在恢复引用比较断言失败，已完成部分来源撤权的 200/200/404/404 授权及清面板检查 | `26ab1cfaee19877b49bd21760ac3388446b8f2c106a3b1d8564240bb4a04a44b` |
 | `pr08b-frontend-20261117-06` | Astra 修复复验 | 全部通过。Vitest 323/323，同步原生浏览器 29/29，缓存 28/28，组合 11/11，PostgreSQL 与正式浏览器 46/46。33 个 PR-08b 测试函数及真实认证浏览器全部执行，0 failures / errors / skipped | `04bed6a56cac8f7edde88aacbcadcea556764b4899cc0d7d94a764fd8413a8aa` |
+| `pr08b-full-20261117-03` | Astra 修复完整 Web 复验 | 1297 项（1268 父用例、29 子测试），1296 passed / 1 failed / 0 errors / 0 skipped。33 个 PR-08b 函数与正式浏览器通过。既有并发删除用例有一个请求在认证会话行锁处超时 | `83c68ae9cec949b140de9b76cfb4444414d30098b6aa9926ef97b9b1f6d78dd2` |
 
 第二次运行的证据归档 SHA-256 为 `a20eaee07743f52d51f690a0db5dabe79bda7268e9c37b443c4b8162ab1c81db`。来宾 PostgreSQL 正常停止，退出码 0，受管对象服务残留进程数为 0。新增同步和正式 HTTP 浏览器路径仍有失败，后续运行负责验证修复。
 
@@ -70,6 +71,12 @@
 frontend05 证据 SHA-256 为 `556754167f445531faba6f523ce5c77eb1874aacb5310c21a3040881b868820e`。新增断言错误地要求写入引用与恢复后的完整认证 header 对象完全相同。恢复记录包含合法的 owner/device/key/schema 元数据。修正后逐项精确核对原引用的全部字段，并另行核对真实会话 owner/device、schema、keyId 与 keyVersion。测试服务采用 3 秒 graceful shutdown 和 15 秒 join，并在 finally 中始终隔离合成 Review 任务。
 
 frontend06 证据 SHA-256 为 `156a63f3227ef19fa7487801fdc77b6d50ed092014391adb5c19db4a7c32d023`，全部通过，服务残留为 0。正式浏览器完成部分来源撤权后的面板清理、准确 HTTP 授权、重新打开加密存储后的受限状态与拒读断言。两处真实双连接锁序回归和旧冲突换 base 的拒绝回归同时通过。
+
+full03 证据 SHA-256 为 `7e19f14d4a294e63c115b432da5012e54ded5f231857898c438b6b4696381769`，服务残留为 0。唯一失败来自 `test_concurrent_and_repeated_deletes_of_one_object_are_one_request`，六个并发请求中一个返回 503。PostgreSQL 日志记录 `identity_api.validate_session` 对 `auth_sessions` 执行 FOR UPDATE 时发生 lock timeout，需诊断与复验。
+
+`pr08b-lock-01` 复用 full03 冻结源码，对原并发删除用例执行五轮，30 个请求全部通过。原 500 ms 阈值、产品代码和测试断言保持原值。20 ms 采样记录认证会话行锁及 transactionid 等待，各轮账本追加耗时 31–32 ms，最长 submit 为 93–156 ms，服务残留为 0。证据 SHA-256 为 `45fcdb9d10704fb43d2e14b7ea4a8d0d90446b8e3aa3d6b55d2d42ee1bce93e8`。该诊断未复现 full03 的 503，既有认证与删除事务持锁边界仍作为并发可用性风险保留。0014 仅在首次删除提交时增加一个事件，复用事务已持有的 owner counter 锁，实际新增耗时尚未独立量化。
+
+Astra 对 `c711458` 的增量复审新增 R5（P2），普通 Review 事件引起锁定时，尚未确认的手动合并输入缺少独立加密恢复。该项正在修复，后续以新的 VMware 前端和正式浏览器阶段验证。
 
 完整本机证据保存在 `outputs/pr08b/<RunId>/`。已取消运行保留 `cancellation.json` 与原排队文件。失败运行保留原 JUnit、日志和归档。
 
