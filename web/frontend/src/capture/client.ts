@@ -24,7 +24,14 @@ export class CaptureClient implements CaptureTransport {
     if (csrf !== this.identity.csrf) throw new CaptureError('STALE_ACCOUNT');
     let value: unknown;
     try { value = await response.json(); } catch { throw new CaptureError(response.ok ? 'RESULT_UNKNOWN' : 'OUTPUT_INVALID'); }
-    if (!response.ok) throw new CaptureError((value as { error?: { code?: string } }).error?.code ?? 'STORAGE_UNAVAILABLE');
+    if (!response.ok) {
+      const error = (value as { error?: { code?: string; conflict_id?: unknown } }).error;
+      const conflict = error?.conflict_id;
+      if (error?.code === 'LEASE_CONFLICT' && conflict !== undefined && conflict !== null
+        && (typeof conflict !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(conflict)))
+        throw new CaptureError('OUTPUT_INVALID');
+      throw new CaptureError(error?.code ?? 'STORAGE_UNAVAILABLE', error?.code === 'LEASE_CONFLICT' && typeof conflict === 'string' ? conflict : null);
+    }
     return value as T;
   }
 

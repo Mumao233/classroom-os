@@ -10,6 +10,13 @@ MAX_CHUNK_BYTES = 32_000
 MAX_SEQUENCE = 50_000
 
 
+class CaptureLeaseConflict(AuthRejected):
+    """A current owner's CAS target, exposed only after classroom authorization."""
+    def __init__(self, lease_id=None):
+        super().__init__('LEASE_CONFLICT', 409)
+        self.conflict_id = str(lease_id) if lease_id is not None else None
+
+
 def validate_chunk(body, *, max_samples, max_chunks):
     for field in ('seq', 'start_sample', 'end_sample', 'byte_length', 'fence_token'):
         if type(body.get(field)) is not int:

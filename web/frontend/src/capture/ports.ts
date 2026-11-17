@@ -32,7 +32,7 @@ export interface CaptureTransport {
 }
 
 export class CaptureError extends Error {
-  constructor(readonly code: string) { super(code); this.name = 'CaptureError'; }
+  constructor(readonly code: string, readonly conflictId: string | null = null) { super(code); this.name = 'CaptureError'; }
 }
 
 export async function sha256(bytes: Uint8Array<ArrayBuffer>): Promise<string> {

@@ -9,7 +9,7 @@ from uuid import uuid4
 import sqlalchemy as sa
 
 from ..domain.auth import AuthRejected
-from ..domain.capture import DurableCaptureChunk, MAX_CHUNK_BYTES, missing_ranges, sequence_ranges, validate_chunk
+from ..domain.capture import CaptureLeaseConflict, DurableCaptureChunk, MAX_CHUNK_BYTES, missing_ranges, sequence_ranges, validate_chunk
 from ..domain.data import Gone, NotFound
 from ..domain.identity import AuthorizationDenied
 from ..domain.media import ObjectUnavailable
@@ -107,9 +107,9 @@ class CaptureService:
         now = repo.now()
         if current and current['released_at'] is None:
             if not body['confirm_takeover'] or body.get('expected_lease_id') != str(current['id']):
-                raise AuthRejected('LEASE_CONFLICT', 409)
+                raise CaptureLeaseConflict(current['id'])
         elif body.get('expected_lease_id') is not None and (current is None or body['expected_lease_id'] != str(current['id'])):
-            raise AuthRejected('LEASE_CONFLICT', 409)
+            raise CaptureLeaseConflict(current['id'] if current else None)
         fence = current['fence_token'] + 1 if current else 1
         lost_event = None
         if current and current['released_at'] is None:

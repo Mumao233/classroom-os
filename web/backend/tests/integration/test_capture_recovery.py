@@ -106,6 +106,41 @@ def test_acquire_idempotency_and_parallel_owner_lease(capture):
         assert c.scalar(sa.text('SELECT count(*) FROM capture_leases WHERE owner_id=:id'),{'id':m.uid})==1
 
 
+def test_independent_device_discovers_lease_and_explicit_cas_takeover(capture):
+    m=capture;old=acquire(m);old_context=m.ctx;old_device=m.session['device_id']
+    path=BASE+f'/class-sessions/{m.classroom.id}/capture/acquire'
+    m.client.cookies.clear();m.session=login(m.a)
+    m.ctx=BrowserContext(session=m.client.cookies.get('__Host-classroom_session'),csrf=m.session['csrf_token'])
+    assert m.session['device_id']!=old_device
+    conflict=m.client.post(path,json=acquire_body(m),headers=headers(m))
+    assert conflict.status_code==409
+    target=conflict.json()['error']['conflict_id'];assert target==old['id']
+    wrong=m.client.post(path,json=acquire_body(m,device_id=str(uuid4())),headers=headers(m))
+    assert wrong.status_code==403 and wrong.json()['error']['conflict_id'] is None
+    stale=m.client.post(path,json=acquire_body(m,confirm_takeover=True,expected_lease_id=str(uuid4())),headers=headers(m))
+    assert stale.status_code==409 and stale.json()['error']['conflict_id']==target
+    taken=acquire(m,confirm_takeover=True,expected_lease_id=target)
+    assert taken['fence_token']==old['fence_token']+1
+    with TestClient(m.client.app,base_url='https://testserver') as original:
+        original.cookies.set('__Host-classroom_session',old_context.session)
+        rejected=original.post(BASE+f'/class-sessions/{m.classroom.id}/capture/renew',json=command_body(old),
+            headers={**headers(m),'X-CSRF-Token':old_context.csrf})
+        assert rejected.status_code==409 and rejected.json()['error']['code']=='STALE_FENCE'
+    superseded=m.client.post(path,json=acquire_body(m,confirm_takeover=True,expected_lease_id=target),headers=headers(m))
+    assert superseded.status_code==409 and superseded.json()['error']['conflict_id']==taken['id']
+    # Both contenders observed this same lease. Only one may consume that CAS target.
+    def contend(_):
+        try:return m.capture.acquire(m.ctx,str(m.classroom.id),str(uuid4()),acquire_body(m,confirm_takeover=True,expected_lease_id=taken['id']))
+        except AuthRejected as error:return error
+    with ThreadPoolExecutor(max_workers=2) as pool:results=list(pool.map(contend,range(2)))
+    successful=[result for result in results if isinstance(result,dict)]
+    refused=[result for result in results if isinstance(result,AuthRejected)]
+    assert len(successful)==len(refused)==1 and refused[0].conflict_id==successful[0]['id']
+    m.client.cookies.clear()
+    anonymous=m.client.post(path,json=acquire_body(m),headers=headers(m))
+    assert anonymous.status_code in (401,403) and anonymous.json()['error']['conflict_id'] is None
+
+
 def test_tail_chunk_durable_ack_retry_outbox_and_source(capture):
     m=capture;lease=acquire(m);tail=CONTENT[:514];pending=prepare(m,lease,content=tail)
     assert pending['state']=='pending' and pending['durable_at'] is None
@@ -285,6 +320,8 @@ def test_second_owner_http_and_composite_foreign_keys(capture):
         with pytest.raises(sa.exc.DBAPIError):
             c.execute(sa.text('UPDATE audio_chunks SET owner_id=:other WHERE id=:id'),{'other':other.uid,'id':pending['id']})
     as_user(m,other.email)
+    other_acquire=m.client.post(BASE+f'/class-sessions/{m.classroom.id}/capture/acquire',json=acquire_body(m),headers=headers(m))
+    assert other_acquire.status_code==404 and other_acquire.json()['error']['conflict_id'] is None
     assert put(m,pending).status_code==404
     response=m.client.get(BASE+f'/class-sessions/{m.classroom.id}/audio-manifest',params={'capture_epoch_id':lease['capture_epoch_id']})
     assert response.status_code==404

@@ -124,12 +124,55 @@ try {
     await restored.restore(config.classroom, resumed.capture_epoch_id);
     await restored.authorizeRecovery(); await restored.uploadPending();
     if (restored.snapshot().pending.length || memory.size) throw new Error('expired-fence recovery did not drain');
+    window.captureOriginal = { csrf: identity.csrf, device: login.device_id };
     return { fullBytes: 32000, tailBytes: 514, durableChunks: 3, resumedNewEpoch: true,
       offlineStopExpiredLeaseRestoredAndRecovered: true, order };
   }, config);
   steps.push('real_https_cookie_capture_acquire', 'real_wss_heartbeat_full_and_tail_durable_ack', 'durable_ack_clears_memory_only_after_commit',
     'pause_resume_new_epoch', 'legacy_v1_missing_array_normalized_malformed_rejected', 'unknown_renew_key_preserved_through_local_stop',
     'offline_stop_expired_fence_restored_runtime_real_recovery');
+  await page.evaluate(async config => {
+    const client = new window.pr05b.CaptureClient({ csrf: window.captureOriginal.csrf });
+    const body = { device_id: window.captureOriginal.device, microphone_consent_version: 'synthetic-v1',
+      recovery_consent_version: 'synthetic-v1', asr_consent_version: 'synthetic-v1', confirm_takeover: false };
+    let target;
+    try { await client.acquire(config.classroom, body, crypto.randomUUID()); }
+    catch (error) { if (error.code !== 'LEASE_CONFLICT' || !error.conflictId) throw error; target = error.conflictId; }
+    if (!target) throw new Error('lease conflict target missing');
+    window.captureOriginal.lease = await client.acquire(config.classroom, { ...body, confirm_takeover: true, expected_lease_id: target }, crypto.randomUUID());
+  }, config);
+  const otherContext = await browser.newContext();
+  await otherContext.route('**/*', route => new URL(route.request().url()).origin === config.origin ? route.continue() : route.abort());
+  try {
+    const otherPage = await otherContext.newPage(); await otherPage.goto(config.origin);
+    await otherPage.waitForFunction(() => Boolean(window.pr05b));
+    await otherPage.evaluate(async config => {
+      const base = '/api/web/v1'; const csrf = (await (await fetch(base + '/auth/csrf')).json()).csrf_token;
+      const login = await (await fetch(base + '/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json',
+        'X-CSRF-Token': csrf, 'Idempotency-Key': crypto.randomUUID() }, body: JSON.stringify({ email: config.email,
+        password: config.password, remember_me: false, device_name: 'Second independent capture device' }) })).json();
+      const client = new window.pr05b.CaptureClient({ csrf: login.csrf_token });
+      const body = { device_id: login.device_id, microphone_consent_version: 'synthetic-v1', recovery_consent_version: 'synthetic-v1',
+        asr_consent_version: 'synthetic-v1', confirm_takeover: false };
+      let target;
+      try { await client.acquire(config.classroom, body, crypto.randomUUID()); }
+      catch (error) { if (error.code !== 'LEASE_CONFLICT' || !error.conflictId) throw error; target = error.conflictId; }
+      if (!target) throw new Error('new device could not discover CAS target');
+      const taken = await client.acquire(config.classroom, { ...body, confirm_takeover: true, expected_lease_id: target }, crypto.randomUUID());
+      try { await client.acquire(config.classroom, { ...body, confirm_takeover: true, expected_lease_id: target }, crypto.randomUUID()); throw new Error('stale CAS succeeded'); }
+      catch (error) { if (error.code !== 'LEASE_CONFLICT' || error.conflictId !== taken.id) throw error; }
+    }, config);
+    await page.evaluate(async config => {
+      const client = new window.pr05b.CaptureClient({ csrf: window.captureOriginal.csrf });
+      const old = window.captureOriginal.lease;
+      try {
+        await client.command(config.classroom, 'renew', { capture_epoch_id: old.capture_epoch_id, fence_token: old.fence_token,
+          last_local_seq: 0, last_sample: 0, client_monotonic_ms: 1 }, crypto.randomUUID());
+        throw new Error('old device renewed after takeover');
+      } catch (error) { if (error.code !== 'STALE_FENCE') throw error; }
+    }, config);
+  } finally { await otherContext.close(); }
+  steps.push('two_independent_native_logins_discover_conflict_id_explicit_takeover_and_old_fence_rejected');
   const cookie = (await context.cookies()).find(item => item.name === '__Host-classroom_session');
   if (!cookie?.secure || !cookie.httpOnly) throw new Error('secure cookie missing');
   const eventsCloseCode = await page.evaluate(async () => {
