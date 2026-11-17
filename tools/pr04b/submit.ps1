@@ -6,13 +6,16 @@ param(
     [ValidateSet('probe','targeted','full')][string]$Mode = 'targeted',
     [string]$Python = 'C:\Users\Mumao\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe',
     [string]$BrokerRoot = 'J:\class-assistant\worktrees\web-pr03b-sessions',
-    [int]$TimeoutSeconds = 1800
+    [int]$TimeoutSeconds = 1800,
+    # Pinned validation wheels prepared for PR-07b; needed by the complete suite only.
+    [string]$ValidationWheelhouse = 'J:\class-assistant\worktrees\web-pr07b-summary-versions\work\pr07b\validation-wheels'
 )
 $ErrorActionPreference = 'Stop'
 $tag = 'pr04b-' + [DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss') + '-' + [Guid]::NewGuid().ToString('N').Substring(0,8)
 $broker = Join-Path $BrokerRoot 'work\pr03b\vmware-broker'
 $payload = Join-Path $broker $tag
-& $Python -B (Join-Path $PSScriptRoot 'prepare_payload.py') $payload
+if ($Mode -eq 'full') { & $Python -B (Join-Path $PSScriptRoot 'prepare_payload.py') $payload $ValidationWheelhouse }
+else { & $Python -B (Join-Path $PSScriptRoot 'prepare_payload.py') $payload }
 if ($LASTEXITCODE -ne 0) { throw 'source preparation failed' }
 $hash = (Get-FileHash (Join-Path $payload 'source.zip')).Hash.ToLowerInvariant()
 $script = Join-Path $broker "scripts\$tag.ps1"

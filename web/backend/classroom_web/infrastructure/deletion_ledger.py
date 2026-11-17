@@ -9,11 +9,16 @@ Readers trust neither a cached head nor a listing alone: the chain is read from
 generation 1, every link is verified, and any key listed beyond the first missing
 generation is treated as corruption. A store that does not enforce create-only
 writes is rejected when the adapter is constructed.
+
+Loss of the newest entries leaves a shorter chain that is still internally valid.
+Nothing inside this store can reveal that, so ``verify_head`` compares the chain with
+a head witness (generation and entry hash) that the operator recorded elsewhere.
 """
 import hashlib
 import json
 import re
 import threading
+import time
 from urllib.parse import urlsplit
 from uuid import uuid4
 
@@ -34,8 +39,12 @@ def _status(error):
 
 
 class S3DeletionLedger:
+    # Longest a single store call may take under a caller's deadline; callers reserve this much.
+    CONNECT_SECONDS, READ_SECONDS = 1, 1.5
+    call_seconds = CONNECT_SECONDS + READ_SECONDS
+
     def __init__(self, *, endpoint: str, bucket: str, region: str, access_key: str,
-                 secret_key: str, synthetic_loopback=False, max_entry_bytes=4096):
+                 secret_key: str, synthetic_loopback=False, max_entry_bytes=262144):
         parsed = urlsplit(endpoint)
         local = synthetic_loopback and parsed.scheme == 'http' and parsed.hostname == '127.0.0.1'
         if (not (local or parsed.scheme == 'https') or not parsed.netloc
@@ -45,12 +54,18 @@ class S3DeletionLedger:
             raise ValueError('explicit independent ledger configuration required')
         self.endpoint, self.bucket, self.max_entry_bytes = endpoint.rstrip('/'), bucket, max_entry_bytes
         # Explicit credentials only; one attempt per call so a retry is always our decision.
-        self.client = boto3.client('s3', endpoint_url=endpoint, region_name=region,
-            aws_access_key_id=access_key, aws_secret_access_key=secret_key,
-            config=Config(signature_version='s3v4', connect_timeout=2, read_timeout=5,
-                          retries={'total_max_attempts': 1}, s3={'addressing_style': 'path'},
-                          request_checksum_calculation='when_required', response_checksum_validation='when_required'))
+        def connect(connect_timeout, read_timeout):
+            return boto3.client('s3', endpoint_url=endpoint, region_name=region,
+                aws_access_key_id=access_key, aws_secret_access_key=secret_key,
+                config=Config(signature_version='s3v4', connect_timeout=connect_timeout, read_timeout=read_timeout,
+                              retries={'total_max_attempts': 1}, s3={'addressing_style': 'path'},
+                              request_checksum_calculation='when_required', response_checksum_validation='when_required'))
+        self.client = connect(2, 5)
+        # Used only while a caller's deadline is set: a slow store is then treated as
+        # unavailable soon enough for the caller to still revoke access locally.
+        self._bounded = connect(self.CONNECT_SECONDS, self.READ_SECONDS)
         self._lock = threading.Lock()
+        self._local = threading.local()
         self._chain: list[LedgerEntry] = []
         self._by_intent: dict = {}
         self._verify_private()
@@ -99,9 +114,19 @@ class S3DeletionLedger:
     def _name(generation):
         return f'{PREFIX}{generation:020d}.json'
 
+    def _store(self):
+        """The client for the next chain call. No call starts once the caller's deadline is reached."""
+        deadline = getattr(self._local, 'deadline', None)
+        if deadline is None:
+            return self.client
+        if time.monotonic() >= deadline:
+            raise LedgerUnavailable('ledger time budget exhausted')
+        return self._bounded
+
     def _get(self, generation):
+        store = self._store()
         try:
-            with self.client.get_object(Bucket=self.bucket, Key=self._name(generation))['Body'] as stream:
+            with store.get_object(Bucket=self.bucket, Key=self._name(generation))['Body'] as stream:
                 raw = stream.read(self.max_entry_bytes + 1)
         except ClientError as error:
             if _status(error) == 404:
@@ -129,7 +154,7 @@ class S3DeletionLedger:
         highest, count, token = 0, 0, {}
         try:
             while True:
-                reply = self.client.list_objects_v2(Bucket=self.bucket, Prefix=PREFIX, **token)
+                reply = self._store().list_objects_v2(Bucket=self.bucket, Prefix=PREFIX, **token)
                 for item in reply.get('Contents', []):
                     match = _KEY.fullmatch(item['Key'])
                     if match is None:
@@ -171,35 +196,73 @@ class S3DeletionLedger:
             self._chain, self._by_intent = chain, by_intent
         return list(chain)
 
-    def append(self, intent: DeletionIntent) -> int:
-        """Return the generation holding this intent, appending it if it is new.
+    def head(self):
+        """(generation, entry hash) of the verified chain; (0, GENESIS) when it is empty.
 
-        The generation is returned only after the stored bytes were read back.
+        Record it outside this store with every backup: it is the only evidence that
+        can later show the ledger itself lost its newest entries.
+        """
+        chain = self.entries()
+        return (len(chain), chain[-1].entry_hash) if chain else (0, GENESIS)
+
+    def verify_head(self, witness):
+        """Fail unless the chain still contains the witnessed head."""
+        try:
+            generation, entry_hash = witness
+            if type(generation) is not int or generation < 0 or not re.fullmatch(r'[0-9a-f]{64}', entry_hash):
+                raise ValueError()
+        except (TypeError, ValueError):
+            raise ValueError('a ledger head witness is (generation, entry hash)') from None
+        chain = self.entries()
+        found = GENESIS if generation == 0 else chain[generation - 1].entry_hash if generation <= len(chain) else None
+        if found != entry_hash:
+            raise LedgerCorrupt('ledger is shorter than or differs from its witnessed head')
+        return chain
+
+    def append(self, intent: DeletionIntent, *, deadline: float | None = None) -> LedgerEntry:
+        """Return the entry holding this intent, appending it if it is new.
+
+        The entry is returned only after the stored bytes were read back. ``deadline``
+        is a ``time.monotonic()`` instant after which no further store call is started.
         """
         if not isinstance(intent, DeletionIntent):
             raise TypeError('a deletion intent is required')
         with self._lock:
-            for _ in range(32):
-                self._extend(self._chain, self._by_intent)
-                known = self._by_intent.get(intent.intent_id)
-                if known is not None:
-                    if known.intent != intent:
-                        raise LedgerConflict('intent identity recorded with different content')
-                    return known.generation
-                generation = len(self._chain) + 1
-                raw = canonical(dict(v=1, generation=generation, intent=intent.record(),
-                                     previous=self._chain[-1].entry_hash if self._chain else GENESIS))
-                try:
-                    self.client.put_object(Bucket=self.bucket, Key=self._name(generation), Body=raw,
-                                           ContentLength=len(raw), IfNoneMatch='*')
-                except ClientError as error:
-                    if _status(error) == 412:
-                        continue  # another writer took this generation; re-read and append after it
-                    raise LedgerUnavailable('ledger append failed') from None
-                except BotoCoreError:
-                    # The write may or may not have landed. The caller retries with the
-                    # same intent, and the next read of the chain settles which it was.
-                    raise LedgerUnavailable('ledger append outcome unknown') from None
-                if self._get(generation) != raw:
-                    raise LedgerUnavailable('ledger append could not be confirmed')
-            raise LedgerUnavailable('ledger head contention')
+            self._local.deadline = deadline
+            try:
+                return self._append(intent)
+            finally:
+                self._local.deadline = None
+
+    def _append(self, intent):
+        for _ in range(32):
+            self._extend(self._chain, self._by_intent)
+            known = self._by_intent.get(intent.intent_id)
+            if known is not None:
+                if known.intent.identity() != intent.identity():
+                    raise LedgerConflict('intent identity recorded with different content')
+                # The cached entry is evidence only while the store still holds it.
+                raw = self._get(known.generation)
+                if raw is None or hashlib.sha256(raw).hexdigest() != known.entry_hash:
+                    raise LedgerCorrupt('ledger history changed')
+                return known
+            generation = len(self._chain) + 1
+            raw = canonical(dict(v=1, generation=generation, intent=intent.record(),
+                                 previous=self._chain[-1].entry_hash if self._chain else GENESIS))
+            if len(raw) > self.max_entry_bytes:
+                raise ValueError('deletion intent exceeds the ledger entry bound')
+            store = self._store()
+            try:
+                store.put_object(Bucket=self.bucket, Key=self._name(generation), Body=raw,
+                                       ContentLength=len(raw), IfNoneMatch='*')
+            except ClientError as error:
+                if _status(error) == 412:
+                    continue  # another writer took this generation; re-read and append after it
+                raise LedgerUnavailable('ledger append failed') from None
+            except BotoCoreError:
+                # The write may or may not have landed. The caller retries with the
+                # same intent, and the next read of the chain settles which it was.
+                raise LedgerUnavailable('ledger append outcome unknown') from None
+            if self._get(generation) != raw:
+                raise LedgerUnavailable('ledger append could not be confirmed')
+        raise LedgerUnavailable('ledger head contention')

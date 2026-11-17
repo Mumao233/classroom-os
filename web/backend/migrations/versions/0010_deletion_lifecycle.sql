@@ -82,6 +82,9 @@ CREATE TABLE deletion_executions (
     leased_by text CHECK (leased_by IS NULL OR char_length(leased_by) BETWEEN 1 AND 100),
     lease_expires_at timestamptz,
     attempt_count integer NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+    -- Every inventoried object is proven absent. For scopes that also hold database
+    -- content this is not completion: the request stays open until that content is erased.
+    objects_absent_at timestamptz,
     CONSTRAINT uq_deletion_execution_intent UNIQUE(owner_id,intent_id),
     CONSTRAINT uq_deletion_execution_generation UNIQUE(ledger_generation),
     FOREIGN KEY(owner_id,request_id) REFERENCES deletion_requests(owner_id,id) ON DELETE RESTRICT,
@@ -517,6 +520,7 @@ BEGIN
     FROM public.deletion_executions x
     JOIN public.deletion_requests d ON d.owner_id = x.owner_id AND d.id = x.request_id
     WHERE d.state IN ('pending','failed') AND x.ledger_generation IS NOT NULL
+      AND x.objects_absent_at IS NULL
       AND x.not_before <= clock_timestamp()
       AND (x.lease_expires_at IS NULL OR x.lease_expires_at <= clock_timestamp())
     ORDER BY x.not_before, x.request_id LIMIT 1 FOR UPDATE OF x SKIP LOCKED;
@@ -597,6 +601,21 @@ BEGIN
           revision = u.revision + 1, updated_at = n
         WHERE u.id = e.owner_id AND u.state = 'erasing';
     END IF;
+    IF r.scope_type NOT IN ('audio','media_asset') THEN
+      -- A classroom, course, semester or account also holds database content
+      -- (transcripts, provider output, materials, questions, review documents). This
+      -- package erases objects only, so the request is not reported as deleted: it
+      -- stays pending, access stays revoked, and the worker no longer claims it.
+      UPDATE public.deletion_requests d SET state = 'pending', last_error_code = NULL
+        WHERE d.owner_id = e.owner_id AND d.id = request;
+      UPDATE public.deletion_executions x SET lease_token = x.lease_token + 1, leased_by = NULL,
+          lease_expires_at = NULL, objects_absent_at = n, revision = x.revision + 1, updated_at = n
+        WHERE x.request_id = request;
+      IF r.state <> 'pending' THEN
+        PERFORM public.classroom_web_deletion_event(e.owner_id, r.scope_type, r.scope_id, request, 'pending');
+      END IF;
+      RETURN 'objects_absent';
+    END IF;
     UPDATE public.deletion_requests d SET state = 'complete', completed_at = n, last_error_code = NULL
       WHERE d.owner_id = e.owner_id AND d.id = request;
     UPDATE public.deletion_executions x SET lease_token = x.lease_token + 1, leased_by = NULL,
@@ -668,6 +687,9 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
               WHERE s.owner_id = a.owner_id AND s.id = a.class_session_id))),
     'unaccepted_requests', (SELECT count(*) FROM public.deletion_executions x WHERE x.ledger_generation IS NULL),
     'open_requests', (SELECT count(*) FROM public.deletion_requests d WHERE d.state <> 'complete'),
+    'content_erasure_outstanding', (SELECT count(*) FROM public.deletion_executions x
+      JOIN public.deletion_requests d ON d.owner_id = x.owner_id AND d.id = x.request_id
+      WHERE x.objects_absent_at IS NOT NULL AND d.state <> 'complete'),
     'failed_requests', (SELECT count(*) FROM public.deletion_requests d WHERE d.state = 'failed'),
     'erasing_accounts', (SELECT count(*) FROM public.users u WHERE u.state = 'erasing'))
 $fn$;
@@ -691,6 +713,27 @@ BEGIN
 END
 $fn$;
 
+-- Restore only: accounts the operator attests lost access after the backup was taken.
+-- The independent ledger does not journal account disablement, so the restored copy
+-- cannot know them; an unknown or already inactive identifier is counted, not an error.
+CREATE FUNCTION classroom_web_restore_block(targets uuid[]) RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
+DECLARE target record; blocked integer := 0; n timestamptz := clock_timestamp();
+BEGIN
+  IF targets IS NULL OR cardinality(targets) > 10000 THEN
+    RAISE EXCEPTION 'invalid account list' USING ERRCODE = '22023';
+  END IF;
+  FOR target IN SELECT u.id FROM public.users u WHERE u.id = ANY(targets) AND u.state = 'active'
+      ORDER BY u.id FOR UPDATE LOOP
+    UPDATE public.users u SET state = 'disabled', security_epoch = u.security_epoch + 1,
+        revision = u.revision + 1, updated_at = n WHERE u.id = target.id;
+    PERFORM identity_api.revoke_derived(target.id);
+    blocked := blocked + 1;
+  END LOOP;
+  RETURN jsonb_build_object('requested', cardinality(targets), 'blocked', blocked);
+END
+$fn$;
+
 -- 7. Function ownership and EXECUTE grants ---------------------------------------
 GRANT CREATE ON SCHEMA public TO classroom_web_eraser;
 DO $functions$
@@ -704,7 +747,7 @@ BEGIN
         'classroom_web_deletion_inventory','classroom_web_record_deletion','classroom_web_finish_deletion',
         'classroom_web_deletion_ledger_state','classroom_web_object_key_state','classroom_web_deletion_audit',
         'classroom_web_owner_state',
-        'classroom_web_restore_seal') LOOP
+        'classroom_web_restore_seal','classroom_web_restore_block') LOOP
     EXECUTE format('ALTER FUNCTION %s OWNER TO classroom_web_eraser', item.signature);
     EXECUTE format('REVOKE ALL ON FUNCTION %s FROM PUBLIC, classroom_web_runtime, classroom_web_deletion_worker, classroom_web_restore_operator', item.signature);
   END LOOP;
@@ -717,5 +760,5 @@ GRANT EXECUTE ON FUNCTION classroom_web_expire_media(jsonb), classroom_web_expir
   classroom_web_record_deletion(uuid, bigint, uuid, text, text), classroom_web_finish_deletion(uuid, bigint, integer),
   classroom_web_deletion_ledger_state(), classroom_web_object_key_state(text), classroom_web_deletion_audit(),
   classroom_web_owner_state(uuid) TO classroom_web_deletion_worker;
-GRANT EXECUTE ON FUNCTION classroom_web_restore_seal(), classroom_web_deletion_audit(),
+GRANT EXECUTE ON FUNCTION classroom_web_restore_seal(), classroom_web_restore_block(uuid[]), classroom_web_deletion_audit(),
   classroom_web_deletion_ledger_state() TO classroom_web_restore_operator;

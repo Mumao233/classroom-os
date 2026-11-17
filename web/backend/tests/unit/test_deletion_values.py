@@ -4,7 +4,7 @@ from uuid import uuid4
 
 import pytest
 
-from classroom_web.domain.deletion import (DeletionIntent, DeletionPolicy, canonical, deletion_dto)
+from classroom_web.domain.deletion import (MAX_MEMBERS, DeletionIntent, DeletionPolicy, canonical, deletion_dto)
 
 
 def test_policy_has_no_retention_default_and_rejects_unbounded_values():
@@ -31,7 +31,7 @@ def test_one_intent_per_owner_and_scope_and_no_content_in_the_record():
     assert first.intent_id != DeletionIntent.for_scope(owner, 'audio', scope).intent_id
     assert first.intent_id != DeletionIntent.for_scope(uuid4(), 'class_session', scope).intent_id
     assert first.intent_id.version == 4 and first.request_id.version == 4
-    assert set(first.record()) == {'intent_id', 'request_id', 'owner_id', 'scope_type', 'scope_id', 'origin'}
+    assert set(first.record()) == {'intent_id', 'request_id', 'owner_id', 'scope_type', 'scope_id', 'origin', 'members'}
     assert DeletionIntent.from_record(first.record()) == first
 
 
@@ -47,6 +47,25 @@ def test_forged_or_malformed_intents_are_rejected():
     with pytest.raises(ValueError):
         DeletionIntent.for_scope(owner, 'account', scope)
     assert DeletionIntent.for_scope(owner, 'account', owner).scope_id == owner
+
+
+def test_cascade_members_are_recorded_evidence_and_not_identity():
+    owner, scope = uuid4(), uuid4()
+    rooms = sorted((uuid4() for _ in range(3)), key=str)
+    plain = DeletionIntent.for_scope(owner, 'course', scope)
+    listed = DeletionIntent.for_scope(owner, 'course', scope, members=[rooms[2], rooms[0], rooms[1], rooms[0]])
+    assert listed.members == tuple(rooms) and plain.members == ()
+    # Same intent and request whatever the membership was; the records still differ.
+    assert listed.identity() == plain.identity() and listed != plain
+    assert DeletionIntent.from_record(listed.record()) == listed
+    assert listed.record()['members'] == [str(room) for room in rooms]
+    with pytest.raises(ValueError):
+        DeletionIntent.for_scope(owner, 'class_session', scope, members=rooms)
+    with pytest.raises(ValueError):
+        DeletionIntent.for_scope(owner, 'semester', scope, members=[uuid4() for _ in range(MAX_MEMBERS + 1)])
+    for members in (None, 'x', [1], [str(rooms[1]), str(rooms[0])], [str(rooms[0]), str(rooms[0])], ['not-a-uuid']):
+        with pytest.raises(ValueError):
+            DeletionIntent.from_record({**plain.record(), 'members': members})
 
 
 def test_canonical_encoding_is_stable():

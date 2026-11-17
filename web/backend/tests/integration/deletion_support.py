@@ -8,6 +8,9 @@ from datetime import timedelta
 import json
 import os
 from pathlib import Path
+import socket
+import threading
+import time
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -30,7 +33,7 @@ from classroom_web.infrastructure.object_store import S3ObjectStore
 from classroom_web.test_support import SYNTHETIC_PASSWORD
 
 __all__ = ['BASE', 'PASSWORD', 'POLICY', 'SECRET_KEY', 'auth', 'login', 'pg', 'services', 'deploy', 'd',
-           'contract', 'build', 'rows', 'one', 'object_key', 'versions', 'as_user', 'new_user', 'classroom']
+           'contract', 'build', 'rows', 'one', 'object_key', 'versions', 'as_user', 'new_user', 'classroom', 'settled']
 
 SECRET_KEY = b'pr04b-synthetic-confirmation-key-0001'
 # No waiting in ordinary tests; the settle window has its own test with a real delay.
@@ -76,9 +79,58 @@ def object_store(services, bucket):
                          access_key=ACCESS, secret_key=SECRET, synthetic_loopback=True)
 
 
-def ledger_store(services, bucket):
-    return S3DeletionLedger(endpoint=services.ledger.endpoint, bucket=bucket, region=REGION,
+def ledger_store(services, bucket, endpoint=None):
+    return S3DeletionLedger(endpoint=endpoint or services.ledger.endpoint, bucket=bucket, region=REGION,
                             access_key=ACCESS, secret_key=SECRET, synthetic_loopback=True)
+
+
+class StallProxy:
+    """Loopback TCP relay to a real store. While ``stalled`` it keeps every peer
+    connected and relays nothing: the store has accepted the connection and is silent."""
+    def __init__(self, endpoint):
+        self.target = int(endpoint.rsplit(':', 1)[1])
+        self.stalled = self.closed = False
+        self.sockets = []
+        self.listener = socket.create_server(('127.0.0.1', 0))
+        self.endpoint = f'http://127.0.0.1:{self.listener.getsockname()[1]}'
+        threading.Thread(target=self._accept, daemon=True).start()
+
+    def _accept(self):
+        while True:
+            try:
+                client, _ = self.listener.accept()
+                upstream = socket.create_connection(('127.0.0.1', self.target))
+            except OSError:
+                return
+            self.sockets += [client, upstream]
+            for source, sink in ((client, upstream), (upstream, client)):
+                threading.Thread(target=self._relay, args=(source, sink), daemon=True).start()
+
+    def _relay(self, source, sink):
+        try:
+            while True:
+                data = source.recv(65536)
+                if not data:
+                    break
+                while self.stalled and not self.closed:
+                    time.sleep(0.05)
+                sink.sendall(data)
+        except OSError:
+            pass
+        finally:
+            for item in (source, sink):
+                try:
+                    item.close()
+                except OSError:
+                    pass
+
+    def close(self):
+        self.closed = True
+        for item in [self.listener, *self.sockets]:
+            try:
+                item.close()
+            except OSError:
+                pass
 
 
 @pytest.fixture(scope='module')
@@ -151,6 +203,19 @@ def one(m, sql, **parameters):
     found = rows(m, sql, **parameters)
     assert len(found) == 1, found
     return found[0]
+
+
+def settled(m, deletion_id):
+    """Every inventoried object is proven absent and the worker has let go of the request.
+
+    For a classroom, course, semester or account that is not completion: database content
+    is not erased by this package, so the request must still be open, not reported deleted.
+    """
+    row = one(m, """SELECT d.state,d.completed_at,d.last_error_code,x.objects_absent_at,x.leased_by FROM deletion_requests d
+        JOIN deletion_executions x ON x.request_id=d.id WHERE d.id=:id""", id=deletion_id)
+    open_items = rows(m, "SELECT 1 FROM deletion_assets WHERE request_id=:id AND state<>'absent'", id=deletion_id)
+    return (row['state'] == 'pending' and row['completed_at'] is None and row['last_error_code'] is None
+            and row['objects_absent_at'] is not None and row['leased_by'] is None and open_items == [])
 
 
 def object_key(m, asset_id):

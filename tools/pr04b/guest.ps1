@@ -29,6 +29,16 @@ $env:TEMP = "$root\work\pr04b"; $env:TMP = $env:TEMP
 Set-Location $root
 & $python -I -B -m pip check
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+$wheels = @($manifest.validation_wheels_sha256.PSObject.Properties)
+if ($wheels.Count) {
+    foreach ($wheel in $wheels) {
+        if ((Get-FileHash -LiteralPath "$share\validation-wheels\$($wheel.Name)").Hash.ToLowerInvariant() -ne $wheel.Value) { throw 'Validation wheel hash mismatch' }
+    }
+    $env:PIP_CACHE_DIR = "$root\work\pr04b\pip-cache"
+    & $python -I -X utf8 -B -m pip install --disable-pip-version-check --no-index --find-links "$share\validation-wheels" --target "$root\work\pr04b\validation-deps" -r automation/validation-requirements.txt > "$root\outputs\pr04b\validation-deps.log"
+    if ($LASTEXITCODE -ne 0) { Get-Content "$root\outputs\pr04b\validation-deps.log" -Tail 20; exit $LASTEXITCODE }
+    $env:PR04B_VALIDATION_DEPS = "$root\work\pr04b\validation-deps"
+}
 & $python -I -B "$root\tools\pr04b\run_guest.py" $TestMode
 $code = $LASTEXITCODE
 Compress-Archive -Path "$root\outputs\pr04b" -DestinationPath "$root\evidence.zip"

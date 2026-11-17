@@ -1,9 +1,10 @@
 """Deletion acceptance, physical erasure, ledger reconciliation and restore.
 
-Order of a user deletion: authorize and check the confirmed version, record the intent
-in the independent ledger, then revoke access and persist the inventory in one database
-transaction. ``202`` is returned only after both exist. If the ledger cannot accept the
-intent, access is still revoked locally and the caller receives a retryable ``503``.
+A user deletion is one database transaction: reserve the idempotency key, lock the
+target with its descendants and media, check the confirmed version and extent, record
+the intent in the independent ledger, then revoke access and persist the inventory.
+``202`` is returned only after both exist. If the ledger cannot accept the intent in
+time, access is still revoked locally and the caller receives a retryable ``503``.
 The same idempotent application step serves the request path, crash recovery and the
 replay that follows a backup restore.
 """
@@ -13,6 +14,7 @@ from datetime import timedelta
 import hashlib
 import hmac
 import json
+import time
 from uuid import UUID
 
 from sqlalchemy.exc import DBAPIError
@@ -25,6 +27,7 @@ from ..domain.deletion import (CATALOG_SCOPES, Clock, DeletionIntent, DeletionPo
 from ..domain.identity import AuthorizationDenied
 from ..domain.media import ObjectUnavailable
 from ..domain.tasks import IdempotencyMismatch
+from ..infrastructure.auth_deadlines import remaining
 from ..infrastructure.deletion_repository import PgDeletionRepository
 
 # path -> (scope, {method: operationId}); account deletion is deliberately absent.
@@ -54,6 +57,9 @@ def identifier(value):
 
 
 class DeletionService:
+    # Kept back from the request deadline for the revocation that follows the ledger call.
+    REVOCATION_RESERVE = 1.0
+
     def __init__(self, *, auth, database, queue, store, ledger, confirmation_secret: bytes,
                  policy: DeletionPolicy | None = None, clock: Clock | None = None):
         if not isinstance(confirmation_secret, bytes) or len(confirmation_secret) < 32:
@@ -135,38 +141,54 @@ class DeletionService:
             if body.get('destination_id') is not None:
                 raise AuthRejected('VALIDATION_FAILED', 422)
         digest = hashlib.sha256(canonical(dict(scope_type=scope_type, scope_id=str(scope), body=body))).hexdigest()
+        accepted = True
         with self.transaction(ctx, write=True) as (repo, principal):
+            # Held to the end of the transaction: a concurrent request with this key
+            # waits here and then meets the stored receipt, so it can never reach the
+            # ledger with another target.
             receipt = repo.tx.receipts.lock_and_get(operation, key, digest)
             if receipt:
                 return deletion_dto(repo.request(receipt['resource_id']))
             intent = DeletionIntent.for_scope(principal.user_id, scope_type, scope)
+            repo.lock(intent)
             existing = repo.request(intent.request_id)
-            if existing is None:
-                impact = repo.impact(scope_type, scope)
-                if impact['revision'] != body['base_revision']:
-                    raise AuthRejected('REVISION_CONFLICT', 409)
-                self._confirm(principal, scope_type, scope, impact, body['confirmation_token'])
-            elif existing['ledger_generation'] is not None:
+            if existing is not None and existing['ledger_generation'] is not None:
                 # A repeated deletion of the same object returns the one existing request.
                 repo.remember(operation, key, digest, intent.request_id)
                 return deletion_dto(existing)
-        try:
-            generation = self.ledger.append(intent)
-        except LedgerUnavailable:
-            # Not durably accepted. Deny access locally now; the client retries the same key.
-            with self.transaction(ctx, write=True) as (repo, _):
+            if existing is None:
+                # The locks taken here are kept across the ledger call, so what the
+                # user confirmed is exactly what is revoked below.
+                impact = repo.impact(scope_type, scope, lock=True)
+                if impact['revision'] != body['base_revision']:
+                    raise AuthRejected('REVISION_CONFLICT', 409)
+                self._confirm(principal, scope_type, scope, impact, body['confirmation_token'])
+            try:
+                intent = DeletionIntent.for_scope(principal.user_id, scope_type, scope,
+                                                  members=repo.members(scope_type, scope))
+            except ValueError:
+                raise AuthRejected('VALIDATION_FAILED', 422) from None
+            left = remaining()
+            deadline = None if left is None else (time.monotonic() + left - self.REVOCATION_RESERVE
+                                                  - getattr(self.ledger, 'call_seconds', 0))
+            try:
+                entry = self.ledger.append(intent, deadline=deadline)
+            except LedgerUnavailable:
+                entry = None
+            except (LedgerCorrupt, LedgerConflict):
+                self.ready = False
+                raise AuthRejected('STORAGE_UNAVAILABLE', 503) from None
+            if entry is None:
+                # Not durably accepted. Deny access locally now, in this same
+                # transaction; the client retries the same key.
                 repo.apply(intent, None, self.settle_seconds)
-            raise AuthRejected('STORAGE_UNAVAILABLE', 503) from None
-        except (LedgerCorrupt, LedgerConflict):
-            self.ready = False
-            raise AuthRejected('STORAGE_UNAVAILABLE', 503) from None
-        with self.transaction(ctx, write=True) as (repo, _):
-            receipt = repo.tx.receipts.lock_and_get(operation, key, digest)
-            if receipt:
-                return deletion_dto(repo.request(receipt['resource_id']))
-            row = repo.apply(intent, generation, self.settle_seconds)
-            repo.remember(operation, key, digest, intent.request_id)
-            return deletion_dto(row)
+                accepted = False
+            else:
+                row = repo.apply(entry.intent, entry.generation, self.settle_seconds)
+                repo.remember(operation, key, digest, intent.request_id)
+        if not accepted:
+            raise AuthRejected('STORAGE_UNAVAILABLE', 503)
+        return deletion_dto(row)
 
     def status(self, ctx, deletion_id):
         with self.transaction(ctx) as (repo, _):
@@ -208,7 +230,7 @@ class DeletionService:
         if not isinstance(owner, OwnerContext):
             raise TypeError('an authenticated OwnerContext is required')
         intent = DeletionIntent.for_scope(owner.owner_id, 'account', owner.owner_id)
-        generation = self.ledger.append(intent)
+        generation = self.ledger.append(intent).generation
         try:
             self._apply(intent, generation)
         except InactiveOwner:
@@ -218,22 +240,25 @@ class DeletionService:
                 raise
         return intent.request_id
 
-    def reconcile(self):
+    def reconcile(self, *, witness=None, admit=True):
         """Verify the ledger from its first entry and apply every intent the database lacks.
 
         Covers a crash between ledger append and database commit, requests the ledger
         had not yet accepted, and a database restored from a backup. Any unreadable,
-        broken or contradicting state leaves the service closed.
+        broken or contradicting state leaves the service closed. ``witness`` is a head
+        recorded outside the ledger store; with it a ledger that lost its newest entries
+        is refused. ``admit=False`` never opens the service, whatever the outcome.
         """
         self.ready = False
-        entries = self.ledger.entries()
+        entries = self.ledger.entries() if witness is None else self.ledger.verify_head(witness)
         recorded = {entry.intent.intent_id: entry for entry in entries}
         local = {row['intent_id']: row for row in self.queue.ledger_state()}
         for row in local.values():
             entry = recorded.get(row['intent_id'])
             if row['ledger_generation'] is not None and (entry is None or entry.generation != row['ledger_generation']):
                 raise LedgerCorrupt('local deletion state is ahead of or contradicts the ledger')
-        report = dict(head=len(entries), applied=[], accepted=[], covered=[], unresolved=[])
+        report = dict(head=len(entries), head_hash=entries[-1].entry_hash if entries else None,
+                      applied=[], accepted=[], covered=[], unresolved=[])
         for entry in entries:
             row = local.get(entry.intent.intent_id)
             if row is not None and row['ledger_generation'] == entry.generation:
@@ -252,17 +277,28 @@ class DeletionService:
                     report['unresolved'].append(dict(generation=entry.generation, reason='InactiveOwner'))
             except DBAPIError as error:
                 report['unresolved'].append(dict(generation=entry.generation, reason=type(error).__name__))
-        for row in local.values():
+        # Read again: replay may have revoked classrooms that a cascade covered but this
+        # copy held elsewhere; like requests the ledger never accepted, they need a position.
+        for row in self.queue.ledger_state():
             if row['ledger_generation'] is None and row['intent_id'] not in recorded:
                 # Access was revoked while the ledger was unavailable; complete the acceptance.
-                intent = DeletionIntent.for_scope(row['owner_id'], row['scope_type'], row['scope_id'], row['origin'])
                 try:
-                    generation = self.ledger.append(intent)
-                    self._apply(intent, generation)
-                    report['accepted'].append(generation)
-                except (InactiveOwner, DBAPIError) as error:
+                    if row['origin'] == 'expiry':
+                        entry = self.ledger.append(DeletionIntent.for_scope(
+                            row['owner_id'], row['scope_type'], row['scope_id'], 'expiry'))
+                        self._apply(entry.intent, entry.generation)
+                    else:
+                        with self.database.transaction(OwnerContext(row['owner_id'])) as tx:
+                            repo = PgDeletionRepository(tx, row['owner_id'])
+                            entry = self.ledger.append(DeletionIntent.for_scope(
+                                row['owner_id'], row['scope_type'], row['scope_id'], row['origin'],
+                                members=repo.members(row['scope_type'], row['scope_id'])))
+                            repo.apply(entry.intent, entry.generation, self.settle_seconds)
+                    report['accepted'].append(entry.generation)
+                except (InactiveOwner, DBAPIError, ValueError) as error:
                     report['unresolved'].append(dict(generation=None, reason=type(error).__name__))
-        self.ready = not report['unresolved']
+        if admit:
+            self.ready = not report['unresolved']
         return report
 
     def expire_due(self, batch=50, rounds=20):
@@ -273,7 +309,7 @@ class DeletionService:
             for owner_id, asset_id in due:
                 intent = DeletionIntent.for_scope(owner_id, 'media_asset', asset_id, 'expiry')
                 try:
-                    generation = self.ledger.append(intent)
+                    generation = self.ledger.append(intent).generation
                 except LedgerUnavailable:
                     # Reads are already refused by the deadline. Revoke locally now;
                     # reconcile() completes the acceptance before any physical work.
@@ -360,16 +396,24 @@ class RestoreCoordinator:
     def __init__(self, *, service: DeletionService, operator, worker: DeletionWorker):
         self.service, self.operator, self.worker = service, operator, worker
 
-    def run(self, *, purge_unreferenced=False):
+    def run(self, *, ledger_witness, revoked_owners, purge_unreferenced=False):
+        """``ledger_witness`` is the ledger head (generation, entry hash) recorded outside
+        the ledger store; ``revoked_owners`` are the accounts that lost access after the
+        backup was taken. Both are required: the restored copy and the ledger cannot
+        supply them, so the operator states them explicitly, even when the list is empty.
+        The service is admitted only by the last line, after every step succeeded.
+        """
         service = self.service
         service.ready = False
+        revoked = list(revoked_owners)
         report = {}
-        # 1. The live ledger must be readable and intact before anything else.
-        report['ledger_head'] = len(service.ledger.entries())
+        # 1. The live ledger must be readable, intact and at least as long as its witness.
+        report['ledger_head'] = len(service.ledger.verify_head(ledger_witness))
         # 2. Every session, challenge and proof in the copy predates the incident.
         report['seal'] = self.operator.seal()
+        report['blocked'] = self.operator.block(revoked)
         # 3. Replay deletions and revocations recorded after the backup.
-        report['reconcile'] = service.reconcile()
+        report['reconcile'] = service.reconcile(witness=ledger_witness, admit=False)
         # 4. Deadlines are evaluated against the present, not the backup time.
         report['expired'] = service.expire_due()
         # 5. Objects whose manifests are deleted or (only on request) missing.
@@ -377,9 +421,10 @@ class RestoreCoordinator:
         # 6. Physical erasure that is already due.
         report['drained'] = self.worker.drain()
         report['audit'] = self.operator.audit()
-        service.ready = report['ready'] = bool(service.ready and report['audit']['exposed_media'] == 0
-                                               and report['audit']['unaccepted_requests'] == 0
-                                               and report['orphans']['failed'] == 0)
+        report['ready'] = bool(not report['reconcile']['unresolved'] and report['audit']['exposed_media'] == 0
+                               and report['audit']['unaccepted_requests'] == 0
+                               and report['orphans']['failed'] == 0)
+        service.ready = report['ready']
         return report
 
 

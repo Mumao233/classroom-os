@@ -13,6 +13,8 @@ CATALOG_SCOPES = ('semester', 'course', 'class_session')
 MEDIA_SCOPES = ('media_asset', 'audio')
 SCOPES = CATALOG_SCOPES + MEDIA_SCOPES + ('account',)
 ORIGINS = ('user', 'expiry')
+# Upper bound on the classrooms one cascade may name; larger cascades are refused.
+MAX_MEMBERS = 5000
 DTO_STATES = {'access_revoked': 'access_revoked', 'pending': 'pending_delete',
               'failed': 'delete_failed', 'complete': 'deleted'}
 
@@ -81,9 +83,16 @@ class DeletionIntent:
     scope_type: str
     scope_id: UUID
     origin: str
+    # Classrooms a course or semester cascade covered when it was accepted. A restored
+    # copy may hold them under another parent, so replay cannot derive them again.
+    members: tuple = ()
 
     def __post_init__(self):
         if (self.scope_type not in SCOPES or self.origin not in ORIGINS
+                or type(self.members) is not tuple or len(self.members) > MAX_MEMBERS
+                or any(not isinstance(v, UUID) for v in self.members)
+                or list(self.members) != sorted(set(self.members), key=str)
+                or (self.members and self.scope_type not in ('course', 'semester'))
                 or any(not isinstance(v, UUID) for v in (self.intent_id, self.request_id, self.owner_id, self.scope_id))
                 or (self.scope_type == 'account' and self.scope_id != self.owner_id)
                 or self.intent_id != _derived('intent', self.owner_id, self.scope_type, self.scope_id)
@@ -91,22 +100,32 @@ class DeletionIntent:
             raise ValueError('invalid deletion intent')
 
     @classmethod
-    def for_scope(cls, owner_id: UUID, scope_type: str, scope_id: UUID, origin: str = 'user') -> 'DeletionIntent':
+    def for_scope(cls, owner_id: UUID, scope_type: str, scope_id: UUID, origin: str = 'user',
+                  members=()) -> 'DeletionIntent':
         # One intent per owner and scope: a repeated or concurrent deletion of the same
         # object, from any request key, maps to the same ledger entry and local request.
         intent_id = _derived('intent', owner_id, scope_type, scope_id)
-        return cls(intent_id, _derived('request', intent_id), owner_id, scope_type, scope_id, origin)
+        return cls(intent_id, _derived('request', intent_id), owner_id, scope_type, scope_id, origin,
+                   tuple(sorted(set(members), key=str)))
+
+    def identity(self) -> tuple:
+        """What makes two records the same intent; the member list is evidence, not identity."""
+        return (self.intent_id, self.request_id, self.owner_id, self.scope_type, self.scope_id, self.origin)
 
     def record(self) -> dict:
         return dict(intent_id=str(self.intent_id), request_id=str(self.request_id), owner_id=str(self.owner_id),
-                    scope_type=self.scope_type, scope_id=str(self.scope_id), origin=self.origin)
+                    scope_type=self.scope_type, scope_id=str(self.scope_id), origin=self.origin,
+                    members=[str(member) for member in self.members])
 
     @classmethod
     def from_record(cls, value: dict) -> 'DeletionIntent':
-        if not isinstance(value, dict) or set(value) != {'intent_id', 'request_id', 'owner_id', 'scope_type', 'scope_id', 'origin'}:
+        if (not isinstance(value, dict)
+                or set(value) != {'intent_id', 'request_id', 'owner_id', 'scope_type', 'scope_id', 'origin', 'members'}
+                or not isinstance(value['members'], list) or any(not isinstance(item, str) for item in value['members'])):
             raise ValueError('invalid deletion intent record')
         return cls(UUID(value['intent_id']), UUID(value['request_id']), UUID(value['owner_id']),
-                   value['scope_type'], UUID(value['scope_id']), value['origin'])
+                   value['scope_type'], UUID(value['scope_id']), value['origin'],
+                   tuple(UUID(item) for item in value['members']))
 
 
 @dataclass(frozen=True)
@@ -118,7 +137,7 @@ class LedgerEntry:
 
 class DeletionLedger(Protocol):
     """Append-only journal in a fault domain separate from the database and media."""
-    def append(self, intent: DeletionIntent) -> int: ...
+    def append(self, intent: DeletionIntent, *, deadline: float | None = None) -> LedgerEntry: ...
     def entries(self) -> list[LedgerEntry]: ...
 
 

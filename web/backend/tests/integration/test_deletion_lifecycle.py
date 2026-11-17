@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 from pathlib import Path
+import threading
 import time
 from types import SimpleNamespace
 from uuid import UUID, uuid4
@@ -13,7 +14,7 @@ import pytest
 import sqlalchemy as sa
 
 from deletion_support import *  # noqa: F401,F403  (fixtures and helpers)
-from deletion_support import POLICY, build, ledger_store, object_store
+from deletion_support import POLICY, StallProxy, build, ledger_store, object_store
 from test_private_media import CONTENT, access, available, create, headers, put
 from classroom_web.application.deletion import DeletionWorker
 from classroom_web.domain.auth import AuthRejected
@@ -57,6 +58,12 @@ def status(m, deletion_id):
     reply = m.client.get(BASE + f'/deletions/{deletion_id}')
     assert reply.status_code == 200, reply.text
     return reply.json()
+
+
+def finished(m, deletion_id):
+    """Objects are gone and the request honestly stays open (see ``settled``)."""
+    shown = status(m, deletion_id)
+    return settled(m, deletion_id) and shown['state'] == 'pending_delete' and shown['physical_completed_at'] is None
 
 
 def events(m, deletion_id):
@@ -115,7 +122,7 @@ def test_schema_matches_frozen_inventory_and_roles_are_narrow(d):
                       'UPDATE deletion_executions SET ledger_generation=999999',
                       "INSERT INTO deletion_executions(request_id,owner_id,intent_id,origin,settle_until,not_before) VALUES(gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),'user',now(),now())",
                       "SELECT * FROM classroom_web_claim_deletion('intruder',30)",
-                      'SELECT classroom_web_restore_seal()',
+                      'SELECT classroom_web_restore_seal()', 'SELECT classroom_web_restore_block(ARRAY[]::uuid[])',
                       "SELECT classroom_web_revoke_media_impl('{}'::jsonb)",
                       'DELETE FROM deletion_requests', "INSERT INTO retention_policies(version,media_kind,max_lifetime,approval_reference,synthetic) VALUES('fake-policy','slide','1 day','none',true)"):
         with pytest.raises(sa.exc.DBAPIError):
@@ -125,7 +132,8 @@ def test_schema_matches_frozen_inventory_and_roles_are_narrow(d):
     with m.deploy.queue.engine.connect() as c:
         for statement in ('SELECT * FROM media_assets', 'SELECT * FROM users', 'SELECT * FROM deletion_requests',
                           'SELECT * FROM class_sessions', "SELECT classroom_web_owner_revoke_media('{}'::jsonb)",
-                          'SELECT classroom_web_restore_seal()', 'SELECT classroom_web_seal_account(gen_random_uuid())'):
+                          'SELECT classroom_web_restore_seal()', 'SELECT classroom_web_restore_block(ARRAY[]::uuid[])',
+                          'SELECT classroom_web_seal_account(gen_random_uuid())'):
             with pytest.raises(sa.exc.DBAPIError):
                 c.execute(sa.text(statement))
             c.rollback()
@@ -189,16 +197,19 @@ def test_class_session_delete_revokes_first_then_erases_every_version(d):
     assert preview(m, 'class_session', m.classroom.id).status_code == 410
     assert m.worker.drain() >= 1
     final = status(m, deletion['id'])
-    assert final['state'] == 'deleted' and final['physical_completed_at'] and final['revision'] > deletion['revision']
+    # Not reported as deleted: the classroom's database content is outside this package.
+    assert finished(m, deletion['id']) and final['revision'] > deletion['revision']
+    assert m.deploy.queue.audit()['content_erasure_outstanding'] >= 1
+    assert m.worker.run_once() is False
     for stored in keys:
         assert versions(m, stored) == [] and m.store.inspect(stored) is None
     assert all(asset_state(m, i)['status'] == 'deleted' and asset_state(m, i)['deleted_at']
                for i in (asset['id'], staged['asset_id'], empty['asset_id']))
     assert all(item['state'] == 'absent' and item['confirmed_absent_at'] for item in
                rows(m, 'SELECT state,confirmed_absent_at FROM deletion_assets WHERE request_id=:id', id=deletion['id']))
-    assert events(m, deletion['id']) == ['pending_delete', 'deleted']
+    assert events(m, deletion['id']) == ['pending_delete']
     assert len(rows(m, "SELECT 1 FROM deletion_requests WHERE owner_id=:o AND scope_id=:s", o=m.uid, s=m.classroom.id)) == 1
-    assert submit(m, 'class_session', m.classroom.id, shown, key).json()['state'] == 'deleted'
+    assert submit(m, 'class_session', m.classroom.id, shown, key).json()['state'] == 'pending_delete'
     assert m.client.get(path).status_code == 410
     assert 'ticket=' not in json.dumps(list(m.client.app.state.errors), default=str)
 
@@ -261,8 +272,8 @@ def test_concurrent_and_repeated_deletes_of_one_object_are_one_request(d):
     workers = [DeletionWorker(queue=m.deploy.queue, store=m.store, policy=POLICY, worker_id=f'racer-{i}') for i in range(4)]
     with ThreadPoolExecutor(4) as pool:
         list(pool.map(lambda w: w.drain(), workers))
-    assert status(m, deletion_id)['state'] == 'deleted'
-    assert events(m, deletion_id) == ['pending_delete', 'deleted']
+    assert finished(m, deletion_id)
+    assert events(m, deletion_id) == ['pending_delete']
     assert versions(m, object_key(m, asset['id'])) == []
 
 
@@ -292,13 +303,13 @@ def test_course_and_semester_cascades_cover_every_descendant(d):
             tx.catalog.move_class_session(second.id, second.revision, kept_course.id)
     assert m.client.get(access(m, kept_asset)).content == kept_data
     m.worker.drain()
-    assert status(m, done['id'])['state'] == 'deleted'
+    assert finished(m, done['id'])
     assert asset_state(m, kept_asset['id'])['status'] == 'committed'
     whole = delete(m, 'semester', m.semester.id)
     assert asset_state(m, kept_asset['id'])['status'] == 'delete_pending'
     assert m.client.post(BASE + f'/media/{kept_asset["id"]}/access', json={}, headers=headers(m)).status_code == 410
     m.worker.drain()
-    assert status(m, whole['id'])['state'] == 'deleted'
+    assert finished(m, whole['id'])
     assert versions(m, object_key(m, kept_asset['id'])) == []
     # A sibling semester of the same owner is untouched.
     assert m.client.get(access(m, far_asset)).content == far_data
@@ -342,7 +353,7 @@ def test_other_owner_cannot_see_request_or_affect_deletion(d):
     assert asset_state(m, theirs['id'])['status'] == 'committed'
     assert versions(m, object_key(m, mine['id'])) == []
     as_user(m, owner_email)
-    assert status(m, done['id'])['state'] == 'deleted'
+    assert finished(m, done['id'])
 
 
 def test_ledger_outage_denies_access_locally_and_is_not_an_accepted_deletion(d):
@@ -384,7 +395,7 @@ def test_ledger_outage_denies_access_locally_and_is_not_an_accepted_deletion(d):
     assert retried.json()['state'] == 'pending_delete'
     assert events(m, request['id']) == ['access_revoked', 'pending_delete']
     m.worker.drain()
-    assert status(m, request['id'])['state'] == 'deleted'
+    assert finished(m, request['id'])
     assert versions(m, object_key(m, first_asset['id'])) == [] and versions(m, object_key(m, second_asset['id'])) == []
 
 
@@ -416,7 +427,7 @@ def test_crash_after_ledger_append_is_replayed_into_the_database(d, monkeypatch)
     retried = submit(m, 'class_session', m.classroom.id, shown, key)
     assert retried.status_code == 202 and retried.json()['id'] == str(request['id'])
     m.worker.drain()
-    assert status(m, request['id'])['state'] == 'deleted'
+    assert finished(m, request['id'])
 
 
 def test_storage_outage_fails_closed_keeps_access_revoked_and_retries(d):
@@ -445,9 +456,9 @@ def test_storage_outage_fails_closed_keeps_access_revoked_and_retries(d):
         m.deploy.services.media.start()
     m.worker.drain()
     final = status(m, done['id'])
-    assert final['state'] == 'deleted' and final['failure_code'] is None
+    assert finished(m, done['id']) and final['failure_code'] is None
     assert versions(m, object_key(m, first['id'])) == [] and versions(m, object_key(m, second['id'])) == []
-    assert events(m, done['id']) == ['pending_delete', 'delete_failed', 'deleted']
+    assert events(m, done['id']) == ['pending_delete', 'delete_failed', 'pending_delete']
     assert asset_state(m, second['id'])['status'] == 'deleted'
 
 
@@ -479,16 +490,11 @@ def test_worker_crash_is_resumed_and_a_stale_worker_is_fenced(d):
     assert one(m, 'SELECT state FROM deletion_assets WHERE id=:id', id=items[1][0])['state'] == 'pending'
     m.store.erase(items[1][1])
     queue.record(successor, items[1][0], 'absent')
-    assert queue.finish(successor, 0) == 'complete'
+    assert queue.finish(successor, 0) == 'objects_absent'
     with pytest.raises(StaleDeletionFence):
         queue.finish(successor, 0)
-    assert status(m, done['id'])['state'] == 'deleted'
-    assert events(m, done['id']) == ['pending_delete', 'deleted']
-    # A completed request cannot be reopened, even by the migration identity.
-    with pytest.raises(sa.exc.DBAPIError):
-        with m.pg.admin.begin() as c:
-            c.execute(sa.text("SELECT set_config('app.owner_id',:o,true)"), dict(o=str(m.uid)))
-            c.execute(sa.text("UPDATE deletion_requests SET state='pending',completed_at=NULL WHERE id=:id"), dict(id=done['id']))
+    assert finished(m, done['id'])
+    assert events(m, done['id']) == ['pending_delete']
     assert all(asset_state(m, a['id'])['status'] == 'deleted' for a in (first, second))
 
 
@@ -524,7 +530,7 @@ def test_settle_window_delays_erasure_and_removes_a_late_write(d):
     assert m.store.inspect(late_key) is not None
     time.sleep(4.2)
     slow.worker.drain()
-    assert status(m, done['id'])['state'] == 'deleted'
+    assert finished(m, done['id'])
     assert versions(m, late_key) == [] and m.store.inspect(late_key) is None
 
 
@@ -534,7 +540,7 @@ def test_orphan_sweep_removes_revived_objects_and_never_guesses(d):
     gone, _ = upload(m, marker='gone')
     done = delete(m, 'class_session', m.classroom.id)
     m.worker.drain()
-    assert status(m, done['id'])['state'] == 'deleted'
+    assert finished(m, done['id'])
     revived_key = object_key(m, gone['id'])
     room = classroom(m, 'Live synthetic classroom')
     live, live_data = upload(m, room)
@@ -544,16 +550,25 @@ def test_orphan_sweep_removes_revived_objects_and_never_guesses(d):
     unreferenced = f'media/{uuid4().hex}/{uuid4().hex}/' + 'a' * 64
     m.store.client.put_object(Bucket=m.store.bucket, Key=unreferenced, Body=b'unreferenced-synthetic')
     m.store.client.put_object(Bucket=m.store.bucket, Key='media/not-generated.txt', Body=b'foreign-synthetic')
+    # An unreferenced key whose latest version is a delete marker: a plain listing no
+    # longer shows it, yet its bytes are still stored as an older version.
+    hidden = f'media/{uuid4().hex}/{uuid4().hex}/' + 'c' * 64
+    m.store.client.put_object(Bucket=m.store.bucket, Key=hidden, Body=b'hidden-synthetic')
+    m.store.client.delete_object(Bucket=m.store.bucket, Key=hidden)
+    assert len(versions(m, hidden)) == 2
+    assert hidden not in [item['Key'] for item in m.store.client.list_objects_v2(Bucket=m.store.bucket, Prefix=hidden).get('Contents', [])]
+    listed = [key for key, _ in m.store.keys(hidden[:-1], 10)]
+    assert hidden in listed and all(key > hidden[:-1] for key in listed) and listed == sorted(set(listed))
     report = m.deletion.sweep_orphans()
     assert report['revived_removed'] == 1 and versions(m, revived_key) == []
     # Without the explicit switch an unreferenced object is counted and left in place.
-    assert report['unreferenced'] >= 2 and report['unreferenced_removed'] == 0
-    assert m.store.inspect(unreferenced) is not None
+    assert report['unreferenced'] >= 3 and report['unreferenced_removed'] == 0
+    assert m.store.inspect(unreferenced) is not None and len(versions(m, hidden)) == 2
     assert m.deletion.sweep_orphans(purge_unreferenced=True, grace=timedelta(days=1))['unreferenced_removed'] == 0
     assert m.store.inspect(unreferenced) is not None
     purged = m.deletion.sweep_orphans(purge_unreferenced=True, grace=timedelta(0))
     assert purged['unreferenced_removed'] >= 1 and purged['foreign'] >= 1 and purged['failed'] == 0
-    assert versions(m, unreferenced) == []
+    assert versions(m, unreferenced) == [] and versions(m, hidden) == []
     assert m.store.client.get_object(Bucket=m.store.bucket, Key='media/not-generated.txt')['Body'].read() == b'foreign-synthetic'
     # Live and pending manifests are never candidates.
     assert m.client.get(access(m, live)).content == live_data
@@ -654,7 +669,7 @@ def test_retention_needs_an_approved_policy_and_audio_commit_stays_closed(d):
     finally:
         done = delete(m, 'class_session', m.classroom.id)
         m.worker.drain()
-        assert status(m, done['id'])['state'] == 'deleted'
+        assert finished(m, done['id'])
 
 
 def test_audio_scope_deletes_only_audio_and_keeps_the_classroom(d):
@@ -676,7 +691,13 @@ def test_audio_scope_deletes_only_audio_and_keeps_the_classroom(d):
     assert done['scope_type'] == 'audio'
     assert all(asset_state(m, i)['status'] == 'delete_pending' for i in audio_ids)
     m.worker.drain()
-    assert status(m, done['id'])['state'] == 'deleted'
+    assert status(m, done['id'])['state'] == 'deleted' and status(m, done['id'])['physical_completed_at']
+    assert events(m, done['id']) == ['pending_delete', 'deleted']
+    # A completed request cannot be reopened, even by the migration identity.
+    with pytest.raises(sa.exc.DBAPIError):
+        with m.pg.admin.begin() as c:
+            c.execute(sa.text("SELECT set_config('app.owner_id',:o,true)"), dict(o=str(m.uid)))
+            c.execute(sa.text("UPDATE deletion_requests SET state='pending',completed_at=NULL WHERE id=:id"), dict(id=done['id']))
     assert all(versions(m, key) == [] for key in audio_keys)
     # The classroom, its slide and its text survive an audio deletion.
     with m.pg.db.transaction(OwnerContext(m.uid)) as tx:
@@ -733,7 +754,7 @@ def test_account_erasure_port_seals_revokes_and_scrubs_identity(d):
     assert erased['state'] == 'erased' and erased['deleted_at'] is not None
     assert erased['normalized_email'] is None and erased['password_hash'] is None and erased['email_verified_at'] is None
     assert erased['profile'] == {} and erased['preferences'] == {}
-    assert one(m, 'SELECT state FROM deletion_requests WHERE id=:r', r=request_id)['state'] == 'complete'
+    assert settled(m, request_id)
     assert versions(m, key) == []
     assert m.deploy.queue.audit()['erasing_accounts'] == 0
 
@@ -751,13 +772,13 @@ def test_ledger_chain_is_create_only_contended_safely_and_tamper_evident(deploy)
     writers = [ledger_store(services, bucket) for _ in range(4)]
     intents = [DeletionIntent.for_scope(uuid4(), 'class_session', uuid4()) for _ in range(12)]
     with ThreadPoolExecutor(8) as pool:
-        generations = list(pool.map(lambda pair: writers[pair[0] % 4].append(pair[1]), enumerate(intents * 2)))
+        generations = list(pool.map(lambda pair: writers[pair[0] % 4].append(pair[1]).generation, enumerate(intents * 2)))
     # Contending writers never overwrite each other: 12 intents, 12 distinct contiguous positions.
     assert sorted(set(generations)) == list(range(1, 13))
     assert generations[:12] == generations[12:] or sorted(generations[:12]) == sorted(generations[12:])
     chain = ledger_store(services, bucket).entries()
     assert [e.generation for e in chain] == list(range(1, 13)) and {e.intent for e in chain} == set(intents)
-    assert writers[0].append(intents[3]) == next(e.generation for e in chain if e.intent == intents[3])
+    assert writers[0].append(intents[3]) == next(e for e in chain if e.intent == intents[3])
     listed = client.list_objects_v2(Bucket=bucket, Prefix='ledger/v1/')['Contents']
     assert len(listed) == 12
     body = client.get_object(Bucket=bucket, Key=listed[0]['Key'])['Body'].read()
@@ -786,9 +807,25 @@ def test_ledger_chain_is_create_only_contended_safely_and_tamper_evident(deploy)
     writer = ledger_store(services, bucket)
     for intent in intents[:3]:
         writer.append(intent)
+    witness = writer.head()
+    assert witness[0] == 3 and writer.verify_head(witness) and writer.verify_head((0, '0' * 64))
     client.delete_object(Bucket=bucket, Key='ledger/v1/00000000000000000003.json')
     with pytest.raises(LedgerCorrupt):
         writer.entries()
+    # The writer does not hand out the position of an entry the store no longer holds.
+    with pytest.raises(LedgerCorrupt):
+        writer.append(intents[2])
+    # A reader that never saw the lost entry finds a shorter chain that is valid in itself;
+    # only a head witness kept outside the store exposes the loss.
+    fresh = ledger_store(services, bucket)
+    assert len(fresh.entries()) == 2
+    with pytest.raises(LedgerCorrupt):
+        fresh.verify_head(witness)
+    with pytest.raises(LedgerCorrupt):
+        fresh.verify_head((2, witness[1]))
+    for malformed in (None, (1,), ('1', witness[1]), (-1, witness[1]), (1, 'not-a-hash')):
+        with pytest.raises(ValueError):
+            fresh.verify_head(malformed)
     # Foreign objects in the ledger prefix, and an unreachable store, keep it closed.
     client.put_object(Bucket=bucket, Key='ledger/v1/unexpected', Body=b'x')
     with pytest.raises(LedgerCorrupt):
@@ -826,3 +863,97 @@ def test_service_stays_closed_until_reconciled_and_when_the_ledger_is_behind(d):
                         ledger=SimpleNamespace(bucket=m.store.bucket, endpoint=m.deploy.services.media.endpoint),
                         confirmation_secret=b'x' * 32)
     m.worker.drain()
+
+
+def test_confirmed_version_and_idempotency_key_are_held_across_the_ledger_append(d):
+    m = d
+    upload(m)
+    with m.pg.db.transaction(OwnerContext(m.uid)) as tx:
+        elsewhere = tx.catalog.create_course(m.semester.id, 'Another synthetic course')
+    other_room = classroom(m, 'Second synthetic classroom')
+    other_asset, other_data = upload(m, other_room, 'other')
+    shown, other = preview(m, 'class_session', m.classroom.id).json(), preview(m, 'class_session', other_room.id).json()
+    key = str(uuid4())
+    ledger, seen = m.deletion.ledger, {}
+    real = ledger.append
+
+    def move():
+        try:
+            with m.pg.db.transaction(OwnerContext(m.uid)) as tx:
+                tx.catalog.move_class_session(m.classroom.id, m.classroom.revision, elsewhere.id)
+            seen['move'] = 'moved'
+        except Exception as error:  # noqa: BLE001  (the outcome is asserted below)
+            seen['move'] = type(error).__name__
+
+    with ThreadPoolExecutor(2) as pool:
+        def during_append(intent, **options):
+            # The intent is on its way to the ledger. Now: an edit of the confirmed
+            # classroom, and a second request reusing the key for another classroom.
+            if 'mover' not in seen:
+                seen['mover'] = pool.submit(move)
+                seen['rival'] = pool.submit(submit, m, 'class_session', other_room.id, other, key)
+                time.sleep(0.4)
+                seen['waiting'] = not seen['mover'].done() and not seen['rival'].done()
+            return real(intent, **options)
+
+        ledger.append = during_append
+        try:
+            accepted = submit(m, 'class_session', m.classroom.id, shown, key)
+        finally:
+            del ledger.append
+        seen['mover'].result(15)
+        rival = seen['rival'].result(15)
+    assert accepted.status_code == 202, accepted.text
+    # Both waited for the deletion to commit instead of slipping in beside it.
+    assert seen['waiting'] is True
+    # The edit met the revoked classroom; what was deleted is the confirmed version.
+    assert seen['move'] == 'Gone'
+    tombstone = one(m, 'SELECT deleted_revision FROM deletion_tombstones WHERE owner_id=:o AND resource_id=:r', o=m.uid, r=m.classroom.id)
+    assert tombstone['deleted_revision'] == shown['revision'] + 1
+    assert one(m, 'SELECT course_id FROM class_sessions WHERE id=:id', id=m.classroom.id)['course_id'] == m.course.id
+    # The reused key was refused before anything about its target was recorded anywhere.
+    assert rival.status_code == 409 and rival.json()['error']['code'] == 'IDEMPOTENCY_MISMATCH'
+    refused = DeletionIntent.for_scope(m.uid, 'class_session', other_room.id)
+    assert [e for e in ledger.entries() if e.intent.intent_id == refused.intent_id] == []
+    assert rows(m, 'SELECT 1 FROM deletion_requests WHERE owner_id=:o AND scope_id=:s', o=m.uid, s=other_room.id) == []
+    # So neither crash recovery nor a restore can ever delete it on the refused request's behalf.
+    report = m.deletion.reconcile()
+    assert report['applied'] == [] and report['accepted'] == [] and m.deletion.ready
+    assert m.client.get(access(m, other_asset)).content == other_data
+    assert asset_state(m, other_asset['id'])['status'] == 'committed'
+    m.worker.drain()
+
+
+def test_stalled_ledger_still_revokes_locally_within_the_request_deadline(d):
+    m = d
+    asset, _ = upload(m)
+    proxy = StallProxy(m.deploy.services.ledger.endpoint)
+    try:
+        slow = build(m.a, m.deploy, m.spool, ledger=ledger_store(m.deploy.services, m.deploy.ledger_bucket, proxy.endpoint))
+        with TestClient(slow.app, base_url='https://testserver', cookies=m.client.cookies) as client:
+            original, m.client = m.client, client
+            try:
+                shown = preview(m, 'class_session', m.classroom.id).json()
+                # The ledger store keeps accepting connections and answers nothing.
+                proxy.stalled = True
+                started = time.monotonic()
+                refused = submit(m, 'class_session', m.classroom.id, shown, str(uuid4()))
+                elapsed = time.monotonic() - started
+            finally:
+                m.client = original
+        assert refused.status_code == 503 and refused.json()['error']['code'] == 'STORAGE_UNAVAILABLE', refused.text
+        assert 1 <= elapsed < 5
+        # Not accepted, but access is already denied: the revocation was not lost to the deadline.
+        request = one(m, """SELECT d.id,d.state,x.ledger_generation FROM deletion_requests d
+            JOIN deletion_executions x ON x.request_id=d.id WHERE d.owner_id=:o AND d.scope_id=:s""", o=m.uid, s=m.classroom.id)
+        assert request['state'] == 'access_revoked' and request['ledger_generation'] is None
+        assert m.client.post(BASE + f'/media/{asset["id"]}/access', json={}, headers=headers(m)).status_code == 410
+        intent = DeletionIntent.for_scope(m.uid, 'class_session', m.classroom.id)
+        proxy.stalled = False
+        assert [e for e in m.deploy.ledger.entries() if e.intent.intent_id == intent.intent_id] == []
+    finally:
+        proxy.close()
+    report = m.deletion.reconcile()
+    assert len(report['accepted']) == 1 and report['unresolved'] == [] and m.deletion.ready
+    m.worker.drain()
+    assert finished(m, request['id'])

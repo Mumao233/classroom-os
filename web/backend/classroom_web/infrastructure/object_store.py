@@ -154,11 +154,24 @@ class S3ObjectStore:
     def keys(self, after=None, limit=500):
         if not 1 <= limit <= 1000 or (after is not None and not after.startswith('media/')):
             raise ValueError('invalid object listing bounds')
-        params = dict(Bucket=self.bucket, Prefix='media/', MaxKeys=limit)
-        if after:
-            params['StartAfter'] = after
+        # Listed by version: a key whose latest version is a delete marker still
+        # holds older bytes and never appears in a plain object listing.
+        found, marker = {}, dict(KeyMarker=after) if after else {}
         try:
-            reply = self.client.list_objects_v2(**params)
-            return [(item['Key'], item['LastModified']) for item in reply.get('Contents', [])]
+            while True:
+                remaining()
+                reply = self.client.list_object_versions(Bucket=self.bucket, Prefix='media/', MaxKeys=limit, **marker)
+                for group in ('Versions', 'DeleteMarkers'):
+                    for item in reply.get(group, []):
+                        known = found.get(item['Key'])
+                        found[item['Key']] = item['LastModified'] if known is None else max(known, item['LastModified'])
+                if not reply.get('IsTruncated') or len(found) > limit:
+                    break
+                marker = dict(KeyMarker=reply['NextKeyMarker'])
+                if reply.get('NextVersionIdMarker'):
+                    marker['VersionIdMarker'] = reply['NextVersionIdMarker']
+            # The last key of a truncated page may be incomplete; the caller resumes after
+            # the final key returned, and erase() enumerates every version of a key itself.
+            return sorted(found.items())[:limit]
         except (ClientError, BotoCoreError, KeyError):
             raise ObjectUnavailable('object listing failed') from None

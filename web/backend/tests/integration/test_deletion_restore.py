@@ -12,12 +12,13 @@ import sqlalchemy as sa
 
 from deletion_support import *  # noqa: F401,F403  (fixtures and helpers)
 from deletion_support import POLICY, build, ledger_store
-from test_deletion_lifecycle import delete, preview, status, upload
+from test_deletion_lifecycle import delete, finished, preview, status, upload
 from test_private_media import access, headers
 from classroom_web.application.auth import AuthService
 from classroom_web.application.deletion import DeletionWorker, RestoreCoordinator
-from classroom_web.domain.data import Gone, OwnerContext
-from classroom_web.domain.deletion import LedgerCorrupt, StaleDeletionFence
+from classroom_web.domain.data import Gone, InactiveOwner, OwnerContext
+from classroom_web.domain.deletion import DeletionIntent, LedgerCorrupt, StaleDeletionFence
+from classroom_web.domain.media import ObjectUnavailable
 from classroom_web.infrastructure.auth_admission import HashAdmission
 from classroom_web.infrastructure.auth_repository import PgAuthRepository
 from classroom_web.infrastructure.database import Database
@@ -101,14 +102,18 @@ def test_restored_copy_replays_deletions_revokes_sessions_and_never_revives(d, t
         other_room = tx.catalog.create_class_session(tx.catalog.create_course(other_semester.id, 'Other course').id, 'Other classroom')
     other_asset, other_data = upload(m, other_room, 'other-owner')
     as_user(m, owner_email)
+    # An account that is active in the backup and loses access afterwards.
+    barred = new_user(m)
     old_cookie = m.client.cookies.get('__Host-classroom_session')
     dump = backup(m, tmp_path / 'backup.dump')
+    with m.pg.admin.begin() as c:
+        c.execute(sa.text("UPDATE users SET state='disabled' WHERE id=:id"), dict(id=barred.uid))
     # After the backup: deletions, a logout, and a new upload the copy will not know.
     erased = delete(m, 'class_session', rooms['erased'].id)
     with m.pg.admin.begin() as c:  # release the pre-backup lease so the live system can finish
         c.execute(sa.text("UPDATE deletion_executions SET lease_expires_at=clock_timestamp() WHERE request_id=:id"), dict(id=leased['id']))
     m.worker.drain()
-    assert status(m, erased['id'])['state'] == 'deleted' and versions(m, keys['erased']) == []
+    assert finished(m, erased['id']) and versions(m, keys['erased']) == []
     pending = delete(m, 'class_session', rooms['pending'].id)
     late, _ = upload(m, rooms['kept'], 'after-backup')
     late_key = object_key(m, late['id'])
@@ -132,9 +137,23 @@ def test_restored_copy_replays_deletions_revokes_sessions_and_never_revives(d, t
                 assert client.get(BASE + path).status_code == 503
         opened = restored.build(reconcile=False)
         worker = DeletionWorker(queue=restored.queue, store=m.store, policy=POLICY, worker_id='restore-drill')
-        head = len(m.deploy.ledger.entries())
-        report = RestoreCoordinator(service=opened.deletion, operator=restored.operator, worker=worker).run()
+        witness = m.deploy.ledger.head()
+        head = witness[0]
+        coordinator = RestoreCoordinator(service=opened.deletion, operator=restored.operator, worker=worker)
+        # The ledger head witness and the accounts revoked since the backup must be stated.
+        for incomplete in ({}, dict(ledger_witness=witness), dict(revoked_owners=[])):
+            with pytest.raises(TypeError):
+                coordinator.run(**incomplete)
+        assert opened.deletion.ready is False
+        assert restored.rows('SELECT state FROM users WHERE id=:id', id=barred.uid)[0]['state'] == 'active'
+        report = coordinator.run(ledger_witness=witness, revoked_owners=[barred.uid, uuid4()])
         assert report['ready'] is True and opened.deletion.ready, report
+        # The account disabled after the backup is not active again in the copy.
+        assert report['blocked'] == dict(requested=2, blocked=1)
+        assert restored.rows('SELECT state FROM users WHERE id=:id', id=barred.uid)[0]['state'] == 'disabled'
+        with pytest.raises(InactiveOwner):
+            with restored.db.transaction(OwnerContext(barred.uid)):
+                pass
         # The ledger was read at its live head; the expiry found during the restore was appended to it.
         assert report['ledger_head'] == head and len(m.deploy.ledger.entries()) == head + report['expired']
         assert report['seal']['accounts_sealed'] >= 1 and report['seal']['leases_cleared'] >= 1
@@ -187,7 +206,8 @@ def test_restored_copy_replays_deletions_revokes_sessions_and_never_revives(d, t
             assert client.get(BASE + f'/class-sessions/{rooms["kept"].id}/deletion-preview').status_code == 404
             restored.a.email = owner_email
         # Running the procedure again is harmless, and the explicit switch removes the unreferenced object.
-        again = RestoreCoordinator(service=opened.deletion, operator=restored.operator, worker=worker).run(purge_unreferenced=True)
+        again = coordinator.run(ledger_witness=m.deploy.ledger.head(), revoked_owners=[barred.uid], purge_unreferenced=True)
+        assert again['blocked'] == dict(requested=1, blocked=0)
         assert again['ready'] is True and again['reconcile']['applied'] == [] and again['orphans']['unreferenced_removed'] >= 1
         assert versions(m, late_key) == []
     finally:
@@ -195,7 +215,7 @@ def test_restored_copy_replays_deletions_revokes_sessions_and_never_revives(d, t
     # The original deployment still completes its own pending work.
     as_user(m, m.a.email)
     m.worker.drain()
-    assert status(m, pending['id'])['state'] == 'deleted'
+    assert finished(m, pending['id'])
 
 
 def test_restore_stays_closed_without_an_intact_ledger(d, tmp_path):
@@ -206,7 +226,7 @@ def test_restore_stays_closed_without_an_intact_ledger(d, tmp_path):
     upload(m, earlier_room, 'earlier')
     earlier = delete(m, 'class_session', earlier_room.id)
     m.worker.drain()
-    assert status(m, earlier['id'])['state'] == 'deleted'
+    assert finished(m, earlier['id'])
     dump = backup(m, tmp_path / 'backup.dump')
     done = delete(m, 'class_session', m.classroom.id)
     restored = Restored(m, dump)
@@ -221,31 +241,114 @@ def test_restore_stays_closed_without_an_intact_ledger(d, tmp_path):
             client.put_object(Bucket=copy, Key=item['Key'], Body=body)
         first = client.get_object(Bucket=copy, Key='ledger/v1/00000000000000000001.json')['Body'].read()
         client.put_object(Bucket=copy, Key='ledger/v1/00000000000000000001.json', Body=first[:-1] + b' }')
+        witness = m.deploy.ledger.head()
         tampered = restored.build(ledger=ledger_store(m.deploy.services, copy), reconcile=False)
         with pytest.raises(LedgerCorrupt):
-            RestoreCoordinator(service=tampered.deletion, operator=restored.operator, worker=worker).run()
+            RestoreCoordinator(service=tampered.deletion, operator=restored.operator, worker=worker).run(
+                ledger_witness=witness, revoked_owners=[])
         assert tampered.deletion.ready is False
         assert restored.rows('SELECT 1 FROM auth_sessions WHERE owner_id=:o AND revoked_at IS NULL', o=m.uid)
         with TestClient(tampered.app, base_url='https://testserver') as browser:
             assert browser.get(BASE + '/auth/csrf').status_code == 503
-        # A ledger that has lost history (here: an empty one) contradicts the deletions the copy
-        # already holds. The copy is sealed, never opened, and nothing recorded later is applied.
+        # A ledger that lost exactly the deletion made after the backup. Its chain is valid
+        # and agrees with the copy, so nothing inside the ledger or the database can tell;
+        # the witnessed head does, and the copy is refused before it is even sealed.
+        short = 'pr04b-short-' + uuid4().hex
+        client.create_bucket(Bucket=short)
+        for item in client.list_objects_v2(Bucket=m.deploy.ledger_bucket, Prefix='ledger/v1/')['Contents']:
+            if not item['Key'].endswith(f'{witness[0]:020d}.json'):
+                client.put_object(Bucket=short, Key=item['Key'],
+                                  Body=client.get_object(Bucket=m.deploy.ledger_bucket, Key=item['Key'])['Body'].read())
+        truncated = restored.build(ledger=ledger_store(m.deploy.services, short), reconcile=False)
+        assert len(truncated.deletion.ledger.entries()) == witness[0] - 1
+        with pytest.raises(LedgerCorrupt):
+            RestoreCoordinator(service=truncated.deletion, operator=restored.operator, worker=worker).run(
+                ledger_witness=witness, revoked_owners=[])
+        assert truncated.deletion.ready is False
+        assert restored.rows('SELECT 1 FROM auth_sessions WHERE owner_id=:o AND revoked_at IS NULL', o=m.uid)
+        # An empty ledger, stated as empty, contradicts the deletions the copy already
+        # holds. The copy is sealed, never opened, and nothing recorded later is applied.
         empty = 'pr04b-empty-' + uuid4().hex
         client.create_bucket(Bucket=empty)
         lost = restored.build(ledger=ledger_store(m.deploy.services, empty), reconcile=False)
         with pytest.raises(LedgerCorrupt):
-            RestoreCoordinator(service=lost.deletion, operator=restored.operator, worker=worker).run()
+            RestoreCoordinator(service=lost.deletion, operator=restored.operator, worker=worker).run(
+                ledger_witness=(0, '0' * 64), revoked_owners=[])
         assert lost.deletion.ready is False
+        assert restored.rows('SELECT 1 FROM auth_sessions WHERE owner_id=:o AND revoked_at IS NULL', o=m.uid) == []
         assert restored.rows('SELECT status FROM media_assets WHERE id=:id', id=asset['id'])[0]['status'] == 'committed'
         with TestClient(lost.app, base_url='https://testserver') as browser:
             assert browser.get(BASE + '/auth/csrf').status_code == 503
-        # With the intact ledger the same copy opens, and the post-backup deletion holds.
+        # A step after reconciliation fails (the media store is away): the gate stays closed.
         good = restored.build(reconcile=False)
-        report = RestoreCoordinator(service=good.deletion, operator=restored.operator, worker=worker).run()
+        coordinator = RestoreCoordinator(service=good.deletion, operator=restored.operator, worker=worker)
+        m.deploy.services.media.stop()
+        try:
+            with pytest.raises(ObjectUnavailable):
+                coordinator.run(ledger_witness=witness, revoked_owners=[])
+            assert good.deletion.ready is False
+            with TestClient(good.app, base_url='https://testserver') as browser:
+                assert browser.get(BASE + '/auth/csrf').status_code == 503
+        finally:
+            m.deploy.services.media.start()
+        # The post-backup deletion was already replayed by the failed run and holds.
+        assert restored.rows('SELECT access_revoked_at FROM media_assets WHERE id=:id', id=asset['id'])[0]['access_revoked_at'] is not None
+        # With the intact ledger and every step succeeding, the same copy opens.
+        report = RestoreCoordinator(service=restored.build(reconcile=False).deletion, operator=restored.operator,
+                                    worker=worker).run(ledger_witness=witness, revoked_owners=[])
         assert report['ready'] is True
         assert restored.rows('SELECT status FROM media_assets WHERE id=:id', id=asset['id'])[0]['status'] == 'deleted'
     finally:
         restored.close()
     as_user(m, m.a.email)
     m.worker.drain()
-    assert status(m, done['id'])['state'] == 'deleted'
+    assert finished(m, done['id'])
+
+
+def test_restore_revokes_a_classroom_moved_into_a_course_deleted_after_the_backup(d, tmp_path):
+    m = d
+    m.worker.drain()
+    moved = classroom(m, 'Moved after the backup')
+    asset, _ = upload(m, moved, 'moved')
+    stayed_asset, stayed_data = upload(m, marker='stayed')
+    key = object_key(m, asset['id'])
+    dump = backup(m, tmp_path / 'backup.dump')
+    # After the backup the classroom moves into a new course, and that course is deleted.
+    with m.pg.db.transaction(OwnerContext(m.uid)) as tx:
+        later = tx.catalog.create_course(m.semester.id, 'Created after the backup')
+        tx.catalog.move_class_session(moved.id, moved.revision, later.id)
+    done = delete(m, 'course', later.id)
+    entry = m.deploy.ledger.entries()[-1]
+    assert entry.intent.scope_id == later.id and entry.intent.members == (moved.id,)
+    witness = m.deploy.ledger.head()
+    restored = Restored(m, dump)
+    try:
+        # The copy knows neither the move nor the course: the classroom is live under its old parent.
+        assert restored.rows('SELECT course_id,deleted_at FROM class_sessions WHERE id=:id', id=moved.id) == [
+            dict(course_id=m.course.id, deleted_at=None)]
+        assert restored.rows('SELECT 1 FROM courses WHERE id=:id', id=later.id) == []
+        opened = restored.build(reconcile=False)
+        worker = DeletionWorker(queue=restored.queue, store=m.store, policy=POLICY, worker_id='restore-drill')
+        report = RestoreCoordinator(service=opened.deletion, operator=restored.operator, worker=worker).run(
+            ledger_witness=witness, revoked_owners=[])
+        assert report['ready'] is True, report
+        # The cascade's recorded members are revoked wherever the copy keeps them.
+        with pytest.raises(Gone):
+            with restored.db.transaction(OwnerContext(m.uid)) as tx:
+                tx.catalog.get_class_session(moved.id)
+        assert restored.rows('SELECT status FROM media_assets WHERE id=:id', id=asset['id'])[0]['status'] == 'deleted'
+        assert versions(m, key) == []
+        # It became a request of its own, and was given its own ledger position before opening.
+        own = DeletionIntent.for_scope(m.uid, 'class_session', moved.id)
+        assert len(report['reconcile']['accepted']) == 1 and report['audit']['unaccepted_requests'] == 0
+        assert [e.generation for e in m.deploy.ledger.entries() if e.intent == own] == report['reconcile']['accepted']
+        # The classroom that never left the old course is untouched.
+        with restored.db.transaction(OwnerContext(m.uid)) as tx:
+            assert tx.catalog.get_class_session(m.classroom.id).deleted_at is None
+        assert restored.rows('SELECT status FROM media_assets WHERE id=:id', id=stayed_asset['id'])[0]['status'] == 'committed'
+        assert m.store.client.get_object(Bucket=m.store.bucket, Key=object_key(m, stayed_asset['id']))['Body'].read() == stayed_data
+    finally:
+        restored.close()
+    as_user(m, m.a.email)
+    m.worker.drain()
+    assert finished(m, done['id'])

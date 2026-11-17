@@ -23,6 +23,9 @@ env.update(TEMP=str(run), TMP=str(run), PYTHONDONTWRITEBYTECODE='1', PYTHONUTF8=
            PYTEST_DISABLE_PLUGIN_AUTOLOAD='1', PR04B_DELETION_INTEGRATION='1',
            PR04B_OBJECT_ROOT=str(run / 'objects'), PR04B_PG_BIN=os.environ['PR04B_PG_BIN'])
 pgbin = Path(os.environ['PR04B_PG_BIN'])
+if os.environ.get('PR04B_VALIDATION_DEPS'):
+    # Pinned contract-validation packages, visible to the test process only.
+    env['PYTHONPATH'] = os.environ['PR04B_VALIDATION_DEPS']
 flags = subprocess.CREATE_NO_WINDOW
 commands = []
 REQUIRED = ['test_deletion_lifecycle', 'test_deletion_restore']
@@ -79,7 +82,7 @@ try:
         selected = ['tests']
     test = call([sys.executable, '-B', '-m', 'pytest', *selected, '-q', '-p', 'no:cacheprovider',
                  '--basetemp=' + str(run / 'pytest'), '--junitxml=' + str(OUTPUT / (tag + '.xml'))],
-                cwd=ROOT / 'web/backend', timeout=1500)
+                cwd=ROOT / 'web/backend', timeout=2100)
     cases = list(ET.parse(OUTPUT / (tag + '.xml')).iter('testcase'))
     required, observed = set(), set()
     for module in REQUIRED:

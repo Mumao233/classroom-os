@@ -23,7 +23,9 @@ _ROW = '''SELECT d.id,d.created_at,d.scope_type,d.scope_id,d.state,d.access_revo
 
 
 def _payload(intent: DeletionIntent, generation, settle_seconds):
-    return json.dumps(dict(intent.record(), generation=generation, settle_seconds=settle_seconds))
+    record = intent.record()
+    del record['members']  # ledger evidence; the database derives extent from its own rows
+    return json.dumps(dict(record, generation=generation, settle_seconds=settle_seconds))
 
 
 class PgDeletionRepository:
@@ -36,19 +38,50 @@ class PgDeletionRepository:
     def request(self, request_id):
         return self.execute(_ROW, id=request_id).mappings().one_or_none()
 
-    def impact(self, scope_type, scope_id):
-        """Current version and extent of a deletion; raises NotFound or Gone like any read."""
+    def lock(self, intent: DeletionIntent):
+        """Serialize every application of one intent for the rest of the transaction."""
+        self.execute('SELECT pg_advisory_xact_lock(hashtextextended(CAST(:name AS text),0))', name=f'deletion:{intent.intent_id}')
+
+    def members(self, scope_type, scope_id):
+        """Classrooms a cascade covers. Works on a tombstoned root, whose children cannot move."""
+        if scope_type == 'course':
+            where = 's.course_id=:scope'
+        elif scope_type == 'semester':
+            where = 's.course_id IN (SELECT c.id FROM courses c WHERE c.owner_id=:owner AND c.semester_id=:scope)'
+        else:
+            return ()
+        return tuple(self.execute(f'SELECT s.id FROM class_sessions s WHERE s.owner_id=:owner AND {where} ORDER BY s.id',
+                                  scope=scope_id).scalars())
+
+    def impact(self, scope_type, scope_id, *, lock=False):
+        """Current version and extent of a deletion; raises NotFound or Gone like any read.
+
+        With ``lock`` the target, its descendants and their media stay locked until the
+        transaction ends, so the confirmed version and extent are what gets revoked:
+        an edit, a move, a new classroom or a new upload has to wait.
+        """
         if scope_type == 'semester':
-            target = self.tx.catalog.get_semester(scope_id)
+            resource = Resource.SEMESTER
             sessions = '''s.course_id IN (SELECT c.id FROM courses c WHERE c.owner_id=:owner AND c.semester_id=:scope)'''
         elif scope_type == 'course':
-            target = self.tx.catalog.get_course(scope_id)
+            resource = Resource.COURSE
             sessions = 's.course_id=:scope'
         elif scope_type in ('class_session', 'audio'):
-            target = self.tx.catalog.get_class_session(scope_id)
+            resource = Resource.CLASS_SESSION
             sessions = 's.id=:scope'
         else:
             raise ValueError('scope has no preview')
+        target = self.tx.catalog._load(resource, scope_id, write=lock)
+        if lock:
+            # Ancestors before descendants, each level in identifier order.
+            if scope_type == 'semester':
+                self.execute('SELECT 1 FROM courses c WHERE c.owner_id=:owner AND c.semester_id=:scope ORDER BY c.id FOR UPDATE',
+                             scope=scope_id)
+            self.execute(f'SELECT 1 FROM class_sessions s WHERE s.owner_id=:owner AND {sessions} ORDER BY s.id FOR UPDATE',
+                         scope=scope_id)
+            self.execute(f'''SELECT 1 FROM media_assets a WHERE a.owner_id=:owner AND a.class_session_id IN
+                (SELECT s.id FROM class_sessions s WHERE s.owner_id=:owner AND {sessions}) ORDER BY a.id FOR UPDATE''',
+                scope=scope_id)
         count = 0 if scope_type == 'audio' else self.execute(
             f'SELECT count(*) FROM class_sessions s WHERE s.owner_id=:owner AND s.deleted_at IS NULL AND {sessions}',
             scope=scope_id).scalar_one()
@@ -68,7 +101,7 @@ class PgDeletionRepository:
         if intent.owner_id != self.owner_id:
             raise ValueError('deletion intent belongs to another owner')
         # Concurrent applications of one intent wait here and then observe the first.
-        self.execute('SELECT pg_advisory_xact_lock(hashtextextended(CAST(:name AS text),0))', name=f'deletion:{intent.intent_id}')
+        self.lock(intent)
         account = intent.scope_type == 'account'
         fresh = self.request(intent.request_id) is None
         if fresh and (account or intent.scope_type in CATALOG_SCOPES):
@@ -91,6 +124,17 @@ class PgDeletionRepository:
                                               request_id=intent.request_id)
         self.execute('SELECT classroom_web_owner_revoke_media(CAST(:intent AS jsonb))',
                      intent=_payload(intent, generation, settle_seconds))
+        if fresh:
+            for member in intent.members:
+                # A classroom the accepted cascade covered but this copy holds outside the
+                # tombstoned root (restored from before a move, or the root is not in the
+                # copy at all) is still readable here. Revoke it as its own request; it has
+                # no ledger position yet, so nothing opens until reconciliation records one.
+                try:
+                    self.tx.catalog._load(Resource.CLASS_SESSION, member, write=True)
+                except (NotFound, Gone):
+                    continue
+                self.apply(DeletionIntent.for_scope(self.owner_id, 'class_session', member), None, settle_seconds)
         row = self.request(intent.request_id)
         if account and fresh:
             # Last statement: the owner context loses all access from here on.
@@ -201,3 +245,7 @@ class PgRestoreOperator(_SystemIdentity):
 
     def seal(self):
         return self._call('SELECT classroom_web_restore_seal() AS sealed')[0]['sealed']
+
+    def block(self, owners):
+        return self._call('SELECT classroom_web_restore_block(CAST(:owners AS uuid[])) AS blocked',
+                          owners=[UUID(str(owner)) for owner in owners])[0]['blocked']
