@@ -1,5 +1,7 @@
 import type { components } from '../generated/openapi';
 import canonicalize from 'canonicalize';
+import { AuthenticatedCache } from '../cache/auth-cache';
+import type { CacheOptions } from '../cache/types';
 
 type S = components['schemas'];
 type Login = S['LoginResult'];
@@ -47,8 +49,20 @@ export class AuthClient {
   private generation = 0;
   private receiver?: CryptoKeyPair;
   private recovery?: Recovery;
+  private session: S['SessionContext'] | null = null;
+  private sessionListeners = new Set<(session: S['SessionContext'] | null) => void>();
   constructor(private transport: typeof fetch = fetch) {}
-  clear() { this.generation++; this.csrf = ''; this.receiver = undefined; this.recovery = undefined; this.orphanedRecovery = false; }
+  private publishSession(session: S['SessionContext'] | null) {
+    this.session = session;
+    for (const listener of this.sessionListeners) listener(session);
+  }
+  subscribeSession(listener: (session: S['SessionContext'] | null) => void) {
+    this.sessionListeners.add(listener);
+    listener(this.session);
+    return () => { this.sessionListeners.delete(listener); };
+  }
+  createTrustedCache(options: CacheOptions = {}) { return new AuthenticatedCache(this, options); }
+  clear() { this.generation++; this.csrf = ''; this.receiver = undefined; this.recovery = undefined; this.orphanedRecovery = false; this.publishSession(null); }
   private async checkRejectedContext(generation: number, sentCsrf: string) {
     // Probe the cookie/CSRF context only; matching CSRF does not establish that
     // an MFA challenge is still valid. Never replay the rejected write.
@@ -104,7 +118,7 @@ export class AuthClient {
     try {
       const session = await this.request<S['SessionContext']>('/auth/session');
       if (!object(session) || !exact(session,['user','device_id','session_id','csrf_token']) || !user(session.user) || !uuid(session.device_id) || !uuid(session.session_id) || !token(session.csrf_token)) throw new AuthError('OUTPUT_INVALID');
-      this.csrf = session.csrf_token; return session;
+      this.csrf = session.csrf_token; this.publishSession(session); return session;
     } catch (e) { if (!(e instanceof AuthError) || e.status !== 401) throw e; }
     await this.refreshCsrf(); return null;
   }
@@ -122,7 +136,10 @@ export class AuthClient {
     if (result.state === 'recovery_required') { this.recovery = result.recovery; this.csrf = result.recovery.csrf_token; }
     return result;
   }
-  async login(body: S['LoginRequest']) { return this.accept(parseLogin(await this.request('/auth/login', body))); }
+  async login(body: S['LoginRequest']) {
+    this.generation++; this.publishSession(null);
+    return this.accept(parseLogin(await this.request('/auth/login', body)));
+  }
   async totp(challenge_id: string, code: string) { return this.accept(parseLogin(await this.request('/auth/login/mfa', {factor_type: 'totp', challenge_id, code}))); }
   private async proof(body: Record<string, unknown>, path: string, key: string, kind: string, context: string, challenge: string, jwk: S['ReceiverPublicKey']) {
     if (!this.receiver || !token(challenge)) throw new AuthError('UNAUTHENTICATED');
@@ -163,6 +180,8 @@ export class AuthClient {
     return value;
   }
   async change(purpose:S['ReauthOperation']['purpose'], target:S['ReauthOperation']['target'], body:Record<string,unknown>, password:string, mfa_code?:string, path?:string) {
+    if (['logoutAll', 'changePassword', 'confirmMfa', 'disableMfa'].includes(purpose)
+      || (purpose === 'revokeDevice' && target.id === this.session?.device_id)) this.publishSession(null);
     const key=crypto.randomUUID();
     const operation={purpose,target,candidate_parameters:{idempotency_key:key,body}};
     const proof=await this.request<S['ReauthResult']>('/auth/reauth',{password,...(mfa_code?{mfa_code}:{}),operation});
@@ -170,5 +189,5 @@ export class AuthClient {
     // No automatic retries: secret responses and unknown commits are not replayable.
     return this.request<unknown>(path,body,{key,reauth:proof.reauth_token});
   }
-  async logout() { try { await this.request('/auth/logout',{}); } finally { this.clear(); } }
+  async logout() { this.publishSession(null); try { await this.request('/auth/logout',{}); } finally { this.clear(); } }
 }
