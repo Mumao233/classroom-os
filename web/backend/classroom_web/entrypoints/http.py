@@ -80,6 +80,8 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
         raise ValueError('Review requires its explicit PR-07b contract candidate')
     if sync is not None and contract.get('x-pr07b-candidate') != 'pr07b-1':
         raise ValueError('Sync requires the existing PR-07b contract candidate for exact Review conflicts')
+    if sync is not None and sync.enabled and (review is None or not review.config.get('enabled', False)):
+        raise ValueError('Enabled Sync requires an enabled ReviewBrowser for exact source authorization')
     qa_paths = {
         '/class-sessions/{class_session_id}/generation-plans',
         '/generation-plans/{plan_id}', '/generation-plans/{plan_id}/execute',

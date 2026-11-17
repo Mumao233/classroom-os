@@ -11,6 +11,8 @@ export type CacheReference = {
   scope: CacheScope; objectId: string; revision: number; generation: number;
   /** PR-08b binds a learning object's domain type into its authenticated header. */
   objectType?: string;
+  /** Exact review body authority; separate from the document projection's CAS revision. */
+  contentRevisionId?: string;
 };
 export type CacheWrite = CacheReference & {
   ancestry: CacheAncestry;

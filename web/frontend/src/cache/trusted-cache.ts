@@ -305,6 +305,7 @@ export class TrustedCache extends EventTarget {
         if (!value) { done(null); return; }
         this.guard(tx, auth, value.header, () => {
           if (snapshot.objectType && snapshot.objectType !== value.header.objectType) { fail(new CacheError('REVISION_CONFLICT')); return; }
+          if (snapshot.contentRevisionId && snapshot.contentRevisionId !== value.header.contentRevisionId) { fail(new CacheError('REVISION_CONFLICT')); return; }
           if (value.header.scope === 'learning' && Date.now() - value.header.verifiedAt! >= LEARNING_LIMITS.ageMs) {
             if (mode === 'readwrite') deleteCacheRecord(tx, value.id);
             done(null); return;
@@ -417,6 +418,7 @@ export class TrustedCache extends EventTarget {
           const ancestry = record.header.ancestry;
           // Source fragments, media and unrecognized cache identifiers require fresh authorized hydration.
           const current = projection && projection.object_type === record.header.objectType && projection.revision === record.header.revision
+            && (projection.object_type !== 'review_document' || typeof record.header.contentRevisionId === 'string')
             && (!ancestry.semesterId || available.get(ancestry.semesterId)?.object_type === 'semester')
             && (!ancestry.courseId || available.get(ancestry.courseId)?.object_type === 'course')
             && (!ancestry.classSessionId || available.get(ancestry.classSessionId)?.object_type === 'class_session');

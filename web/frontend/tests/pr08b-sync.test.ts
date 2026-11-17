@@ -14,6 +14,10 @@ const stamp = '2026-11-17T12:00:00Z';
 const key = (reference: CacheReference) => JSON.stringify([reference.scope, reference.objectId, reference.revision, reference.generation]);
 const operation = (number = 1): SyncOperation => ({ op_id: id(number), object_type: 'course', object_id: id(100), draft_id: id(200), base_revision: 1, payload: { base_revision: 1, name: `课程 ${number}` } });
 const projection = (objectId = id(100), kind: S['BootstrapProjection']['object_type'] = 'course'): S['BootstrapProjection'] => ({ object_id: objectId, object_type: kind, revision: 1, parent_id: null, adopted_revision_id: null, updated_at: stamp });
+const personalOperation = (contentRevisionId: string | null = id(800)): SyncOperation => ({ op_id: id(1), object_type: 'personal_revision', object_id: id(100), draft_id: id(200), base_revision: 1,
+  payload: { base_revision: 1, base_content_revision_id: contentRevisionId, draft_id: id(200), body_markdown: 'SOURCE B PRIVATE DRAFT', personal_note: 'unique note' } });
+const reviewRevision = (revisionId: string): S['ReviewRevision'] => ({ id: revisionId, document_id: id(100), revision: 1, kind: 'ai_candidate', created_at: stamp, updated_at: stamp,
+  parent_revision_id: null, source_snapshot_id: id(810), raw_output_ref: null, body_markdown: 'SOURCE B PRIVATE BODY', structured_content: null, personal_note: '' });
 
 class MemoryCache extends EventTarget implements SyncCache {
   records = new Map<string, { reference: CacheWrite; bytes: Uint8Array }>();
@@ -63,6 +67,9 @@ function fixture() {
     receipt: async (opId, name) => { const value = receipts.get(opId); if (!value || value.operation !== name) throw new SyncError('NOT_FOUND'); return structuredClone(value); },
     push: async op => { received.push(structuredClone(op)); const saved = await receipt(op); receipts.set(op.op_id, saved); return { receipts: [saved], cursor: 'unconsumed-server-hint' }; },
     conflict: async () => ({ id: id(300), object_id: id(100), base_revision: 1, server_revision: 2, local_operation: operation(), server_content: { id: id(100) } as S['Course'], resolved: false }),
+    reviewRevision: async revisionId => reviewRevision(revisionId),
+    document: async documentId => ({ id: documentId, revision: 1, created_at: stamp, updated_at: stamp, class_session_id: id(101), kind: 'note', title: 'Personal note',
+      adopted_revision_id: null, latest_personal_revision_id: null, candidate_revision_ids: [], understood: false, source_status: 'unchanged' }),
     resolve: async (conflictId, body, opId) => {
       const saved: SyncReceipt = { op_id: opId, operation: 'resolveConflict', request_sha256: await syncFingerprint({ conflict_id: conflictId, body }), status: 'applied', object_id: body.resolution === 'copy_to_new_note' ? id(900) : id(100), revision: 3, conflict_id: null, task_id: null, created_at: stamp };
       receipts.set(opId, saved); return saved;
@@ -372,5 +379,89 @@ describe('PR-08b encrypted operation queue', () => {
     const f = fixture(); await f.runtime.unlock(''); await f.runtime.enqueue(operation(), ancestry, 1);
     f.transport.changes = async () => ({ items: [{ event_id: id(702), object_type: 'review_document', object_id: id(100), revision: 1, deleted: true }], next_cursor: 'source-revoked', has_more: false });
     await f.runtime.pollChanges(); expect(f.runtime.snapshot().unlockedScopes).toEqual([]); expect(f.cache.records.size).toBe(1);
+  });
+
+  it('keeps a partially revoked source draft restricted after a fresh unlock and runtime reload', async () => {
+    const f = fixture(); f.setProjections([projection(id(100), 'review_document'), projection(id(101), 'class_session')]);
+    await f.runtime.unlock(''); await f.runtime.readReviewRevision(id(100), id(800));
+    const reference = await f.runtime.enqueue(personalOperation(), ancestry, 1);
+    f.receipts.set(id(1), await receipt(personalOperation(), 'conflict'));
+    f.transport.conflict = async () => ({ id: id(300), object_id: id(100), base_revision: 1, server_revision: 2, local_operation: personalOperation(), server_content: reviewRevision(id(800)), resolved: false });
+    await f.runtime.flush(); expect((await f.runtime.inspectConflict(reference)).server_content).toMatchObject({ body_markdown: 'SOURCE B PRIVATE BODY' });
+    f.transport.reviewRevision = async () => { throw new SyncError('NOT_FOUND'); };
+    f.transport.conflict = async () => { throw new SyncError('NOT_FOUND'); };
+    f.transport.changes = async () => ({ items: [{ event_id: id(820), object_type: 'review_document', object_id: id(100), revision: 1, deleted: false }], next_cursor: 'partial-revocation', has_more: false });
+    await f.runtime.pollChanges(); expect(f.runtime.snapshot().unlocked).toBe(false); expect(f.cache.events).not.toContain('delete');
+    f.transport.changes = async () => ({ items: [], next_cursor: 'partial-revocation', has_more: false });
+    await f.runtime.unlock(''); expect(f.runtime.snapshot().pending[0].state).toBe('restricted');
+    await expect(f.runtime.readDraft(reference)).rejects.toMatchObject({ code: 'AUTHORITY_UNAVAILABLE' });
+    f.runtime.close(); const next = new OfflineSyncRuntime(f.cache, f.transport, { enabled: true }); await next.unlock('');
+    await expect(next.readDraft(reference)).rejects.toMatchObject({ code: 'AUTHORITY_UNAVAILABLE' });
+    expect(next.snapshot().pending[0].state).toBe('restricted'); expect(f.cache.records.size).toBe(1); expect(f.received).toHaveLength(0);
+  });
+
+  it('uses exact authority only for its current unlock epoch and permits previously authorized offline drafts', async () => {
+    const f = fixture(); f.setProjections([projection(id(100), 'review_document')]); await f.runtime.unlock('');
+    await f.runtime.readReviewRevision(id(100), id(800));
+    f.transport.reviewRevision = async () => { throw new SyncError('STORAGE_UNAVAILABLE'); };
+    const reference = await f.runtime.enqueue(personalOperation(), ancestry, 1);
+    expect((await f.runtime.readDraft(reference)).payload).toMatchObject({ body_markdown: 'SOURCE B PRIVATE DRAFT' });
+    f.cache.lock(); await f.runtime.unlock('');
+    await expect(f.runtime.readDraft(reference)).rejects.toMatchObject({ code: 'STORAGE_UNAVAILABLE' }); expect(f.cache.records.size).toBe(1);
+  });
+
+  it('requires a verified note document for null-base personal drafts', async () => {
+    const f = fixture(); f.setProjections([projection(id(100), 'review_document')]); await f.runtime.unlock('');
+    const document = f.transport.document;
+    f.transport.document = async id => ({ ...await document(id), kind: 'summary' });
+    await expect(f.runtime.enqueue(personalOperation(null), ancestry, 1)).rejects.toMatchObject({ code: 'AUTHORITY_UNAVAILABLE' });
+    expect(f.cache.records.size).toBe(0); f.transport.document = document;
+    await f.runtime.enqueue(personalOperation(null), ancestry, 1); expect(f.cache.records.size).toBe(1);
+  });
+
+  it('rejects revision identity mismatch and a late exact-authorization response after locking', async () => {
+    const f = fixture(); f.setProjections([projection(id(100), 'review_document')]); await f.runtime.unlock('');
+    f.transport.reviewRevision = async revisionId => ({ ...reviewRevision(revisionId), document_id: id(999) });
+    await expect(f.runtime.enqueue(personalOperation(), ancestry, 1)).rejects.toMatchObject({ code: 'INCOMPATIBLE_CLIENT' });
+    f.transport.reviewRevision = async revisionId => { f.cache.lock(); return reviewRevision(revisionId); };
+    await expect(f.runtime.enqueue(personalOperation(), ancestry, 1)).rejects.toMatchObject({ code: 'LOCKED' }); expect(f.cache.records.size).toBe(0);
+  });
+
+  it('invalidates an in-flight exact revision read before it can deliver a revoked body', async () => {
+    const f = fixture(); f.setProjections([projection(id(100), 'review_document')]); await f.runtime.unlock('');
+    let finish!: (revision: S['ReviewRevision']) => void;
+    f.transport.reviewRevision = async () => new Promise(resolve => { finish = resolve; });
+    const pending = f.runtime.readReviewRevision(id(100), id(800));
+    f.transport.changes = async () => ({ items: [{ event_id: id(822), object_type: 'review_document', object_id: id(100), revision: 1, deleted: false }], next_cursor: 'partial-revocation', has_more: false });
+    await f.runtime.pollChanges(); finish(reviewRevision(id(800)));
+    await expect(pending).rejects.toMatchObject({ code: 'LOCKED' }); expect(f.runtime.snapshot().unlocked).toBe(false);
+  });
+
+  it('reauthorizes the exact frozen conflict before reopening an unconfirmed resolution envelope', async () => {
+    const f = fixture(); await f.runtime.unlock(''); const original = await f.runtime.enqueue(operation(), ancestry, 1);
+    f.receipts.set(id(1), await receipt(operation(), 'conflict')); await f.runtime.flush();
+    f.transport.resolve = async () => { throw new SyncError('RESULT_UNKNOWN'); };
+    await f.runtime.resolve(original, { base_revision: 2, resolution: 'use_server' }, 2);
+    const resolution = f.runtime.snapshot().pending.find(value => value.reference.generation === 2)!.reference;
+    f.cache.lock(); f.transport.conflict = async () => { throw new SyncError('NOT_FOUND'); };
+    await f.runtime.unlock('');
+    expect(f.runtime.snapshot().pending.find(value => value.reference.generation === 2)?.state).toBe('restricted');
+    await expect(f.runtime.readDraft(resolution)).rejects.toMatchObject({ code: 'AUTHORITY_UNAVAILABLE' }); expect(f.cache.records.size).toBe(2);
+  });
+
+  it('requires exact review-body authority and never rehydrates revoked learning content', async () => {
+    const f = fixture(); f.setProjections([projection(id(100), 'review_document')]); await f.runtime.unlockLearning('');
+    const reference: LearningReference = { scope: 'learning', objectType: 'review_document', objectId: id(100), revision: 1, generation: 1, ancestry, contentRevisionId: id(800) };
+    await expect(f.runtime.cacheLearning({ ...reference, contentRevisionId: undefined }, async () => ({ objectId: id(100), revision: 1, bytes: new Uint8Array() }))).rejects.toMatchObject({ code: 'AUTHORITY_UNAVAILABLE' });
+    await expect(f.runtime.cacheLearning(reference, async () => ({ objectId: id(100), revision: 1, contentRevisionId: id(801), bytes: new Uint8Array() }))).rejects.toMatchObject({ code: 'INVALID_HYDRATION' });
+    await f.runtime.cacheLearning(reference, async () => ({ objectId: id(100), revision: 1, contentRevisionId: id(800), bytes: new TextEncoder().encode('SOURCE B PRIVATE BODY') }));
+    f.transport.reviewRevision = async () => { throw new SyncError('NOT_FOUND'); };
+    f.transport.changes = async () => ({ items: [{ event_id: id(821), object_type: 'review_document', object_id: id(100), revision: 1, deleted: false }], next_cursor: 'partial-revocation', has_more: false });
+    await f.runtime.pollChanges(); expect(f.runtime.snapshot().unlockedScopes).toEqual([]);
+    f.transport.changes = async () => ({ items: [], next_cursor: 'partial-revocation', has_more: false });
+    await f.runtime.unlockLearning(''); await expect(f.runtime.readLearning(reference)).rejects.toMatchObject({ code: 'AUTHORITY_UNAVAILABLE' });
+    let hydrated = false;
+    await expect(f.runtime.cacheLearning(reference, async () => { hydrated = true; return { objectId: id(100), revision: 1, bytes: new Uint8Array() }; })).rejects.toMatchObject({ code: 'AUTHORITY_UNAVAILABLE' });
+    expect(hydrated).toBe(false);
   });
 });

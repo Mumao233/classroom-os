@@ -15,6 +15,8 @@ export interface SyncTransport {
   receipt(id: string, operation: 'syncOperation' | 'resolveConflict'): Promise<SyncReceipt>;
   push(operation: SyncOperation, batchId: string): Promise<S['SyncResult']>;
   conflict(id: string): Promise<SyncConflict>;
+  reviewRevision(id: string): Promise<S['ReviewRevision']>;
+  document(id: string): Promise<S['ReviewDocument']>;
   resolve(id: string, body: SyncResolution, operationId: string): Promise<SyncReceipt>;
 }
 
@@ -39,6 +41,8 @@ export class AuthenticatedSyncClient implements SyncTransport {
     return this.auth.request<S['SyncResult']>('/sync/operations', { operations: [structuredClone(operation)] }, { key: batchId });
   }
   conflict(id: string) { return this.auth.request<SyncConflict>(`/sync/conflicts/${encodeURIComponent(id)}`); }
+  reviewRevision(id: string) { return this.auth.request<S['ReviewRevision']>(`/review-revisions/${encodeURIComponent(id)}`); }
+  document(id: string) { return this.auth.request<S['ReviewDocument']>(`/review-documents/${encodeURIComponent(id)}`); }
   resolve(id: string, body: SyncResolution, operationId: string) {
     return this.auth.request<SyncReceipt>(`/sync/conflicts/${encodeURIComponent(id)}/resolve`, structuredClone(body), { key: operationId });
   }

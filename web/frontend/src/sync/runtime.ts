@@ -50,7 +50,8 @@ function validateOperation(value: unknown): asserts value is SyncOperation {
   if (!object(value) || !uuid(value.op_id) || !uuid(value.object_id) || !uuid(value.draft_id)
     || !['personal_revision', 'mark', 'preferences', 'course'].includes(String(value.object_type))
     || !positive(value.base_revision) || !object(value.payload) || value.payload.base_revision !== value.base_revision
-    || (value.object_type === 'personal_revision' && value.payload.draft_id !== value.draft_id)) throw new SyncError('INVALID_SYNC_OPERATION');
+    || (value.object_type === 'personal_revision' && (value.payload.draft_id !== value.draft_id
+      || (value.payload.base_content_revision_id !== null && !uuid(value.payload.base_content_revision_id))))) throw new SyncError('INVALID_SYNC_OPERATION');
 }
 
 /** One runtime per authenticated cache. Durable operations remain immutable across retries and reloads. */
@@ -68,6 +69,9 @@ export class OfflineSyncRuntime extends EventTarget {
   private identity: string | null | undefined;
   private projections = new Map<string, Projection>();
   private authority = new Map<string, Projection['object_type']>();
+  /** Successful exact reads only; no body is retained here, and every lock clears these grants. */
+  private exactAuthority = new Set<string>();
+  private protectedDocuments = new Set<string>();
   private metadataDirty = false;
   private rows = new Map<string, PendingDraft>();
   private bindings = new Map<string, ReceiptBinding>();
@@ -76,6 +80,8 @@ export class OfflineSyncRuntime extends EventTarget {
     this.unlocked = false;
     this.scopes.clear();
     this.learningEpoch++;
+    this.exactAuthority.clear();
+    this.protectedDocuments.clear();
     this.rows.clear();
     this.bindings.clear();
     this.dispatchEvent(new Event('locked'));
@@ -106,6 +112,7 @@ export class OfflineSyncRuntime extends EventTarget {
     if (epoch !== this.epoch || this.closing || (this.options.identity && this.options.identity() !== this.identity)) throw new SyncError('LOCKED');
   }
   private current(epoch: number) { this.sameEpoch(epoch); if (!this.unlocked) throw new SyncError('LOCKED'); }
+  private scoped(epoch: number) { this.sameEpoch(epoch); if (!this.scopes.size) throw new SyncError('LOCKED'); }
   private newId() { return this.options.newId?.() ?? crypto.randomUUID(); }
 
   /** The caller has established its authenticated session before calling this entry point. */
@@ -225,6 +232,9 @@ export class OfflineSyncRuntime extends EventTarget {
           this.removeProjection(change.object_type, change.object_id);
         }
         else {
+          // A retained document projection does not authorize every historical source-backed body.
+          // Revoke delivered and in-flight plaintext before reauthorizing exact revisions on unlock.
+          if (change.object_type === 'review_document' && this.scopes.size && this.protectedDocuments.has(change.object_id)) { this.cache.lock(); epoch = this.epoch; }
           // The old metadata cannot authorize a newly changed body or moved object. Hydrate on a new snapshot.
           const previous = this.projections.get(change.object_id);
           if (['semester', 'course', 'class_session', 'review_document', 'mark', 'preferences'].includes(change.object_type)) {
@@ -278,7 +288,7 @@ export class OfflineSyncRuntime extends EventTarget {
     for (const reference of references) {
       if (!this.permitted(reference)) { this.row(reference, 'restricted', 'AUTHORITY_UNAVAILABLE'); continue; }
       try { await this.load(reference); this.current(epoch); this.row(reference, 'local_only'); }
-      catch (error) { this.current(epoch); this.row(reference, errorCode(error) === 'GONE' ? 'restricted' : 'failed', errorCode(error)); }
+      catch (error) { this.current(epoch); this.row(reference, ['GONE', 'AUTHORITY_UNAVAILABLE'].includes(errorCode(error)) ? 'restricted' : 'failed', errorCode(error)); }
     }
   }
 
@@ -298,8 +308,73 @@ export class OfflineSyncRuntime extends EventTarget {
     const value = envelope.kind === 'write' ? envelope.operation : { conflict_id: envelope.conflictId, body: envelope.resolution };
     if (await syncFingerprint(value) !== envelope.requestHash) throw new SyncError('CORRUPT_DRAFT');
     this.current(epoch);
+    await this.authorizeOperation(envelope.operation, epoch);
+    if (envelope.kind === 'resolve') {
+      if (!this.exactAuthority.has(JSON.stringify(['conflict', reference.objectId, envelope.conflictId]))) await this.fetchConflict(envelope.conflictId, reference.objectId, epoch);
+      if (envelope.resolution.merged_operation) await this.authorizeOperation(envelope.resolution.merged_operation, epoch);
+    }
+    this.current(epoch);
     this.bindings.set(keyOf(reference), this.receiptBinding(envelope));
     return envelope;
+  }
+
+  private authorizationFailure(error: unknown, key: string): never {
+    if (['NOT_FOUND', 'FORBIDDEN', 'GONE'].includes(errorCode(error))) {
+      if (this.exactAuthority.has(key)) this.cache.lock();
+      throw new SyncError('AUTHORITY_UNAVAILABLE');
+    }
+    throw error;
+  }
+
+  /** Online exact hydration also primes a bounded, memory-only authority grant for offline edits. */
+  async readReviewRevision(documentId: string, revisionId: string): Promise<S['ReviewRevision']> {
+    this.enabled();
+    const epoch = this.epoch;
+    this.scoped(epoch);
+    if (!uuid(revisionId) || this.projections.get(documentId)?.object_type !== 'review_document') throw new SyncError('AUTHORITY_UNAVAILABLE');
+    const key = JSON.stringify(['revision', documentId, revisionId]);
+    this.protectedDocuments.add(documentId);
+    let revision: S['ReviewRevision'];
+    try { revision = await this.transport.reviewRevision(revisionId); }
+    catch (error) { this.scoped(epoch); this.authorizationFailure(error, key); }
+    this.scoped(epoch);
+    if (revision.id !== revisionId || revision.document_id !== documentId || !positive(revision.revision)) throw new SyncError('INCOMPATIBLE_CLIENT');
+    this.exactAuthority.add(key);
+    return structuredClone(revision);
+  }
+
+  private async authorizeRevision(documentId: string, revisionId: string, epoch: number) {
+    this.scoped(epoch);
+    if (!this.exactAuthority.has(JSON.stringify(['revision', documentId, revisionId]))) await this.readReviewRevision(documentId, revisionId);
+    this.scoped(epoch);
+  }
+
+  private async authorizeOperation(operation: SyncOperation, epoch: number) {
+    if (operation.object_type !== 'personal_revision') return;
+    const revisionId = operation.payload.base_content_revision_id;
+    if (revisionId !== null) { await this.authorizeRevision(operation.object_id, revisionId, epoch); return; }
+    const key = JSON.stringify(['note', operation.object_id]);
+    if (!this.exactAuthority.has(key)) {
+      let document: S['ReviewDocument'];
+      try { document = await this.transport.document(operation.object_id); }
+      catch (error) { this.scoped(epoch); this.authorizationFailure(error, key); }
+      this.scoped(epoch);
+      if (document.id !== operation.object_id || document.kind !== 'note') throw new SyncError('AUTHORITY_UNAVAILABLE');
+      this.exactAuthority.add(key);
+    }
+    this.scoped(epoch);
+  }
+
+  private async fetchConflict(id: string, documentId: string, epoch: number): Promise<SyncConflict> {
+    const key = JSON.stringify(['conflict', documentId, id]);
+    this.protectedDocuments.add(documentId);
+    let conflict: SyncConflict;
+    try { conflict = await this.transport.conflict(id); }
+    catch (error) { this.current(epoch); this.authorizationFailure(error, key); }
+    this.current(epoch);
+    if (conflict.id !== id || conflict.object_id !== documentId) throw new SyncError('INCOMPATIBLE_CLIENT');
+    this.exactAuthority.add(key);
+    return conflict;
   }
 
   /** A persistence rejection leaves the caller responsible for keeping the current editor input. */
@@ -314,6 +389,8 @@ export class OfflineSyncRuntime extends EventTarget {
       ancestry: structuredClone(ancestry), operationId: frozen.op_id };
     if (!this.permitted(reference, frozen)) throw new SyncError('AUTHORITY_UNAVAILABLE');
     const envelope: WriteEnvelope = { schema: 1, kind: 'write', operation: frozen, requestHash: await syncFingerprint(frozen), batchId: frozen.op_id };
+    this.current(epoch);
+    await this.authorizeOperation(frozen, epoch);
     this.current(epoch);
     await this.persist(reference, envelope);
     this.current(epoch);
@@ -346,6 +423,7 @@ export class OfflineSyncRuntime extends EventTarget {
     if (!this.scopes.has('learning')) throw new SyncError('LOCKED');
     if (learningEpoch !== this.learningEpoch || reference.scope !== 'learning' || !positive(reference.generation)
       || !projection || projection.object_type !== reference.objectType || projection.revision !== reference.revision
+      || (reference.objectType === 'review_document' && !uuid(reference.contentRevisionId))
       || !this.permitted(reference)) throw new SyncError('AUTHORITY_UNAVAILABLE');
   }
 
@@ -354,24 +432,29 @@ export class OfflineSyncRuntime extends EventTarget {
     const epoch = this.epoch;
     const learningEpoch = this.learningEpoch;
     this.learningAllowed(frozen, epoch, learningEpoch);
+    if (frozen.objectType === 'review_document') await this.authorizeRevision(frozen.objectId, frozen.contentRevisionId!, epoch);
+    this.learningAllowed(frozen, epoch, learningEpoch);
     const bytes = await this.cache.read(frozen);
     try { this.learningAllowed(frozen, epoch, learningEpoch); return bytes; }
     catch (error) { bytes?.fill(0); throw error; }
   }
 
   /** The hydration port performs the existing authorized HTTP read for this exact cloud revision. */
-  async cacheLearning(reference: LearningReference, hydrate: () => Promise<{ objectId: string; revision: number; bytes: Uint8Array }>): Promise<void> {
+  async cacheLearning(reference: LearningReference, hydrate: () => Promise<{ objectId: string; revision: number; contentRevisionId?: string; bytes: Uint8Array }>): Promise<void> {
     const frozen = structuredClone(reference);
     const epoch = this.epoch;
     const learningEpoch = this.learningEpoch;
     this.learningAllowed(frozen, epoch, learningEpoch);
+    if (frozen.objectType === 'review_document') await this.authorizeRevision(frozen.objectId, frozen.contentRevisionId!, epoch);
+    this.learningAllowed(frozen, epoch, learningEpoch);
     const hydrated = await hydrate();
     this.learningAllowed(frozen, epoch, learningEpoch);
-    if (hydrated.objectId !== frozen.objectId || hydrated.revision !== frozen.revision || !(hydrated.bytes instanceof Uint8Array)) throw new SyncError('INVALID_HYDRATION');
+    if (hydrated.objectId !== frozen.objectId || hydrated.revision !== frozen.revision || !(hydrated.bytes instanceof Uint8Array)
+      || (frozen.objectType === 'review_document' && hydrated.contentRevisionId !== frozen.contentRevisionId)) throw new SyncError('INVALID_HYDRATION');
     const bytes = new Uint8Array(hydrated.bytes);
     try {
       await this.cache.put({ scope: 'learning', objectId: frozen.objectId, revision: frozen.revision, generation: frozen.generation,
-        objectType: frozen.objectType, ancestry: frozen.ancestry, verifiedAt: Date.now() }, bytes);
+        objectType: frozen.objectType, contentRevisionId: frozen.contentRevisionId, ancestry: frozen.ancestry, verifiedAt: Date.now() }, bytes);
       this.learningAllowed(frozen, epoch, learningEpoch);
     } finally { bytes.fill(0); }
   }
@@ -536,7 +619,7 @@ export class OfflineSyncRuntime extends EventTarget {
     const row = this.rows.get(keyOf(frozen));
     if (!row?.conflictId) throw new SyncError('CONFLICT_UNAVAILABLE');
     const envelope = await this.load(frozen);
-    const conflict = await this.transport.conflict(row.conflictId);
+    const conflict = await this.fetchConflict(row.conflictId, frozen.objectId, epoch);
     this.current(epoch);
     if (conflict.id !== row.conflictId || conflict.object_id !== frozen.objectId || conflict.resolved
       || await syncFingerprint(conflict.local_operation) !== await syncFingerprint(envelope.operation)) throw new SyncError('INCOMPATIBLE_CLIENT');

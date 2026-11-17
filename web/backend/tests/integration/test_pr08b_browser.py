@@ -9,7 +9,7 @@ import socket
 import subprocess
 import threading
 import time
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import sqlalchemy as sa
 import uvicorn
@@ -20,11 +20,13 @@ from classroom_web.application.review_browser import ReviewBrowser
 from classroom_web.application.sync_browser import SyncBrowser
 from classroom_web.domain.data import OwnerContext
 from classroom_web.entrypoints.http import create_app
+from classroom_web.infrastructure.qa_repository import PgQaRepository
 from classroom_web.infrastructure.review_repository import PgReviewRepository
 from deletion_support import POLICY, SECRET_KEY, deploy, services
 from test_auth_browser import _certificate
 from test_authentication import PASSWORD, auth
 from test_cache_keys import cache, cache_schema, pg
+from test_pr08b_sync import build_partial_revocation_conflict
 
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -50,6 +52,7 @@ def test_actual_browser_offline_recovery_conflict_and_deletion(cache, deploy, tm
         note = PgReviewRepository(tx).create_note(dict(
             class_session_id=str(classroom.id), title='PR08b browser note',
             body_markdown='Initial synthetic content', draft_id=str(uuid4())), uuid4())
+    partial = build_partial_revocation_conflict(cache.a.pg, OwnerContext(cache.a.uid), classroom)
     # The fixture's existing product policy uses a short synthetic window. This test
     # also exercises browser refresh and user-driven conflict resolution within it.
     with cache.a.pg.admin.begin() as connection:
@@ -75,8 +78,16 @@ def test_actual_browser_offline_recovery_conflict_and_deletion(cache, deploy, tm
                      cache=cache.service, review=review, sync=sync, deletion=deletion)
     app.add_api_route('/', lambda: HTMLResponse('<!doctype html><title>PR08b actual sync</title>'), methods=['GET'])
     app.add_api_route('/sync.js', lambda: Response((output / 'sync.js').read_bytes(), media_type='text/javascript'), methods=['GET'])
+    # Synthetic test control on this owned loopback service. Product reads still
+    # pass through the authenticated HTTP endpoints and their real PostgreSQL RLS.
+    def revoke_partial_source():
+        with database.transaction(OwnerContext(cache.a.uid)) as tx:
+            PgQaRepository(tx).revoke_source(UUID(partial['revoked_source_id']))
+        return {'revoked': True}
+    app.add_api_route('/test/revoke-partial-source', revoke_partial_source, methods=['POST'])
     server = uvicorn.Server(uvicorn.Config(app, host='127.0.0.1', port=port,
-        ssl_certfile=str(cert), ssl_keyfile=str(key), access_log=False, log_level='warning', ws='none'))
+        ssl_certfile=str(cert), ssl_keyfile=str(key), access_log=False, log_level='warning',
+        ws='none', timeout_graceful_shutdown=3))
     thread = threading.Thread(target=server.run, daemon=True)
     process = None
     try:
@@ -86,7 +97,7 @@ def test_actual_browser_offline_recovery_conflict_and_deletion(cache, deploy, tm
             time.sleep(0.02)
         assert server.started
         scenario = dict(note=note, semester_id=str(semester.id), course_id=str(course.id),
-                        class_session_id=str(classroom.id))
+                        class_session_id=str(classroom.id), partial=partial)
         env = {**os.environ, 'PR08B_EMAIL': cache.a.email, 'PR08B_PASSWORD': PASSWORD,
                'PR08B_ORIGIN': origin, 'PR08B_PIN': pin, 'PR08B_PROFILE': str(tmp_path / 'profile'),
                'PR08B_PLAYWRIGHT_MODULE': str(modules / '@playwright/test/index.mjs'),
@@ -110,6 +121,8 @@ def test_actual_browser_offline_recovery_conflict_and_deletion(cache, deploy, tm
         assert result['explicit_resolution'] and result['actual_conflict_panel']
         assert result['deletion_blocks_replay']
         assert result['device_revocation_locks']
+        assert result['partial_source_revocation_clears_view']
+        assert result['partial_source_revocation_survives_reopen']
         (output / 'formal-browser.json').write_text(json.dumps(result, indent=2), encoding='utf-8')
     finally:
         if process is not None and process.poll() is None:
@@ -119,6 +132,11 @@ def test_actual_browser_offline_recovery_conflict_and_deletion(cache, deploy, tm
                 os.killpg(process.pid, signal.SIGKILL)
             process.wait(timeout=10)
         server.should_exit = True
-        if thread.ident is not None:
-            thread.join(timeout=5)
-            assert not thread.is_alive()
+        try:
+            if thread.ident is not None:
+                thread.join(timeout=15)
+                assert not thread.is_alive()
+        finally:
+            with cache.a.pg.admin.begin() as connection:
+                connection.execute(sa.text("UPDATE tasks SET not_before=clock_timestamp()+interval '365 days' WHERE owner_id=:owner"),
+                                   {'owner': cache.a.uid})

@@ -311,9 +311,6 @@ class PgSyncRepository:
 
     def resolve(self, identity, body, key):
         self.serialize()
-        # Every resolution can copy into Review. Match its ancestor/document
-        # lock ordering before locking even a course or mark being resolved.
-        self.review._serialize()
         digest = _hash(dict(conflict_id=str(identity), body=body))
         old = self.tx.receipts.lock_and_get('resolveConflict', key, digest)
         if old:
@@ -321,10 +318,19 @@ class PgSyncRepository:
         conflict = self.conflict(identity)
         operation = conflict['local_operation']
         kind, target = operation['object_type'], UUID(operation['object_id'])
-        revision, _, classroom = self.current(kind, target, lock=True)
-        if conflict['resolved'] or body['base_revision'] != revision:
-            raise RevisionConflict(revision)
         resolution = body['resolution']
+        if kind == 'personal_revision' or resolution == 'copy_to_new_note':
+            self.review._serialize()
+        if kind == 'course' and resolution in ('use_server','copy_to_new_note'):
+            # Freeze the compared CAS without upgrading the shared ancestor lock
+            # already held by concurrent Review note creation.
+            self.tx.catalog._load(Resource.COURSE,target,share=True)
+            revision, _, classroom = self.current(kind,target)
+        else:
+            revision, _, classroom = self.current(kind, target, lock=True)
+        if (conflict['resolved'] or body['base_revision'] != revision
+                or conflict['server_revision'] != revision):
+            raise RevisionConflict(revision)
         if resolution == 'edited_merge':
             merged = body.get('merged_operation')
             if (merged is None or body.get('destination_class_session_id') is not None

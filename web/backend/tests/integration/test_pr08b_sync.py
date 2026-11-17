@@ -5,6 +5,7 @@ import importlib.util
 import json
 from pathlib import Path
 from threading import Event
+from time import monotonic, sleep
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
@@ -13,6 +14,7 @@ import pytest
 import sqlalchemy as sa
 
 from classroom_web.application.sync_browser import SyncBrowser
+from classroom_web.application.review_browser import ReviewBrowser
 from classroom_web.domain.data import OwnerContext, Resource
 from classroom_web.domain.qa import QaRejected
 from classroom_web.entrypoints.http import create_app
@@ -41,12 +43,14 @@ def sync_api(auth,monkeypatch):
     spec.loader.exec_module(candidate)
     contract=candidate.build(base_contract)
     sync = SyncBrowser(auth=auth.service,database=auth.pg.db,enabled=True)
-    app = create_app(auth=auth.service,contract=contract,origin='https://testserver',sync=sync)
+    review = ReviewBrowser(auth=auth.service,database=auth.pg.db,config=dict(enabled=True))
+    app = create_app(auth=auth.service,contract=contract,origin='https://testserver',sync=sync,review=review)
     with TestClient(app,base_url='https://testserver') as client:
         browser = SimpleNamespace(client=client,email=auth.email)
         session = login(browser)
         yield SimpleNamespace(auth=auth,owner=owner,semester=semester,course=course,classroom=classroom,
-            note=note,client=client,browser=browser,csrf=session['csrf_token'],sync=sync,app=app,base_contract=base_contract)
+            note=note,client=client,browser=browser,csrf=session['csrf_token'],sync=sync,app=app,
+            base_contract=base_contract,contract=contract)
     with auth.pg.admin.begin() as connection:
         connection.execute(sa.text("UPDATE tasks SET not_before=clock_timestamp()+interval '365 days' WHERE owner_id=:owner"),
                            dict(owner=auth.uid))
@@ -78,6 +82,42 @@ def receipt(api, op):
     response = api.client.get(BASE+'/operations/'+op['op_id'],params=dict(operation='syncOperation'))
     assert response.status_code==200,response.text
     return response.json()
+
+
+def build_partial_revocation_conflict(pg, owner, classroom):
+    """Create an A-origin document whose newer conflict depends on A and B."""
+    from test_pr07b_versions import generate,prepare_review,REQUEST,output
+    from classroom_web.infrastructure.qa_repository import PgQaRepository
+
+    tree=SimpleNamespace(classroom=classroom)
+    first_source,_,_,initial=generate(pg,SimpleNamespace(a=owner),tree)
+    document_id=UUID(initial['summary_document_id'])
+    with pg.db.transaction(owner) as tx:
+        original=PgReviewRepository(tx).document(document_id)
+        second_source=PgQaRepository(tx).add_source(classroom.id,kind='transcript_segment',object_id=uuid4(),
+            text='Source B may later be independently revoked.',start_ms=6000,end_ms=8000)
+    request=dict(REQUEST,target_document_id=str(document_id),base_revision=original['revision'])
+    plan,task=prepare_review(pg,owner,tree,request=request)
+    assert {item['source_id'] for item in plan['source_snapshot']['items']} == {
+        str(first_source.source_id),str(second_source.source_id)}
+    with pg.db.transaction(owner) as tx:
+        repo=PgReviewRepository(tx)
+        newer=repo.publish(task,output(alias='S2',answer='Candidate using independently revocable source B.'),
+                          UUID(plan['source_snapshot']['id']),request)
+        document=repo.document(document_id)
+    commands=[]
+    for text in ('Cloud personal content using source B.','Offline personal content using source B.'):
+        key,draft=str(uuid4()),str(uuid4())
+        commands.append(dict(op_id=key,object_type='personal_revision',object_id=str(document_id),
+            draft_id=draft,base_revision=document['revision'],payload=dict(base_revision=document['revision'],
+                base_content_revision_id=newer['revision_ids'][0],draft_id=draft,body_markdown=text,personal_note='')))
+    for command in commands:
+        with pg.db.transaction(owner) as tx:
+            result=PgSyncRepository(tx).apply(command)
+    assert result['status']=='conflict'
+    return dict(operation=commands[-1],conflict_id=result['conflict_id'],document_id=str(document_id),
+                document_revision=result['revision'],base_content_revision_id=newer['revision_ids'][0],
+                unaffected_revision_id=initial['revision_ids'][0],revoked_source_id=str(second_source.source_id))
 
 
 def test_real_http_apply_replay_fingerprint_and_lost_response(sync_api):
@@ -177,9 +217,29 @@ def test_resolution_checks_newest_cas_and_typed_object(sync_api):
     stale=post(a.browser,'/sync/conflicts/'+result['conflict_id']+'/resolve',
         dict(base_revision=result['revision'],resolution='use_server'),a.csrf)
     assert stale.status_code==409,stale.text
-    body=dict(base_revision=result['revision']+1,resolution='edited_merge',merged_operation=operation(a,kind='course'))
-    rejected=post(a.browser,'/sync/conflicts/'+result['conflict_id']+'/resolve',body,a.csrf)
+    with a.auth.pg.db.transaction(a.owner) as tx:
+        before=PgReviewRepository(tx).document(UUID(a.note['id']))
+    for resolution in ('use_server','edited_merge','copy_to_new_note'):
+        body=dict(base_revision=before['revision'],resolution=resolution)
+        if resolution=='edited_merge':
+            body['merged_operation']=operation(a,base=before['revision'],body_markdown='Must compare a new conflict first')
+        elif resolution=='copy_to_new_note':
+            body['destination_class_session_id']=str(a.classroom.id)
+        response=post(a.browser,'/sync/conflicts/'+result['conflict_id']+'/resolve',body,a.csrf)
+        assert response.status_code==409,response.text
+    with a.auth.pg.db.transaction(a.owner) as tx:
+        assert PgReviewRepository(tx).document(UUID(a.note['id']))==before
+        assert tx.connection.scalar(sa.text('SELECT count(*) FROM sync_resolutions WHERE owner_id=:owner'),
+                                    dict(owner=a.owner.owner_id))==0
+        assert tx.connection.scalar(sa.text('SELECT count(*) FROM review_documents WHERE owner_id=:owner'),
+                                    dict(owner=a.owner.owner_id))==1
+    fresh=batch(a,[operation(a)]).json()['receipts'][0]
+    body=dict(base_revision=fresh['revision'],resolution='edited_merge',merged_operation=operation(a,kind='course'))
+    rejected=post(a.browser,'/sync/conflicts/'+fresh['conflict_id']+'/resolve',body,a.csrf)
     assert rejected.status_code==422,rejected.text
+    accepted=post(a.browser,'/sync/conflicts/'+fresh['conflict_id']+'/resolve',
+                  dict(base_revision=fresh['revision'],resolution='use_server'),a.csrf)
+    assert accepted.status_code==200,accepted.text
 
 
 @pytest.mark.parametrize('kind',['course','preferences'])
@@ -312,6 +372,16 @@ def test_sync_requires_existing_review_contract_composition(sync_api):
         create_app(auth=a.auth.service,contract=a.base_contract,origin='https://testserver',sync=a.sync)
 
 
+def test_enabled_sync_requires_review_authorization_endpoints(sync_api):
+    a=sync_api
+    disabled=ReviewBrowser(auth=a.auth.service,database=a.auth.pg.db,config=dict(enabled=False))
+    for review in (None,disabled):
+        with pytest.raises(ValueError,match='Enabled Sync requires an enabled ReviewBrowser'):
+            create_app(auth=a.auth.service,contract=a.contract,origin='https://testserver',sync=a.sync,review=review)
+    assert a.client.get(BASE+'/review-documents/'+a.note['id']).status_code==200
+    assert a.client.get(BASE+'/review-revisions/'+a.note['latest_personal_revision_id']).status_code==200
+
+
 def test_bootstrap_10000_projection_bound_never_truncates(sync_api):
     a=sync_api
     with a.auth.pg.db.transaction(a.owner) as tx:
@@ -352,6 +422,118 @@ def test_deferred_catalog_events_do_not_invert_review_lock_order(sync_api):
         second.result(timeout=15)
     with a.auth.pg.db.transaction(a.owner) as tx:
         assert PgReviewRepository(tx).document(UUID(a.note['id']))['title']=='Second update'
+
+
+@pytest.mark.parametrize('resolution',['use_server','edited_merge','copy_to_new_note'])
+def test_course_resolution_and_direct_note_creation_have_no_lock_cycle(sync_api,resolution):
+    a=sync_api
+    assert batch(a,[operation(a,kind='course')]).status_code==200
+    conflict=batch(a,[operation(a,kind='course')]).json()['receipts'][0]
+    source_shared,resolution_lock_attempt=Event(),Event()
+
+    def create_note():
+        with a.auth.pg.db.transaction(a.owner) as tx:
+            review=PgReviewRepository(tx)
+            serialize=review._serialize
+            def wait_after_source_authorization():
+                source_shared.set()
+                assert resolution_lock_attempt.wait(4)
+                serialize()
+            review._serialize=wait_after_source_authorization
+            return review.create_note(dict(class_session_id=str(a.classroom.id),title='Concurrent note',
+                body_markdown='Created while resolving a course conflict.',draft_id=str(uuid4())),uuid4())
+
+    def resolve_course():
+        assert source_shared.wait(4)
+        with a.auth.pg.db.transaction(a.owner) as tx:
+            load=tx.catalog._load
+            def signal_course_lock(resource,identity,**options):
+                if resource==Resource.COURSE and identity==a.course.id and (options.get('write') or options.get('share')):
+                    resolution_lock_attempt.set()
+                return load(resource,identity,**options)
+            tx.catalog._load=signal_course_lock
+            body=dict(base_revision=conflict['revision'],resolution=resolution)
+            if resolution=='edited_merge':
+                body['merged_operation']=operation(a,kind='course',base=conflict['revision'],name='Explicitly merged course')
+            elif resolution=='copy_to_new_note':
+                body['destination_class_session_id']=str(a.classroom.id)
+            return PgSyncRepository(tx).resolve(UUID(conflict['conflict_id']),body,uuid4())
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        created=pool.submit(create_note)
+        resolved=pool.submit(resolve_course)
+        note=created.result(timeout=15)
+        result=resolved.result(timeout=15)
+    assert result['status']=='applied'
+    with a.auth.pg.db.transaction(a.owner) as tx:
+        assert PgReviewRepository(tx).document(UUID(note['id']))['title']=='Concurrent note'
+        course=tx.catalog.get_course(a.course.id)
+        assert course.revision==conflict['revision']+(resolution=='edited_merge')
+
+
+def test_direct_review_conflict_locks_cloud_sources_before_event_counter(sync_api):
+    from classroom_web.infrastructure.qa_repository import PgQaRepository
+    a=sync_api
+    state=build_partial_revocation_conflict(a.auth.pg,a.owner,a.classroom)
+    writer_ready,revoker_started,source_revoked,counter_locked=Event(),Event(),Event(),Event()
+    advance_allowed,revocation_commit_allowed=Event(),Event()
+    connection_ids={}
+    draft=dict(base_revision=state['document_revision']-1,
+        base_content_revision_id=state['unaffected_revision_id'],draft_id=str(uuid4()),
+        body_markdown='A-only personal branch remains preserved.',personal_note='')
+
+    def write_direct_conflict():
+        with a.auth.pg.db.transaction(a.owner) as tx:
+            connection_ids['writer']=tx.connection.scalar(sa.text('SELECT pg_backend_pid()'))
+            review=PgReviewRepository(tx)
+            advance,event=review._advance,review._event
+            def pause_before_counter(row,**fields):
+                writer_ready.set()
+                assert advance_allowed.wait(5)
+                return advance(row,**fields)
+            def observe_counter(row):
+                event(row)
+                counter_locked.set()
+            review._advance,review._event=pause_before_counter,observe_counter
+            return review.write_personal(UUID(state['document_id']),draft,uuid4())
+
+    def revoke_cloud_source():
+        with a.auth.pg.db.transaction(a.owner) as tx:
+            connection_ids['revoker']=tx.connection.scalar(sa.text('SELECT pg_backend_pid()'))
+            revoker_started.set()
+            PgQaRepository(tx).revoke_source(UUID(state['revoked_source_id']))
+            source_revoked.set()
+            assert revocation_commit_allowed.wait(5)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        writer=pool.submit(write_direct_conflict)
+        assert writer_ready.wait(5)
+        revoker=pool.submit(revoke_cloud_source)
+        try:
+            assert revoker_started.wait(5)
+            deadline=monotonic()+4
+            while not source_revoked.is_set():
+                with a.auth.pg.admin.connect() as monitor:
+                    blocked=monitor.scalar(sa.text('SELECT :writer=ANY(pg_blocking_pids(:revoker))'),connection_ids)
+                if blocked:
+                    break
+                assert monotonic()<deadline,'source revocation did not reach its real PostgreSQL lock'
+                sleep(.01)
+            advance_allowed.set()
+            assert counter_locked.wait(5)
+            assert source_revoked.wait(5)
+        finally:
+            advance_allowed.set()
+            revocation_commit_allowed.set()
+        result=writer.result(timeout=15)
+        revoker.result(timeout=15)
+    assert result['submitted_revision']['body_markdown']==draft['body_markdown']
+    with a.auth.pg.db.transaction(a.owner) as tx:
+        review=PgReviewRepository(tx)
+        assert review.document(UUID(state['document_id']))['revision']==state['document_revision']+1
+        assert review.revision(UUID(result['submitted_revision']['id']))['body_markdown']==draft['body_markdown']
+        with pytest.raises(QaRejected,match='NOT_FOUND'):
+            review.revision(UUID(state['base_content_revision_id']))
 
 
 def test_direct_review_receipt_and_conflict_join_the_sync_read_api(sync_api):
@@ -530,6 +712,45 @@ def test_source_revocation_emits_change_and_revokes_all_sync_reads(sync_api):
     assert document['id'] not in {item['object_id'] for item in bootstrap.json()['projections']}
     assert receipt(a,op)['status']=='deleted'
     assert batch(a,[dict(op,op_id=str(uuid4()))]).json()['receipts'][0]['status']=='deleted'
+
+
+def test_partial_source_revocation_keeps_document_but_hides_exact_conflict_lineage(sync_api):
+    from classroom_web.infrastructure.qa_repository import PgQaRepository
+    a=sync_api
+    state=build_partial_revocation_conflict(a.auth.pg,a.owner,a.classroom)
+    document_path=BASE+'/review-documents/'+state['document_id']
+    conflict_path=BASE+'/sync/conflicts/'+state['conflict_id']
+    conflict=a.client.get(conflict_path)
+    assert conflict.status_code==200,conflict.text
+    server_revision=conflict.json()['server_content']['id']
+    with a.auth.pg.db.transaction(a.owner) as tx:
+        local_revision=str(tx.connection.scalar(sa.text('SELECT submitted_revision_id FROM review_conflicts WHERE id=:id'),
+                                               dict(id=UUID(state['conflict_id']))))
+    for revision in (state['base_content_revision_id'],server_revision,local_revision,state['unaffected_revision_id']):
+        assert a.client.get(BASE+'/review-revisions/'+revision).status_code==200
+    watermark=a.client.get(BASE+'/sync/bootstrap').json()['watermark']
+    with a.auth.pg.db.transaction(a.owner) as tx:
+        PgQaRepository(tx).revoke_source(UUID(state['revoked_source_id']))
+    projection=a.client.get(BASE+'/sync/bootstrap')
+    assert projection.status_code==200,projection.text
+    document_projection=next(item for item in projection.json()['projections'] if item['object_id']==state['document_id'])
+    assert document_projection['revision']==state['document_revision']
+    changes=a.client.get(BASE+'/sync/changes',params=dict(after=watermark))
+    assert changes.status_code==200,changes.text
+    assert any(item['object_id']==state['document_id'] and not item['deleted']
+               and item['revision']==state['document_revision'] for item in changes.json()['items'])
+    assert a.client.get(document_path).status_code==200
+    assert a.client.get(BASE+'/review-revisions/'+state['unaffected_revision_id']).status_code==200
+    for revision in (state['base_content_revision_id'],server_revision,local_revision):
+        assert a.client.get(BASE+'/review-revisions/'+revision).status_code==404
+    assert a.client.get(conflict_path).status_code==404
+    with a.auth.pg.db.transaction(a.owner) as tx:
+        assert tx.connection.scalar(sa.text('SELECT id FROM review_documents WHERE id=:id'),
+                                    dict(id=UUID(state['document_id']))) is not None
+        assert tx.connection.scalar(sa.text('SELECT id FROM review_revisions WHERE id=:id'),
+                                    dict(id=UUID(state['base_content_revision_id']))) is None
+        assert tx.connection.scalar(sa.text('SELECT id FROM sync_conflicts WHERE id=:id'),
+                                    dict(id=UUID(state['conflict_id']))) is None
 
 
 @pytest.mark.parametrize('bad_field,bad_value',[('name','   '),('name','bad\x00name'),('teacher','bad\x00teacher')])

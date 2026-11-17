@@ -24,6 +24,9 @@
 | `pr08b-full-20261117-02` | 完整 Web 后端 | 全部 1291 项通过（1262 父用例、29 子测试），0 failures / errors / skipped。08b 29 个函数及真实认证浏览器全部执行 | `9c57fad97241af8252a1285cea3912b2b15205893d0046f51f006ea656888cb5` |
 | `pr08b-legacy-20261117-01` | 原 Windows 回归 | 525 主用例中 524 通过、1 失败，171 子测试通过，九套 Node 与隔离 guard 通过。失败为原课堂包导入预览返回 422 | `b3bfd6a859ad5430aaacb73cccd77a39e563feb4e5df16a0c22ca8aee08989d1` |
 | `pr08b-legacy-20261117-02` | 原 Windows 回归 | 全部 525 主用例与 171 子测试通过，九套 Node、Python/Node guards、JUnit gate 全部退出 0，0 failures / errors / skipped | `ad9a583df42f7e795188701dc1ab5218baf16b4cc06fd5741c3a0f7622fb0b18` |
+| `pr08b-frontend-20261117-04` | Astra 修复复验 | Vitest 323/323、同步原生浏览器 29/29、缓存 28/28 与组合 11/11 通过。PostgreSQL 45 passed / 1 failed，新增锁序与冻结 CAS 用例通过，正式浏览器在首次离线入队前尚未读取准确 base 版本 | `cc49a90224ef81505bf8b23cd8bfc2bc3f04d4e14befd995c87fe4a9191faf32` |
+| `pr08b-frontend-20261117-05` | Astra 修复复验 | 单元、原生浏览器和其他后端测试通过。正式浏览器在恢复引用比较断言失败，已完成部分来源撤权的 200/200/404/404 授权及清面板检查 | `26ab1cfaee19877b49bd21760ac3388446b8f2c106a3b1d8564240bb4a04a44b` |
+| `pr08b-frontend-20261117-06` | Astra 修复复验 | 全部通过。Vitest 323/323，同步原生浏览器 29/29，缓存 28/28，组合 11/11，PostgreSQL 与正式浏览器 46/46。33 个 PR-08b 测试函数及真实认证浏览器全部执行，0 failures / errors / skipped | `04bed6a56cac8f7edde88aacbcadcea556764b4899cc0d7d94a764fd8413a8aa` |
 
 第二次运行的证据归档 SHA-256 为 `a20eaee07743f52d51f690a0db5dabe79bda7268e9c37b443c4b8162ab1c81db`。来宾 PostgreSQL 正常停止，退出码 0，受管对象服务残留进程数为 0。新增同步和正式 HTTP 浏览器路径仍有失败，后续运行负责验证修复。
 
@@ -60,6 +63,14 @@
 
 来宾实际 Python/Node/pytest 命令、工作目录、逐步退出码和耗时保存在各证据目录的 `run.json`。前端原生浏览器使用真实 Chromium/Web Crypto/IndexedDB 与合成 transport，正式浏览器使用真实 TLS、会话、HTTP、PostgreSQL 和独立设备上下文。
 
+## Astra 修复复验
+
+独立初审在 `325d687` 上发现 1 项 P1 与 3 项 P2，详见 [初审报告](ASTRA-REVIEW.md) 和 [闭环记录](REVIEW-CLOSEOUT.md)。修复后的 frontend04 证据 SHA-256 为 `422ebfff8baadf08f9d75a7ec5894d265a89fcab57684d5205e9c219d6a7a684`。首次离线编辑场景已补充正常编辑器在线打开时的准确 `readReviewRevision`，然后再断网保存，继续保留原幂等与密文断言。该轮正式浏览器尚未通过，后续用新 RunId 完整复验。
+
+frontend05 证据 SHA-256 为 `556754167f445531faba6f523ce5c77eb1874aacb5310c21a3040881b868820e`。新增断言错误地要求写入引用与恢复后的完整认证 header 对象完全相同。恢复记录包含合法的 owner/device/key/schema 元数据。修正后逐项精确核对原引用的全部字段，并另行核对真实会话 owner/device、schema、keyId 与 keyVersion。测试服务采用 3 秒 graceful shutdown 和 15 秒 join，并在 finally 中始终隔离合成 Review 任务。
+
+frontend06 证据 SHA-256 为 `156a63f3227ef19fa7487801fdc77b6d50ed092014391adb5c19db4a7c32d023`，全部通过，服务残留为 0。正式浏览器完成部分来源撤权后的面板清理、准确 HTTP 授权、重新打开加密存储后的受限状态与拒读断言。两处真实双连接锁序回归和旧冲突换 base 的拒绝回归同时通过。
+
 完整本机证据保存在 `outputs/pr08b/<RunId>/`。已取消运行保留 `cancellation.json` 与原排队文件。失败运行保留原 JUnit、日志和归档。
 
 ## 静态与契约
@@ -72,5 +83,5 @@
 
 ## 尚待完成
 
-- 全部测试通过后提交独立 Astra 复审，登记 P0–P3 风险及修复验证。
+- 完成 Astra 修复的正式浏览器与完整 Web 复验，再进行独立增量复审。
 - 以最终源码和证据提交 Draft PR。

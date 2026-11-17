@@ -4,7 +4,7 @@
 
 ## 服务端入口
 
-`SyncBrowser(auth=auth, database=database, enabled=True)` 通过 `create_app(..., sync=sync)` 接入既有认证、Cookie、CSRF、Origin、严格 JSON 与响应校验。构造参数默认关闭。生产启用继续使用原发布审批流程。
+`SyncBrowser(auth=auth, database=database, enabled=True)` 通过 `create_app(..., review=review, sync=sync)` 接入既有认证、Cookie、CSRF、Origin、严格 JSON 与响应校验。启用同步时需显式提供已启用的 ReviewBrowser，供准确文档和版本授权读取使用。构造参数默认关闭。生产启用继续使用原发布审批流程。
 
 与 ReviewBrowser 一样，应用装配需传入现有 `tools/pr07b/contract_candidate.py` 生成的完整契约。同步冲突携带实际候选的 `S1` 等来源别名、结构化内容和 `generation_task_id`。入口检查 `x-pr07b-candidate=pr07b-1`，确保实际候选与响应校验一致。
 
@@ -36,6 +36,12 @@ await sync.flush();
 解锁会先检查完整授权目录和增量删除，再取得内存密钥。无法由当前投影证明有效的学习缓存失效。草稿密文独立保留，失去原对象授权的条目标记为受限。网络恢复重新验证授权，关闭页面或身份失效时释放内存密钥。运行时定期消费事件，收到删除或明确撤权后发出 `locked` 事件，消费者需清除其持有的展示明文。
 
 学习缓存通过 `unlockLearning` 独立解锁，`snapshot.unlockedScopes` 明确列出当前作用域。`cacheLearning` 接收精确对象类型、ID、revision、generation、祖先和授权读取回调，核对实际返回的对象与版本后加密保存。`readLearning` 在解密完成后再次核对授权。普通更新和同版本的来源变化也会使对应学习副本失效。
+
+个人稿的 `base_content_revision_id` 通过既有 ReviewRevision GET 核对文档归属和当前授权。无 parent 的个人稿需通过文档 GET 确认为独立 note。冲突决策同时核对原冲突可见性。成功授权只在当前有期限的解锁周期内复用，相关文档变化会清除展示与在途正文，重新解锁逐项复核。文档仍可见而某个来源版本撤权时，该版本草稿保持受限密文。
+
+编辑器联网打开个人稿时，通过 `readReviewRevision(documentId, baseContentRevisionId)` 读取并确认准确版本，再进入离线编辑。当前解锁周期内已经成功确认的版本可离线复用。首次精确授权需要网络，未完成授权的保存错误应由编辑器保留当前输入并提示。
+
+Review 学习副本还需提供 `contentRevisionId`，并由准确内容版本的授权 GET 确认。`readReviewRevision(documentId, revisionId)` 提供该在线读取入口。`cacheLearning` 的引用与 hydrate 结果需具有相同的 `contentRevisionId`，该字段进入加密 header/AAD。旧缺失准确内容版本的 Review 学习副本在重新核验时失效。
 
 08b 学习记录将 `objectType` 加入原 schema2 的认证 header/AAD。旧08a无类型学习副本在完整投影核对时失效，后续经在线精确版本读取重新缓存。草稿、录音和 nonce 历史继续保留。同 ID、版本和 generation 的异类型记录明确冲突，原内容持续保留。
 

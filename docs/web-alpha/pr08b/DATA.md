@@ -10,9 +10,9 @@
 
 `sync_conflicts` 保存冻结的 typed 本地操作与当时云端内容，`sync_resolutions` 追加用户决策。三张表的既有记录不可更新或删除。复习个人稿仍由 PR-07b 的不可变分支与文档 CAS 管理。新增直接个人稿写入同时保留精确冲突输入，历史冲突经原 op_id 与原请求体重交并验证原收据后可以补齐同步元数据。
 
-冲突读取完整保留既有 ReviewRevision，包括生成候选的原 source_ids、structured_content 和 generation_task_id。main 的 PR-07b 来源别名为 S1 至 S512，使用 `tools/pr07b/contract_candidate.py::build(base)` 组合对应来源定义与生成任务导航。Sync 与 Review 的应用装配均要求既有 x-pr07b-candidate 标识，缺少 overlay 时在启动前明确拒绝。
+冲突读取完整保留既有 ReviewRevision，包括生成候选的原 source_ids、structured_content 和 generation_task_id。main 的 PR-07b 来源别名为 S1 至 S512，使用 `tools/pr07b/contract_candidate.py::build(base)` 组合对应来源定义与生成任务导航。Sync 与 Review 的应用装配均要求既有 x-pr07b-candidate 标识，缺少 overlay 时在启动前明确拒绝。启用 Sync 时须同时注入已启用的 ReviewBrowser，供客户端通过既有精确文档与版本读取接口核验来源授权。
 
-`copy_to_new_note` 为个人稿保留原 Markdown 与 personal_note。标记、课程、偏好冲突的副本正文采用 typed payload 的规范 JSON，保留所提交字段及值。副本返回新 note 的标识和文档 CAS。明确采用云端与手动合并均要求当前 CAS，原分支持续保留。
+`copy_to_new_note` 为个人稿保留原 Markdown 与 personal_note。标记、课程、偏好冲突的副本正文采用 typed payload 的规范 JSON，保留所提交字段及值。副本返回新 note 的标识和文档 CAS。三种决策同时核对请求 base_revision、冲突冻结 server_revision 与当前 CAS。旧冲突遇到云端后续编辑时需要重新比较，原分支持续保留。
 
 ## 标记适配
 
@@ -45,9 +45,13 @@
 
 新增触发器避免目录写先占 event counter 后等待 Review 序列锁的增量锁环。任意组合多个现有任务、Review 与目录写入的调用仍须遵守其既有锁序，PR-08b 的逐操作事务限定实际写入组合。双连接用例核验本包新增组合。
 
+个人版本冲突在递增 event counter 前读取并锁定将冻结的准确云端来源，随后补齐同步元数据直接使用该已读内容。课程冲突的采用云端与复制决策用共享课程锁冻结 CAS，手动合并取得课程写锁时不获取 Review 序列锁。只有个人版本决策及复制到新笔记需要 Review 序列锁。
+
 删除事件在 HTTP Changes 中映射到 `deletion` 类型、真实删除请求标识和删除进度版本。客户端可读取删除请求范围并重新核对完整授权投影。来源撤权后的完整投影移除对应对象，未同步草稿保留受限恢复状态。
 
 qa_sources 的新增、修订与撤权在同一事务提交阶段给本课堂 Review 文档和标记追加既有 object.changed 事件，事件只含标识和真实对象版本。来源状态变化可以发生在对象 CAS 未改变时，客户端收到该事件仍须核对授权和精确内容。已被 RLS 隐藏的文档和标记在 Changes 中标记 deleted，其他对象继续按同一标识重新读取。
+
+文档原始来源仍有效时，后续某个来源撤权可以只隐藏其派生版本和冲突。此时文档投影保留，Changes 仍发同版本的变化事件。精确 ReviewRevision 读取核对该版本的来源快照，冲突读取同时核对冻结的云端版本与本地提交分支，客户端据此控制正文和草稿访问。
 
 ## 验证边界
 

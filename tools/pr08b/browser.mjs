@@ -29,13 +29,15 @@ async function install(target = page) {
       course: '10000000-0000-4000-8000-000000000005', classroom: '10000000-0000-4000-8000-000000000006',
       document: '10000000-0000-4000-8000-000000000007', conflict: '10000000-0000-4000-8000-000000000008',
       deletion: '10000000-0000-4000-8000-000000000009',
+      revisionA: '10000000-0000-4000-8000-000000000010', revisionB: '10000000-0000-4000-8000-000000000011',
+      snapshotA: '10000000-0000-4000-8000-000000000012', snapshotB: '10000000-0000-4000-8000-000000000013',
     };
     window.ancestry = { semesterId: ids.semester, courseId: ids.course, classSessionId: ids.classroom };
-    window.operation = (text = 'SYNTHETIC PRIVATE LOCAL TEXT', revision = 1) => {
+    window.operation = (text = 'SYNTHETIC PRIVATE LOCAL TEXT', revision = 1, contentRevisionId = null) => {
       const draft = crypto.randomUUID();
       return { op_id: crypto.randomUUID(), object_id: ids.document, object_type: 'personal_revision',
         draft_id: draft, base_revision: revision,
-        payload: { base_revision: revision, base_content_revision_id: null, draft_id: draft,
+        payload: { base_revision: revision, base_content_revision_id: contentRevisionId, draft_id: draft,
           body_markdown: text, personal_note: 'Synthetic personal note' } };
     };
     window.expectCode = async (promise, code) => {
@@ -51,8 +53,11 @@ async function install(target = page) {
       }
     }
     class Transport {
-      constructor() {
+      constructor(options = {}) {
         this.receipts = new Map(); this.pushes = []; this.resolutions = []; this.mode = 'apply'; this.pages = [];
+        this.revokedRevisions = new Set(options.revokedRevisions ?? []);
+        this.conflictsRevoked = options.conflictsRevoked ?? false;
+        this.revisionReads = [];
         this.serverRevision = 2;
         this.projections = [
           ['semester', ids.semester, null], ['course', ids.course, ids.semester],
@@ -63,6 +68,24 @@ async function install(target = page) {
       async bootstrap() { return { projection_complete: true, maximum_projection_count: 10000, projections: structuredClone(this.projections), watermark: 'watermark-0' }; }
       async changes(after) { return this.pages.shift() ?? { items: [], next_cursor: after, has_more: false }; }
       async deletion(id) { return { id, scope_id: ids.classroom, scope_type: 'class_session', state: 'access_revoked', revision: 1 }; }
+      async document(id) {
+        const projection = this.projections.find(value => value.object_id === id && value.object_type === 'review_document');
+        if (!projection) throw Object.assign(new Error('Document missing'), { code: 'NOT_FOUND' });
+        return { id, revision: projection.revision, created_at: projection.updated_at, updated_at: projection.updated_at,
+          class_session_id: ids.classroom, kind: 'note', title: 'Synthetic personal note', adopted_revision_id: null,
+          latest_personal_revision_id: null, candidate_revision_ids: [], understood: false, source_status: 'unchanged' };
+      }
+      async reviewRevision(id) {
+        this.revisionReads.push(id);
+        if (![ids.revisionA, ids.revisionB].includes(id) || this.revokedRevisions.has(id)) {
+          throw Object.assign(new Error('Revision missing'), { code: 'NOT_FOUND' });
+        }
+        return { id, document_id: ids.document, revision: 1, kind: 'ai_candidate',
+          created_at: new Date().toISOString(), updated_at: new Date().toISOString(), parent_revision_id: null,
+          source_snapshot_id: id === ids.revisionA ? ids.snapshotA : ids.snapshotB, raw_output_ref: null,
+          body_markdown: id === ids.revisionA ? 'AUTHORIZED SOURCE A BODY' : 'REVOKED SOURCE B BODY',
+          structured_content: null, personal_note: '' };
+      }
       async receipt(id) { if (!this.receipts.has(id)) throw Object.assign(new Error('Missing'), { code: 'NOT_FOUND' }); return structuredClone(this.receipts.get(id)); }
       async makeReceipt(operation, kind = 'syncOperation', value = operation) {
         return { op_id: operation.op_id, operation: kind, request_sha256: await lib.syncFingerprint(value),
@@ -81,7 +104,10 @@ async function install(target = page) {
         if (this.mode === 'invalid') receipt.request_sha256 = '0'.repeat(64);
         return { receipts: [structuredClone(receipt)], cursor: 'unconsumed-server-hint' };
       }
-      async conflict() { return structuredClone(this.conflictValue); }
+      async conflict() {
+        if (this.conflictsRevoked) throw Object.assign(new Error('Conflict missing'), { code: 'NOT_FOUND' });
+        return structuredClone(this.conflictValue);
+      }
       async resolve(id, body, opId) {
         this.resolutions.push({ id, body: structuredClone(body), opId });
         if (body.base_revision !== this.serverRevision) throw Object.assign(new Error('Synthetic stale CAS'), { code: 'REVISION_CONFLICT' });
@@ -92,19 +118,19 @@ async function install(target = page) {
         return receipt;
       }
     }
-    window.create = async (name, limits = {}, runtimeOptions = {}, scope = 'drafts') => {
+    window.create = async (name, limits = {}, runtimeOptions = {}, scope = 'drafts', transportOptions = {}) => {
       window.cache = new NativeCache({ enabled: true, recordingEnabled: true, databaseName: name,
         limits: { draftBytes: 2000000, draftOperations: 100, recordingBytes: 2000000, ...limits } });
       cache.bind({ ownerId: ids.owner, deviceId: ids.device, sessionId: ids.session });
-      window.transport = new Transport();
+      window.transport = new Transport(transportOptions);
       window.runtime = new lib.OfflineSyncRuntime(cache, transport, { enabled: true, ...runtimeOptions });
       if (scope === 'learning') await runtime.unlockLearning('synthetic-password');
       else await runtime.unlock('synthetic-password');
     };
     window.learningReference = (revision = 1) => ({ scope: 'learning', objectType: 'review_document',
-      objectId: ids.document, revision, generation: 1, ancestry });
+      objectId: ids.document, revision, generation: 1, contentRevisionId: revision === 1 ? ids.revisionA : ids.revisionB, ancestry });
     window.hydrate = (reference, text) => async () => ({ objectId: reference.objectId,
-      revision: reference.revision, bytes: new TextEncoder().encode(text) });
+      revision: reference.revision, contentRevisionId: reference.contentRevisionId, bytes: new TextEncoder().encode(text) });
     window.records = async name => {
       const database = await lib.openCacheDatabase(name);
       try {
@@ -389,6 +415,72 @@ try {
       records: (await records('pr08b-bootstrap-revocation')).length, pushes: transport.pushes.length })),
     { unlocked: false, records: 1, pushes: 1 });
   });
+  await test('partial-source-revocation-clears-conflict-and-restricts-draft-after-unlock-and-page-reload', async () => {
+    const reference = await page.evaluate(async () => {
+      await create('pr08b-partial-source'); transport.mode = 'conflict';
+      const reference = await runtime.enqueue(operation('SOURCE B UNIQUE DRAFT', 1, ids.revisionB), ancestry, 1);
+      await runtime.flush();
+      transport.conflictValue.server_content = await transport.reviewRevision(ids.revisionB);
+      const mount = document.createElement('div'); document.body.append(mount);
+      window.uiRoot = lib.createRoot(mount);
+      uiRoot.render(lib.React.createElement(lib.ConflictPanel, { runtime, reference, generation: 2 }));
+      return reference;
+    });
+    await page.getByRole('heading', { name: '云端版本 2' }).waitFor();
+    assert.equal((await page.locator('body').innerText()).includes('REVOKED SOURCE B BODY'), true);
+    await page.getByRole('textbox', { name: '合并正文', exact: true }).fill('SOURCE B UNSENT MERGE');
+    await page.evaluate(async () => {
+      transport.revokedRevisions.add(ids.revisionB); transport.conflictsRevoked = true;
+      transport.pages.push({ items: [{ event_id: crypto.randomUUID(), object_id: ids.document,
+        object_type: 'review_document', revision: 1, deleted: false }], next_cursor: 'partial-source-revoked', has_more: false });
+      await runtime.pollChanges();
+    });
+    await page.getByRole('status').filter({ hasText: '同步已锁定，请重新验证身份。' }).waitFor();
+    const visible = await page.locator('body').innerText();
+    for (const marker of ['REVOKED SOURCE B BODY', 'SOURCE B UNIQUE DRAFT', 'SOURCE B UNSENT MERGE']) {
+      assert.equal(visible.includes(marker), false);
+    }
+    assert.equal(await page.locator('textarea').count(), 0);
+    const reopened = await page.evaluate(async reference => {
+      await runtime.unlock('synthetic-password');
+      await expectCode(runtime.readDraft(reference), 'AUTHORITY_UNAVAILABLE');
+      return { state: runtime.snapshot().pending[0].state, records: (await records('pr08b-partial-source')).length,
+        documentVisible: (await transport.document(ids.document)).id === ids.document,
+        allowedBody: (await runtime.readReviewRevision(ids.document, ids.revisionA)).body_markdown };
+    }, reference);
+    assert.deepEqual(reopened, { state: 'restricted', records: 1, documentVisible: true, allowedBody: 'AUTHORIZED SOURCE A BODY' });
+    await page.reload();
+    await install();
+    const restarted = await page.evaluate(async reference => {
+      await create('pr08b-partial-source', {}, {}, 'drafts', { revokedRevisions: [ids.revisionB], conflictsRevoked: true });
+      await expectCode(runtime.readDraft(reference), 'AUTHORITY_UNAVAILABLE');
+      const state = runtime.snapshot().pending[0].state;
+      const allowed = await runtime.enqueue(operation('SOURCE A VALID DRAFT', 1, ids.revisionA), ancestry, 2);
+      const stored = await records('pr08b-partial-source');
+      return { state, records: stored.length, allowedText: (await runtime.readDraft(allowed)).payload.body_markdown,
+        rejectedRevisionRead: transport.revisionReads.includes(ids.revisionB),
+        leaked: JSON.stringify(stored).includes('SOURCE B UNIQUE DRAFT') };
+    }, reference);
+    assert.deepEqual(restarted, { state: 'restricted', records: 2, allowedText: 'SOURCE A VALID DRAFT', rejectedRevisionRead: true, leaked: false });
+  });
+  await test('partial-source-event-rejects-a-late-exact-revision-response', async () => {
+    await page.evaluate(async () => {
+      await create('pr08b-late-revision');
+      await runtime.enqueue(operation('PRESERVED WHILE AUTHORIZATION IS PENDING'), ancestry, 1);
+      const value = await transport.reviewRevision(ids.revisionB);
+      transport.reviewRevision = async () => new Promise(resolve => { transport.release = () => resolve(value); });
+      window.lateRevision = runtime.readReviewRevision(ids.document, ids.revisionB)
+        .then(value => ({ body: value.body_markdown }), error => ({ code: error.code }));
+    });
+    await page.waitForFunction(() => typeof transport.release === 'function');
+    const result = await page.evaluate(async () => {
+      transport.pages.push({ items: [{ event_id: crypto.randomUUID(), object_id: ids.document,
+        object_type: 'review_document', revision: 1, deleted: false }], next_cursor: 'late-partial-revocation', has_more: false });
+      await runtime.pollChanges(); transport.release();
+      return { result: await lateRevision, unlocked: runtime.snapshot().unlocked, records: (await records('pr08b-late-revision')).length };
+    });
+    assert.deepEqual(result, { result: { code: 'LOCKED' }, unlocked: false, records: 1 });
+  });
   await test('learning-only-unlock-authorizes-exact-hydration-and-keeps-drafts-locked', async () => {
     const result = await page.evaluate(async () => {
       await create('pr08b-learning-only', {}, {}, 'learning');
@@ -423,6 +515,8 @@ try {
       transport.pages.push({ items: [{ event_id: crypto.randomUUID(), object_id: ids.document,
         object_type: 'review_document', revision: 2, deleted: false }], next_cursor: 'changed-2', has_more: false });
       await runtime.pollChanges();
+      const lockedOnChange = runtime.snapshot().unlockedScopes.length === 0;
+      await runtime.unlockLearning('synthetic-password');
       let oldCode = null;
       try { await runtime.readLearning(old); } catch (error) { oldCode = error.code; }
       const current = learningReference(2);
@@ -434,10 +528,35 @@ try {
       transport.pages.push({ items: [{ event_id: crypto.randomUUID(), object_id: ids.document,
         object_type: 'review_document', revision: 2, deleted: false }], next_cursor: 'same-revision-change', has_more: false });
       await runtime.pollChanges();
-      return { oldCode, empty, mismatchCode, text, afterSameRevisionChange: await runtime.readLearning(current) };
+      const lockedOnSameRevision = runtime.snapshot().unlockedScopes.length === 0;
+      await runtime.unlockLearning('synthetic-password');
+      return { oldCode, empty, mismatchCode, text, lockedOnChange, lockedOnSameRevision,
+        afterSameRevisionChange: await runtime.readLearning(current) };
     });
     assert.deepEqual(result, { oldCode: 'AUTHORITY_UNAVAILABLE', empty: null, mismatchCode: 'INVALID_HYDRATION',
-      text: 'CURRENT CONTENT', afterSameRevisionChange: null });
+      text: 'CURRENT CONTENT', lockedOnChange: true, lockedOnSameRevision: true, afterSameRevisionChange: null });
+  });
+  await test('partial-source-revocation-denies-exact-learning-body-and-preserves-valid-source', async () => {
+    const result = await page.evaluate(async () => {
+      await create('pr08b-partial-learning', {}, {}, 'learning');
+      const revoked = { ...learningReference(), contentRevisionId: ids.revisionB };
+      await runtime.cacheLearning(revoked, hydrate(revoked, 'SOURCE B CACHED BODY'));
+      transport.revokedRevisions.add(ids.revisionB);
+      transport.pages.push({ items: [{ event_id: crypto.randomUUID(), object_id: ids.document,
+        object_type: 'review_document', revision: 1, deleted: false }], next_cursor: 'learning-partial-revoked', has_more: false });
+      await runtime.pollChanges();
+      const locked = runtime.snapshot().unlockedScopes.length === 0;
+      await runtime.unlockLearning('synthetic-password');
+      await expectCode(runtime.readLearning(revoked), 'AUTHORITY_UNAVAILABLE');
+      let hydrated = false;
+      await expectCode(runtime.cacheLearning(revoked, async () => { hydrated = true; return hydrate(revoked, 'STALE SOURCE B')(); }), 'AUTHORITY_UNAVAILABLE');
+      const allowed = learningReference();
+      await runtime.cacheLearning(allowed, hydrate(allowed, 'SOURCE A CURRENT BODY'));
+      return { locked, hydrated, allowed: new TextDecoder().decode(await runtime.readLearning(allowed)),
+        storedRevision: (await records('pr08b-partial-learning'))[0].header.contentRevisionId };
+    });
+    assert.deepEqual(result, { locked: true, hydrated: false, allowed: 'SOURCE A CURRENT BODY',
+      storedRevision: '10000000-0000-4000-8000-000000000010' });
   });
   await test('same-revision-source-revocation-clears-learning-and-retains-encrypted-draft', async () => {
     const result = await page.evaluate(async () => {
@@ -460,29 +579,34 @@ try {
     });
     assert.deepEqual(result, { locked: true, code: 'AUTHORITY_UNAVAILABLE', scopes: ['drafts'], leaked: false });
   });
-  await test('legacy-untyped-learning-is-invalidated-with-unique-pools-preserved', async () => {
-    const result = await page.evaluate(async () => {
-      await create('pr08b-legacy-learning');
-      const draft = await runtime.enqueue(operation('UNIQUE LEGACY DRAFT'), ancestry, 1);
-      await cache.unlockScope('learning');
-      const legacy = { ...learningReference(), verifiedAt: Date.now() }; delete legacy.objectType;
-      await cache.put(legacy, new TextEncoder().encode('OLD UNTYPED LEARNING'));
-      const unlockRecording = () => cache.unlock('recording_recovery', ids.classroom, async () => ({
-        key_id: 'synthetic-recording_recovery', key_epoch: 1,
-        key_material_b64: btoa(String.fromCharCode(...new Uint8Array(32).fill(17))), scope: 'recording_recovery',
-        expires_at: new Date(Date.now() + 120000).toISOString(), cache_policy_revision: 'synthetic-only' }));
-      await unlockRecording();
-      const pcm = { scope: 'recording_recovery', objectId: 'synthetic-pcm', revision: 1, generation: 1, ancestry };
-      await cache.put(pcm, new Uint8Array([1, 2, 3, 4]));
-      await runtime.unlock('synthetic-password');
-      const stored = await records('pr08b-legacy-learning');
-      await unlockRecording();
-      return { scopes: stored.map(value => value.header.scope).sort(),
-        draft: (await runtime.readDraft(draft)).payload.body_markdown,
-        pcm: Array.from(await cache.read(pcm, ids.classroom)) };
+  for (const legacyKind of ['untyped', 'missing-content-revision']) {
+    await test('legacy-learning-' + legacyKind + '-is-invalidated-with-unique-pools-preserved', async () => {
+      const result = await page.evaluate(async legacyKind => {
+        const database = 'pr08b-legacy-learning-' + legacyKind;
+        await create(database);
+        const draft = await runtime.enqueue(operation('UNIQUE LEGACY DRAFT'), ancestry, 1);
+        await cache.unlockScope('learning');
+        const legacy = { ...learningReference(), verifiedAt: Date.now() };
+        if (legacyKind === 'untyped') delete legacy.objectType;
+        delete legacy.contentRevisionId;
+        await cache.put(legacy, new TextEncoder().encode('OLD UNTYPED LEARNING'));
+        const unlockRecording = () => cache.unlock('recording_recovery', ids.classroom, async () => ({
+          key_id: 'synthetic-recording_recovery', key_epoch: 1,
+          key_material_b64: btoa(String.fromCharCode(...new Uint8Array(32).fill(17))), scope: 'recording_recovery',
+          expires_at: new Date(Date.now() + 120000).toISOString(), cache_policy_revision: 'synthetic-only' }));
+        await unlockRecording();
+        const pcm = { scope: 'recording_recovery', objectId: 'synthetic-pcm', revision: 1, generation: 1, ancestry };
+        await cache.put(pcm, new Uint8Array([1, 2, 3, 4]));
+        await runtime.unlock('synthetic-password');
+        const stored = await records(database);
+        await unlockRecording();
+        return { scopes: stored.map(value => value.header.scope).sort(),
+          draft: (await runtime.readDraft(draft)).payload.body_markdown,
+          pcm: Array.from(await cache.read(pcm, ids.classroom)) };
+      }, legacyKind);
+      assert.deepEqual(result, { scopes: ['drafts', 'recording_recovery'], draft: 'UNIQUE LEGACY DRAFT', pcm: [1, 2, 3, 4] });
     });
-    assert.deepEqual(result, { scopes: ['drafts', 'recording_recovery'], draft: 'UNIQUE LEGACY DRAFT', pcm: [1, 2, 3, 4] });
-  });
+  }
   await test('learning-kind-is-bound-to-same-uuid-revision-generation', async () => {
     const result = await page.evaluate(async () => {
       await create('pr08b-learning-kind', {}, {}, 'learning');
@@ -493,10 +617,32 @@ try {
       try { await cache.put({ ...wrong, verifiedAt: Date.now() }, new TextEncoder().encode('TYPED LEARNING CONTENT')); }
       catch (error) { writeCode = error.code; }
       try { await cache.read(wrong); } catch (error) { readCode = error.code; }
-      return { writeCode, readCode, text: new TextDecoder().decode(await runtime.readLearning(reference)),
+      const wrongRevision = { ...reference, contentRevisionId: ids.revisionB };
+      let revisionWriteCode = null; let revisionReadCode = null;
+      try { await cache.put({ ...wrongRevision, verifiedAt: Date.now() }, new TextEncoder().encode('OTHER CONTENT VERSION')); }
+      catch (error) { revisionWriteCode = error.code; }
+      try { await cache.read(wrongRevision); } catch (error) { revisionReadCode = error.code; }
+      const text = new TextDecoder().decode(await runtime.readLearning(reference));
+      const database = await lib.openCacheDatabase('pr08b-learning-kind');
+      try {
+        await new Promise((resolve, reject) => {
+          const tx = database.transaction(['records'], 'readwrite');
+          const store = tx.objectStore('records');
+          const request = store.getAll();
+          request.onsuccess = () => {
+            const record = request.result[0]; record.header.contentRevisionId = ids.revisionB; store.put(record);
+          };
+          tx.oncomplete = resolve; tx.onabort = () => reject(tx.error);
+        });
+      } finally { database.close(); }
+      let tamperedCode = null;
+      try { await cache.read(wrongRevision); } catch (error) { tamperedCode = error.code; }
+      return { writeCode, readCode, revisionWriteCode, revisionReadCode, tamperedCode, text,
         count: (await records('pr08b-learning-kind')).length };
     });
-    assert.deepEqual(result, { writeCode: 'REVISION_CONFLICT', readCode: 'REVISION_CONFLICT', text: 'TYPED LEARNING CONTENT', count: 1 });
+    assert.deepEqual(result, { writeCode: 'REVISION_CONFLICT', readCode: 'REVISION_CONFLICT',
+      revisionWriteCode: 'REVISION_CONFLICT', revisionReadCode: 'REVISION_CONFLICT', tamperedCode: 'CORRUPT_RECORD',
+      text: 'TYPED LEARNING CONTENT', count: 1 });
   });
   await test('second-tab-reconciles-an-operation-already-acknowledged-in-first-tab', async () => {
     const other = await context.newPage();
@@ -524,7 +670,7 @@ try {
   await context.close();
   await new Promise(resolve => server.close(resolve));
   await writeFile(join(output, 'sync-browser.json'), JSON.stringify({ chromium: browserVersion, synthetic_transport: true,
-    native_crypto_indexeddb: true, results, passed: results.length === 25 && results.every(result => result.passed) }, null, 2));
+    native_crypto_indexeddb: true, results, passed: results.length === 29 && results.every(result => result.passed) }, null, 2));
 }
 console.log(JSON.stringify({ tests: results.length, passed: results.filter(result => result.passed).length, results }));
-if (results.length !== 25 || results.some(result => !result.passed)) process.exitCode = 1;
+if (results.length !== 29 || results.some(result => !result.passed)) process.exitCode = 1;
