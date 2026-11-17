@@ -444,7 +444,8 @@ export class OfflineSyncRuntime extends EventTarget {
       || !this.exactAuthority.has(JSON.stringify(['conflict', original.objectId, row.conflictId]))) throw new SyncError('INVALID_RESOLUTION');
     this.editorGenerations.set(editorId, generation);
     const reference: CacheWrite = { scope: 'drafts', objectType: 'sync_editor_recovery', objectId: editorId, revision: original.revision,
-      generation, operationId: this.newId(), ancestry: structuredClone(original.ancestry), recoveryFor: original.operationId, recoveryConflictId: row.conflictId };
+      generation, operationId: this.newId(), ancestry: structuredClone(original.ancestry), recoveryFor: original.operationId,
+      recoveryConflictId: row.conflictId, recoverySourceObjectId: original.objectId };
     const bytes = encoder.encode(JSON.stringify({ schema: 1, kind: 'editor_recovery', source: original, conflictId: row.conflictId,
       sourceHash: binding.requestHash, body, note } satisfies EditorEnvelope));
     let writing: Promise<void>;
@@ -543,6 +544,7 @@ export class OfflineSyncRuntime extends EventTarget {
       if (!bytes) return null;
       const saved = JSON.parse(decoder.decode(bytes)) as EditorEnvelope;
       if (saved.kind !== 'editor_recovery' || saved.schema !== 1 || !saved.source || !uuid(saved.source.operationId)
+        || saved.source.objectId !== reference.recoverySourceObjectId
         || saved.source.operationId !== reference.recoveryFor || saved.conflictId !== reference.recoveryConflictId
         || typeof saved.sourceHash !== 'string' || typeof saved.body !== 'string' || typeof saved.note !== 'string') throw new SyncError('CORRUPT_DRAFT');
       return saved;

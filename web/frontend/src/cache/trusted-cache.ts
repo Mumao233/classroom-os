@@ -181,6 +181,7 @@ export class TrustedCache extends EventTarget {
       || (kind === 'course' && objectId === header.ancestry.courseId)
       || (kind === 'class_session' && objectId === header.ancestry.classSessionId)
       || (kind === 'audio' && header.scope === 'recording_recovery' && objectId === header.ancestry.classSessionId)
+      || (header.objectType === 'sync_editor_recovery' && objectId === header.recoverySourceObjectId)
       || objectId === header.objectId;
   }
 
@@ -226,7 +227,7 @@ export class TrustedCache extends EventTarget {
   saveRecoveryDraft(write: CacheWrite, plaintext: Uint8Array): Promise<void> {
     const snapshot = structuredClone(write);
     this.validate(snapshot);
-    if (snapshot.scope !== 'drafts' || snapshot.objectType !== 'sync_editor_recovery' || !snapshot.recoveryFor || !snapshot.recoveryConflictId) throw new CacheError('INVALID_INPUT');
+    if (snapshot.scope !== 'drafts' || snapshot.objectType !== 'sync_editor_recovery' || !snapshot.recoveryFor || !snapshot.recoveryConflictId || !snapshot.recoverySourceObjectId) throw new CacheError('INVALID_INPUT');
     const auth = this.authorized('drafts', null);
     const header: CacheHeader = { ...snapshot, ownerId: auth.identity.ownerId, deviceId: auth.identity.deviceId,
       keyId: auth.key.id, keyVersion: auth.key.version, schema: 2 };
@@ -255,23 +256,29 @@ export class TrustedCache extends EventTarget {
         const state = tx.objectStore('namespaces').get(record.namespace);
         state.onsuccess = () => {
           if (((state.result as NamespaceState | undefined)?.recoveryGeneration ?? 0) !== value.recoveryGeneration) { fail(new CacheError('STALE_OPERATION')); return; }
-          const heads = tx.objectStore('namespaces');
-          const headId = `${record.namespace}:recovery:${record.header.objectId}`;
-          const head = heads.get(headId);
-          head.onsuccess = () => {
-          if (((head.result as NamespaceState | undefined)?.generation ?? 0) >= record.header.generation) { done(); return; }
-          const request = tx.objectStore('metadata').index('pool').getAll([record.namespace, 'drafts']);
-          request.onsuccess = () => {
-            const own = request.result as CacheMetadata[];
-            const versions = own.filter(item => item.header.objectType === 'sync_editor_recovery' && item.header.objectId === record.header.objectId);
-            if (versions.some(item => item.header.generation >= record.header.generation)) { done(); return; }
-            try { this.makeRoom(tx, own.filter(item => !versions.includes(item)), record); }
-            catch (error) { fail(error as CacheError); return; }
-            for (const version of versions) deleteCacheRecord(tx, version.id);
-            tx.objectStore('nonces').add({ id: `${record.header.keyId}:${Array.from(record.nonce).join('.')}`, namespace: record.namespace });
-            heads.put({ id: headId, generation: record.header.generation });
-            putCacheRecord(tx, record); done();
-          };
+          const tombstones = tx.objectStore('tombstones').getAll();
+          tombstones.onsuccess = () => {
+            if ((tombstones.result as Tombstone[]).some(item => item.namespace === record.namespace && item.retainDrafts !== true && this.matchesDeletion(record.header, item))) {
+              fail(new CacheError('STALE_OPERATION')); return;
+            }
+            const heads = tx.objectStore('namespaces');
+            const headId = `${record.namespace}:recovery:${record.header.objectId}`;
+            const head = heads.get(headId);
+            head.onsuccess = () => {
+              if (((head.result as NamespaceState | undefined)?.generation ?? 0) >= record.header.generation) { done(); return; }
+              const request = tx.objectStore('metadata').index('pool').getAll([record.namespace, 'drafts']);
+              request.onsuccess = () => {
+                const own = request.result as CacheMetadata[];
+                const versions = own.filter(item => item.header.objectType === 'sync_editor_recovery' && item.header.objectId === record.header.objectId);
+                if (versions.some(item => item.header.generation >= record.header.generation)) { done(); return; }
+                try { this.makeRoom(tx, own.filter(item => !versions.includes(item)), record); }
+                catch (error) { fail(error as CacheError); return; }
+                for (const version of versions) deleteCacheRecord(tx, version.id);
+                tx.objectStore('nonces').add({ id: `${record.header.keyId}:${Array.from(record.nonce).join('.')}`, namespace: record.namespace });
+                heads.put({ id: headId, generation: record.header.generation });
+                putCacheRecord(tx, record); done();
+              };
+            };
           };
         };
       }); // Intentionally not tracked: only pre-authorized ciphertext append can survive a lock.
@@ -380,6 +387,7 @@ export class TrustedCache extends EventTarget {
         this.guard(tx, auth, value.header, () => {
           if (snapshot.objectType && snapshot.objectType !== value.header.objectType) { fail(new CacheError('REVISION_CONFLICT')); return; }
           if (snapshot.contentRevisionId && snapshot.contentRevisionId !== value.header.contentRevisionId) { fail(new CacheError('REVISION_CONFLICT')); return; }
+          if (snapshot.recoverySourceObjectId && snapshot.recoverySourceObjectId !== value.header.recoverySourceObjectId) { fail(new CacheError('REVISION_CONFLICT')); return; }
           if (value.header.scope === 'learning' && Date.now() - value.header.verifiedAt! >= LEARNING_LIMITS.ageMs) {
             if (mode === 'readwrite') deleteCacheRecord(tx, value.id);
             done(null); return;
@@ -459,16 +467,24 @@ export class TrustedCache extends EventTarget {
     const namespace = namespaceOf(identity);
     this.lock();
     this.channel?.postMessage('lock');
-    const tombstone: Tombstone = { id: JSON.stringify([namespace, notice.object_type, notice.object_id]), namespace, kind: notice.object_type, objectId: notice.object_id };
+    const tombstone: Tombstone = { id: JSON.stringify([namespace, notice.object_type, notice.object_id]), namespace, kind: notice.object_type, objectId: notice.object_id, retainDrafts };
     this.barrier = this.barrier.then(() => cacheTransaction<void>(this.databaseName, 'readwrite', (tx, done) => {
-      tx.objectStore('tombstones').put(tombstone);
+      let retainAllowed = retainDrafts;
+      const tombstones = tx.objectStore('tombstones');
+      const prior = tombstones.get(tombstone.id);
+      prior.onsuccess = () => {
+        const previous = prior.result as Tombstone | undefined;
+        retainAllowed = retainDrafts && (!previous || previous.retainDrafts === true);
+        tombstones.put({ ...tombstone, retainDrafts: retainAllowed });
+      };
       const states = tx.objectStore('namespaces');
       const state = states.get(namespace);
-      state.onsuccess = () => states.put({ ...(state.result as NamespaceState | undefined), id: namespace, generation: ((state.result as NamespaceState | undefined)?.generation ?? 0) + 1 });
+      state.onsuccess = () => states.put({ ...(state.result as NamespaceState | undefined), id: namespace,
+        generation: ((state.result as NamespaceState | undefined)?.generation ?? 0) + 1 });
       const request = tx.objectStore('metadata').index('namespace').getAll(namespace);
       request.onsuccess = () => {
         for (const record of request.result as CacheMetadata[]) {
-          if (this.matchesDeletion(record.header, tombstone) && !(retainDrafts && record.header.scope === 'drafts')) deleteCacheRecord(tx, record.id);
+          if (this.matchesDeletion(record.header, tombstone) && !(retainAllowed && record.header.scope === 'drafts')) deleteCacheRecord(tx, record.id);
         }
         done();
       };

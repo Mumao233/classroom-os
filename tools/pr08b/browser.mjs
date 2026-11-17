@@ -713,6 +713,66 @@ try {
     });
     assert.deepEqual(result, { code: 'STALE_OPERATION', retryCode: 'STALE_OPERATION', count: 0 });
   });
+  for (const scope of ['class_session', 'review_document']) {
+    for (const retainDrafts of [false, true]) {
+      await test('deletion-' + scope + '-recovery-retention-' + retainDrafts, async () => {
+        const database = 'pr08b-editor-delete-' + scope + '-' + retainDrafts;
+        await page.evaluate(async database => {
+          const source = await editable(database); const stream = crypto.randomUUID();
+          await runtime.saveConflictDraft(source, 'EXISTING RECOVERY BODY', 'EXISTING NOTE', stream, 1);
+          delayEncryption();
+          window.editorSave = runtime.saveConflictDraft(source, 'DELAYED RECOVERY BODY', 'DELAYED NOTE', stream, 2)
+            .then(reference => ({ code: 'saved', reference }), error => ({ code: error.code }));
+        }, database);
+        await page.waitForFunction(() => encryptedReleases.length === 1);
+        const result = await page.evaluate(async ({ scope, retainDrafts, database }) => {
+          const notice = { object_type: scope, object_id: scope === 'class_session' ? ids.classroom : ids.document, deletion_id: crypto.randomUUID(), state: 'access_revoked' };
+          if (retainDrafts) await cache.applyDeletion(notice, { retainDrafts: true });
+          else await cache.applyDeletion(notice);
+          const afterDeletion = (await records(database)).length;
+          restoreEncryption(); encryptedReleases.shift()(); const saved = await editorSave;
+          const stored = await records(database);
+          let readCode = null;
+          if (saved.reference) {
+            transport.projections = transport.projections.filter(value => value.object_id !== ids.document && (scope !== 'class_session' || value.object_id !== ids.classroom));
+            await runtime.unlock('synthetic-password');
+            try { await cache.read(saved.reference); } catch (error) { readCode = error.code; }
+          }
+          return { code: saved.code, afterDeletion, count: stored.length, readCode,
+            sourceBound: stored.filter(value => value.header.objectType === 'sync_editor_recovery').every(value => value.header.recoverySourceObjectId === ids.document),
+            leaked: JSON.stringify(stored).includes('RECOVERY BODY') };
+        }, { scope, retainDrafts, database });
+        assert.deepEqual(result, { code: retainDrafts ? 'saved' : 'STALE_OPERATION', afterDeletion: retainDrafts ? 2 : 0,
+          count: retainDrafts ? 2 : 0, readCode: retainDrafts ? 'GONE' : null, sourceBound: true, leaked: false });
+      });
+    }
+  }
+  await test('targeted-deletion-keeps-unrelated-inflight-recovery-and-cannot-weaken-delete', async () => {
+    await page.evaluate(async () => {
+      window.firstSource = await editable('pr08b-editor-targeted-delete');
+      const otherDocument = crypto.randomUUID();
+      transport.projections.push({ object_type: 'review_document', object_id: otherDocument, parent_id: ids.classroom, revision: 1, adopted_revision_id: null, updated_at: new Date().toISOString() });
+      await runtime.unlock('synthetic-password'); await runtime.flush();
+      window.otherSource = await runtime.enqueue({ ...operation('UNRELATED ORIGINAL'), object_id: otherDocument }, ancestry, 1);
+      await runtime.flush(); await runtime.inspectConflict(firstSource); await runtime.inspectConflict(otherSource);
+      delayEncryption();
+      window.firstSave = runtime.saveConflictDraft(firstSource, 'DELETED A INPUT', '', crypto.randomUUID(), 1).then(() => 'saved', error => error.code);
+      window.otherSave = runtime.saveConflictDraft(otherSource, 'UNRELATED B INPUT', '', crypto.randomUUID(), 1).then(reference => ({ code: 'saved', reference }), error => ({ code: error.code }));
+    });
+    await page.waitForFunction(() => encryptedReleases.length === 2);
+    const result = await page.evaluate(async () => {
+      const notice = { object_type: 'review_document', object_id: ids.document, deletion_id: crypto.randomUUID(), state: 'access_revoked' };
+      await cache.applyDeletion(notice);
+      await cache.applyDeletion(notice, { retainDrafts: true });
+      restoreEncryption(); encryptedReleases.splice(0).forEach(release => release());
+      const first = await firstSave, other = await otherSave;
+      transport.projections = transport.projections.filter(value => value.object_id !== ids.document);
+      await runtime.unlock('synthetic-password'); await runtime.flush();
+      const [draft] = await runtime.readConflictDrafts(otherSource);
+      return { first, other: other.code, body: draft.body, count: (await records('pr08b-editor-targeted-delete')).length };
+    });
+    assert.deepEqual(result, { first: 'STALE_OPERATION', other: 'saved', body: 'UNRELATED B INPUT', count: 2 });
+  });
   await test('locked-editor-reports-idb-failure-and-retries-only-retained-ciphertext', async () => {
     await page.evaluate(async () => { await editable('pr08b-editor-idb-failure', {}, true); delayEncryption(); });
     await page.getByRole('textbox', { name: '合并正文', exact: true }).fill('IDB FAILURE UNIQUE INPUT');
@@ -865,7 +925,7 @@ try {
   await context.close();
   await new Promise(resolve => server.close(resolve));
   await writeFile(join(output, 'sync-browser.json'), JSON.stringify({ chromium: browserVersion, synthetic_transport: true,
-    native_crypto_indexeddb: true, results, passed: results.length === 39 && results.every(result => result.passed) }, null, 2));
+    native_crypto_indexeddb: true, results, passed: results.length === 44 && results.every(result => result.passed) }, null, 2));
 }
 console.log(JSON.stringify({ tests: results.length, passed: results.filter(result => result.passed).length, results }));
-if (results.length !== 39 || results.some(result => !result.passed)) process.exitCode = 1;
+if (results.length !== 44 || results.some(result => !result.passed)) process.exitCode = 1;

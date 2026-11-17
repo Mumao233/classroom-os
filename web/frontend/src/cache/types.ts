@@ -15,6 +15,7 @@ export type CacheReference = {
   contentRevisionId?: string;
   recoveryFor?: string;
   recoveryConflictId?: string;
+  recoverySourceObjectId?: string;
 };
 export type CacheWrite = CacheReference & {
   ancestry: CacheAncestry;
@@ -63,7 +64,7 @@ export type CipherRecord = CacheMetadata & {
   ciphertext: ArrayBuffer;
 };
 export type NamespaceState = { id: string; generation: number; recoveryGeneration?: number };
-export type Tombstone = { id: string; namespace: string; kind: string; objectId: string };
+export type Tombstone = { id: string; namespace: string; kind: string; objectId: string; retainDrafts?: boolean };
 
 export const LEARNING_LIMITS = Object.freeze({ ageMs: 14 * 24 * 60 * 60 * 1000, classes: 20, bytes: 50_000_000 });
 export const namespaceOf = (identity: CacheIdentity) => JSON.stringify([identity.ownerId, identity.deviceId]);
