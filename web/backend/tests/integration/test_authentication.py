@@ -276,14 +276,16 @@ def test_additive_auth_migration_has_one_head_repeat_and_forced_RLS(auth):
     from alembic.script import ScriptDirectory
     a=auth
     scripts=ScriptDirectory.from_config(a.pg.config)
-    assert scripts.get_heads()==['0010_deletion_lifecycle']
+    heads=scripts.get_heads()
+    assert len(heads)==1
+    assert scripts.get_revision('0011_cache_keys').down_revision=='0010_deletion_lifecycle'
     assert scripts.get_revision('0010_deletion_lifecycle').down_revision=='pr07b_001'
     assert scripts.get_revision('pr07b_001').down_revision=='pr07a_001'
     assert scripts.get_revision('pr07a_001').down_revision=='0009_private_media'
     assert scripts.get_revision('0009_private_media').down_revision=='0008_manual_recovery'
     for _ in range(2):command.upgrade(a.pg.config,'head')
     with a.pg.admin.connect() as c:
-        assert c.scalar(sa.text('SELECT version_num FROM alembic_version'))=='0010_deletion_lifecycle'
+        assert c.scalar(sa.text('SELECT version_num FROM alembic_version'))==heads[0]
         rows=c.execute(sa.text("SELECT relname,relrowsecurity,relforcerowsecurity FROM pg_class WHERE relname IN ('devices','auth_sessions','auth_challenges','reauth_proofs','mfa_credentials','recovery_code_groups','mfa_recovery_codes','email_actions','preauth_receipts')")).all()
         assert len(rows)==9 and all(enabled and forced for _,enabled,forced in rows)
         assert c.scalar(sa.text("SELECT count(*) FROM pg_roles WHERE rolname IN ('classroom_web_auth_verifier','classroom_web_session_writer','classroom_web_identity_table_owner') AND (rolcanlogin OR rolsuper OR rolbypassrls OR rolcreatedb OR rolcreaterole OR rolinherit)"))==0
