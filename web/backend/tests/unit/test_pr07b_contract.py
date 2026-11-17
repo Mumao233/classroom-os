@@ -54,7 +54,8 @@ def test_generation_task_pointer_is_optional_nullable_and_keeps_formal_base_vers
     assert revision['properties']['generation_task_id']['anyOf'] == [
         {'type': 'string', 'format': 'uuid'}, {'type': 'null'}]
     assert 'generation_task_id' not in BASE['components']['schemas']['ReviewRevision']['properties']
-    assert candidate['info']['version'] == BASE['info']['version'] == '0.2.0'
+    assert candidate['info']['version'] == BASE['info']['version']
+    assert BASE['info']['version'] in {'0.2.0', '0.2.1'}
     legacy = next(case['value'] for case in FIXTURES if case['name'] == 'ai_candidate_revision')
     assert 'generation_task_id' not in legacy
     assert validator(candidate, 'ReviewRevision').is_valid(legacy)

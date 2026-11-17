@@ -2494,7 +2494,7 @@ export interface components {
             schema_revision: string;
             minimum_client_build: string;
             /** @constant */
-            contract_version: "0.2.0";
+            contract_version: "0.2.1";
             /** Format: date-time */
             server_time: string;
             features: {
@@ -4229,6 +4229,22 @@ export interface components {
                 op_id: string;
                 plan_hash: string;
             };
+        } | {
+            /** @constant */
+            purpose: "unlockCache";
+            /** @description Locator only; server verifies current ownership and required role. An account target must equal the authenticated user. */
+            target: {
+                /** @constant */
+                kind: "device";
+                /** Format: uuid */
+                id: string;
+            };
+            /** @description Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned. */
+            candidate_parameters: {
+                /** Format: uuid */
+                idempotency_key: string;
+                body: components["schemas"]["CacheUnlockRequest"];
+            };
         };
         /** @description Only automatic flow. Valid restricted cookie, its CSRF, exact Origin, current target epoch/flow, current password verification and fresh receiver-key PoP are all required. Server records actual verified_at and an operation-specific deadline at most verified_at+120s, intersecting flow/current qualification expiry; recheck after all locks. No new-password minimum, lost old MFA, second recovery-code consumption or flow-TTL extension. Not a manual receiver protocol. */
         RecoveryReceiverRequest: {
@@ -5463,6 +5479,8 @@ export interface operations {
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
                 /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
+                /** @description Existing X-Reauth-Token header, carrying an opaque server-issued proof for the exact purpose, target, candidate parameters and future Idempotency-Key. R3 at most 120 seconds from real verified_at and single-use; R1/R2 use the documented role window. Recheck current session/device/epoch and deadline after all locks. This header cannot grant ordinary admin permissions or authorize an unreviewed operation. Producer generates at least 32 random bytes, canonical unpadded base64url, 43..256 characters; parser decodes/re-encodes and rejects noncanonical or insufficient-byte values. Same token is accepted by control StudentExecutorEvidence via its Secret envelope; shape alone does not prove entropy or authorization. */
+                "X-Reauth-Token": components["parameters"]["ReauthToken"];
             };
             path?: never;
             cookie?: never;
