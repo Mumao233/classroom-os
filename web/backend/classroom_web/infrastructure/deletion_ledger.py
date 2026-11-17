@@ -10,6 +10,10 @@ generation 1, every link is verified, and any key listed beyond the first missin
 generation is treated as corruption. A store that does not enforce create-only
 writes is rejected when the adapter is constructed.
 
+A long-running writer keeps the verified chain in memory. Before every append it
+compares the store's listing with the ETag each cached entry had when it was read, so
+an entry rewritten or removed underneath it is refused instead of being built upon.
+
 Loss of the newest entries leaves a shorter chain that is still internally valid.
 Nothing inside this store can reveal that, so ``verify_head`` compares the chain with
 a head witness (generation and entry hash) that the operator recorded elsewhere.
@@ -68,6 +72,7 @@ class S3DeletionLedger:
         self._local = threading.local()
         self._chain: list[LedgerEntry] = []
         self._by_intent: dict = {}
+        self._etags: dict = {}
         self._verify_private()
         self._verify_conditional_writes()
 
@@ -123,20 +128,26 @@ class S3DeletionLedger:
             raise LedgerUnavailable('ledger time budget exhausted')
         return self._bounded
 
-    def _get(self, generation):
+    def _fetch(self, generation):
+        """(bytes, ETag) of one entry, or (None, None) when the store has no such key."""
         store = self._store()
         try:
-            with store.get_object(Bucket=self.bucket, Key=self._name(generation))['Body'] as stream:
+            reply = store.get_object(Bucket=self.bucket, Key=self._name(generation))
+            with reply['Body'] as stream:
                 raw = stream.read(self.max_entry_bytes + 1)
+            etag = reply['ETag'].strip('"')
         except ClientError as error:
             if _status(error) == 404:
-                return None
+                return None, None
             raise LedgerUnavailable('ledger entry unreadable') from None
-        except (BotoCoreError, OSError):
+        except (BotoCoreError, OSError, KeyError):
             raise LedgerUnavailable('ledger entry unreadable') from None
         if len(raw) > self.max_entry_bytes:
             raise LedgerCorrupt('ledger entry exceeds its bound')
-        return raw
+        return raw, etag
+
+    def _get(self, generation):
+        return self._fetch(generation)[0]
 
     @staticmethod
     def _parse(raw, generation, previous):
@@ -150,8 +161,9 @@ class S3DeletionLedger:
         except (ValueError, UnicodeError, KeyError, TypeError):
             raise LedgerCorrupt('ledger chain verification failed') from None
 
-    def _listed_head(self):
-        highest, count, token = 0, 0, {}
+    def _listed(self):
+        """{generation: ETag} of every stored entry; a gap or a foreign key is corruption."""
+        found, token = {}, {}
         try:
             while True:
                 reply = self._store().list_objects_v2(Bucket=self.bucket, Prefix=PREFIX, **token)
@@ -159,20 +171,21 @@ class S3DeletionLedger:
                     match = _KEY.fullmatch(item['Key'])
                     if match is None:
                         raise LedgerCorrupt('unexpected object in ledger prefix')
-                    highest, count = max(highest, int(match.group(1))), count + 1
+                    found[int(match.group(1))] = item['ETag'].strip('"')
                 if not reply.get('IsTruncated'):
-                    if count != highest:
+                    if len(found) != max(found, default=0):
                         raise LedgerCorrupt('ledger generation gap')
-                    return highest
+                    return found
                 token = dict(ContinuationToken=reply['NextContinuationToken'])
         except (ClientError, BotoCoreError, KeyError):
             raise LedgerUnavailable('ledger listing failed') from None
 
-    def _extend(self, chain, by_intent):
-        """Read forward from the verified prefix until the first missing generation."""
+    def _extend(self, chain, by_intent, etags):
+        """Read forward from the verified prefix until the first missing generation,
+        then check the whole prefix, old and new, against what the store lists now."""
         while True:
             generation = len(chain) + 1
-            raw = self._get(generation)
+            raw, etag = self._fetch(generation)
             if raw is None:
                 break
             entry = self._parse(raw, generation, chain[-1].entry_hash if chain else GENESIS)
@@ -180,20 +193,25 @@ class S3DeletionLedger:
                 raise LedgerCorrupt('duplicate intent in ledger')
             chain.append(entry)
             by_intent[entry.intent.intent_id] = entry
+            etags[generation] = etag
+        listed = self._listed()
+        # Every entry this reader verified must still be stored with the bytes it verified.
+        if any(listed.get(generation) != etag for generation, etag in etags.items()):
+            raise LedgerCorrupt('ledger history changed')
         # A listed key past the first missing generation means an entry was lost.
-        if self._listed_head() > len(chain):
+        if len(listed) > len(chain):
             if self._get(len(chain) + 1) is None:
                 raise LedgerCorrupt('ledger generation gap')
-            return self._extend(chain, by_intent)
-        return chain, by_intent
+            return self._extend(chain, by_intent, etags)
+        return chain, by_intent, etags
 
     def entries(self):
         """Fresh full verification from generation 1; never served from the cache."""
-        chain, by_intent = self._extend([], {})
+        chain, by_intent, etags = self._extend([], {}, {})
         with self._lock:
             if len(chain) < len(self._chain) or any(a.entry_hash != b.entry_hash for a, b in zip(chain, self._chain)):
                 raise LedgerCorrupt('ledger history changed')
-            self._chain, self._by_intent = chain, by_intent
+            self._chain, self._by_intent, self._etags = chain, by_intent, etags
         return list(chain)
 
     def head(self):
@@ -227,16 +245,19 @@ class S3DeletionLedger:
         """
         if not isinstance(intent, DeletionIntent):
             raise TypeError('a deletion intent is required')
-        with self._lock:
+        # Waiting for another append counts against the caller's deadline too.
+        if not self._lock.acquire(timeout=-1 if deadline is None else max(0, deadline - time.monotonic())):
+            raise LedgerUnavailable('ledger busy past the time budget')
+        try:
             self._local.deadline = deadline
-            try:
-                return self._append(intent)
-            finally:
-                self._local.deadline = None
+            return self._append(intent)
+        finally:
+            self._local.deadline = None
+            self._lock.release()
 
     def _append(self, intent):
         for _ in range(32):
-            self._extend(self._chain, self._by_intent)
+            self._extend(self._chain, self._by_intent, self._etags)
             known = self._by_intent.get(intent.intent_id)
             if known is not None:
                 if known.intent.identity() != intent.identity():

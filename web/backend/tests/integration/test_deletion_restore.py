@@ -352,3 +352,101 @@ def test_restore_revokes_a_classroom_moved_into_a_course_deleted_after_the_backu
     as_user(m, m.a.email)
     m.worker.drain()
     assert finished(m, done['id'])
+
+
+def test_restore_revokes_a_course_moved_into_a_semester_deleted_after_the_backup(d, tmp_path):
+    m = d
+    m.worker.drain()
+    with m.pg.db.transaction(OwnerContext(m.uid)) as tx:
+        travelling = tx.catalog.create_course(m.semester.id, 'Moved after the backup')
+    room = classroom(m, 'Inside the moved course', travelling)
+    asset, _ = upload(m, room, 'moved')
+    stayed_asset, stayed_data = upload(m, marker='stayed')
+    key = object_key(m, asset['id'])
+    dump = backup(m, tmp_path / 'backup.dump')
+    with m.pg.db.transaction(OwnerContext(m.uid)) as tx:
+        later = tx.catalog.create_semester('Created after the backup')
+        tx.catalog.move_course(travelling.id, travelling.revision, later.id)
+    done = delete(m, 'semester', later.id)
+    entry = m.deploy.ledger.entries()[-1]
+    assert entry.intent.scope_id == later.id
+    assert entry.intent.courses == (travelling.id,) and entry.intent.members == (room.id,)
+    witness = m.deploy.ledger.head()
+    restored = Restored(m, dump)
+    try:
+        # In the copy the course is live in its old semester; the deleted semester is unknown.
+        assert restored.rows('SELECT semester_id,deleted_at FROM courses WHERE id=:id', id=travelling.id) == [
+            dict(semester_id=m.semester.id, deleted_at=None)]
+        opened = restored.build(reconcile=False)
+        worker = DeletionWorker(queue=restored.queue, store=m.store, policy=POLICY, worker_id='restore-drill')
+        report = RestoreCoordinator(service=opened.deletion, operator=restored.operator, worker=worker).run(
+            ledger_witness=witness, revoked_owners=[])
+        assert report['ready'] is True, report
+        with restored.db.transaction(OwnerContext(m.uid)) as tx:
+            for read in (lambda: tx.catalog.get_course(travelling.id), lambda: tx.catalog.get_class_session(room.id)):
+                with pytest.raises(Gone):
+                    read()
+            # The semester the course was restored into, and its other course, are untouched.
+            assert tx.catalog.get_course(m.course.id).deleted_at is None
+            assert tx.catalog.get_class_session(m.classroom.id).deleted_at is None
+        assert restored.rows('SELECT status FROM media_assets WHERE id=:id', id=asset['id'])[0]['status'] == 'deleted'
+        assert versions(m, key) == []
+        own = DeletionIntent.for_scope(m.uid, 'course', travelling.id, members=[room.id])
+        assert len(report['reconcile']['accepted']) == 1 and report['audit']['unaccepted_requests'] == 0
+        assert [e.generation for e in m.deploy.ledger.entries() if e.intent == own] == report['reconcile']['accepted']
+        assert restored.rows('SELECT status FROM media_assets WHERE id=:id', id=stayed_asset['id'])[0]['status'] == 'committed'
+        assert m.store.client.get_object(Bucket=m.store.bucket, Key=object_key(m, stayed_asset['id']))['Body'].read() == stayed_data
+    finally:
+        restored.close()
+    as_user(m, m.a.email)
+    m.worker.drain()
+    assert finished(m, done['id'])
+
+
+def test_restore_stops_when_the_copy_would_widen_an_accepted_cascade(d, tmp_path):
+    m = d
+    m.worker.drain()
+    with m.pg.db.transaction(OwnerContext(m.uid)) as tx:
+        doomed = tx.catalog.create_course(m.semester.id, 'Deleted after the backup')
+    leaver, stayer = classroom(m, 'Left before the deletion', doomed), classroom(m, 'Deleted with the course', doomed)
+    kept_asset, kept_data = upload(m, leaver, 'kept')
+    gone_asset, _ = upload(m, stayer, 'gone')
+    kept_key = object_key(m, kept_asset['id'])
+    dump = backup(m, tmp_path / 'backup.dump')
+    # After the backup one classroom leaves the course; only then is the course deleted.
+    with m.pg.db.transaction(OwnerContext(m.uid)) as tx:
+        tx.catalog.move_class_session(leaver.id, leaver.revision, m.course.id)
+    done = delete(m, 'course', doomed.id)
+    entry = m.deploy.ledger.entries()[-1]
+    assert entry.intent.members == (stayer.id,)
+    m.worker.drain()
+    assert finished(m, done['id'])
+    assert m.client.get(access(m, kept_asset)).content == kept_data
+    witness = m.deploy.ledger.head()
+    restored = Restored(m, dump)
+    try:
+        # The copy still has both classrooms under the course. Replaying the cascade by
+        # the copy's relationships would erase media the accepted deletion never covered.
+        assert len(restored.rows('SELECT 1 FROM class_sessions WHERE course_id=:c', c=doomed.id)) == 2
+        opened = restored.build(reconcile=False)
+        worker = DeletionWorker(queue=restored.queue, store=m.store, policy=POLICY, worker_id='restore-drill')
+        report = RestoreCoordinator(service=opened.deletion, operator=restored.operator, worker=worker).run(
+            ledger_witness=witness, revoked_owners=[])
+        assert report['reconcile']['unresolved'] == [dict(generation=entry.generation, reason='ScopeExpanded')]
+        assert report['ready'] is False and opened.deletion.ready is False
+        with TestClient(opened.app, base_url='https://testserver') as browser:
+            assert browser.get(BASE + '/auth/csrf').status_code == 503
+        # Nothing was applied on the strength of that intent, and no byte was erased.
+        assert restored.rows('SELECT deleted_at FROM courses WHERE id=:id', id=doomed.id) == [dict(deleted_at=None)]
+        assert restored.rows('SELECT 1 FROM deletion_requests WHERE scope_id=:id', id=doomed.id) == []
+        assert restored.rows('SELECT status,access_revoked_at FROM media_assets WHERE id=:id', id=kept_asset['id']) == [
+            dict(status='committed', access_revoked_at=None)]
+        assert m.store.client.get_object(Bucket=m.store.bucket, Key=kept_key)['Body'].read() == kept_data
+        # Still closed on a second attempt: the conflict needs an operator, not a retry.
+        again = RestoreCoordinator(service=restored.build(reconcile=False).deletion, operator=restored.operator,
+                                   worker=worker).run(ledger_witness=witness, revoked_owners=[])
+        assert again['ready'] is False
+    finally:
+        restored.close()
+    as_user(m, m.a.email)
+    assert m.client.get(access(m, kept_asset)).content == kept_data

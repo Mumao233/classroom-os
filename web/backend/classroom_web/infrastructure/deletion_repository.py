@@ -13,7 +13,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError
 
 from ..domain.data import Gone, NotFound, Resource
-from ..domain.deletion import CATALOG_SCOPES, DeletionIntent, SettleWindowOpen, StaleDeletionFence
+from ..domain.deletion import CATALOG_SCOPES, DeletionIntent, ScopeExpanded, SettleWindowOpen, StaleDeletionFence
 
 _LIVE = "('staging','verified','committed')"
 _ROW = '''SELECT d.id,d.created_at,d.scope_type,d.scope_id,d.state,d.access_revoked_at,d.completed_at,d.last_error_code,
@@ -24,7 +24,7 @@ _ROW = '''SELECT d.id,d.created_at,d.scope_type,d.scope_id,d.state,d.access_revo
 
 def _payload(intent: DeletionIntent, generation, settle_seconds):
     record = intent.record()
-    del record['members']  # ledger evidence; the database derives extent from its own rows
+    del record['members'], record['courses']  # ledger evidence; apply() checks them against the rows
     return json.dumps(dict(record, generation=generation, settle_seconds=settle_seconds))
 
 
@@ -42,16 +42,18 @@ class PgDeletionRepository:
         """Serialize every application of one intent for the rest of the transaction."""
         self.execute('SELECT pg_advisory_xact_lock(hashtextextended(CAST(:name AS text),0))', name=f'deletion:{intent.intent_id}')
 
-    def members(self, scope_type, scope_id):
-        """Classrooms a cascade covers. Works on a tombstoned root, whose children cannot move."""
+    def descendants(self, scope_type, scope_id):
+        """(courses, classrooms) a cascade covers. Works on a tombstoned root, whose children cannot move."""
         if scope_type == 'course':
-            where = 's.course_id=:scope'
+            courses, where = (), 's.course_id=:scope'
         elif scope_type == 'semester':
+            courses = tuple(self.execute('SELECT c.id FROM courses c WHERE c.owner_id=:owner AND c.semester_id=:scope ORDER BY c.id',
+                                         scope=scope_id).scalars())
             where = 's.course_id IN (SELECT c.id FROM courses c WHERE c.owner_id=:owner AND c.semester_id=:scope)'
         else:
-            return ()
-        return tuple(self.execute(f'SELECT s.id FROM class_sessions s WHERE s.owner_id=:owner AND {where} ORDER BY s.id',
-                                  scope=scope_id).scalars())
+            return (), ()
+        return courses, tuple(self.execute(
+            f'SELECT s.id FROM class_sessions s WHERE s.owner_id=:owner AND {where} ORDER BY s.id', scope=scope_id).scalars())
 
     def impact(self, scope_type, scope_id, *, lock=False):
         """Current version and extent of a deletion; raises NotFound or Gone like any read.
@@ -104,6 +106,13 @@ class PgDeletionRepository:
         self.lock(intent)
         account = intent.scope_type == 'account'
         fresh = self.request(intent.request_id) is None
+        if fresh and intent.scope_type in ('course', 'semester'):
+            # The accepted deletion covered exactly the recorded descendants. A copy that
+            # holds more under this root (restored from before one of them moved away)
+            # must not have them deleted on the strength of this intent.
+            courses, rooms = self.descendants(intent.scope_type, intent.scope_id)
+            if set(courses) - set(intent.courses) or set(rooms) - set(intent.members):
+                raise ScopeExpanded()
         if fresh and (account or intent.scope_type in CATALOG_SCOPES):
             sequence = self.execute('SELECT coalesce(max(ledger_sequence),0)+1 FROM deletion_tombstones WHERE owner_id=:owner').scalar_one()
             if account:
@@ -125,11 +134,20 @@ class PgDeletionRepository:
         self.execute('SELECT classroom_web_owner_revoke_media(CAST(:intent AS jsonb))',
                      intent=_payload(intent, generation, settle_seconds))
         if fresh:
+            # A course or classroom the accepted cascade covered but this copy holds outside
+            # the tombstoned root (restored from before a move, or the root is not in the
+            # copy at all) is still readable here. Revoke it as its own request; it has no
+            # ledger position yet, so nothing opens until reconciliation records one.
+            for course in intent.courses:
+                try:
+                    self.tx.catalog._load(Resource.COURSE, course, write=True)
+                except (NotFound, Gone):
+                    continue
+                rooms = self.descendants('course', course)[1]
+                if set(rooms) - set(intent.members):
+                    raise ScopeExpanded()
+                self.apply(DeletionIntent.for_scope(self.owner_id, 'course', course, members=rooms), None, settle_seconds)
             for member in intent.members:
-                # A classroom the accepted cascade covered but this copy holds outside the
-                # tombstoned root (restored from before a move, or the root is not in the
-                # copy at all) is still readable here. Revoke it as its own request; it has
-                # no ledger position yet, so nothing opens until reconciliation records one.
                 try:
                     self.tx.catalog._load(Resource.CLASS_SESSION, member, write=True)
                 except (NotFound, Gone):
@@ -141,11 +159,13 @@ class PgDeletionRepository:
             self.execute('SELECT classroom_web_seal_account(:request)', request=intent.request_id)
         return row
 
-    def remember(self, operation, key, fingerprint, request_id):
+    def remember(self, operation, key, fingerprint, request_id, status=202):
+        """Bind the idempotency key to this request. 503 marks a binding made while the
+        ledger had not accepted the request; the same key may still complete it."""
         self.execute('''INSERT INTO operation_receipts
             (id,owner_id,operation,op_id,request_hash,resource_type,resource_id,response_status,response_body)
-            VALUES(:id,:owner,:operation,:key,:hash,'deletion_request',:resource,202,CAST(:body AS jsonb))''',
-            id=uuid4(), operation=operation, key=key, hash=fingerprint, resource=request_id,
+            VALUES(:id,:owner,:operation,:key,:hash,'deletion_request',:resource,:status,CAST(:body AS jsonb))''',
+            id=uuid4(), operation=operation, key=key, hash=fingerprint, resource=request_id, status=status,
             body=json.dumps({'deletion_id': str(request_id)}))
 
 

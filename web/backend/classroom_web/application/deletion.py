@@ -22,7 +22,7 @@ from sqlalchemy.exc import DBAPIError
 from ..domain.auth import AuthRejected, AuthReply
 from ..domain.data import Gone, InactiveOwner, NotFound, OwnerContext, RevisionConflict
 from ..domain.deletion import (CATALOG_SCOPES, Clock, DeletionIntent, DeletionPolicy, LedgerConflict, LedgerCorrupt,
-                               LedgerUnavailable, SettleWindowOpen, StaleDeletionFence, SystemClock, canonical,
+                               LedgerUnavailable, ScopeExpanded, SettleWindowOpen, StaleDeletionFence, SystemClock, canonical,
                                deletion_dto)
 from ..domain.identity import AuthorizationDenied
 from ..domain.media import ObjectUnavailable
@@ -90,7 +90,7 @@ class DeletionService:
             raise AuthRejected('NOT_FOUND', 404) from None
         except Gone:
             raise AuthRejected('GONE', 410) from None
-        except RevisionConflict:
+        except (RevisionConflict, ScopeExpanded):
             raise AuthRejected('REVISION_CONFLICT', 409) from None
         except IdempotencyMismatch:
             raise AuthRejected('IDEMPOTENCY_MISMATCH', 409) from None
@@ -147,15 +147,16 @@ class DeletionService:
             # waits here and then meets the stored receipt, so it can never reach the
             # ledger with another target.
             receipt = repo.tx.receipts.lock_and_get(operation, key, digest)
-            if receipt:
-                return deletion_dto(repo.request(receipt['resource_id']))
             intent = DeletionIntent.for_scope(principal.user_id, scope_type, scope)
             repo.lock(intent)
             existing = repo.request(intent.request_id)
             if existing is not None and existing['ledger_generation'] is not None:
                 # A repeated deletion of the same object returns the one existing request.
-                repo.remember(operation, key, digest, intent.request_id)
+                if not receipt:
+                    repo.remember(operation, key, digest, intent.request_id)
                 return deletion_dto(existing)
+            # From here the request is new, or its access was revoked while the ledger was
+            # away (the key may already be bound to it) and this call completes the acceptance.
             if existing is None:
                 # The locks taken here are kept across the ledger call, so what the
                 # user confirmed is exactly what is revoked below.
@@ -164,8 +165,8 @@ class DeletionService:
                     raise AuthRejected('REVISION_CONFLICT', 409)
                 self._confirm(principal, scope_type, scope, impact, body['confirmation_token'])
             try:
-                intent = DeletionIntent.for_scope(principal.user_id, scope_type, scope,
-                                                  members=repo.members(scope_type, scope))
+                courses, rooms = repo.descendants(scope_type, scope)
+                intent = DeletionIntent.for_scope(principal.user_id, scope_type, scope, members=rooms, courses=courses)
             except ValueError:
                 raise AuthRejected('VALIDATION_FAILED', 422) from None
             left = remaining()
@@ -179,13 +180,14 @@ class DeletionService:
                 self.ready = False
                 raise AuthRejected('STORAGE_UNAVAILABLE', 503) from None
             if entry is None:
-                # Not durably accepted. Deny access locally now, in this same
-                # transaction; the client retries the same key.
+                # Not durably accepted. Deny access locally now, in this same transaction,
+                # and bind the key to this target; the client retries the same key.
                 repo.apply(intent, None, self.settle_seconds)
                 accepted = False
             else:
                 row = repo.apply(entry.intent, entry.generation, self.settle_seconds)
-                repo.remember(operation, key, digest, intent.request_id)
+            if not receipt:
+                repo.remember(operation, key, digest, intent.request_id, 202 if accepted else 503)
         if not accepted:
             raise AuthRejected('STORAGE_UNAVAILABLE', 503)
         return deletion_dto(row)
@@ -275,7 +277,9 @@ class DeletionService:
                     report['covered'].append(entry.generation)
                 else:
                     report['unresolved'].append(dict(generation=entry.generation, reason='InactiveOwner'))
-            except DBAPIError as error:
+            except (DBAPIError, ScopeExpanded) as error:
+                # ScopeExpanded: this copy holds more under a cascade's root than the accepted
+                # deletion covered. Nothing was applied; an operator has to resolve it.
                 report['unresolved'].append(dict(generation=entry.generation, reason=type(error).__name__))
         # Read again: replay may have revoked classrooms that a cascade covered but this
         # copy held elsewhere; like requests the ledger never accepted, they need a position.
@@ -290,12 +294,13 @@ class DeletionService:
                     else:
                         with self.database.transaction(OwnerContext(row['owner_id'])) as tx:
                             repo = PgDeletionRepository(tx, row['owner_id'])
+                            courses, rooms = repo.descendants(row['scope_type'], row['scope_id'])
                             entry = self.ledger.append(DeletionIntent.for_scope(
                                 row['owner_id'], row['scope_type'], row['scope_id'], row['origin'],
-                                members=repo.members(row['scope_type'], row['scope_id'])))
+                                members=rooms, courses=courses))
                             repo.apply(entry.intent, entry.generation, self.settle_seconds)
                     report['accepted'].append(entry.generation)
-                except (InactiveOwner, DBAPIError, ValueError) as error:
+                except (InactiveOwner, DBAPIError, ScopeExpanded, ValueError) as error:
                     report['unresolved'].append(dict(generation=None, reason=type(error).__name__))
         if admit:
             self.ready = not report['unresolved']

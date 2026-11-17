@@ -367,6 +367,13 @@ def test_ledger_outage_denies_access_locally_and_is_not_an_accepted_deletion(d):
     try:
         refused = submit(m, 'class_session', m.classroom.id, first, key)
         assert refused.status_code == 503, refused.text
+        # The key is bound to its target even though the deletion is not accepted yet:
+        # it cannot be pointed at another classroom, and repeating it stays the same request.
+        reused = submit(m, 'class_session', second_room.id, second, key)
+        assert reused.status_code == 409 and reused.json()['error']['code'] == 'IDEMPOTENCY_MISMATCH'
+        assert rows(m, 'SELECT 1 FROM deletion_requests WHERE owner_id=:o AND scope_id=:s', o=m.uid, s=second_room.id) == []
+        assert submit(m, 'class_session', m.classroom.id, first, key).status_code == 503
+        assert len(rows(m, 'SELECT 1 FROM deletion_requests WHERE owner_id=:o', o=m.uid)) == 1
         assert submit(m, 'class_session', second_room.id, second).status_code == 503
         request = one(m, "SELECT d.id,d.state,x.ledger_generation FROM deletion_requests d JOIN deletion_executions x ON x.request_id=d.id WHERE d.owner_id=:o AND d.scope_id=:s", o=m.uid, s=m.classroom.id)
         # Not accepted: no ledger position, state says only that access is revoked.
@@ -802,6 +809,10 @@ def test_ledger_chain_is_create_only_contended_safely_and_tamper_evident(deploy)
         ledger_store(services, bucket).entries()
     with pytest.raises(LedgerCorrupt):
         writer.entries()
+    # Nor does the writer that cached the original history build on the rewritten one.
+    with pytest.raises(LedgerCorrupt):
+        writer.append(intents[5])
+    assert len(client.list_objects_v2(Bucket=bucket, Prefix='ledger/v1/')['Contents']) == 3
     # A truncated history (entries removed from the end) is detected by a reader that saw them.
     bucket = fresh_bucket()
     writer = ledger_store(services, bucket)

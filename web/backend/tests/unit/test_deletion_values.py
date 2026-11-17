@@ -31,7 +31,7 @@ def test_one_intent_per_owner_and_scope_and_no_content_in_the_record():
     assert first.intent_id != DeletionIntent.for_scope(owner, 'audio', scope).intent_id
     assert first.intent_id != DeletionIntent.for_scope(uuid4(), 'class_session', scope).intent_id
     assert first.intent_id.version == 4 and first.request_id.version == 4
-    assert set(first.record()) == {'intent_id', 'request_id', 'owner_id', 'scope_type', 'scope_id', 'origin', 'members'}
+    assert set(first.record()) == {'intent_id', 'request_id', 'owner_id', 'scope_type', 'scope_id', 'origin', 'members', 'courses'}
     assert DeletionIntent.from_record(first.record()) == first
 
 
@@ -64,8 +64,17 @@ def test_cascade_members_are_recorded_evidence_and_not_identity():
     with pytest.raises(ValueError):
         DeletionIntent.for_scope(owner, 'semester', scope, members=[uuid4() for _ in range(MAX_MEMBERS + 1)])
     for members in (None, 'x', [1], [str(rooms[1]), str(rooms[0])], [str(rooms[0]), str(rooms[0])], ['not-a-uuid']):
-        with pytest.raises(ValueError):
-            DeletionIntent.from_record({**plain.record(), 'members': members})
+        for name in ('members', 'courses'):
+            with pytest.raises(ValueError):
+                DeletionIntent.from_record({**DeletionIntent.for_scope(owner, 'semester', scope).record(), name: members})
+    # A semester cascade also names its courses; no other scope may.
+    whole = DeletionIntent.for_scope(owner, 'semester', scope, members=rooms, courses=[rooms[1], rooms[0]])
+    assert whole.courses == (rooms[0], rooms[1]) and DeletionIntent.from_record(whole.record()) == whole
+    assert whole.identity() == DeletionIntent.for_scope(owner, 'semester', scope).identity()
+    with pytest.raises(ValueError):
+        DeletionIntent.for_scope(owner, 'course', scope, courses=rooms)
+    with pytest.raises(ValueError):
+        DeletionIntent.for_scope(owner, 'semester', scope, members=[uuid4() for _ in range(MAX_MEMBERS)], courses=[uuid4()])
 
 
 def test_canonical_encoding_is_stable():
