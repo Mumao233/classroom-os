@@ -29,6 +29,8 @@
 | `pr08b-frontend-20261117-06` | Astra 修复复验 | 全部通过。Vitest 323/323，同步原生浏览器 29/29，缓存 28/28，组合 11/11，PostgreSQL 与正式浏览器 46/46。33 个 PR-08b 测试函数及真实认证浏览器全部执行，0 failures / errors / skipped | `04bed6a56cac8f7edde88aacbcadcea556764b4899cc0d7d94a764fd8413a8aa` |
 | `pr08b-full-20261117-03` | Astra 修复完整 Web 复验 | 1297 项（1268 父用例、29 子测试），1296 passed / 1 failed / 0 errors / 0 skipped。33 个 PR-08b 函数与正式浏览器通过。既有并发删除用例有一个请求在认证会话行锁处超时 | `83c68ae9cec949b140de9b76cfb4444414d30098b6aa9926ef97b9b1f6d78dd2` |
 | `pr08b-frontend-20261117-07` | R5 编辑恢复复验 | 排队期间发现默认缓存删除的迟到恢复密文边界，确认尚未执行后取消。原队列、源码包与取消记录保留 | `b13a4686aac50f676bbff0f981298edfb3cdad249f5310ef651db1b65101ad71` |
+| `pr08b-full-20261117-04` | 完整 Web 复验 | 1297 项，1280 passed / 0 failures / 17 errors / 0 skipped。17 个错误均在 capture 模块共享对象服务的启动前置阶段，原并发删除与 33 个 PR-08b 函数通过 | `83c68ae9cec949b140de9b76cfb4444414d30098b6aa9926ef97b9b1f6d78dd2` |
+| `pr08b-frontend-20261117-08` | R5 编辑恢复复验 | Vitest 332/332、PostgreSQL 与正式浏览器 46/46、缓存及组合浏览器均通过。同步原生浏览器 43 passed / 1 failed，合成 resolve 回执误绑定另一文档，运行时正确保留未确认操作 | `0d0ac1fcc358d3747c3ea9c3f59d13617f9ef4b71213ad7ebc7791dffba97183` |
 
 第二次运行的证据归档 SHA-256 为 `a20eaee07743f52d51f690a0db5dabe79bda7268e9c37b443c4b8162ab1c81db`。来宾 PostgreSQL 正常停止，退出码 0，受管对象服务残留进程数为 0。新增同步和正式 HTTP 浏览器路径仍有失败，后续运行负责验证修复。
 
@@ -78,6 +80,10 @@ full03 证据 SHA-256 为 `7e19f14d4a294e63c115b432da5012e54ded5f231857898c438b6
 `pr08b-lock-01` 复用 full03 冻结源码，对原并发删除用例执行五轮，30 个请求全部通过。原 500 ms 阈值、产品代码和测试断言保持原值。20 ms 采样记录认证会话行锁及 transactionid 等待，各轮账本追加耗时 31–32 ms，最长 submit 为 93–156 ms，服务残留为 0。证据 SHA-256 为 `45fcdb9d10704fb43d2e14b7ea4a8d0d90446b8e3aa3d6b55d2d42ee1bce93e8`。该诊断未复现 full03 的 503，既有认证与删除事务持锁边界仍作为并发可用性风险保留。0014 仅在首次删除提交时增加一个事件，复用事务已持有的 owner counter 锁，实际新增耗时尚未独立量化。
 
 Astra 对 `c711458` 的增量复审新增 R5（P2），普通 Review 事件引起锁定时，尚未确认的手动合并输入缺少独立加密恢复。该项正在修复，后续以新的 VMware 前端和正式浏览器阶段验证。
+
+full04 证据 SHA-256 为 `6729fa56025dde9aaed0ba4a4c9ad6cd53ac80ca73b12ebc16381a083c4e3870`，服务残留为 0。对象服务日志明确记录同一夹具的 media gRPC 已占用 32727，提前分配端口的 ledger 又使用 32727 作为 S3 端口，启动时 bind 失败。夹具改为 media 完成启动后再构造并启动 ledger，保留原就绪检查、断言、超时和启动失败清理。后续补验覆盖全部 17 个受影响用例。
+
+frontend08 证据 SHA-256 为 `22c3d4a28885eefacbca941b2f04f13bac117d4bc506df19b9fbcf169943f4e9`，服务残留为 0。唯一原生失败来自第二文档的合成 resolve 仍硬编码第一文档 ID。夹具改为读取准确 conflict 的对象 ID，并在删除前增加成功 ACK 的强断言。最终恢复记录数与空 pending 的断言继续保留。真实 HTTP/PostgreSQL 的普通远端更新、独有合并输入重开恢复、零自动提交和撤权拒读已在该轮通过。
 
 完整本机证据保存在 `outputs/pr08b/<RunId>/`。已取消运行保留 `cancellation.json` 与原排队文件。失败运行保留原 JUnit、日志和归档。
 

@@ -114,11 +114,13 @@ async function install(target = page) {
       async resolve(id, body, opId) {
         this.resolutions.push({ id, body: structuredClone(body), opId });
         if (body.base_revision !== this.serverRevision) throw Object.assign(new Error('Synthetic stale CAS'), { code: 'REVISION_CONFLICT' });
+        const conflict = this.conflicts.get(id);
+        if (!conflict) throw Object.assign(new Error('Conflict missing'), { code: 'NOT_FOUND' });
         const receipt = { op_id: opId, operation: 'resolveConflict', request_sha256: await lib.syncFingerprint({ conflict_id: id, body }),
-          status: 'applied', object_id: body.resolution === 'copy_to_new_note' ? crypto.randomUUID() : ids.document,
+          status: 'applied', object_id: body.resolution === 'copy_to_new_note' ? crypto.randomUUID() : conflict.object_id,
           revision: 3, conflict_id: null, task_id: null };
         this.receipts.set(opId, receipt);
-        if (this.conflicts.has(id)) this.conflicts.get(id).resolved = true;
+        conflict.resolved = true;
         return receipt;
       }
     }
@@ -888,6 +890,7 @@ try {
       await runtime.saveConflictDraft(second, 'AUTHORIZED OTHER CLASS INPUT', '', crypto.randomUUID(), 1);
       await runtime.resolve(first, { base_revision: 2, resolution: 'use_server' }, 2);
       await runtime.resolve(second, { base_revision: 2, resolution: 'use_server' }, 2);
+      if (runtime.snapshot().pending.length !== 0) throw new Error('Fixture failed to acknowledge both document identities: ' + JSON.stringify(runtime.snapshot().pending.map(value => ({ state: value.state, error: value.error }))));
       await cache.applyDeletion({ object_type: 'class_session', object_id: ids.classroom, deletion_id: crypto.randomUUID(), state: 'access_revoked' }, { retainDrafts: true });
       transport.projections = transport.projections.filter(value => ![ids.classroom, ids.document].includes(value.object_id));
       const server = transport; runtime.close(); await create('pr08b-editor-deleted-sibling'); runtime.close();
