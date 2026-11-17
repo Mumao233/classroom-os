@@ -17,6 +17,7 @@
 `CaptureService` 必须显式启用，且 `DeletionService.ready` 为真。数据库 capture policy 另有独立开关，所有时间和 consent 产品参数初始为空。默认构造、正式迁移、未配置真实运行入口均保持关闭。
 
 - acquisition 绑定当前 owner/device 与 consent，建立新 epoch 和 owner 唯一 lease。显式 takeover 需要 expected lease ID，fence 单调增加。
+- 新设备从已授权 acquisition 的 `LEASE_CONFLICT` 响应读取既有 `error.conflict_id`，再显式确认同一 lease ID。该值在 owner 与目标课堂、device、consent 检查通过后返回，客户端仅接受合法 UUID。
 - renew/pause/resume/stop 通过 DB 时钟、fence、device 和状态检查。resume 关闭旧 epoch 与 pause gap，创建新 epoch。
 - chunk 的 `(owner, epoch, seq)` 唯一，sample 范围、PCM byte length、SHA-256 和媒体 lineage 固定。匹配 descriptor 使用新幂等键时也登记该键。
 - private object 的条件创建固定首个 object timestamp。对象成功、DB 回滚后可重试关联同一对象。prepare 已写 expires/hard expiry，未重试对象可被 04b expiry 和删除 worker 清除。
