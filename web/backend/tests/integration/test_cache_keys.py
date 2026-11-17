@@ -35,7 +35,8 @@ def pg():
 @pytest.fixture(scope="module")
 def cache_schema(pg):
     with pg.admin.begin() as connection:
-        connection.exec_driver_sql(candidate_sql(ROOT), execution_options={"no_parameters": True})
+        if connection.scalar(sa.text("SELECT to_regclass('public.cache_keys')")) is None:
+            connection.exec_driver_sql(candidate_sql(ROOT), execution_options={"no_parameters": True})
     yield
 
 
