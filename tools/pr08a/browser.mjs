@@ -314,6 +314,36 @@ try {
       isolated.close();
     });
   });
+  await test('learning-cumulative-soft-limit-evicts-oldest-and-preserves-unique-pools', async () => {
+    const result = await page.evaluate(async () => {
+      const databaseName = 'pr08a-cumulative';
+      const value = new lib.TrustedCache({ ...options, databaseName }); value.bind(identity);
+      await value.unlock('learning', null, () => issue('learning'));
+      await value.unlock('drafts', null, () => issue('drafts'));
+      await value.unlock('recording_recovery', 'class-a', () => issue('recording_recovery'));
+      await value.put(write('unique-draft'), encoder.encode('retain-unique'));
+      const chunk = { ...descriptor, seq: 33 };
+      await value.putRecording(chunk, new Uint8Array([1, 0, 2, 0]), ancestry, 3);
+      const entry = index => ({ scope: 'learning', objectId: 'cumulative-' + index, revision: 1, generation: 1, ancestry, verifiedAt: Date.now() });
+      for (let index = 0; index < 11; index++) {
+        const bytes = new Uint8Array(5_000_000); bytes[0] = index;
+        await value.put(entry(index), bytes);
+      }
+      const oldestGone = await value.read(entry(0)) === null;
+      const newest = await value.read(entry(10));
+      const draftSurvives = decoder.decode(await value.read(reference('unique-draft'))) === 'retain-unique';
+      const recordingSurvives = String(await value.readRecording(chunk)) === '1,0,2,0';
+      const db = await lib.openCacheDatabase(databaseName);
+      const records = await new Promise(resolve => { const request = db.transaction('records').objectStore('records').getAll(); request.onsuccess = () => resolve(request.result); }); db.close();
+      const learning = records.filter(record => record.header.scope === 'learning');
+      value.close();
+      return { oldestGone, newestFirstByte: newest?.[0], draftSurvives, recordingSurvives,
+        learningBytes: learning.reduce((sum, record) => sum + record.bytes, 0), learningRecords: learning.length };
+    });
+    assert.equal(result.oldestGone, true); assert.equal(result.newestFirstByte, 10);
+    assert.equal(result.draftSurvives, true); assert.equal(result.recordingSurvives, true);
+    assert.ok(result.learningBytes <= 50_000_000); assert.ok(result.learningRecords < 11);
+  });
   await test('authclient-failed-logout-locks-before-network-completes', async () => {
     await page.evaluate(async () => {
       const user = { id: '11111111-1111-4111-8111-111111111111', revision: 1, created_at: new Date().toISOString(), updated_at: new Date().toISOString(), email: 'synthetic@example.invalid', nickname: '', school: '', major: '', role: 'student', status: 'active', mfa_enabled: false };

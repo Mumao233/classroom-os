@@ -2,6 +2,8 @@
 import json
 import os
 from pathlib import Path
+import shutil
+import signal
 import socket
 import subprocess
 import threading
@@ -22,10 +24,13 @@ ROOT = Path(__file__).resolve().parents[4]
 
 
 def test_formal_authclient_encrypted_cache_and_revocation(cache, tmp_path):
-    output = Path(os.environ['PR08A_OUTPUT'])
-    dependency = Path(os.environ['PR05A_DEPENDENCY_ROOT'])
-    node = dependency / 'work/pr03b/vmware-broker/payload/node/node.exe'
+    output = Path(os.environ.get('PR08A_OUTPUT', tmp_path / 'browser-output'))
+    dependency = Path(os.environ.get('PR05A_DEPENDENCY_ROOT', ROOT))
+    node = shutil.which('node') or str(dependency / 'work/pr03b/vmware-broker/payload/node/node.exe')
     module = dependency / 'web/frontend/node_modules/@playwright/test/index.mjs'
+    if not (output / 'cache.js').is_file():
+        bundle_env = {**os.environ, 'PR08A_OUTPUT': str(output), 'PR08A_FRONTEND_MODULES': str(dependency / 'web/frontend/node_modules')}
+        subprocess.run([node, str(ROOT / 'tools/pr08a/build.mjs')], env=bundle_env, check=True, timeout=30, capture_output=True)
     contract = json.loads((ROOT / 'docs/web-alpha/architecture/contracts/openapi.json').read_text(encoding='utf-8'))
     assert contract['info']['version'] == '0.2.1'
     cert, key, pin = _certificate(tmp_path, 'pr08a-formal', uuid4().hex[:12])
@@ -50,7 +55,7 @@ def test_formal_authclient_encrypted_cache_and_revocation(cache, tmp_path):
     try:
         with (output / 'formal-browser-stderr.log').open('w', encoding='utf-8') as stderr:
             process = subprocess.Popen([str(node), str(ROOT / 'tools/pr08a/formal-browser.mjs')],
-                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=stderr, env=env, text=True, encoding='utf-8')
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=stderr, env=env, text=True, encoding='utf-8', start_new_session=os.name != 'nt')
             ready = process.stdout.readline()
             assert ready, (output / 'formal-browser-stderr.log').read_text(encoding='utf-8')
             device = json.loads(ready)['device_id']
@@ -64,7 +69,10 @@ def test_formal_authclient_encrypted_cache_and_revocation(cache, tmp_path):
         (output / 'formal-browser.json').write_text(json.dumps(result, indent=2), encoding='utf-8')
     finally:
         if process is not None and process.poll() is None:
-            subprocess.run(['taskkill', '/PID', str(process.pid), '/T', '/F'], capture_output=True, check=False)
+            if os.name == 'nt':
+                subprocess.run(['taskkill', '/PID', str(process.pid), '/T', '/F'], capture_output=True, check=False)
+            else:
+                os.killpg(process.pid, signal.SIGKILL)
             process.wait(timeout=10)
         server.should_exit = True
         thread.join(timeout=5)

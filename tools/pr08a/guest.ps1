@@ -21,6 +21,7 @@ $pg = "$old\work\pr03b\toolchains\pg17.11-win64-53b5364a5a04e8ec\runtime\Library
 New-Item -ItemType Junction -Path "$root\web\frontend\node_modules" -Target "$old\web\frontend\node_modules" | Out-Null
 New-Item -ItemType Junction -Path "$root\work\pr03b" -Target "$old\work\pr03b" | Out-Null
 $env:PR08A_VMWARE_GUEST = '1'
+if ($BrowserOnly) { $env:PR08A_BROWSER_ONLY = '1' }
 $env:PR05A_VMWARE_GUEST = '1'
 $env:PYTHONDONTWRITEBYTECODE = '1'
 $env:TEMP = "$root\work\pr08a"

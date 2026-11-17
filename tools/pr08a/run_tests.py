@@ -52,6 +52,12 @@ def main():
     execute([node, root / 'tools/pr08a/build.mjs'], 'bundle')
     if results['bundle'] == 0:
         execute([node, root / 'tools/pr08a/browser.mjs'], 'browser')
+    if os.environ.get('PR08A_BROWSER_ONLY') == '1':
+        report = {'package': 'PR-08a', 'mode': 'native-browser-only', 'results': results, 'commands': commands,
+                  'passed': results == {'bundle': 0, 'browser': 0}, 'synthetic_only': True}
+        (args.output / 'run.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
+        print(json.dumps(report), flush=True)
+        return 0 if report['passed'] else 1
     frontend = root / 'web/frontend'
     execute([node, modules / 'typescript/bin/tsc', '-b', '--pretty', 'false'], 'typecheck', frontend)
     execute([node, modules / 'eslint/bin/eslint.js', '.', '--max-warnings', '0'], 'lint', frontend)
