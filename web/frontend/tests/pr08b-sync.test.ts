@@ -26,7 +26,8 @@ class MemoryCache extends EventTarget implements SyncCache {
   denied = false;
   recoveryHeads = new Map<string, number>();
   lock() { this.events.push('lock'); this.dispatchEvent(new Event('locked')); }
-  lockForDeletion() { this.events.push('peer-lock'); this.lock(); }
+  async lockForDeletion() { this.events.push('peer-lock'); this.lock(); }
+  async pendingDeletionIds() { return []; }
   close() { this.lock(); }
   async unlockScope() { this.events.push('unlock'); }
   async reconcileLearning(projections: S['BootstrapProjection'][], options: { preserveKeys?: boolean } = {}) {
@@ -700,6 +701,8 @@ describe('PR-08b encrypted operation queue', () => {
     const sources = await next.listConflictDraftSources();
     expect(sources.map(value => value.state).sort()).toEqual(['available', 'restricted']);
     expect(sources.find(value => value.state === 'restricted')?.source).toBeNull();
+    const available = sources.find(value => value.state === 'available')?.source;
+    expect(await next.readConflictDrafts(available!)).toMatchObject([{ body: 'AVAILABLE BRANCH' }]);
   });
 
   it('reports failed editor persistence without acknowledging it as saved', async () => {
