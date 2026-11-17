@@ -167,20 +167,29 @@ def test_restored_copy_replays_deletions_revokes_sessions_and_never_revives(d, t
         assert report['ledger_head'] == head and len(m.deploy.ledger.entries()) == head + report['expired']
         assert report['seal']['accounts_sealed'] >= 1 and report['seal']['leases_cleared'] >= 1
         # Missing submission evidence is not proof that the task was never sent: both are
-        # frozen and marked as possibly charged, and their previous schedule is kept.
+        # taken out of reach with nothing about them decided, and their schedule is kept.
         assert report['seal']['tasks_quarantined'] == 2 and report['audit']['dispatchable_tasks'] == 0
         held = {r['id']: r for r in restored.rows(
-            'SELECT id,state,not_before,leased_by,lease_expires_at,may_have_charged FROM tasks WHERE id IN (:a,:b)',
+            'SELECT id,state,revision,not_before,leased_by,lease_expires_at,may_have_charged FROM tasks WHERE id IN (:a,:b)',
             a=queued.id, b=running.id)}
         frozen = datetime(9999, 1, 1, tzinfo=timezone.utc)
         assert held[queued.id]['state'] == 'queued' and held[queued.id]['not_before'] == frozen
         assert held[queued.id]['lease_expires_at'] is None
         assert held[running.id]['state'] == 'running' and held[running.id]['lease_expires_at'] == frozen
-        assert all(r['may_have_charged'] for r in held.values())
+        # No evidence is invented: the possible-charge flag is what the copy held.
+        assert not any(r['may_have_charged'] for r in held.values())
         assert {r['task_id']: r['previous_state'] for r in restored.rows('SELECT task_id,previous_state FROM restore_task_quarantine')} \
             == {queued.id: 'queued', running.id: 'running'}
-        assert len(restored.rows("SELECT 1 FROM outbox_events WHERE event_type='task.changed' AND aggregate_id IN (:a,:b) "
-                                 "AND (payload->>'may_have_charged')::boolean", a=queued.id, b=running.id)) == 2
+        # Nothing may change a quarantined task: no cancellation (billing would then release
+        # its reservation as unsent), no rescheduling, not even by the migration identity.
+        for change in ("state='cancelled',revision=revision+1", 'not_before=clock_timestamp()',
+                       "state='unknown',revision=revision+1"):
+            with pytest.raises(sa.exc.DBAPIError) as refused:
+                with restored.admin.begin() as c:
+                    c.execute(sa.text(f'UPDATE tasks SET {change} WHERE id IN (:a,:b)'), dict(a=queued.id, b=running.id))
+            assert refused.value.orig.sqlstate == '55000'
+        assert {r['id']: r['revision'] for r in restored.rows('SELECT id,revision FROM tasks WHERE id IN (:a,:b)',
+                                                               a=queued.id, b=running.id)} == {k: v['revision'] for k, v in held.items()}
         # Neither the dispatcher's claim nor lease recovery can reach them in the copy.
         with restored.admin.begin() as c:
             assert c.execute(sa.text("SELECT * FROM classroom_web_claim_tasks('restore-probe',30,100,'1')")).all() == []

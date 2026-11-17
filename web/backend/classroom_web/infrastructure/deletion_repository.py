@@ -4,6 +4,7 @@ PgDeletionRepository runs inside the existing owner unit of work. PgDeletionQueu
 PgRestoreOperator connect as separate restricted logins that can only execute the
 fixed functions of migration 0010; neither can read a private table.
 """
+from contextlib import contextmanager
 from dataclasses import dataclass
 import json
 from uuid import UUID, uuid4
@@ -218,12 +219,17 @@ class _SystemIdentity:
         if safe is not True:
             raise PermissionError('a separate restricted deletion identity is required')
 
-    def _call(self, sql, **parameters):
+    @contextmanager
+    def _session(self):
         with self.engine.begin() as connection:
             self._check(connection)
             connection.execute(text("SET LOCAL search_path = public, pg_temp"))
             connection.execute(text("SET LOCAL lock_timeout = '5s'"))
             connection.execute(text("SET LOCAL statement_timeout = '30s'"))
+            yield connection
+
+    def _call(self, sql, **parameters):
+        with self._session() as connection:
             try:
                 return connection.execute(text(sql), parameters).mappings().all()
             except DBAPIError as error:
@@ -270,6 +276,28 @@ class PgDeletionQueue(_SystemIdentity):
 
     def expire(self, intent, generation, settle_seconds):
         self._call('SELECT classroom_web_expire_media(CAST(:intent AS jsonb))',
+                   intent=_payload(intent, generation, settle_seconds))
+
+    @contextmanager
+    def expiring(self, owner_id, asset_id):
+        """Lock one asset and recheck its deadline; yields (eligible, expire).
+
+        Lock, the caller's ledger append and ``expire`` share one transaction, so the
+        asset cannot leave its expired state between the check and the revocation.
+        """
+        with self._session() as connection:
+            eligible = connection.execute(text('SELECT classroom_web_lock_expiry(:owner,:asset)'),
+                                          dict(owner=owner_id, asset=asset_id)).scalar_one()
+
+            def expire(intent, generation, settle_seconds):
+                if intent.owner_id != owner_id or intent.scope_id != asset_id:
+                    raise ValueError('expiry intent does not match the locked asset')
+                connection.execute(text('SELECT classroom_web_expire_media(CAST(:intent AS jsonb))'),
+                                   dict(intent=_payload(intent, generation, settle_seconds)))
+            yield eligible, expire
+
+    def accept_covered(self, intent, generation, settle_seconds):
+        self._call('SELECT classroom_web_accept_covered(CAST(:intent AS jsonb))',
                    intent=_payload(intent, generation, settle_seconds))
 
     def owner_state(self, owner_id):

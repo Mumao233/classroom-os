@@ -105,8 +105,9 @@ CREATE TABLE retention_policies (
 
 -- Restore only: work a restored copy holds that it must not dispatch again. A task that
 -- is queued or running in the copy may have reached its provider after the backup was
--- taken; the copy cannot tell, so the task is frozen and marked as possibly charged.
--- The previous schedule is kept so the task layer can release it after reconciliation.
+-- taken; the copy cannot tell. The task is frozen: no claim, lease recovery, cancellation
+-- or reservation release can change it while its row is here. The previous schedule is
+-- kept so the task and billing layers can release it after reconciling its submission.
 CREATE TABLE restore_task_quarantine (
     task_id uuid PRIMARY KEY,
     owner_id uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
@@ -169,10 +170,9 @@ GRANT SELECT (id, state, deleted_at, security_epoch, revision) ON users TO class
 GRANT UPDATE (state, deleted_at, security_epoch, revision, updated_at, normalized_email, password_hash,
               email_verified_at, profile, preferences) ON users TO classroom_web_eraser;
 CREATE POLICY eraser_users ON users TO classroom_web_eraser USING (true) WITH CHECK (true);
--- Restore quarantine: scheduling metadata and the possible-charge flag only, never task input.
-GRANT SELECT (id, owner_id, state, not_before, leased_by, lease_expires_at, lease_token, revision,
-              class_session_id, error_code, may_have_charged) ON tasks TO classroom_web_eraser;
-GRANT UPDATE (not_before, lease_expires_at, lease_token, may_have_charged, revision, updated_at) ON tasks TO classroom_web_eraser;
+-- Restore quarantine: scheduling metadata only, never task input.
+GRANT SELECT (id, owner_id, state, not_before, leased_by, lease_expires_at, lease_token) ON tasks TO classroom_web_eraser;
+GRANT UPDATE (not_before, lease_expires_at, lease_token) ON tasks TO classroom_web_eraser;
 CREATE POLICY eraser_quarantine ON tasks TO classroom_web_eraser USING (true) WITH CHECK (true);
 GRANT EXECUTE ON FUNCTION classroom_web_owner_active() TO classroom_web_eraser;
 GRANT USAGE ON SCHEMA identity_api TO classroom_web_eraser;
@@ -326,6 +326,21 @@ REVOKE ALL ON FUNCTION classroom_web_media_retention() FROM PUBLIC;
 -- AFTER: table CHECK constraints, including 0009's audio commit gate, are evaluated first.
 CREATE TRIGGER media_retention AFTER INSERT OR UPDATE ON media_assets
   FOR EACH ROW EXECUTE FUNCTION classroom_web_media_retention();
+
+-- A quarantined task cannot change at all, whoever tries: not a claim, not lease recovery,
+-- not a cancellation (which would let billing release its reservation as unsent).
+CREATE FUNCTION classroom_web_guard_restore_quarantine() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
+BEGIN
+  IF NEW IS DISTINCT FROM OLD AND EXISTS (SELECT FROM public.restore_task_quarantine q
+      WHERE q.owner_id = OLD.owner_id AND q.task_id = OLD.id) THEN
+    RAISE EXCEPTION 'task is quarantined after a restore until its submission is reconciled' USING ERRCODE = '55000';
+  END IF;
+  RETURN NEW;
+END
+$fn$;
+CREATE TRIGGER guard_restore_quarantine BEFORE UPDATE ON tasks
+  FOR EACH ROW EXECUTE FUNCTION classroom_web_guard_restore_quarantine();
 
 -- 6. Fixed eraser functions -------------------------------------------------------
 CREATE FUNCTION classroom_web_deletion_event(target_owner uuid, kind text, object uuid, deletion uuid, db_state text)
@@ -728,7 +743,7 @@ $fn$;
 CREATE FUNCTION classroom_web_restore_seal() RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
 DECLARE target record; sealed integer := 0; leases integer; n timestamptz := clock_timestamp();
-        held_task record; quarantined integer := 0; seq bigint;
+        held_task record; quarantined integer := 0;
         held timestamptz := timestamptz '9999-01-01 00:00:00+00';
 BEGIN
   FOR target IN SELECT u.id FROM public.users u WHERE u.state IN ('active','disabled') ORDER BY u.id FOR UPDATE LOOP
@@ -740,34 +755,59 @@ BEGIN
   UPDATE public.deletion_executions x SET lease_token = x.lease_token + 1, leased_by = NULL,
       lease_expires_at = NULL, revision = x.revision + 1, updated_at = n WHERE x.leased_by IS NOT NULL;
   GET DIAGNOSTICS leases = ROW_COUNT;
-  -- Missing submission evidence in the copy is not proof that a task was never sent.
-  FOR held_task IN SELECT t.id, t.owner_id, t.state, t.not_before, t.leased_by, t.lease_expires_at,
-        t.revision, t.class_session_id, t.error_code
+  -- Missing submission evidence in the copy is not proof that a task was never sent, so
+  -- nothing about the task is decided here: it is only taken out of reach.
+  FOR held_task IN SELECT t.id, t.owner_id, t.state, t.not_before, t.lease_expires_at
       FROM public.tasks t WHERE t.state IN ('queued','running','cancel_requested')
         AND NOT EXISTS (SELECT FROM public.restore_task_quarantine q WHERE q.task_id = t.id)
       ORDER BY t.owner_id, t.id FOR UPDATE OF t LOOP
-    INSERT INTO public.restore_task_quarantine(task_id, owner_id, previous_state, previous_not_before, previous_lease_expires_at)
-      VALUES(held_task.id, held_task.owner_id, held_task.state, held_task.not_before, held_task.lease_expires_at);
-    -- Neither the claim (queued, not_before) nor lease recovery (expired lease) reaches it;
-    -- the fence moves so no worker of the copy's past can write to it.
+    -- Scheduling metadata only, not a visible state or revision. Neither the claim
+    -- (queued, not_before) nor lease recovery (expired lease) selects it again, so the
+    -- guard below never has to fail a dispatcher batch; the fence moves for old workers.
     UPDATE public.tasks t SET not_before = held,
         lease_expires_at = CASE WHEN t.leased_by IS NULL THEN NULL ELSE held END,
-        lease_token = t.lease_token + 1, may_have_charged = true,
-        revision = t.revision + 1, updated_at = n
+        lease_token = t.lease_token + 1
       WHERE t.owner_id = held_task.owner_id AND t.id = held_task.id;
-    INSERT INTO public.owner_event_counters(id, owner_id, next_sequence)
-      VALUES(gen_random_uuid(), held_task.owner_id, 1) ON CONFLICT DO NOTHING;
-    UPDATE public.owner_event_counters c SET next_sequence = c.next_sequence + 1
-      WHERE c.owner_id = held_task.owner_id RETURNING c.next_sequence - 1 INTO seq;
-    INSERT INTO public.outbox_events(id, owner_id, event_sequence, event_type,
-        aggregate_type, aggregate_id, aggregate_revision, payload, schema_version)
-      VALUES(gen_random_uuid(), held_task.owner_id, seq, 'task.changed', 'task', held_task.id, held_task.revision + 1,
-        jsonb_build_object('task_id', held_task.id, 'class_session_id', held_task.class_session_id,
-          'revision', held_task.revision + 1, 'state', held_task.state, 'error_code', held_task.error_code,
-          'may_have_charged', true), '1');
+    INSERT INTO public.restore_task_quarantine(task_id, owner_id, previous_state, previous_not_before, previous_lease_expires_at)
+      VALUES(held_task.id, held_task.owner_id, held_task.state, held_task.not_before, held_task.lease_expires_at);
     quarantined := quarantined + 1;
   END LOOP;
   RETURN jsonb_build_object('accounts_sealed', sealed, 'leases_cleared', leases, 'tasks_quarantined', quarantined);
+END
+$fn$;
+
+-- Records the ledger position of a request whose access was revoked locally while the
+-- ledger was away, after the owner's account erasure has sealed it: the owner context can
+-- no longer do it, and the account tombstone already revokes everything the owner held.
+CREATE FUNCTION classroom_web_accept_covered(p jsonb) RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
+BEGIN
+  IF (p->>'generation') IS NULL
+      OR NOT EXISTS (SELECT FROM public.deletion_tombstones t WHERE t.owner_id = (p->>'owner_id')::uuid
+        AND t.resource_type = 'account' AND t.resource_id = t.owner_id)
+      OR NOT EXISTS (SELECT FROM public.deletion_executions x WHERE x.owner_id = (p->>'owner_id')::uuid
+        AND x.request_id = (p->>'request_id')::uuid AND x.intent_id = (p->>'intent_id')::uuid
+        AND x.ledger_generation IS NULL) THEN
+    RAISE EXCEPTION 'only a locally revoked request under an account tombstone' USING ERRCODE = '42501';
+  END IF;
+  RETURN public.classroom_web_revoke_media_impl(p);
+END
+$fn$;
+
+-- Locks one asset and reports whether its own deadline has passed. The expiry sweep holds
+-- this lock across the ledger append, so an upload that completes meanwhile either waits
+-- and is then refused, or finished first and is no longer journaled for expiry.
+CREATE FUNCTION classroom_web_lock_expiry(p_owner uuid, p_asset uuid) RETURNS boolean
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
+BEGIN
+  PERFORM 1 FROM public.media_assets a
+    WHERE a.owner_id = p_owner AND a.id = p_asset AND a.status IN ('staging','verified','committed')
+      AND (a.expires_at <= clock_timestamp() OR a.hard_expire_at <= clock_timestamp()
+        OR (a.status = 'committed' AND a.access_revoked_at IS NOT NULL)
+        OR (a.status IN ('staging','verified') AND EXISTS (SELECT FROM public.media_uploads u
+              WHERE u.owner_id = a.owner_id AND u.asset_id = a.id AND u.expires_at <= clock_timestamp())))
+    FOR UPDATE;
+  RETURN FOUND;
 END
 $fn$;
 
@@ -805,7 +845,8 @@ BEGIN
         'classroom_web_deletion_inventory','classroom_web_record_deletion','classroom_web_finish_deletion',
         'classroom_web_deletion_ledger_state','classroom_web_object_key_state','classroom_web_deletion_audit',
         'classroom_web_owner_state',
-        'classroom_web_restore_seal','classroom_web_restore_block') LOOP
+        'classroom_web_restore_seal','classroom_web_restore_block','classroom_web_accept_covered',
+        'classroom_web_lock_expiry','classroom_web_guard_restore_quarantine') LOOP
     EXECUTE format('ALTER FUNCTION %s OWNER TO classroom_web_eraser', item.signature);
     EXECUTE format('REVOKE ALL ON FUNCTION %s FROM PUBLIC, classroom_web_runtime, classroom_web_deletion_worker, classroom_web_restore_operator', item.signature);
   END LOOP;
@@ -817,6 +858,7 @@ GRANT EXECUTE ON FUNCTION classroom_web_expire_media(jsonb), classroom_web_expir
   classroom_web_claim_deletion(text, integer), classroom_web_deletion_inventory(uuid, bigint),
   classroom_web_record_deletion(uuid, bigint, uuid, text, text), classroom_web_finish_deletion(uuid, bigint, integer),
   classroom_web_deletion_ledger_state(), classroom_web_object_key_state(text), classroom_web_deletion_audit(),
-  classroom_web_owner_state(uuid) TO classroom_web_deletion_worker;
+  classroom_web_owner_state(uuid), classroom_web_accept_covered(jsonb), classroom_web_lock_expiry(uuid, uuid)
+  TO classroom_web_deletion_worker;
 GRANT EXECUTE ON FUNCTION classroom_web_restore_seal(), classroom_web_restore_block(uuid[]), classroom_web_deletion_audit(),
   classroom_web_deletion_ledger_state() TO classroom_web_restore_operator;

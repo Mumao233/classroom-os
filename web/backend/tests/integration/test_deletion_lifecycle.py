@@ -1059,3 +1059,58 @@ def test_reconcile_tolerates_a_deletion_accepted_while_it_reads(d):
     assert checker.deletion.reconcile()['applied'] == []
     m.worker.drain()
     assert finished(m, accepted['id'])
+
+
+def test_expiry_journals_only_an_asset_that_is_still_expired_under_lock(d, monkeypatch):
+    m = d
+    m.worker.drain()
+    asset, data = upload(m, marker='completed-meanwhile')
+    # The sweep's unlocked candidate read saw this asset as expired; by the time it acts,
+    # the upload has completed and the asset carries no passed deadline.
+    monkeypatch.setattr(m.deploy.queue, 'expired', lambda batch=50: [(m.uid, UUID(asset['id']))])
+    assert m.deletion.expire_due() == 0
+    monkeypatch.undo()
+    intent = DeletionIntent.for_scope(m.uid, 'media_asset', UUID(asset['id']), 'expiry')
+    # Nothing was journaled, so no later replay can revoke the completed asset.
+    assert [e for e in m.deploy.ledger.entries() if e.intent.intent_id == intent.intent_id] == []
+    assert rows(m, 'SELECT 1 FROM deletion_requests WHERE owner_id=:o AND scope_id=:s', o=m.uid, s=asset['id']) == []
+    assert m.deletion.reconcile()['applied'] == [] and m.deletion.ready
+    assert asset_state(m, asset['id'])['status'] == 'committed'
+    assert m.client.get(access(m, asset)).content == data
+    # The locked recheck still lets a genuinely expired asset through.
+    with m.pg.admin.begin() as c:
+        c.execute(sa.text("UPDATE media_assets SET expires_at=clock_timestamp()+interval '1 second' WHERE id=:id"), dict(id=asset['id']))
+    time.sleep(1.3)
+    assert m.deletion.expire_due() == 1
+    assert [e for e in m.deploy.ledger.entries() if e.intent.intent_id == intent.intent_id]
+    m.worker.drain()
+
+
+def test_reconcile_accepts_a_local_revocation_covered_by_a_later_account_erasure(d):
+    m = d
+    upload(m)
+    shown = preview(m, 'class_session', m.classroom.id).json()
+    m.deploy.services.ledger.stop()
+    try:
+        assert submit(m, 'class_session', m.classroom.id, shown).status_code == 503
+    finally:
+        m.deploy.services.ledger.start()
+    local = one(m, """SELECT d.id,d.state,x.intent_id,x.ledger_generation FROM deletion_requests d
+        JOIN deletion_executions x ON x.request_id=d.id WHERE d.owner_id=:o AND d.scope_id=:s""", o=m.uid, s=m.classroom.id)
+    assert local['state'] == 'access_revoked' and local['ledger_generation'] is None
+    intent = DeletionIntent.for_scope(m.uid, 'class_session', m.classroom.id)
+    # The narrow system path refuses while the owner is active: only an account tombstone covers.
+    with pytest.raises(sa.exc.DBAPIError) as refused:
+        m.deploy.queue.accept_covered(intent, 999999, 0)
+    assert refused.value.orig.sqlstate == '42501'
+    # Before anyone reconciles, the account is erased.
+    account = m.deletion.erase_account(OwnerContext(m.uid))
+    report = m.deletion.reconcile()
+    assert report['unresolved'] == [] and len(report['accepted']) == 1 and m.deletion.ready
+    accepted = one(m, 'SELECT ledger_generation FROM deletion_executions WHERE request_id=:id', id=local['id'])
+    assert accepted['ledger_generation'] == report['accepted'][0]
+    assert [e.generation for e in m.deploy.ledger.entries() if e.intent.intent_id == intent.intent_id] == report['accepted']
+    assert m.deploy.queue.audit()['unaccepted_requests'] == 0
+    assert m.deletion.reconcile()['accepted'] == []
+    m.worker.drain()
+    assert settled(m, local['id']) and settled(m, account)

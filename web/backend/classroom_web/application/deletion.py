@@ -296,6 +296,12 @@ class DeletionService:
                         entry = self.ledger.append(DeletionIntent.for_scope(
                             row['owner_id'], row['scope_type'], row['scope_id'], 'expiry'))
                         self._apply(entry.intent, entry.generation)
+                    elif self.queue.owner_state(row['owner_id']) in ('erasing', 'erased'):
+                        # The account was erased after this local revocation: its tombstone
+                        # covers the data, and only the ledger position is still missing.
+                        entry = self.ledger.append(DeletionIntent.for_scope(
+                            row['owner_id'], row['scope_type'], row['scope_id'], row['origin']))
+                        self.queue.accept_covered(entry.intent, entry.generation, self.settle_seconds)
                     else:
                         with self.database.transaction(OwnerContext(row['owner_id'])) as tx:
                             repo = PgDeletionRepository(tx, row['owner_id'])
@@ -318,13 +324,18 @@ class DeletionService:
             due = self.queue.expired(batch)
             for owner_id, asset_id in due:
                 intent = DeletionIntent.for_scope(owner_id, 'media_asset', asset_id, 'expiry')
-                try:
-                    generation = self.ledger.append(intent).generation
-                except LedgerUnavailable:
-                    # Reads are already refused by the deadline. Revoke locally now;
-                    # reconcile() completes the acceptance before any physical work.
-                    generation = None
-                self.queue.expire(intent, generation, self.settle_seconds)
+                # The candidate list was read without locks; an upload may have completed
+                # since. Only an asset still expired under lock is journaled and revoked.
+                with self.queue.expiring(owner_id, asset_id) as (eligible, expire):
+                    if not eligible:
+                        continue
+                    try:
+                        generation = self.ledger.append(intent).generation
+                    except LedgerUnavailable:
+                        # Reads are already refused by the deadline. Revoke locally now;
+                        # reconcile() completes the acceptance before any physical work.
+                        generation = None
+                    expire(intent, generation, self.settle_seconds)
                 expired += 1
             if len(due) < batch:
                 break
