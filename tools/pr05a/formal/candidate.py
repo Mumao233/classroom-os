@@ -37,7 +37,7 @@ def candidate_contract(contract):
     schemas["CacheRecoverResult"] = recovered
     unlock = result["paths"]["/me/cache-unlock"]["post"]
     unlock["x-requires-reauth"] = True
-    unlock["x-reauth-policy"] = {"purpose": "unlockCache", "state": "candidate only", "windows": "explicit gated DB policy"}
+    unlock.setdefault("x-reauth-policy", {"purpose": "unlockCache", "state": "candidate only", "windows": "explicit gated DB policy"})
     recover = copy.deepcopy(unlock)
     recover["operationId"] = "recoverCache"
     recover["summary"] = "Candidate same-active-device historical cache key recovery"
@@ -50,5 +50,11 @@ def candidate_contract(contract):
         operation["properties"]["purpose"] = {"const": purpose}
         operation["properties"]["target"]["properties"]["kind"] = {"const": "device"}
         operation["properties"]["candidate_parameters"]["properties"]["body"] = {"$ref": f"#/components/schemas/{body}"}
-        schemas["ReauthOperation"]["oneOf"].append(operation)
+        existing = [item for item in schemas["ReauthOperation"]["oneOf"]
+                    if item.get("properties", {}).get("purpose", {}).get("const") == purpose]
+        if existing:
+            if len(existing) != 1 or existing[0] != operation:
+                raise ValueError(f"incompatible existing {purpose} contract")
+        else:
+            schemas["ReauthOperation"]["oneOf"].append(operation)
     return result
