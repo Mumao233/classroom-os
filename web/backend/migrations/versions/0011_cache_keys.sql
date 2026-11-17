@@ -117,6 +117,10 @@ BEGIN
   IF purpose='revokeSession' AND NOT EXISTS(SELECT FROM public.auth_sessions WHERE owner_id=a.owner_id AND id=(p->>'target_id')::uuid AND id<>(s->>'session_id')::uuid) THEN RETURN NULL;END IF;
   IF purpose IN('revokeDevice','trustDevice') AND NOT EXISTS(SELECT FROM public.devices WHERE owner_id=a.owner_id AND id=(p->>'target_id')::uuid AND revoked_at IS NULL) THEN RETURN NULL;END IF;
   IF purpose='confirmMfa' AND NOT EXISTS(SELECT FROM public.mfa_credentials WHERE owner_id=a.owner_id AND id=(p->>'target_id')::uuid AND state='pending') THEN RETURN NULL;END IF;
+  -- Policy locking may wait. Recheck the verified challenge and session deadlines
+  -- after every qualification lock, immediately before issuing a proof.
+  n:=clock_timestamp();
+  IF n>=a.expires_at THEN RETURN NULL;END IF;
   until_at:=least((a.scope->>'verified_at')::timestamptz+risk_window,(s->>'expires_at')::timestamptz);
   IF n>=until_at THEN RETURN NULL;END IF;
   INSERT INTO public.reauth_proofs(id,owner_id,session_id,device_id,security_epoch,token_hash,purpose,target_id,commitment,operation_key,verified_at,expires_at)
