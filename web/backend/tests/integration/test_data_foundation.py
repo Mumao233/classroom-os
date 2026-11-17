@@ -42,7 +42,7 @@ def test_only_required_tables_and_contract_columns_exist(pg):
     auth_tables={'devices','auth_sessions','auth_challenges','reauth_proofs','mfa_credentials','recovery_code_groups','mfa_recovery_codes','email_actions','preauth_receipts'}
     media_tables={'media_assets','media_uploads','media_tickets'}
     # PR-04b SQL tables have their own real-PG column, constraint and ACL checks.
-    deletion_tables={'deletion_assets','deletion_executions','retention_policies'}
+    deletion_tables={'deletion_assets','deletion_executions','retention_policies','restore_task_quarantine'}
     assert set(inspector.get_table_names()) == expected | set(task_tables) | set(identity_tables) | auth_tables | media_tables | set(QA_TABLES) | set(REVIEW_TABLES) | deletion_tables | {"alembic_version"}
     contract = json.loads((ROOT / "docs/web-alpha/architecture/contracts/domain-model.json").read_text("utf-8"))
     for table in contract["tables"]:

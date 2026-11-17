@@ -107,9 +107,9 @@ def test_schema_matches_frozen_inventory_and_roles_are_narrow(d):
     for name in ('deletion_requests', 'deletion_tombstones'):
         table = next(table for table in model['tables'] if table['name'] == name)
         assert {c['name'] for c in inspector.get_columns(name)} == {c['name'] for c in table['columns']}
-    secured = rows(m, """SELECT relname FROM pg_class WHERE relname IN ('deletion_assets','deletion_executions')
+    secured = rows(m, """SELECT relname FROM pg_class WHERE relname IN ('deletion_assets','deletion_executions','restore_task_quarantine')
         AND relrowsecurity AND relforcerowsecurity""")
-    assert len(secured) == 2
+    assert len(secured) == 3
     roles = rows(m, """SELECT rolname,rolcanlogin,rolsuper,rolbypassrls,rolinherit FROM pg_roles
         WHERE rolname IN ('classroom_web_eraser','classroom_web_deletion_worker','classroom_web_restore_operator')""")
     assert len(roles) == 3 and not any(r['rolcanlogin'] or r['rolsuper'] or r['rolbypassrls'] for r in roles)
@@ -124,13 +124,15 @@ def test_schema_matches_frozen_inventory_and_roles_are_narrow(d):
                       "SELECT * FROM classroom_web_claim_deletion('intruder',30)",
                       'SELECT classroom_web_restore_seal()', 'SELECT classroom_web_restore_block(ARRAY[]::uuid[])',
                       "SELECT classroom_web_revoke_media_impl('{}'::jsonb)",
-                      'DELETE FROM deletion_requests', "INSERT INTO retention_policies(version,media_kind,max_lifetime,approval_reference,synthetic) VALUES('fake-policy','slide','1 day','none',true)"):
+                      'DELETE FROM deletion_requests', 'SELECT * FROM restore_task_quarantine',
+                      "INSERT INTO retention_policies(version,media_kind,max_lifetime,approval_reference,synthetic) VALUES('fake-policy','slide','1 day','none',true)"):
         with pytest.raises(sa.exc.DBAPIError):
             with m.pg.db.transaction(OwnerContext(m.uid)) as tx:
                 tx.connection.execute(sa.text(statement))
     # The worker identity sees no private table and cannot use owner or restore functions.
     with m.deploy.queue.engine.connect() as c:
         for statement in ('SELECT * FROM media_assets', 'SELECT * FROM users', 'SELECT * FROM deletion_requests',
+                          'SELECT * FROM restore_task_quarantine', 'SELECT * FROM tasks',
                           'SELECT * FROM class_sessions', "SELECT classroom_web_owner_revoke_media('{}'::jsonb)",
                           'SELECT classroom_web_restore_seal()', 'SELECT classroom_web_restore_block(ARRAY[]::uuid[])',
                           'SELECT classroom_web_seal_account(gen_random_uuid())'):
@@ -790,6 +792,15 @@ def test_ledger_chain_is_create_only_contended_safely_and_tamper_evident(deploy)
     assert len(listed) == 12
     body = client.get_object(Bucket=bucket, Key=listed[0]['Key'])['Body'].read()
     assert b'title' not in body and set(json.loads(body)['intent']) == set(intents[0].record())
+    # One instance shared by appenders and full readers: reads never mistake a
+    # concurrent, legitimate append for a changed history.
+    shared = ledger_store(services, fresh_bucket())
+    with ThreadPoolExecutor(8) as pool:
+        jobs = [pool.submit(shared.append, DeletionIntent.for_scope(uuid4(), 'class_session', uuid4())) for _ in range(10)]
+        jobs += [pool.submit(shared.entries) for _ in range(10)] + [pool.submit(shared.head) for _ in range(4)]
+        for job in jobs:
+            job.result()
+    assert [e.generation for e in shared.entries()] == list(range(1, 11))
     # A lost entry is a gap, not a shorter history.
     client.delete_object(Bucket=bucket, Key=listed[5]['Key'])
     with pytest.raises(LedgerCorrupt):
@@ -968,3 +979,83 @@ def test_stalled_ledger_still_revokes_locally_within_the_request_deadline(d):
     assert len(report['accepted']) == 1 and report['unresolved'] == [] and m.deletion.ready
     m.worker.drain()
     assert finished(m, request['id'])
+
+
+def test_replay_freezes_cascade_membership_before_checking_it(d, monkeypatch):
+    m = d
+    m.worker.drain()
+    upload(m, marker='member')
+    with m.pg.db.transaction(OwnerContext(m.uid)) as tx:
+        elsewhere = tx.catalog.create_course(m.semester.id, 'Outside the deleted course')
+    outsider = classroom(m, 'Outside classroom', elsewhere)
+    outside_asset, outside_data = upload(m, outsider, 'outsider')
+    shown = preview(m, 'course', m.course.id).json()
+    # The course deletion reaches the ledger, then the process dies before its commit.
+    original = PgDeletionRepository.apply
+    monkeypatch.setattr(PgDeletionRepository, 'apply', lambda *a, **k: (_ for _ in ()).throw(RuntimeError('synthetic crash before commit')))
+    assert submit(m, 'course', m.course.id, shown).status_code == 503
+    monkeypatch.setattr(PgDeletionRepository, 'apply', original)
+    entry = next(e for e in m.deploy.ledger.entries() if e.intent.scope_id == m.course.id)
+    assert entry.intent.members == (m.classroom.id,)
+    seen, real = {}, PgDeletionRepository.descendants
+
+    def move():
+        try:
+            with m.pg.db.transaction(OwnerContext(m.uid)) as tx:
+                tx.catalog.move_class_session(outsider.id, outsider.revision, m.course.id)
+            return 'moved'
+        except Exception as error:  # noqa: BLE001  (the outcome is asserted below)
+            return type(error).__name__
+
+    with ThreadPoolExecutor(1) as pool:
+        def checked_then_raced(self, scope_type, scope_id):
+            found = real(self, scope_type, scope_id)
+            if scope_type == 'course' and scope_id == m.course.id and 'mover' not in seen:
+                # Replay has just compared the membership with the ledger. Another process
+                # now moves a classroom into the course being deleted.
+                seen['mover'] = pool.submit(move)
+                time.sleep(0.5)
+                seen['waiting'] = not seen['mover'].done()
+            return found
+
+        monkeypatch.setattr(PgDeletionRepository, 'descendants', checked_then_raced)
+        try:
+            report = m.deletion.reconcile()
+        finally:
+            monkeypatch.setattr(PgDeletionRepository, 'descendants', real)
+        moved = seen['mover'].result(15)
+    assert entry.generation in report['applied'] and report['unresolved'] == [] and m.deletion.ready
+    # The move waited for the replay to commit and then met the revoked course.
+    assert seen['waiting'] is True and moved == 'Gone'
+    assert one(m, 'SELECT course_id FROM class_sessions WHERE id=:id', id=outsider.id)['course_id'] == elsewhere.id
+    # Nothing outside the accepted membership was revoked or inventoried.
+    assert asset_state(m, outside_asset['id'])['status'] == 'committed'
+    assert rows(m, 'SELECT 1 FROM deletion_assets WHERE asset_id=:a', a=outside_asset['id']) == []
+    assert m.client.get(access(m, outside_asset)).content == outside_data
+    m.worker.drain()
+
+
+def test_reconcile_tolerates_a_deletion_accepted_while_it_reads(d):
+    m = d
+    room = classroom(m, 'Accepted during reconciliation')
+    upload(m, room, 'during')
+    checker = build(m.a, m.deploy, m.spool, ledger=ledger_store(m.deploy.services, m.deploy.ledger_bucket), reconcile=False)
+    real, accepted = checker.deletion.ledger.entries, {}
+
+    def read_then_accept():
+        snapshot = real()
+        # Another process accepts a deletion after this one has read the ledger.
+        accepted.update(delete(m, 'class_session', room.id))
+        return snapshot
+
+    checker.deletion.ledger.entries = read_then_accept
+    try:
+        report = checker.deletion.reconcile()
+    finally:
+        del checker.deletion.ledger.entries
+    # A valid ledger that simply grew is not mistaken for one that fell behind.
+    assert report['unresolved'] == [] and checker.deletion.ready
+    assert one(m, 'SELECT ledger_generation FROM deletion_executions WHERE request_id=:id', id=accepted['id'])['ledger_generation']
+    assert checker.deletion.reconcile()['applied'] == []
+    m.worker.drain()
+    assert finished(m, accepted['id'])

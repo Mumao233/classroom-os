@@ -2,9 +2,10 @@
 import os
 from pathlib import Path
 import subprocess
+from datetime import datetime, timezone
 import time
 from types import SimpleNamespace
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from fastapi.testclient import TestClient
 import pytest
@@ -102,6 +103,14 @@ def test_restored_copy_replays_deletions_revokes_sessions_and_never_revives(d, t
         other_room = tx.catalog.create_class_session(tx.catalog.create_course(other_semester.id, 'Other course').id, 'Other classroom')
     other_asset, other_data = upload(m, other_room, 'other-owner')
     as_user(m, owner_email)
+    # Work the backup holds that a worker could still dispatch: one task queued, one running
+    # under the lease of a process that will be gone. Either may reach its provider later.
+    with m.pg.db.transaction(OwnerContext(m.uid)) as tx:
+        queued = tx.tasks.enqueue('export', {'schema_version': 1}, op_id=uuid4())
+        running = tx.tasks.enqueue('export', {'schema_version': 1}, op_id=uuid4())
+    with m.pg.admin.begin() as c:
+        c.execute(sa.text("""UPDATE tasks SET state='running',leased_by='worker-at-backup-time',lease_token=lease_token+1,
+            lease_expires_at=clock_timestamp()+interval '1 second',revision=revision+1 WHERE id=:id"""), dict(id=running.id))
     # An account that is active in the backup and loses access afterwards.
     barred = new_user(m)
     old_cookie = m.client.cookies.get('__Host-classroom_session')
@@ -157,6 +166,25 @@ def test_restored_copy_replays_deletions_revokes_sessions_and_never_revives(d, t
         # The ledger was read at its live head; the expiry found during the restore was appended to it.
         assert report['ledger_head'] == head and len(m.deploy.ledger.entries()) == head + report['expired']
         assert report['seal']['accounts_sealed'] >= 1 and report['seal']['leases_cleared'] >= 1
+        # Missing submission evidence is not proof that the task was never sent: both are
+        # frozen and marked as possibly charged, and their previous schedule is kept.
+        assert report['seal']['tasks_quarantined'] == 2 and report['audit']['dispatchable_tasks'] == 0
+        held = {r['id']: r for r in restored.rows(
+            'SELECT id,state,not_before,leased_by,lease_expires_at,may_have_charged FROM tasks WHERE id IN (:a,:b)',
+            a=queued.id, b=running.id)}
+        frozen = datetime(9999, 1, 1, tzinfo=timezone.utc)
+        assert held[queued.id]['state'] == 'queued' and held[queued.id]['not_before'] == frozen
+        assert held[queued.id]['lease_expires_at'] is None
+        assert held[running.id]['state'] == 'running' and held[running.id]['lease_expires_at'] == frozen
+        assert all(r['may_have_charged'] for r in held.values())
+        assert {r['task_id']: r['previous_state'] for r in restored.rows('SELECT task_id,previous_state FROM restore_task_quarantine')} \
+            == {queued.id: 'queued', running.id: 'running'}
+        assert len(restored.rows("SELECT 1 FROM outbox_events WHERE event_type='task.changed' AND aggregate_id IN (:a,:b) "
+                                 "AND (payload->>'may_have_charged')::boolean", a=queued.id, b=running.id)) == 2
+        # Neither the dispatcher's claim nor lease recovery can reach them in the copy.
+        with restored.admin.begin() as c:
+            assert c.execute(sa.text("SELECT * FROM classroom_web_claim_tasks('restore-probe',30,100,'1')")).all() == []
+            assert c.execute(sa.text('SELECT * FROM classroom_web_expired_tasks(100)')).all() == []
         assert len(report['reconcile']['applied']) >= 2 and report['reconcile']['unresolved'] == []
         assert report['expired'] >= 1
         assert report['audit']['exposed_media'] == 0 and report['audit']['unaccepted_requests'] == 0
@@ -207,7 +235,7 @@ def test_restored_copy_replays_deletions_revokes_sessions_and_never_revives(d, t
             restored.a.email = owner_email
         # Running the procedure again is harmless, and the explicit switch removes the unreferenced object.
         again = coordinator.run(ledger_witness=m.deploy.ledger.head(), revoked_owners=[barred.uid], purge_unreferenced=True)
-        assert again['blocked'] == dict(requested=1, blocked=0)
+        assert again['blocked'] == dict(requested=1, blocked=0) and again['seal']['tasks_quarantined'] == 0
         assert again['ready'] is True and again['reconcile']['applied'] == [] and again['orphans']['unreferenced_removed'] >= 1
         assert versions(m, late_key) == []
     finally:
@@ -450,3 +478,39 @@ def test_restore_stops_when_the_copy_would_widen_an_accepted_cascade(d, tmp_path
         restored.close()
     as_user(m, m.a.email)
     assert m.client.get(access(m, kept_asset)).content == kept_data
+
+
+def test_restore_covers_expiry_of_an_owner_the_backup_never_had(d, tmp_path):
+    m = d
+    m.worker.drain()
+    owner_email = m.a.email
+    dump = backup(m, tmp_path / 'backup.dump')
+    # After the backup: a new account uploads, and its media expires and is journaled.
+    latecomer = new_user(m)
+    as_user(m, latecomer.email)
+    with m.pg.db.transaction(OwnerContext(latecomer.uid)) as tx:
+        semester = tx.catalog.create_semester('Created after the backup')
+        room = tx.catalog.create_class_session(tx.catalog.create_course(semester.id, 'Later course').id, 'Later classroom')
+    asset, _ = upload(m, room, 'latecomer')
+    with m.pg.admin.begin() as c:
+        c.execute(sa.text("UPDATE media_assets SET expires_at=clock_timestamp()+interval '1 second' WHERE id=:id"),
+                  dict(id=asset['id']))
+    time.sleep(1.3)
+    assert m.deletion.expire_due() >= 1
+    entry = next(e for e in m.deploy.ledger.entries() if e.intent.scope_id == UUID(asset['id']))
+    assert entry.intent.origin == 'expiry' and entry.intent.owner_id == latecomer.uid
+    witness = m.deploy.ledger.head()
+    restored = Restored(m, dump)
+    try:
+        assert restored.rows('SELECT 1 FROM users WHERE id=:id', id=latecomer.uid) == []
+        opened = restored.build(reconcile=False)
+        worker = DeletionWorker(queue=restored.queue, store=m.store, policy=POLICY, worker_id='restore-drill')
+        report = RestoreCoordinator(service=opened.deletion, operator=restored.operator, worker=worker).run(
+            ledger_witness=witness, revoked_owners=[])
+        # The copy never had the account, so it holds nothing to revoke: covered, not a failure.
+        assert entry.generation in report['reconcile']['covered']
+        assert report['reconcile']['unresolved'] == [] and report['ready'] is True, report
+    finally:
+        restored.close()
+    as_user(m, owner_email)
+    m.worker.drain()

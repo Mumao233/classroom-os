@@ -42,6 +42,23 @@ class PgDeletionRepository:
         """Serialize every application of one intent for the rest of the transaction."""
         self.execute('SELECT pg_advisory_xact_lock(hashtextextended(CAST(:name AS text),0))', name=f'deletion:{intent.intent_id}')
 
+    def lock_root(self, scope_type, scope_id):
+        """Freeze a cascade's membership for the rest of the transaction.
+
+        Creating a child under a course or semester, or moving one into or out of it,
+        takes FOR SHARE on that row; FOR UPDATE here makes all of them wait. The parent
+        is locked first, in the catalog's ancestor-before-target order. A root this
+        database does not hold has no children that could change.
+        """
+        if scope_type == 'course':
+            parent = self.execute('SELECT semester_id FROM courses WHERE owner_id=:owner AND id=:scope',
+                                  scope=scope_id).scalar_one_or_none()
+            if parent is not None:
+                self.execute('SELECT 1 FROM semesters WHERE owner_id=:owner AND id=:parent FOR SHARE', parent=parent)
+            self.execute('SELECT 1 FROM courses WHERE owner_id=:owner AND id=:scope FOR UPDATE', scope=scope_id)
+        elif scope_type == 'semester':
+            self.execute('SELECT 1 FROM semesters WHERE owner_id=:owner AND id=:scope FOR UPDATE', scope=scope_id)
+
     def descendants(self, scope_type, scope_id):
         """(courses, classrooms) a cascade covers. Works on a tombstoned root, whose children cannot move."""
         if scope_type == 'course':
@@ -109,7 +126,9 @@ class PgDeletionRepository:
         if fresh and intent.scope_type in ('course', 'semester'):
             # The accepted deletion covered exactly the recorded descendants. A copy that
             # holds more under this root (restored from before one of them moved away)
-            # must not have them deleted on the strength of this intent.
+            # must not have them deleted on the strength of this intent. The root stays
+            # locked until commit, so what is checked here is what gets revoked below.
+            self.lock_root(intent.scope_type, intent.scope_id)
             courses, rooms = self.descendants(intent.scope_type, intent.scope_id)
             if set(courses) - set(intent.courses) or set(rooms) - set(intent.members):
                 raise ScopeExpanded()
@@ -143,6 +162,7 @@ class PgDeletionRepository:
                     self.tx.catalog._load(Resource.COURSE, course, write=True)
                 except (NotFound, Gone):
                     continue
+                self.lock_root('course', course)
                 rooms = self.descendants('course', course)[1]
                 if set(rooms) - set(intent.members):
                     raise ScopeExpanded()

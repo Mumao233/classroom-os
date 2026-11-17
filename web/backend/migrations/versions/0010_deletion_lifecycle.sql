@@ -103,6 +103,20 @@ CREATE TABLE retention_policies (
     synthetic boolean NOT NULL
 );
 
+-- Restore only: work a restored copy holds that it must not dispatch again. A task that
+-- is queued or running in the copy may have reached its provider after the backup was
+-- taken; the copy cannot tell, so the task is frozen and marked as possibly charged.
+-- The previous schedule is kept so the task layer can release it after reconciliation.
+CREATE TABLE restore_task_quarantine (
+    task_id uuid PRIMARY KEY,
+    owner_id uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+    quarantined_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
+    previous_state text NOT NULL CHECK (previous_state IN ('queued','running','cancel_requested')),
+    previous_not_before timestamptz NOT NULL,
+    previous_lease_expires_at timestamptz,
+    FOREIGN KEY(owner_id,task_id) REFERENCES tasks(owner_id,id) ON DELETE RESTRICT
+);
+
 DO $body$
 DECLARE t text;
 BEGIN
@@ -117,6 +131,11 @@ BEGIN
     EXECUTE format('GRANT SELECT,INSERT,UPDATE ON %I TO classroom_web_eraser',t);
   END LOOP;
 END $body$;
+REVOKE ALL ON TABLE restore_task_quarantine FROM PUBLIC;
+ALTER TABLE restore_task_quarantine ENABLE ROW LEVEL SECURITY;
+ALTER TABLE restore_task_quarantine FORCE ROW LEVEL SECURITY;
+CREATE POLICY eraser_all ON restore_task_quarantine TO classroom_web_eraser USING (true) WITH CHECK (true);
+GRANT SELECT, INSERT ON restore_task_quarantine TO classroom_web_eraser;
 REVOKE ALL ON TABLE retention_policies FROM PUBLIC;
 GRANT SELECT ON retention_policies TO classroom_web_runtime, classroom_web_eraser;
 
@@ -150,6 +169,11 @@ GRANT SELECT (id, state, deleted_at, security_epoch, revision) ON users TO class
 GRANT UPDATE (state, deleted_at, security_epoch, revision, updated_at, normalized_email, password_hash,
               email_verified_at, profile, preferences) ON users TO classroom_web_eraser;
 CREATE POLICY eraser_users ON users TO classroom_web_eraser USING (true) WITH CHECK (true);
+-- Restore quarantine: scheduling metadata and the possible-charge flag only, never task input.
+GRANT SELECT (id, owner_id, state, not_before, leased_by, lease_expires_at, lease_token, revision,
+              class_session_id, error_code, may_have_charged) ON tasks TO classroom_web_eraser;
+GRANT UPDATE (not_before, lease_expires_at, lease_token, may_have_charged, revision, updated_at) ON tasks TO classroom_web_eraser;
+CREATE POLICY eraser_quarantine ON tasks TO classroom_web_eraser USING (true) WITH CHECK (true);
 GRANT EXECUTE ON FUNCTION classroom_web_owner_active() TO classroom_web_eraser;
 GRANT USAGE ON SCHEMA identity_api TO classroom_web_eraser;
 GRANT EXECUTE ON FUNCTION identity_api.revoke_derived(uuid) TO classroom_web_eraser;
@@ -691,14 +715,21 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
       JOIN public.deletion_requests d ON d.owner_id = x.owner_id AND d.id = x.request_id
       WHERE x.objects_absent_at IS NOT NULL AND d.state <> 'complete'),
     'failed_requests', (SELECT count(*) FROM public.deletion_requests d WHERE d.state = 'failed'),
-    'erasing_accounts', (SELECT count(*) FROM public.users u WHERE u.state = 'erasing'))
+    'erasing_accounts', (SELECT count(*) FROM public.users u WHERE u.state = 'erasing'),
+    -- Meaningful on a restored copy: work it could dispatch that restore has not frozen.
+    'dispatchable_tasks', (SELECT count(*) FROM public.tasks t WHERE t.state IN ('queued','running','cancel_requested')
+      AND NOT EXISTS (SELECT FROM public.restore_task_quarantine q WHERE q.task_id = t.id)),
+    'quarantined_tasks', (SELECT count(*) FROM public.restore_task_quarantine))
 $fn$;
 
 -- Restore only: every credential-derived grant in the restored copy predates the
--- incident and is revoked; every worker lease in it belongs to a process that is gone.
+-- incident and is revoked; every worker lease in it belongs to a process that is gone;
+-- every task it could dispatch is frozen (see restore_task_quarantine). Repeatable.
 CREATE FUNCTION classroom_web_restore_seal() RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $fn$
 DECLARE target record; sealed integer := 0; leases integer; n timestamptz := clock_timestamp();
+        held_task record; quarantined integer := 0; seq bigint;
+        held timestamptz := timestamptz '9999-01-01 00:00:00+00';
 BEGIN
   FOR target IN SELECT u.id FROM public.users u WHERE u.state IN ('active','disabled') ORDER BY u.id FOR UPDATE LOOP
     UPDATE public.users u SET security_epoch = u.security_epoch + 1, revision = u.revision + 1, updated_at = n
@@ -709,7 +740,34 @@ BEGIN
   UPDATE public.deletion_executions x SET lease_token = x.lease_token + 1, leased_by = NULL,
       lease_expires_at = NULL, revision = x.revision + 1, updated_at = n WHERE x.leased_by IS NOT NULL;
   GET DIAGNOSTICS leases = ROW_COUNT;
-  RETURN jsonb_build_object('accounts_sealed', sealed, 'leases_cleared', leases);
+  -- Missing submission evidence in the copy is not proof that a task was never sent.
+  FOR held_task IN SELECT t.id, t.owner_id, t.state, t.not_before, t.leased_by, t.lease_expires_at,
+        t.revision, t.class_session_id, t.error_code
+      FROM public.tasks t WHERE t.state IN ('queued','running','cancel_requested')
+        AND NOT EXISTS (SELECT FROM public.restore_task_quarantine q WHERE q.task_id = t.id)
+      ORDER BY t.owner_id, t.id FOR UPDATE OF t LOOP
+    INSERT INTO public.restore_task_quarantine(task_id, owner_id, previous_state, previous_not_before, previous_lease_expires_at)
+      VALUES(held_task.id, held_task.owner_id, held_task.state, held_task.not_before, held_task.lease_expires_at);
+    -- Neither the claim (queued, not_before) nor lease recovery (expired lease) reaches it;
+    -- the fence moves so no worker of the copy's past can write to it.
+    UPDATE public.tasks t SET not_before = held,
+        lease_expires_at = CASE WHEN t.leased_by IS NULL THEN NULL ELSE held END,
+        lease_token = t.lease_token + 1, may_have_charged = true,
+        revision = t.revision + 1, updated_at = n
+      WHERE t.owner_id = held_task.owner_id AND t.id = held_task.id;
+    INSERT INTO public.owner_event_counters(id, owner_id, next_sequence)
+      VALUES(gen_random_uuid(), held_task.owner_id, 1) ON CONFLICT DO NOTHING;
+    UPDATE public.owner_event_counters c SET next_sequence = c.next_sequence + 1
+      WHERE c.owner_id = held_task.owner_id RETURNING c.next_sequence - 1 INTO seq;
+    INSERT INTO public.outbox_events(id, owner_id, event_sequence, event_type,
+        aggregate_type, aggregate_id, aggregate_revision, payload, schema_version)
+      VALUES(gen_random_uuid(), held_task.owner_id, seq, 'task.changed', 'task', held_task.id, held_task.revision + 1,
+        jsonb_build_object('task_id', held_task.id, 'class_session_id', held_task.class_session_id,
+          'revision', held_task.revision + 1, 'state', held_task.state, 'error_code', held_task.error_code,
+          'may_have_charged', true), '1');
+    quarantined := quarantined + 1;
+  END LOOP;
+  RETURN jsonb_build_object('accounts_sealed', sealed, 'leases_cleared', leases, 'tasks_quarantined', quarantined);
 END
 $fn$;
 

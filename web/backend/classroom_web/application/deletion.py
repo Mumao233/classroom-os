@@ -212,6 +212,9 @@ class DeletionService:
     def _apply(self, intent, generation):
         """Apply an accepted intent without a browser session (worker-style owner context)."""
         if intent.origin == 'expiry':
+            if self.queue.owner_state(intent.owner_id) == 'absent':
+                # This copy never had the owner (it predates the account): nothing to revoke.
+                raise InactiveOwner('owner absent from this database')
             try:
                 return self.queue.expire(intent, generation, self.settle_seconds)
             except DBAPIError as error:
@@ -252,9 +255,11 @@ class DeletionService:
         is refused. ``admit=False`` never opens the service, whatever the outcome.
         """
         self.ready = False
+        # Local state first: a deletion accepted between the two reads is then already in
+        # the ledger read (and replayed idempotently), never local-only and "ahead".
+        local = {row['intent_id']: row for row in self.queue.ledger_state()}
         entries = self.ledger.entries() if witness is None else self.ledger.verify_head(witness)
         recorded = {entry.intent.intent_id: entry for entry in entries}
-        local = {row['intent_id']: row for row in self.queue.ledger_state()}
         for row in local.values():
             entry = recorded.get(row['intent_id'])
             if row['ledger_generation'] is not None and (entry is None or entry.generation != row['ledger_generation']):
@@ -414,7 +419,8 @@ class RestoreCoordinator:
         report = {}
         # 1. The live ledger must be readable, intact and at least as long as its witness.
         report['ledger_head'] = len(service.ledger.verify_head(ledger_witness))
-        # 2. Every session, challenge and proof in the copy predates the incident.
+        # 2. Every session, challenge and proof in the copy predates the incident, and
+        #    every task it could dispatch may already have been sent: freeze them.
         report['seal'] = self.operator.seal()
         report['blocked'] = self.operator.block(revoked)
         # 3. Replay deletions and revocations recorded after the backup.
@@ -428,6 +434,7 @@ class RestoreCoordinator:
         report['audit'] = self.operator.audit()
         report['ready'] = bool(not report['reconcile']['unresolved'] and report['audit']['exposed_media'] == 0
                                and report['audit']['unaccepted_requests'] == 0
+                               and report['audit']['dispatchable_tasks'] == 0
                                and report['orphans']['failed'] == 0)
         service.ready = report['ready']
         return report

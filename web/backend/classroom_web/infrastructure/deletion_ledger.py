@@ -207,8 +207,10 @@ class S3DeletionLedger:
 
     def entries(self):
         """Fresh full verification from generation 1; never served from the cache."""
-        chain, by_intent, etags = self._extend([], {}, {})
+        # Under the append lock: a concurrent append can then neither make this snapshot
+        # look truncated against the cache nor interleave with the cache update.
         with self._lock:
+            chain, by_intent, etags = self._extend([], {}, {})
             if len(chain) < len(self._chain) or any(a.entry_hash != b.entry_hash for a, b in zip(chain, self._chain)):
                 raise LedgerCorrupt('ledger history changed')
             self._chain, self._by_intent, self._etags = chain, by_intent, etags
