@@ -909,6 +909,7 @@ def test_legacy_replay_never_substitutes_later_visible_revision(sync_api, revoca
         # Re-expose only this synthetic source in the isolated database to
         # prove access is checked afresh. Product revocation stays monotonic.
         with a.auth.pg.admin.begin() as connection:
+            connection.exec_driver_sql('SET CONSTRAINTS ALL IMMEDIATE')
             connection.exec_driver_sql('ALTER TABLE qa_sources DISABLE TRIGGER qa_source_guard')
             connection.execute(sa.text('UPDATE qa_sources SET revoked_at=NULL WHERE id=:id'),
                                dict(id=second_source.source_id))
