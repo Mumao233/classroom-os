@@ -44,7 +44,21 @@ def test_only_required_tables_and_contract_columns_exist(pg):
     # PR-04b SQL tables have their own real-PG column, constraint and ACL checks.
     deletion_tables={'deletion_assets','deletion_executions','retention_policies','restore_task_quarantine'}
     cache_tables = {'cache_keys'}
-    assert set(inspector.get_table_names()) == expected | set(task_tables) | set(identity_tables) | auth_tables | media_tables | set(QA_TABLES) | set(REVIEW_TABLES) | deletion_tables | cache_tables | {"alembic_version"}
+    capture_contract_tables = {'consent_records', 'capture_epochs', 'capture_leases', 'capture_gaps', 'audio_chunks'}
+    capture_internal = {
+        'capture_policy': {'id':False,'enabled':False,'lease_seconds':True,'recovery_seconds':True,'max_epoch_samples':True,
+            'max_chunks':True,'microphone_consent_version':True,'recovery_consent_version':True,'asr_consent_version':True,'retention_policy_version':True},
+        'capture_epoch_state': {'epoch_id':False,'owner_id':False,'microphone_consent_id':False,'recovery_consent_id':False,
+            'asr_consent_id':False,'hard_expire_at':False,'retention_policy_version':False,'manifest_sha256':True,
+            'last_local_seq':False,'last_sample':False,'last_monotonic_ms':False},
+        'capture_recovery_grants': {'id':False,'owner_id':False,'epoch_id':False,'session_id':False,'device_id':False,
+            'security_epoch':False,'token_hash':False,'manifest_sha256':False,'last_seq':False,'last_sample':False,'expires_at':False},
+        'audio_chunk_state': {'chunk_id':False,'owner_id':False,'receipt_id':False,'recovery_grant_id':True},
+    }
+    capture_tables = capture_contract_tables | set(capture_internal)
+    assert set(inspector.get_table_names()) == expected | set(task_tables) | set(identity_tables) | auth_tables | media_tables | set(QA_TABLES) | set(REVIEW_TABLES) | deletion_tables | cache_tables | capture_tables | {"alembic_version"}
+    for table, columns in capture_internal.items():
+        assert {column['name']:column['nullable'] for column in inspector.get_columns(table)} == columns
     cache_columns = {column['name']: column['nullable'] for column in inspector.get_columns('cache_keys')}
     assert cache_columns == {'id': False, 'created_at': False, 'owner_id': False, 'device_id': False,
                              'purpose': False, 'class_session_id': True, 'wrapped_dek': False,
@@ -57,7 +71,7 @@ def test_only_required_tables_and_contract_columns_exist(pg):
                 (('owner_id', 'class_session_id'), 'class_sessions', ('owner_id', 'id'))}
     contract = json.loads((ROOT / "docs/web-alpha/architecture/contracts/domain-model.json").read_text("utf-8"))
     for table in contract["tables"]:
-        if table["name"] in expected:
+        if table["name"] in expected | capture_contract_tables:
             actual = {column["name"]: column for column in inspector.get_columns(table["name"])}
             assert set(actual) == {column["name"] for column in table["columns"]}
             for column in table["columns"]:
@@ -65,7 +79,7 @@ def test_only_required_tables_and_contract_columns_exist(pg):
     with pg.admin.connect() as connection:
         # This original gate still compares every legacy metadata object.
         # SQL-managed objects have independent real-PG columns/constraints/ACL checks.
-        differences = compare_metadata(MigrationContext.configure(connection,opts={'include_object':lambda obj,name,kind,reflected,compare_to:not(kind=='table' and name in auth_tables|media_tables|deletion_tables|cache_tables)}), metadata)
+        differences = compare_metadata(MigrationContext.configure(connection,opts={'include_object':lambda obj,name,kind,reflected,compare_to:not(kind=='table' and name in auth_tables|media_tables|deletion_tables|cache_tables|capture_tables)}), metadata)
     assert differences == []
 
 
