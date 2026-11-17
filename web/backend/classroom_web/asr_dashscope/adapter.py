@@ -2,7 +2,7 @@
 import asyncio
 from dataclasses import dataclass, fields
 
-from ..domain.asr import ProtocolError, identity, uid, validate_frame
+from ..asr_sim.simulator import ProtocolError, identity, uid, validate_frame
 from .billing import StreamIdentity, SyntheticRequestPermit
 from .transport import AuthenticationRejected, Transport
 from .wire import TokenUsage, UsageError, finish_task, parse_event, run_task
@@ -100,9 +100,17 @@ class DashScopeAdapter:
         if self._loop is not None and self._loop is not asyncio.get_running_loop():
             raise ProtocolError('stream belongs to another event loop')
 
-    def _timeout(self, seconds):
-        remaining = self._session_deadline - self._loop.time()
-        return asyncio.timeout(max(0, min(seconds, remaining)))
+    def _timeout(self, seconds, *, expires_at=None):
+        now = self._loop.time()
+        deadline = min(now + seconds, self._session_deadline)
+        if expires_at is not None:
+            deadline = min(deadline, expires_at)
+        self._require_time(deadline)
+        return asyncio.timeout_at(deadline)
+
+    def _require_time(self, deadline):
+        if self._loop.time() >= deadline:
+            raise TimeoutError
 
     async def start(self, config):
         if self._state != 'idle' or self._disposed:
@@ -122,6 +130,10 @@ class DashScopeAdapter:
         if type(self._permit) is not SyntheticRequestPermit:
             raise ProtocolError('a synthetic reservation and permit are required')
         self._permit.consume(stream)
+        try:
+            self._transport.claim()
+        except Exception:
+            raise ProtocolError('transport ownership unavailable') from None
 
         self._identity, self._session, self._epoch = stream, session, epoch
         self._loop = asyncio.get_running_loop()
@@ -133,10 +145,9 @@ class DashScopeAdapter:
             phase = 'initialize'
             if self._state != 'starting':
                 raise ProtocolError('start closed')
-            async with self._timeout(self._deadlines.initialize):
-                self._run_attempted = True
-                await self._write(self._transport.send_json, run_task(stream.provider_task_id))
-                self._reader = asyncio.create_task(self._read())
+            async with self._timeout(self._deadlines.initialize) as limit:
+                await self._write(self._send_run, expires_at=limit.when())
+                self._reader = asyncio.create_task(self._read(expires_at=limit.when()))
                 try:
                     self._accept(await self._reader)
                 except asyncio.CancelledError:
@@ -179,10 +190,8 @@ class DashScopeAdapter:
                 raise ProtocolError('frame limit reached')
             base = self._attempted_ranges[0][0] if self._attempted_ranges else start
             self._permit.check_audio(end - base)
-            # From this point a transport failure cannot prove that the bytes did not leave.
-            self._attempted_ranges.append((start, end))
             try:
-                await self._write(self._transport.send_binary, pcm)
+                await self._write(self._send_frame, pcm, start, end)
             except asyncio.CancelledError:
                 self._stop_unconfirmed('closed')
                 await self._wait_closed()
@@ -213,11 +222,10 @@ class DashScopeAdapter:
 
     async def _finish(self):
         try:
-            async with self._timeout(self._deadlines.finish):
+            async with self._timeout(self._deadlines.finish) as limit:
                 async with self._write_lock:
                     if self._state == 'draining':
-                        self._finish_attempted = True
-                        await self._write(self._transport.send_json, finish_task(self._identity.provider_task_id))
+                        await self._write(self._send_finish, expires_at=limit.when())
                 await self._terminal_event.wait()
         except Exception as exc:
             reason = 'finish_timeout' if isinstance(exc, TimeoutError) else 'finish_failed'
@@ -247,12 +255,35 @@ class DashScopeAdapter:
         if self._finisher is not None:
             await asyncio.shield(self._finisher)
 
-    async def _write(self, method, *args, seconds=None):
-        pending = asyncio.create_task(method(*args))
-        self._writer = pending
+    async def _send_run(self):
+        message = run_task(self._identity.provider_task_id)
+        self._run_attempted = True
+        await self._transport.send_json(message)
+
+    async def _send_frame(self, pcm, start, end):
+        # A transport exception cannot prove that the bytes did not leave.
+        self._attempted_ranges.append((start, end))
+        await self._transport.send_binary(pcm)
+
+    async def _send_finish(self):
+        message = finish_task(self._identity.provider_task_id)
+        self._finish_attempted = True
+        await self._transport.send_json(message)
+
+    async def _write(self, method, *args, seconds=None, expires_at=None):
+        limit = self._timeout(self._deadlines.write if seconds is None else seconds,
+                              expires_at=expires_at)
+
+        async def invoke():
+            self._require_time(limit.when())
+            if self._state in _TERMINAL:
+                raise ProtocolError('writer stopped with the connection')
+            await method(*args)
+
         try:
-            async with self._timeout(self._deadlines.write if seconds is None else seconds):
-                await pending
+            async with limit:
+                self._writer = asyncio.create_task(invoke())
+                await self._writer
         except asyncio.CancelledError:
             if asyncio.current_task().cancelling():
                 raise
@@ -260,9 +291,10 @@ class DashScopeAdapter:
         finally:
             self._writer = None
 
-    async def _read(self):
-        async with self._timeout(self._deadlines.read):
+    async def _read(self, *, expires_at=None):
+        async with self._timeout(self._deadlines.read, expires_at=expires_at) as limit:
             raw = await self._transport.receive_text()
+            self._require_time(limit.when())
         self._wire_count += 1
         if self._wire_count > self.MAX_WIRE_EVENTS:
             raise ProtocolError('wire event limit reached')
@@ -272,6 +304,9 @@ class DashScopeAdapter:
         try:
             while self._state not in _TERMINAL:
                 self._accept(await self._read())
+        except asyncio.CancelledError:
+            self._stop_unconfirmed('receive_failed')
+            raise
         except UsageError:
             self._stop_unconfirmed('usage_conflict')
         except ProtocolError:
@@ -282,6 +317,8 @@ class DashScopeAdapter:
             self._stop_unconfirmed('receive_failed')
 
     def _accept(self, event):
+        if self._state in _TERMINAL:
+            return
         if self._state == 'starting' and event.kind not in ('task-started', 'task-failed'):
             raise ProtocolError('provider event before task-started')
         if event.kind == 'task-finished' and (self._state != 'draining' or not self._finish_attempted):
@@ -329,8 +366,8 @@ class DashScopeAdapter:
             if sentence.final:
                 raise ProtocolError('conflicting final revision')
             return
-        if prior is None and number < self._latest_id:
-            raise ProtocolError('out-of-order sentence identity')
+        if prior is None and number != self._latest_id + 1:
+            raise ProtocolError('sentence identity is out of order or has a gap')
         seen = self._seen_partials.setdefault(number, set())
         if not sentence.final and sentence in seen:
             return
@@ -364,6 +401,8 @@ class DashScopeAdapter:
             self._stop('unknown' if self._run_attempted else 'failed', reason)
 
     def _stop(self, state, reason):
+        if self._state in _TERMINAL:
+            return
         self._state = state
         self._emit('asr.terminal', state=state, reason=reason,
                    provider_terminal=self._provider_terminal, billing_pending=self.billing_pending)
@@ -382,9 +421,15 @@ class DashScopeAdapter:
             async with asyncio.timeout(self._deadlines.close):
                 await asyncio.gather(*pending, return_exceptions=True)
                 await self._transport.close()
+        except asyncio.CancelledError:
+            self._close_error = 'close_failed'
+            if asyncio.current_task().cancelling():
+                raise
         except Exception as exc:
             self._close_error = 'close_timeout' if isinstance(exc, TimeoutError) else 'close_failed'
-            try:
-                self._transport.abort()
-            except Exception:
-                self._close_error = 'abort_failed'
+        finally:
+            if self._close_error is not None:
+                try:
+                    self._transport.abort()
+                except Exception:
+                    self._close_error = 'abort_failed'

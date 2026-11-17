@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 import json
 import math
 
-from ..domain.asr import ProtocolError, integer, uid
+from ..asr_sim.simulator import ProtocolError, integer, uid
 
 
 MODEL = "qwen-audio-3.1-asr-flash-streaming"

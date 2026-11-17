@@ -20,13 +20,13 @@
 
 官方结果样例的 `payload.output.output` 可能镜像 `sentence` 和可选 `request_id`，`usage` 也可能同时出现在 `payload.usage` 和 `payload.output.usage`。解析检查重复的已知语义是否相等，累计值只处理一次。可选的字级、声道和 `stash` 元数据不进入领域事件。解析器拒绝重复的 JSON 对象键、未知事件类型、错误 UUID、错误任务归属以及冲突的已知镜像，并限制消息和正文大小，拒绝 NaN 与无穷大。[客户端事件](https://help.aliyun.com/zh/model-studio/qwen-audio-asr-streaming-client-events) · [服务端事件](https://help.aliyun.com/zh/model-studio/qwen-audio-asr-streaming-server-events)
 
-`header.task_id` 是该供应商连接的任务关联值，`output.request_id` 为可选供应商请求标识。两者可能恰好相同，始终按不同来源处理。本地 `task_id`、`attempt_id`、`stream_id` 分别在应用侧归属。`segment_id` 由本地 stream 和供应商句子编号稳定派生。官方样例显示同一个 `sentence_id` 的 `begin_time` 可从 0 ms 更新到 160 ms，保持句子身份并允许时间修订。供应商未提供 revision：本轮仅在连接内生成规范化 revision，防止重复、陈旧 partial 或后续冲突内容覆盖已经收到的 final。稳定重放和持久版本归 PR-06b。[服务端事件](https://help.aliyun.com/zh/model-studio/qwen-audio-asr-streaming-server-events) · [项目接口与数据流](../architecture/04-CONTRACTS-FLOWS.md)
+`header.task_id` 是该供应商连接的任务关联值，`output.request_id` 为可选供应商请求标识。两者可能恰好相同，始终按不同来源处理。本地 `task_id`、`attempt_id`、`stream_id` 分别在应用侧归属。`segment_id` 由本地 stream 和供应商句子编号稳定派生。官方样例显示同一个 `sentence_id` 的 `begin_time` 可从 0 ms 更新到 160 ms，保持句子身份并允许时间修订。供应商未提供 revision。适配器按首次出现的句号从 1 连续递增验证，并在连接内生成 revision。已见 partial 的原样重现按重放丢弃，供应商缺少修订序号时无法区分它和一次恰好回到相同内容的新更新。已接受的 final 不被后续 partial 改写，同一句的冲突 final 会终止该流并保留先前证据。稳定重放和持久版本归 PR-06b。[服务端事件](https://help.aliyun.com/zh/model-studio/qwen-audio-asr-streaming-server-events) · [项目接口与数据流](../architecture/04-CONTRACTS-FLOWS.md)
 
-3.1 的计费用量为 `input_tokens` 与 `output_tokens` 两个非负累计值。若给出 `total_tokens`，应等于两项之和。仅有秒数 `duration` 时保留计费待核状态；`duration` 是官方 3.0 的计费字段。已见高水位保留在原任务上，回退、冲突、超限和缺少最终用量均保留核对证据。真实账单的最低计费、取整和 Token 保守上界仍待验证。终态或已收到的 final 候选均无法单独释放费用预留。[服务端事件](https://help.aliyun.com/zh/model-studio/qwen-audio-asr-streaming-server-events) · [真实接口验证计划](REAL-API-PLAN-20261117.md) · [费用契约](../architecture/06-COST-OPERATIONS.md)
+3.1 的计费用量为 `input_tokens` 与 `output_tokens` 两个非负累计值。若给出 `total_tokens`，应等于两项之和。仅有秒数 `duration` 时保留计费待核状态；`duration` 是官方 3.0 的计费字段。已见高水位保留在原任务上，回退、冲突、超限和缺少最终用量均保留核对证据。真实账单的最低计费、取整和 Token 保守上界仍待验证。终态或已收到的 final 候选均无法单独释放费用预留。内部 billing_pending 只描述供应商识别和最终 Token 证据是否齐全，账本结算仍归事务调用方。[服务端事件](https://help.aliyun.com/zh/model-studio/qwen-audio-asr-streaming-server-events) · [真实接口验证计划](REAL-API-PLAN-20261117.md) · [费用契约](../architecture/06-COST-OPERATIONS.md)
 
 ## 五方法与调用顺序
 
-每个适配器独占一个注入的 Transport 和一个事件循环。Transport 提供异步建连、JSON 发送、二进制发送、文本接收和关闭，必要时以立即、可重复调用的 `abort()` 释放部分打开的连接。`start(config)`、`send(frame)`、`finish()` 是异步方法，保持五方法的流状态回执 `{stream_id, state}`；`events()` 批量取走已规范化事件，`query(receipt)` 同步返回 `unsupported`。文档未公开可核对同一原请求的查询指令。退出时使用异步上下文或 `aclose()`，同一个实例没有重新建连和自动重传路径。[Transport](../../../web/backend/classroom_web/asr_dashscope/transport.py) · [项目接口与数据流](../architecture/04-CONTRACTS-FLOWS.md)
+每个适配器通过一次性 claim 独占一个注入的 Transport，并在一个事件循环内运行。Transport 提供异步建连、JSON 发送、二进制发送、文本接收和关闭，必要时以立即、可重复调用的 `abort()` 释放部分打开的连接。`start(config)`、`send(frame)`、`finish()` 是异步方法，保持五方法的流状态回执 `{stream_id, state}`；`events()` 批量取走已规范化事件，`query(receipt)` 同步返回 `unsupported`。文档未公开可核对同一原请求的查询指令。退出时使用异步上下文或 `aclose()`，同一个实例没有重新建连和自动重传路径。[Transport](../../../web/backend/classroom_web/asr_dashscope/transport.py) · [项目接口与数据流](../architecture/04-CONTRACTS-FLOWS.md)
 
 | 领域步骤 | 调用方可依赖的事实 |
 |---|---|

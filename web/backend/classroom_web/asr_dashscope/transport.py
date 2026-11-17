@@ -2,6 +2,7 @@
 import asyncio
 from copy import deepcopy
 import json
+from threading import Lock
 from typing import Protocol
 
 
@@ -23,6 +24,7 @@ class Transport(Protocol):
 
     offline: bool
 
+    def claim(self) -> None: ...
     async def connect(self) -> None: ...
     async def send_json(self, message: dict) -> None: ...
     async def send_binary(self, frame: bytes) -> None: ...
@@ -37,6 +39,8 @@ class FakeTransport:
     offline = True
 
     def __init__(self):
+        self._claim_lock = Lock()
+        self._claimed = False
         self.connect_count = 0
         self.close_count = 0
         self.abort_count = 0
@@ -64,6 +68,12 @@ class FakeTransport:
 
     def feed_failure(self, error: Exception):
         self._inbound.put_nowait(error)
+
+    def claim(self):
+        with self._claim_lock:
+            if self._claimed or self.connect_count or self.closed:
+                raise Disconnected('connection already owned')
+            self._claimed = True
 
     async def connect(self):
         if self.connect_count or self.closed:

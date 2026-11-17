@@ -2,7 +2,7 @@
 from dataclasses import dataclass
 from threading import Lock
 
-from ..domain.asr import ProtocolError, uid
+from ..asr_sim.simulator import ProtocolError, uid
 from ..domain.billing import integer
 
 

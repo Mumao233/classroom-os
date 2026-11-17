@@ -157,6 +157,12 @@ def main():
         "if config.get('mode', 'synthetic') != 'synthetic':", 'if False:',
         'test_adapter.py::test_real_mode_rejected_before_connect_even_with_permit', 'DID NOT RAISE')
 
+    negative_control('dashscope-mutant-post-terminal', 'adapter.py',
+        '    def _accept(self, event):\n        if self._state in _TERMINAL:\n            return\n',
+        '    def _accept(self, event):\n',
+        'test_adapter.py::test_ready_reader_cannot_change_a_closed_stream_or_append_after_terminal'
+        '[result-generated]', 'asr.final_candidate')
+
     binding = dict(head_sha=manifest['base_sha'], patch_sha256=manifest['source_zip_sha256'])
     for stage in ('candidate', 'trusted'):
         nonce = uuid.uuid4().hex

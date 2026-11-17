@@ -17,7 +17,7 @@ from classroom_web.asr_dashscope.wire import (
     parse_event,
     run_task,
 )
-from classroom_web.domain.asr import ProtocolError
+from classroom_web.asr_sim import ProtocolError
 
 
 TASK = "3d205ce7-1d49-4850-a23f-13e0f29bedb0"

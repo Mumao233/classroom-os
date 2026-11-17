@@ -11,7 +11,7 @@ from classroom_web.asr_dashscope import (
 )
 from classroom_web.asr_dashscope.transport import AuthenticationRejected
 from classroom_web.asr_dashscope.wire import TokenUsage
-from classroom_web.domain.asr import ProtocolError
+from classroom_web.asr_sim import ProtocolError
 
 
 def offline(test):
@@ -323,7 +323,7 @@ async def test_start_failures_are_bounded_and_errors_are_redacted(failure, reaso
     ('usage_overflow', 'unknown', 'usage_conflict'),
     ('usage_conflict', 'unknown', 'usage_conflict'),
     ('changed_final', 'unknown', 'provider_protocol_error'),
-    ('unknown_old_sentence', 'unknown', 'provider_protocol_error'),
+    ('sequence_gap', 'unknown', 'provider_protocol_error'),
     ('out_of_range', 'unknown', 'provider_protocol_error'),
 ])
 @offline
@@ -332,7 +332,7 @@ async def test_stream_fault_preserves_final_attempt_and_trusted_usage(fault, sta
     peer = ScriptedPeer()
     adapter = await open_adapter(cfg, peer)
     await adapter.send(pcm())
-    peer.feed_json(result(cfg, number=2, end=5, final=True, usage=usage(10, 8)))
+    peer.feed_json(result(cfg, number=1, end=5, final=True, usage=usage(10, 8)))
     if fault == 'disconnect':
         peer.feed_disconnect()
     elif fault == 'reader_error':
@@ -350,19 +350,19 @@ async def test_stream_fault_preserves_final_attempt_and_trusted_usage(fault, sta
     elif fault == 'foreign':
         peer.feed_json(wire(config(), 'task-failed'))
     elif fault == 'usage_regression':
-        peer.feed_json(result(cfg, number=2, end=5, final=True, usage=usage(11, 7)))
+        peer.feed_json(result(cfg, number=1, end=5, final=True, usage=usage(11, 7)))
     elif fault == 'usage_overflow':
-        peer.feed_json(result(cfg, number=2, end=5, final=True, usage=usage(61, 10)))
+        peer.feed_json(result(cfg, number=1, end=5, final=True, usage=usage(61, 10)))
     elif fault == 'usage_conflict':
-        event = result(cfg, number=2, end=5, final=True, usage=usage(10, 8))
+        event = result(cfg, number=1, end=5, final=True, usage=usage(10, 8))
         event['payload']['output']['usage'] = usage(10, 9)
         peer.feed_json(event)
     elif fault == 'changed_final':
-        peer.feed_json(result(cfg, number=2, end=5, final=True, text='conflicting-body'))
-    elif fault == 'unknown_old_sentence':
-        peer.feed_json(result(cfg, number=1, end=3, final=True))
+        peer.feed_json(result(cfg, number=1, end=5, final=True, text='conflicting-body'))
+    elif fault == 'sequence_gap':
+        peer.feed_json(result(cfg, number=3, end=3, final=True))
     else:
-        peer.feed_json(result(cfg, number=3, begin=5, end=11, final=True))
+        peer.feed_json(result(cfg, number=2, begin=5, end=11, final=True))
     await wait_state(adapter, state)
     assert await adapter.finish() == {'stream_id': cfg['stream_id'], 'state': state}
     events = adapter.events()
@@ -458,11 +458,13 @@ async def test_maybe_sent_range_never_retried_and_writer_released(failure):
     assert_clean(peer)
 
 
-@pytest.mark.parametrize('close_kind', ['timeout', 'failure'])
+@pytest.mark.parametrize('close_kind', ['timeout', 'failure', 'cancelled'])
 @offline
 async def test_close_is_bounded_uses_abort_and_can_be_repeated(close_kind):
     class ClosePeer(ScriptedPeer):
         async def close(self):
+            if close_kind == 'cancelled':
+                raise asyncio.CancelledError
             if close_kind == 'failure':
                 raise RuntimeError('Bearer close-secret')
             await asyncio.Event().wait()
@@ -557,4 +559,111 @@ async def test_reader_and_session_deadlines_require_no_later_owner_call(deadline
     await wait_state(adapter, 'unknown')
     assert (await adapter.finish())['state'] == 'unknown'
     assert just(adapter.events(), 'asr.terminal')[0]['reason'] == 'receive_timeout'
+    assert_clean(peer)
+
+
+@pytest.mark.parametrize('late_kind', ['task-failed', 'result-generated'])
+@offline
+async def test_ready_reader_cannot_change_a_closed_stream_or_append_after_terminal(late_kind):
+    class ObservedReadPeer(ScriptedPeer):
+        reading = asyncio.Event()
+
+        async def receive_text(self):
+            if self.run_sent.is_set() and not self._inbound.qsize():
+                self.reading.set()
+            return await super().receive_text()
+
+    cfg = config()
+    peer = ObservedReadPeer()
+    adapter = await open_adapter(cfg, peer)
+    await adapter.send(pcm())
+    await peer.reading.wait()
+    peer.feed_json(wire(cfg, late_kind) if late_kind == 'task-failed'
+                   else result(cfg, end=5, final=True, usage=usage(5, 1)))
+    await adapter.aclose()
+    assert [event['type'] for event in adapter.events()] == ['asr.started', 'asr.terminal']
+    assert adapter.state == 'unknown' and adapter.usage is None
+    assert peer.close_count == 1
+    assert_clean(peer)
+
+
+@offline
+async def test_transport_ownership_cannot_be_stolen_by_another_adapter():
+    first_cfg, second_cfg = config(), config()
+    peer = ScriptedPeer()
+    async with await open_adapter(first_cfg, peer) as first:
+        second = DashScopeAdapter(peer, permit=permit_for(second_cfg))
+        with pytest.raises(ProtocolError, match='transport ownership unavailable'):
+            await second.start(second_cfg)
+        await second.aclose()
+        assert first.state == 'streaming' and peer.connected
+        assert peer.connect_count == 1 and peer.close_count == 0
+        await first.send(pcm())
+    assert peer.close_count == 1
+    assert_clean(peer)
+
+
+@offline
+async def test_expired_deadline_never_enters_the_transport_for_a_new_audio_frame():
+    cfg = config()
+    peer = ScriptedPeer()
+    async with await open_adapter(cfg, peer) as adapter:
+        adapter._session_deadline = asyncio.get_running_loop().time() - 1
+        with pytest.raises(ProtocolError, match='send_timeout'):
+            await adapter.send(pcm())
+        assert not peer.sent_binary and adapter.attempted_ranges == ()
+        assert adapter.state == 'unknown'
+    assert_clean(peer)
+
+
+@offline
+async def test_finish_ack_is_invalid_before_finish_transport_write_starts():
+    class HeldFinishPeer(ScriptedPeer):
+        async def send_json(self, message):
+            if message['header']['action'] == 'finish-task':
+                await asyncio.Event().wait()
+            await super().send_json(message)
+
+    cfg = config()
+    peer = HeldFinishPeer()
+    adapter = await open_adapter(cfg, peer)
+    await adapter.send(pcm())
+    peer.feed_json(result(cfg, end=5, final=True))
+    await asyncio.sleep(0)
+    finishing = asyncio.create_task(adapter.finish())
+    asyncio.get_running_loop().call_soon(peer.feed_json, wire(cfg, 'task-finished'))
+    assert (await asyncio.wait_for(finishing, 1))['state'] == 'unknown'
+    terminal, = just(adapter.events(), 'asr.terminal')
+    assert terminal['reason'] == 'provider_protocol_error'
+    assert len(peer.sent_json) == 1
+    assert_clean(peer)
+
+
+@offline
+async def test_reader_owned_cancelled_error_stops_the_stream():
+    class CancelledReadPeer(ScriptedPeer):
+        async def receive_text(self):
+            if not self._inbound.qsize():
+                raise asyncio.CancelledError
+            return await super().receive_text()
+
+    cfg = config()
+    peer = CancelledReadPeer()
+    adapter = await open_adapter(cfg, peer)
+    await wait_state(adapter, 'unknown')
+    assert (await adapter.finish())['state'] == 'unknown'
+    assert just(adapter.events(), 'asr.terminal')[0]['reason'] == 'receive_failed'
+    assert_clean(peer)
+
+
+@offline
+async def test_first_sentence_must_start_at_one():
+    cfg = config()
+    peer = ScriptedPeer()
+    adapter = await open_adapter(cfg, peer)
+    await adapter.send(pcm())
+    peer.feed_json(result(cfg, number=2, end=8, final=True))
+    await wait_state(adapter, 'unknown')
+    assert (await adapter.finish())['state'] == 'unknown'
+    assert not just(adapter.events(), 'asr.final_candidate')
     assert_clean(peer)
