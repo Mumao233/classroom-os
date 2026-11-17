@@ -12,7 +12,7 @@
 
 仓库指定模型为 `qwen-audio-3.1-asr-flash-streaming`，地域为 `cn-beijing`。领域接口为 start/send/finish/events/query，查询能力不支持时返回 unsupported，已发音频结果不明时保留 unknown。[ASR 契约](../architecture/04-CONTRACTS-FLOWS.md)
 
-官方公开规范于 2026-11-17 核对。北京地址为 `wss://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/api-ws/v1/inference`，使用服务端 Bearer 凭据。顺序为建连、run-task、task-started、binary、finish-task、剩余结果、task-finished、关闭连接。[WebSocket 接入](https://help.aliyun.com/zh/model-studio/qwen-audio-asr-streaming-websocket-api)
+2026-11-17 复核阿里云公开帮助页。协议族为 Qwen-Audio-ASR-Streaming WebSocket，URL 路径版本为 `/api-ws/v1/inference`。北京业务空间端点模板为 `wss://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/api-ws/v1/inference`，在握手时使用服务端 Bearer 凭据。候选需锁定 WebSocket 库版本并记录协议文档快照。模型 ID 和 URL 路径已确定，实际业务空间、访问权限和服务端模型修订仍待确认。顺序为建连、run-task、task-started、binary、finish-task、剩余结果、task-finished、关闭连接。[WebSocket 接入](https://help.aliyun.com/zh/model-studio/qwen-audio-asr-streaming-websocket-api)
 
 run-task 与 finish-task 共用 UUID task_id。结果句子身份及 partial/final 需映射到本项目稳定标识和 revision。累计 usage 应按高水位/差量核对，任务 final 和费用最终结算分别记录。[客户端事件](https://help.aliyun.com/zh/model-studio/qwen-audio-asr-streaming-client-events) · [服务端事件](https://help.aliyun.com/zh/model-studio/qwen-audio-asr-streaming-server-events)
 
@@ -32,7 +32,7 @@ run-task 与 finish-task 共用 UUID task_id。结果句子身份及 partial/fin
 | 请求/响应脱敏 | 待实现验证 | secret、Authorization、供应商原始错误及正文不进入普通日志 |
 | 账单与审计 | 待配置 | 保留 attempt/stream/request ID、累计 usage、状态、预留/结算及控制台核对记录 |
 
-现有 `PgBillingRepository` 默认 `synthetic_only=True`，初始 `billing` 和 `asr_streaming` 开关关闭。真实价格需 verified_at，reserve 要求所有计量上界并核对任务最高费用。发送前再次检查当前权限和开关，提交发送意图及一次性计量许可后才允许 I/O。[费用前置说明](../pr11a/README.md) · [费用接缝](../pr11a/INTEGRATION-REVIEW-20261115.md)
+现有 `PgBillingRepository` 默认 `synthetic_only=True`，初始 `billing` 和 `asr_streaming` 开关关闭。真实价格需有效版本及 `verified_at`。同一操作按 `op_id` 预留，发送前用 `authorize_send` 重验开关/风险、绑定 attempt 与 fence，再用 `consume_permit` 消耗唯一 submission key。本地事务 COMMIT 成功后才能建立真实连接或执行许可覆盖的 I/O。提交结果不明时保存原意图并阻断重试，重复 key 不产生第二次许可。现有 worker 的通用钩子在提交时一次消耗整笔 `maximum_units`。06a 需离线验证短任务怎样限定其连接、样本范围与预算，持续流逐窗预留和帧级交接归 06b。[PG 费用仓储](../../../web/backend/classroom_web/infrastructure/billing_repository.py) · [任务钩子](../../../web/backend/classroom_web/application/billing_tasks.py)
 
 ## 候选最小用例
 
@@ -50,7 +50,7 @@ run-task 与 finish-task 共用 UUID task_id。结果句子身份及 partial/fin
 
 ## 成本计算与候选上限
 
-2026-11-17 的公开模型页列出北京输入 ¥6/百万 Token、输出 ¥4.5/百万 Token。目标账户实际费率、最低收费和取整仍须核对。模型页未给最大输入或输出长度。[模型价格](https://help.aliyun.com/zh/model-studio/qwen-audio-3-1-asr-flash-streaming)
+2026-11-17 核对模型页及统一价表，北京原价为输入 ¥6/百万 Token、输出 ¥4.5/百万 Token。计价表中的“百万”是报价分母。该型号按两种 Token 独立计费。公开的 3.0 Streaming 时长单价及实时对话模型的音频换算公式均有各自的适用型号。候选预算采用原价，账户优惠或免费额度不计入安全预算。[模型价格](https://help.aliyun.com/zh/model-studio/qwen-audio-3-1-asr-flash-streaming) · [统一价表的 Qwen-Audio-ASR-Streaming 小节](https://help.aliyun.com/zh/model-studio/model-pricing)
 
 按公开原价计算的金额为
 
@@ -59,11 +59,27 @@ run-task 与 finish-task 共用 UUID task_id。结果句子身份及 partial/fin
            + 4.5 × output_tokens / 1,000,000
 ```
 
-建议申请单批总预算为 **¥1，待批准**。此金额是候选授权上限。当前缺少音频到 Token 的可信最高转换率和最低计费规则，无法证明三条连接、30 秒音频的最坏费用低于 ¥1，因而当前不得执行。
+建议申请单批总预算为 **¥1，待批准**。逐连接核算后累加，最多 3 次连接、30 秒音频（480,000 个单声道采样）。执行器必须在连接前持有以下材料。
+
+| 待证项目 | 本次核对结果及阻断原因 |
+|---|---|
+| 输入 Token 上界 | 发送时长可以由样本数限定。目标型号的公开计价小节未提供从样本到计费输入 Token 的保守上界。供应商事件示例中的时长和实测比例都不足以计算上界。 |
+| 输出 Token 上界 | 模型页最大输出长度显示为 `-`，公开的 Streaming 客户端事件未列出可强制的 `max_output_tokens`。预留还需覆盖 finish 后返回的尾部结果。 |
+| 最低计费和取整 | 所核对的目标型号公开页未说明失败握手、已启动无音频、短会话的计费起点、按请求最低收费、取整单位和粒度。需取得适用于目标账户和模型的费率条款或供应商书面依据。 |
+| PG 的计量映射 | `ReservationRequest.validate` 对 ASR 强制正数 `audio_duration_ms`，而 `Price.amount` 要求上界集合与价目集合完全一致。仅填两项 Token 价目无法按现有接口完成 ASR 预留。须在离线 PG 用例中验证配额时长与两项收费量的独立来源、完整价目及结算。若选用零单价时长项，应明确其配额用途并验证计量来源。 |
+
+代码按计量项向上取整至微元，再应用该价目的最低金额。此算法用于本地预留，真实价目的最低收费、取整与输出上界仍须单独举证。当前无法证明三条连接的最坏费用落在 ¥1 内，执行器应于握手前拒绝全部真实请求。[费用领域实现](../../../web/backend/classroom_web/domain/billing.py) · [客户端参数](https://help.aliyun.com/zh/model-studio/qwen-audio-asr-streaming-client-events)
 
 预算预留必须采用各计量单位上界，并应用目标账户实际最低收费与取整。停止新输入仍可能收到尾部输出及滞后账单，预留应涵盖这部分风险。现有架构明确说明供应商账单滞后与在途费用可能使总账超限。[费用契约](../architecture/06-COST-OPERATIONS.md)
 
 费用契约第 2 节保留原文“没有可靠费用上界时只开放明确总费用授权的POC”。该条仍需专项人工风险决定与可审计执行方案。此任务未授权调整计量上界硬门禁、源码或契约。在对应决定正式完成前，缺上界时维持拒绝发送。
+
+## 累计用量与账单归属
+
+- 按 provider task_id 绑定本次 stream、attempt 和 reservation。供应商的 `result-generated` 可省略 `usage`；有值时读取任务至今的 `input_tokens`、`output_tokens`。若含 `total_tokens`，核对二者之和。中间事件或内外层的重复累计值只记一次，缺失字段保留为未知。逐帧可使用相邻高水位之差做观察，传入 `reconcile` 的数量始终是同一请求的累计值。 [服务端事件](https://help.aliyun.com/zh/model-studio/qwen-audio-asr-streaming-server-events)
+- PG 对同一 reservation 接受一个 `provider_request_id + meter`，通过 `revision` 与内容摘要去重。适配器需保存这一映射和稳定的计量版本；相同版本内容冲突、新累计值倒退或量超过预留均停止新发送。仅在有依据的最终账单更正时按仓储规则引用原回执。原 attempt、预留周期及供应商账期分别保留。[费用仓储](../../../web/backend/classroom_web/infrastructure/billing_repository.py)
+- `task-finished` 确认识别结果已返回，取其 `payload.usage` 核对最终累计量。缺失或不完整时保留已有高水位与费用敞口，等待迟到 usage 或账单。费用用量与音频配额时长分别核对；3.1 的 `duration` 字段不可替代输入和输出 Token。[服务端事件](https://help.aliyun.com/zh/model-studio/qwen-audio-asr-streaming-server-events)
+- 账单按业务空间、Key ID、模型、输入/输出计费项及时间窗核对。官方说明推理账单按分钟汇总，通常有 2–10 分钟延迟。保存脱敏关联记录，将隔离窗口内各请求的最终用量按输入、输出分别汇总与账单对照。无法唯一归属时保留待核，账单未出现期间继续计入风险。[官方账单字段与出账说明](https://help.aliyun.com/zh/model-studio/bill-query-and-cost-management)
 
 ## 停止与恢复
 
@@ -95,10 +111,10 @@ run-task 与 finish-task 共用 UUID task_id。结果句子身份及 partial/fin
 
 成功判定要求协议、结果持久化、资源清理和费用事实分别具有证据。识别产物可用但最终 usage 暂缺时，应保留费用核对待办及风险预留。该最小 POC 的质量观察只覆盖所选短样本。
 
-当前预计成本上限、实际花费和账单核对均为待验证。执行后应记录每例通过、失败、未完成与未执行原因，并保留所有失败轮次。
+本轮仅核对公开文档，真实 ASR 握手与请求均为 0，本轮新增费用 ¥0，新增授权 ¥0。供应商账户账单未经访问。未来短样本的最坏费用仍待证明。执行后应记录每例通过、失败、未完成与未执行原因，并保留所有失败轮次。
 
 ## PR-06a 与 PR-06b 状态
 
-PR-06a 当前保持 `doing`。供应商 transport 等工程缺口与专项授权门禁均开放。本轮模拟 34 项、可信断言 4 项及完整后端 1188 项通过，控制器仍有 1 项环境权限跳过。Astra 执行器完整性门禁失败，当前没有有效独审结论。CI 与各层测试证据已登记于验收材料。[验收记录](CLOSEOUT-20261117.md) · [审查记录](REVIEW-20261117.md)
+PR-06a 当前保持 `doing`。供应商 transport、费用映射与专项授权门禁仍待关闭。各候选提交的测试与独审状态见对应回执。[验收记录](CLOSEOUT-20261117.md) · [审查记录](REVIEW-20261117.md)
 
 PR-06b 可参考冻结 Adapter、PCM、稳定版本与 unknown 语义。其正式实施还需要 06a 适配器与协议验证，以及 05b 采集持久化、02b 任务、11a 持续流计量接缝就绪。本计划没有启动 PR-06b。
