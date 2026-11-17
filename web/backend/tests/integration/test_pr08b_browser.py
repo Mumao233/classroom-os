@@ -132,6 +132,7 @@ def test_actual_browser_offline_recovery_conflict_and_deletion(cache, deploy, tm
         assert result['device_revocation_locks']
         assert result['partial_source_revocation_clears_view']
         assert result['partial_source_revocation_survives_reopen']
+        assert result['ordinary_cache_cannot_release_or_acknowledge_revoked_sync_records']
         (output / 'formal-browser.json').write_text(json.dumps(result, indent=2), encoding='utf-8')
     finally:
         if process is not None and process.poll() is None:

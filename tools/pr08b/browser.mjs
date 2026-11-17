@@ -44,7 +44,7 @@ async function install(target = page) {
       try { await promise; throw new Error('Expected ' + code); }
       catch (error) { if (error.code !== code) throw error; }
     };
-    class NativeCache extends lib.TrustedCache {
+    class NativeTrustedCache extends lib.TrustedCache {
       unlockScope(scope) {
         // Public synthetic fixture. Each unlock receives independent key material.
         return this.unlock(scope, null, async () => ({ key_id: 'synthetic-' + scope, key_epoch: 1,
@@ -52,6 +52,10 @@ async function install(target = page) {
           expires_at: new Date(Date.now() + 120000).toISOString(), cache_policy_revision: 'synthetic-only' }));
       }
     }
+    class NativeCache extends NativeTrustedCache {
+      get allowsSyncRecords() { return true; }
+    }
+    window.NativeTrustedCache = NativeTrustedCache;
     class Transport {
       constructor(options = {}) {
         this.receipts = new Map(options.receipts ?? []); this.conflicts = new Map(options.conflicts ?? []); this.conflictByOp = new Map(); this.pushes = []; this.resolutions = []; this.mode = 'apply'; this.pages = [];
@@ -330,6 +334,61 @@ try {
         retained: (await runtime.readDraft(reference)).payload.body_markdown };
     });
     assert.deepEqual(result, { sent: 0, count: 1, sameId: true, retained: 'ORIGINAL FROZEN INPUT' });
+  });
+  await test('reopened-resolution-can-be-corrected-only-after-exact-definitive-rejection', async () => {
+    const runScenario = preexisting => page.evaluate(async preexisting => {
+      const name = `pr08b-rejected-resolution-${preexisting}`;
+      const limits = { draftOperations: 2 };
+      const reference = await editable(name, limits);
+      const rejected = { resolution: 'edited_merge', base_revision: 2,
+        merged_operation: operation('REJECTED MERGE UNIQUE INPUT', 2) };
+      const storedRecovery = preexisting ? await runtime.saveConflictDraft(reference, rejected.merged_operation.payload.body_markdown,
+        rejected.merged_operation.payload.personal_note, crypto.randomUUID(), 1) : null;
+      const rejectedResponse = () => Object.assign(new Error('Rejected merge'), { code: 'VALIDATION_FAILED', status: 422 });
+      transport.resolve = async () => { throw rejectedResponse(); };
+      await runtime.resolve(reference, rejected, 2);
+      const [frozen] = (await records(name)).filter(value => value.header.resolutionOf);
+      const receipts = [...transport.receipts]; const conflicts = [...transport.conflicts];
+      runtime.close();
+      await create(name, limits, {}, 'drafts', { receipts, conflicts });
+
+      const submit = transport.resolve.bind(transport);
+      const attempted = [];
+      let acknowledgeRejection = false;
+      let atomicReplacement = false;
+      transport.resolve = async (id, body, key) => {
+        attempted.push(key);
+        if (body.resolution === 'edited_merge') {
+          if (acknowledgeRejection) throw rejectedResponse();
+          throw Object.assign(new Error('No response to replay'), { code: 'RESULT_UNKNOWN' });
+        }
+        const current = await records(name);
+        atomicReplacement = current.length === 3 && current.some(value => value.header.operationId === reference.operationId)
+          && current.some(value => value.header.operationId === key && value.header.generation === 3)
+          && current.some(value => value.header.objectType === 'sync_editor_recovery')
+          && current.every(value => value.header.operationId !== frozen.header.operationId);
+        return submit(id, body, key);
+      };
+      const replacement = { resolution: 'use_server', base_revision: 2 };
+      await expectCode(runtime.resolve(reference, replacement, 2), 'RESULT_UNKNOWN');
+      const stillFrozen = (await records(name)).some(value => value.id === frozen.id && value.header.operationId === frozen.header.operationId);
+      acknowledgeRejection = true;
+      await runtime.resolve(reference, replacement, 2);
+      const recovery = await runtime.readConflictDrafts(reference);
+      return {
+        stillFrozen, atomicReplacement,
+        originalKeyRetried: attempted.length === 3 && attempted[0] === frozen.header.operationId && attempted[1] === frozen.header.operationId,
+        replacementHasNewKey: attempted[2] !== frozen.header.operationId,
+        pending: runtime.snapshot().pending.length,
+        recovery: recovery.map(value => [value.body, value.note]), remaining: (await records(name)).length,
+        reusedRecovery: !storedRecovery || recovery[0]?.reference.operationId === storedRecovery.operationId,
+      };
+    }, preexisting);
+    for (const preexisting of [false, true]) {
+      assert.deepEqual(await runScenario(preexisting), { stillFrozen: true, atomicReplacement: true,
+        originalKeyRetried: true, replacementHasNewKey: true, pending: 0,
+        recovery: [['REJECTED MERGE UNIQUE INPUT', 'Synthetic personal note']], remaining: 1, reusedRecovery: true });
+    }
   });
   await test('bootstrap-authority-loss-retains-ciphertext-and-blocks-replay', async () => {
     const result = await page.evaluate(async () => {
@@ -733,6 +792,59 @@ try {
       revisionWriteCode: 'REVISION_CONFLICT', revisionReadCode: 'REVISION_CONFLICT', tamperedCode: 'CORRUPT_RECORD',
       text: 'TYPED LEARNING CONTENT', count: 1 });
   });
+  await test('ordinary-cache-cannot-release-or-acknowledge-sync-records', async () => {
+    const result = await page.evaluate(async () => {
+      const name = 'pr08b-trusted-cache-sync-boundary';
+      const original = await editable(name);
+      const conflict = await runtime.inspectConflict(original);
+      const editor = await runtime.saveConflictDraft(original, 'EDITOR RECOVERY', 'NOTE', crypto.randomUUID(), 1);
+      await runtime.unlockLearning('synthetic-password');
+      const learning = learningReference();
+      await runtime.cacheLearning(learning, hydrate(learning, 'SOURCE-BOUND LEARNING'));
+
+      const encode = value => new TextEncoder().encode(JSON.stringify(value));
+      const body = { base_revision: 2, resolution: 'use_server' };
+      const resolution = { ...conflict.local_operation, op_id: crypto.randomUUID(), base_revision: body.base_revision,
+        payload: { ...conflict.local_operation.payload, base_revision: body.base_revision } };
+      const legacy = { ...original, operationId: resolution.op_id, revision: body.base_revision, generation: 2 };
+      const envelope = { schema: 1, kind: 'resolve', operation: resolution, original,
+        conflictId: conflict.id, resolution: body, requestHash: await lib.syncFingerprint({ conflict_id: conflict.id, body }) };
+      await cache.put(legacy, encode(envelope));
+      const stored = await records(name);
+      for (const reference of [original, legacy]) {
+        const header = stored.find(value => value.header.operationId === reference.operationId).header;
+        if (header.objectType || header.resolutionOf) throw new Error('Expected a legacy unmarked Sync record');
+      }
+      const sealed = values => values.map(({ id, header, nonce, ciphertext }) =>
+        [id, header, Array.from(nonce), Array.from(new Uint8Array(ciphertext))]);
+      const before = JSON.stringify(sealed(stored));
+      const ordinary = new NativeTrustedCache({ enabled: true, databaseName: name,
+        limits: { draftBytes: 2000000, draftOperations: 100, recordingBytes: 2000000 } });
+      ordinary.bind({ ownerId: ids.owner, deviceId: ids.device, sessionId: ids.session });
+      try {
+        await ordinary.unlockScope('drafts'); await ordinary.unlockScope('learning');
+        const exact = ({ scope, objectId, revision, generation }) => ({ scope, objectId, revision, generation });
+        for (const reference of [original, legacy, editor, learning]) {
+          await expectCode(ordinary.read(exact(reference)), 'SYNC_AUTHORITY_REQUIRED');
+        }
+        for (const reference of [original, legacy, editor]) {
+          await expectCode(ordinary.acknowledgeDraft(exact(reference), reference.operationId), 'SYNC_AUTHORITY_REQUIRED');
+        }
+        const normal = { ...original, objectId: crypto.randomUUID(), operationId: crypto.randomUUID() };
+        const bytes = encode({ schema: 1, kind: 'write', text: 'UNSTRUCTURED PR-08a DRAFT' });
+        const forged = { ...legacy, operationId: crypto.randomUUID(), generation: 3,
+          resolutionOf: { operationId: original.operationId, revision: original.revision, generation: original.generation } };
+        await expectCode(ordinary.put(forged, bytes), 'SYNC_AUTHORITY_REQUIRED');
+        await expectCode(ordinary.put(normal, bytes, { rejected: legacy }), 'SYNC_AUTHORITY_REQUIRED');
+        await ordinary.put(normal, bytes);
+        const visible = await ordinary.listPending('drafts');
+        const genericBody = JSON.parse(new TextDecoder().decode(await ordinary.read(normal))).text;
+        await ordinary.acknowledgeDraft(normal, normal.operationId);
+        return { genericBody, pendingGenericCount: visible.length, unchanged: before === JSON.stringify(sealed(await records(name))) };
+      } finally { ordinary.close(); }
+    });
+    assert.deepEqual(result, { genericBody: 'UNSTRUCTURED PR-08a DRAFT', pendingGenericCount: 1, unchanged: true });
+  });
   await test('ordinary-change-preserves-unsent-merge-body-and-note-after-reopen', async () => {
     await page.evaluate(() => editable('pr08b-editor-ordinary', {}, true));
     await page.getByRole('textbox', { name: '合并正文', exact: true }).fill('UNSENT ORDINARY MERGE');
@@ -996,7 +1108,7 @@ try {
   await context.close();
   await new Promise(resolve => server.close(resolve));
   await writeFile(join(output, 'sync-browser.json'), JSON.stringify({ chromium: browserVersion, synthetic_transport: true,
-    native_crypto_indexeddb: true, results, passed: results.length === 46 && results.every(result => result.passed) }, null, 2));
+    native_crypto_indexeddb: true, results, passed: results.length === 48 && results.every(result => result.passed) }, null, 2));
 }
 console.log(JSON.stringify({ tests: results.length, passed: results.filter(result => result.passed).length, results }));
-if (results.length !== 46 || results.some(result => !result.passed)) process.exitCode = 1;
+if (results.length !== 48 || results.some(result => !result.passed)) process.exitCode = 1;

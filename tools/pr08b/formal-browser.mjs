@@ -253,6 +253,26 @@ try {
     try { await window.partialSync.readConflictDrafts(reference); return false; } catch { return true; }
   }, partialReference), true);
   await page.evaluate(() => window.partialSync.close());
+  const cacheIsolation = await page.evaluate(async ({ reference, ancestry, password }) => {
+    const ordinary = window.auth.createTrustedCache({ enabled: true, databaseName: 'pr08b-partial-revocation',
+      limits: { draftBytes: 2_000_000, draftOperations: 30, recordingBytes: 1_000_000 } });
+    try {
+      await ordinary.unlockScope('drafts', password);
+      const code = async action => {
+        try { await action(); return null; } catch (error) { return error.code; }
+      };
+      const read = await code(() => ordinary.read(reference));
+      const acknowledge = await code(() => ordinary.acknowledgeDraft(reference, reference.operationId));
+      const draft = { scope: 'drafts', objectId: crypto.randomUUID(), revision: 1, generation: 1,
+        ancestry, operationId: crypto.randomUUID() };
+      await ordinary.put(draft, new TextEncoder().encode('Ordinary cache draft'));
+      const text = new TextDecoder().decode(await ordinary.read(draft));
+      await ordinary.acknowledgeDraft(draft, draft.operationId);
+      return { read, acknowledge, text };
+    } finally { ordinary.close(); }
+  }, { reference: partialReference, ancestry, password: credentials.password });
+  assert.deepEqual(cacheIsolation, { read: 'SYNC_AUTHORITY_REQUIRED', acknowledge: 'SYNC_AUTHORITY_REQUIRED',
+    text: 'Ordinary cache draft' });
   await page.evaluate(password => window.sync.unlock(password), credentials.password);
 
   const deletedDraft = operation(resolved, 'The unique local draft remains encrypted after deletion.');
@@ -298,6 +318,7 @@ try {
     unconfirmed_merge_survives_remote_update_and_reopen: true, unconfirmed_merge_never_auto_submitted: true,
     unconfirmed_merge_denied_after_source_revocation: true,
     partial_source_revocation_clears_view: true, partial_source_revocation_survives_reopen: true,
+    ordinary_cache_cannot_release_or_acknowledge_revoked_sync_records: true,
     deletion_scope_outage_locks_and_retries: true,
     deletion_blocks_replay: true, device_revocation_locks: true }));
 } finally {

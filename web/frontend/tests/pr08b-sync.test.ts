@@ -295,6 +295,21 @@ describe('PR-08b encrypted operation queue', () => {
     expect(f.runtime.snapshot().cursor).toBe('after-deletion');
   });
 
+  it('resumes from the last completed page after the bounded catch-up limit', async () => {
+    const f = fixture();
+    const cursors: string[] = [];
+    f.transport.changes = async cursor => {
+      cursors.push(cursor);
+      const next = cursor === 'snapshot' ? 1 : Number(cursor.slice('page-'.length)) + 1;
+      return { items: [], next_cursor: `page-${next}`, has_more: next < 102 };
+    };
+    await expect(f.runtime.unlock('')).rejects.toMatchObject({ code: 'CAPACITY_EXCEEDED' });
+    expect(f.runtime.snapshot()).toMatchObject({ unlocked: false, cursor: 'page-100' });
+    await f.runtime.unlock('');
+    expect(cursors.slice(99)).toEqual(['page-99', 'page-100', 'page-101']);
+    expect(f.runtime.snapshot()).toMatchObject({ unlocked: true, cursor: 'page-102' });
+  });
+
   it('locks an open view after cursor expiry and rebuilds only during a fresh unlock', async () => {
     const f = fixture(); await f.runtime.unlock(''); await f.runtime.enqueue(operation(), ancestry, 1);
     f.transport.changes = async cursor => {

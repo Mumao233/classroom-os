@@ -26,6 +26,7 @@ export type CacheWrite = CacheReference & {
   /** Learning TTL starts at an actual successful cloud-version verification. */
   verifiedAt?: number;
 };
+export type RejectedResolutionReplacement = { rejected: CacheWrite; retainedRecovery?: CacheWrite };
 export type CacheLimits = { draftBytes: number; draftOperations: number; recordingBytes: number };
 export type CacheOptions = {
   enabled?: boolean;
@@ -42,7 +43,7 @@ export type DeletionNotice = {
 };
 export type CacheFailure = 'DISABLED' | 'LOCKED' | 'STALE_OPERATION' | 'INVALID_INPUT' | 'INVALID_GRANT'
   | 'DATABASE_BLOCKED' | 'STORAGE_UNAVAILABLE' | 'QUOTA_EXCEEDED' | 'REVISION_CONFLICT'
-  | 'CORRUPT_RECORD' | 'GONE' | 'KEY_REQUIRED' | 'UNSUPPORTED_SCHEMA';
+  | 'CORRUPT_RECORD' | 'GONE' | 'KEY_REQUIRED' | 'UNSUPPORTED_SCHEMA' | 'SYNC_AUTHORITY_REQUIRED';
 export class CacheError extends Error {
   constructor(readonly code: CacheFailure) { super(code); this.name = 'CacheError'; }
 }

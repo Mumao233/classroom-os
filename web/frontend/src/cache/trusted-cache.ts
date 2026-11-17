@@ -5,18 +5,37 @@ import { CacheError, LEARNING_LIMITS, namespaceOf, recordId } from './types';
 import type {
   AudioDescriptor, AudioReceipt, CacheAncestry, CacheGrant, CacheHeader, CacheIdentity,
   CacheMetadata, CacheOptions, CacheReference, CacheScope, CacheWrite, CipherRecord, DeletionNotice,
-  NamespaceState, Tombstone,
+  NamespaceState, RejectedResolutionReplacement, Tombstone,
 } from './types';
 
 const encoder = new TextEncoder();
+const legacyDraftDecoder = new TextDecoder('utf-8', { fatal: true });
 const scopes: CacheScope[] = ['learning', 'drafts', 'recording_recovery'];
 const positive = (value: number) => Number.isSafeInteger(value) && value > 0;
 const equalBytes = (left: Uint8Array, right: Uint8Array) => left.length === right.length && left.every((value, index) => value === right[index]);
 const aad = (header: CacheHeader) => encoder.encode(canonicalize(header) ?? '');
+const object = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value);
 const slot = (scope: CacheScope, classroom: string | null) => JSON.stringify([scope, scope === 'recording_recovery' ? classroom : null]);
 const recordingId = (descriptor: AudioDescriptor) => JSON.stringify([descriptor.class_session_id, descriptor.capture_epoch_id, descriptor.seq]);
 type MemoryKey = { key: CryptoKey; id: string; version: number; deadline: number; wallDeadline: number; generation: number; recoveryGeneration: number };
 type Authorized = { localGeneration: number; namespace: string; identity: CacheIdentity; key: MemoryKey };
+
+function isLegacySyncDraft(header: CacheHeader, plaintext: Uint8Array): boolean {
+  if (plaintext[0] !== 0x7b) return false; // Legacy Sync wrote JSON.stringify objects.
+  let envelope: unknown;
+  try { envelope = JSON.parse(legacyDraftDecoder.decode(plaintext)); }
+  catch { return false; }
+  if (!object(envelope) || envelope.schema !== 1 || !object(envelope.operation)
+    || typeof envelope.requestHash !== 'string' || !/^[a-f0-9]{64}$/.test(envelope.requestHash)) return false;
+  const operation = envelope.operation;
+  if (operation.op_id !== header.operationId || operation.object_id !== header.objectId
+    || operation.base_revision !== header.revision || !object(operation.payload)
+    || operation.payload.base_revision !== header.revision || typeof operation.draft_id !== 'string'
+    || !['personal_revision', 'mark', 'preferences', 'course'].includes(String(operation.object_type))) return false;
+  return (envelope.kind === 'write' && envelope.batchId === header.operationId)
+    || (envelope.kind === 'resolve' && typeof envelope.conflictId === 'string'
+      && object(envelope.resolution) && object(envelope.original));
+}
 
 /** Production adapter. Only ciphertext and minimal routing metadata enter IndexedDB. */
 export class TrustedCache extends EventTarget {
@@ -31,6 +50,9 @@ export class TrustedCache extends EventTarget {
   private recoveryPending = new Map<string, { record: CipherRecord; recoveryGeneration: number }>();
   private readonly databaseName: string;
   private readonly hide = () => this.lock();
+
+  /** Only the private Sync adapter performs the additional exact-source checks. */
+  protected get allowsSyncRecords(): boolean { return false; }
 
   constructor(private readonly options: CacheOptions = {}) {
     super();
@@ -221,8 +243,8 @@ export class TrustedCache extends EventTarget {
     return result;
   }
 
-  async put(write: CacheWrite, plaintext: Uint8Array): Promise<void> {
-    return this.store(write, plaintext, false);
+  async put(write: CacheWrite, plaintext: Uint8Array, replacement?: RejectedResolutionReplacement): Promise<void> {
+    return this.store(write, plaintext, false, replacement);
   }
 
   /** Write-only recovery: authorization and encryption start synchronously, before any lock.
@@ -300,15 +322,25 @@ export class TrustedCache extends EventTarget {
     }));
   }
 
-  private async store(write: CacheWrite, plaintext: Uint8Array, ordered: boolean): Promise<void> {
+  private async store(write: CacheWrite, plaintext: Uint8Array, ordered: boolean, replacement?: RejectedResolutionReplacement): Promise<void> {
     const frozen = new Uint8Array(plaintext);
-    try { await this.storeSnapshot(write, frozen, ordered); }
+    try { await this.storeSnapshot(write, frozen, ordered, replacement); }
     finally { frozen.fill(0); }
   }
 
-  private async storeSnapshot(write: CacheWrite, plaintext: Uint8Array, ordered: boolean): Promise<void> {
+  private async storeSnapshot(write: CacheWrite, plaintext: Uint8Array, ordered: boolean, replacement?: RejectedResolutionReplacement): Promise<void> {
     const snapshot = structuredClone(write);
+    if (!this.allowsSyncRecords && (snapshot.resolutionOf || replacement)) throw new CacheError('SYNC_AUTHORITY_REQUIRED');
     this.validate(snapshot);
+    const { rejected, retainedRecovery } = replacement ? structuredClone(replacement) : {};
+    if (rejected && (!snapshot.resolutionOf || rejected.scope !== 'drafts' || rejected.objectId !== snapshot.objectId
+      || !rejected.operationId || rejected.operationId === snapshot.operationId || !positive(rejected.generation)
+      || rejected.generation >= snapshot.generation || canonicalize(rejected.resolutionOf) !== canonicalize(snapshot.resolutionOf))) {
+      throw new CacheError('INVALID_INPUT');
+    }
+    if (retainedRecovery && (!rejected || retainedRecovery.scope !== 'drafts' || retainedRecovery.objectType !== 'sync_editor_recovery'
+      || !retainedRecovery.operationId || retainedRecovery.recoveryFor !== snapshot.resolutionOf?.operationId
+      || retainedRecovery.recoverySourceObjectId !== snapshot.objectId)) throw new CacheError('INVALID_INPUT');
     const auth = this.authorized(snapshot.scope, snapshot.ancestry.classSessionId);
     const header: CacheHeader = { ...snapshot, ownerId: auth.identity.ownerId, deviceId: auth.identity.deviceId,
       keyId: auth.key.id, keyVersion: auth.key.version, schema: 2 };
@@ -320,12 +352,32 @@ export class TrustedCache extends EventTarget {
         exact.onsuccess = () => {
           const previous = exact.result as CipherRecord | undefined;
           if (previous) { done(previous); return; }
+          const prior = rejected && records.get(recordId(auth.namespace, rejected));
+          const recovery = retainedRecovery && records.get(recordId(auth.namespace, retainedRecovery));
           const request = tx.objectStore('metadata').index('pool').getAll([auth.namespace, header.scope]);
           request.onsuccess = () => {
             const own = request.result as CacheMetadata[];
             const versions = ordered ? own.filter(value => value.header.objectId === header.objectId) : [];
             if (versions.some(value => value.header.revision > header.revision
               || (value.header.revision === header.revision && value.header.generation >= header.generation))) { fail(new CacheError('REVISION_CONFLICT')); return; }
+            if (rejected) {
+              const old = prior?.result as CipherRecord | undefined;
+              const metadata = own.find(value => value.id === old?.id);
+              if (!old || !metadata || old.header.operationId !== rejected.operationId
+                || canonicalize(old.header.resolutionOf) !== canonicalize(snapshot.resolutionOf)
+                || canonicalize(metadata.header) !== canonicalize(old.header)) {
+                fail(new CacheError('REVISION_CONFLICT')); return;
+              }
+              versions.push(metadata);
+            }
+            if (retainedRecovery) {
+              const saved = recovery?.result as CipherRecord | undefined;
+              if (!saved || saved.header.operationId !== retainedRecovery.operationId || saved.header.objectType !== retainedRecovery.objectType
+                || saved.header.recoveryFor !== retainedRecovery.recoveryFor || saved.header.recoverySourceObjectId !== retainedRecovery.recoverySourceObjectId
+                || saved.header.recoveryConflictId !== retainedRecovery.recoveryConflictId) {
+                fail(new CacheError('REVISION_CONFLICT')); return;
+              }
+            }
             try { this.makeRoom(tx, own.filter(value => !versions.includes(value)), record); }
             catch (error) { fail(error as CacheError); return; }
             for (const version of versions) deleteCacheRecord(tx, version.id);
@@ -414,6 +466,7 @@ export class TrustedCache extends EventTarget {
         const value = request.result as CipherRecord | undefined;
         if (!value) { done(null); return; }
         this.guard(tx, auth, value.header, () => {
+          if (!this.allowsSyncRecords && this.hasSyncHeader(value.header)) { fail(new CacheError('SYNC_AUTHORITY_REQUIRED')); return; }
           if (snapshot.objectType && snapshot.objectType !== value.header.objectType) { fail(new CacheError('REVISION_CONFLICT')); return; }
           if (snapshot.contentRevisionId && snapshot.contentRevisionId !== value.header.contentRevisionId) { fail(new CacheError('REVISION_CONFLICT')); return; }
           if (snapshot.recoverySourceObjectId && snapshot.recoverySourceObjectId !== value.header.recoverySourceObjectId) { fail(new CacheError('REVISION_CONFLICT')); return; }
@@ -437,12 +490,24 @@ export class TrustedCache extends EventTarget {
     return record ? { record, auth } : null;
   }
 
+  private hasSyncHeader(header: CacheHeader): boolean {
+    return header.scope === 'learning' && (!!header.objectType || !!header.contentRevisionId)
+      || header.scope === 'drafts' && (header.objectType === 'sync_editor_recovery' || !!header.resolutionOf);
+  }
+
+  private requireReadablePlaintext(header: CacheHeader, plaintext: Uint8Array): void {
+    if (!this.allowsSyncRecords && header.scope === 'drafts' && isLegacySyncDraft(header, plaintext)) {
+      throw new CacheError('SYNC_AUTHORITY_REQUIRED');
+    }
+  }
+
   async read(reference: CacheReference, classroom: string | null = null): Promise<Uint8Array<ArrayBuffer> | null> {
     const loaded = await this.load(reference, classroom);
     if (!loaded) return null;
     const { record, auth } = loaded;
     const plain = await this.decrypt(record, auth);
     try {
+      this.requireReadablePlaintext(record.header, plain);
       await cacheTransaction<void>(this.databaseName, 'readonly', (tx, done, fail) => this.guard(tx, auth, record.header, () => done(), fail), this.track);
       this.check(auth);
       return plain;
@@ -457,8 +522,12 @@ export class TrustedCache extends EventTarget {
     }, this.track);
     const result: CacheWrite[] = [];
     for (const record of records) {
-      const content = await this.read(record.header, classroom);
-      if (content) { content.fill(0); result.push(structuredClone(record.header)); }
+      try {
+        const content = await this.read(record.header, classroom);
+        if (content) { content.fill(0); result.push(structuredClone(record.header)); }
+      } catch (error) {
+        if (!(error instanceof CacheError) || error.code !== 'SYNC_AUTHORITY_REQUIRED') throw error;
+      }
     }
     this.check(auth);
     return result;
@@ -473,6 +542,16 @@ export class TrustedCache extends EventTarget {
   private async removeAcknowledged(reference: CacheReference, classroom: string | null, matches: (header: CacheHeader) => boolean) {
     const snapshot = structuredClone(reference);
     const auth = this.authorized(snapshot.scope, classroom);
+    let expected: CipherRecord | undefined;
+    if (snapshot.scope === 'drafts' && !this.allowsSyncRecords) {
+      const loaded = await this.load(snapshot, classroom);
+      if (!loaded) return;
+      expected = loaded.record;
+      const plain = await this.decrypt(expected, loaded.auth);
+      try { this.requireReadablePlaintext(expected.header, plain); }
+      finally { plain.fill(0); }
+      this.check(auth);
+    }
     await cacheTransaction<void>(this.databaseName, 'readwrite', (tx, done, fail) => {
       const records = tx.objectStore('records');
       const request = records.get(recordId(auth.namespace, snapshot));
@@ -481,6 +560,12 @@ export class TrustedCache extends EventTarget {
         if (!value) { done(); return; }
         this.guard(tx, auth, value.header, () => {
           if (!matches(value.header)) { fail(new CacheError('REVISION_CONFLICT')); return; }
+          // The legacy ownership check was outside this transaction. Only remove the record it checked.
+          if (expected && (canonicalize(expected.header) !== canonicalize(value.header)
+            || !equalBytes(expected.nonce, value.nonce)
+            || !equalBytes(new Uint8Array(expected.ciphertext), new Uint8Array(value.ciphertext)))) {
+            fail(new CacheError('REVISION_CONFLICT')); return;
+          }
           deleteCacheRecord(tx, value.id); done();
         }, fail);
       };
@@ -604,7 +689,10 @@ export class TrustedCache extends EventTarget {
     const { record, auth } = loaded;
     const plain = await this.decrypt(record, auth);
     let replacement: CipherRecord;
-    try { replacement = await this.encrypt({ ...record.header, schema: 2 }, plain, auth); }
+    try {
+      this.requireReadablePlaintext(record.header, plain);
+      replacement = await this.encrypt({ ...record.header, schema: 2 }, plain, auth);
+    }
     finally { plain.fill(0); }
     await cacheTransaction<void>(this.databaseName, 'readwrite', (tx, done, fail) => {
       this.guard(tx, auth, record.header, () => {

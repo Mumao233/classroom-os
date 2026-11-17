@@ -6,13 +6,17 @@ import { OfflineSyncRuntime, SyncError } from './runtime';
 
 export type OfflineSyncOptions = Omit<CacheOptions, 'recordingEnabled'>;
 
+class OfflineSyncCache extends AuthenticatedCache {
+  protected override get allowsSyncRecords(): boolean { return true; }
+}
+
 /** Default-off normal entry point for the authenticated application and downstream editors. */
 export class AuthenticatedOfflineSync extends OfflineSyncRuntime {
   private readonly unsubscribe: () => void;
   constructor(private readonly auth: AuthClient, private readonly configuration: OfflineSyncOptions = {}) {
     const options = configuration;
     let identity: string | null = null;
-    super(new AuthenticatedCache(auth, { ...options, recordingEnabled: false }), new AuthenticatedSyncClient(auth), { enabled: options.enabled, identity: () => identity });
+    super(new OfflineSyncCache(auth, { ...options, recordingEnabled: false }), new AuthenticatedSyncClient(auth), { enabled: options.enabled, identity: () => identity });
     this.unsubscribe = auth.subscribeSession(session => { identity = session ? JSON.stringify([session.user.id, session.device_id, session.session_id]) : null; });
   }
 
