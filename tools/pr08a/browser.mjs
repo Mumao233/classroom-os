@@ -492,7 +492,7 @@ try {
   await test('metadata-projection-survives-migration-ack-lru-delete-and-purge', async () => {
     await page.evaluate(async () => {
       for (const database of await indexedDB.databases()) {
-        if (database.version === 3) await assertMetadata(database.name);
+        if (database.version >= 3) await assertMetadata(database.name);
       }
     });
   });

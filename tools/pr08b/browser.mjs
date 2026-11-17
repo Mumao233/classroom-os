@@ -987,6 +987,46 @@ try {
     });
     assert.deepEqual(result, { genericBody: 'UNSTRUCTURED PR-08a DRAFT', pendingGenericCount: 1, unchanged: true });
   });
+  await test('ordinary-deletion-locks-peer-before-observer-cache-closes', async () => {
+    const [observer, peer] = await Promise.all([context.newPage(), context.newPage()]);
+    try {
+      await Promise.all([install(observer), install(peer)]);
+      await peer.evaluate(async () => {
+        const cache = window.ordinaryPeer = new NativeTrustedCache({ enabled: true, databaseName: 'pr08b-notify-before-close',
+          limits: { draftBytes: 2000000, draftOperations: 2, recordingBytes: 2000000 } });
+        cache.bind({ ownerId: ids.owner, deviceId: ids.device, sessionId: ids.session });
+        await cache.unlockScope('drafts');
+        const reference = window.ordinaryReference = { scope: 'drafts', objectId: ids.document, revision: 1, generation: 1,
+          operationId: crypto.randomUUID(), ancestry };
+        await cache.put(reference, new TextEncoder().encode('VISIBLE ORDINARY DRAFT'));
+        const content = document.createElement('pre');
+        content.id = 'ordinary-deletion-content';
+        content.textContent = new TextDecoder().decode(await cache.read(reference));
+        document.body.append(content);
+        cache.addEventListener('locked', () => { content.textContent = ''; });
+      });
+      assert.equal(await peer.locator('#ordinary-deletion-content').textContent(), 'VISIBLE ORDINARY DRAFT');
+      await observer.evaluate(async () => {
+        const cache = new NativeTrustedCache({ enabled: true, databaseName: 'pr08b-notify-before-close' });
+        cache.bind({ ownerId: ids.owner, deviceId: ids.device, sessionId: ids.session });
+        // Close this adapter and its channel while the IDB transaction is still queued.
+        const committing = cache.applyDeletion({ object_type: 'class_session', object_id: ids.classroom,
+          deletion_id: ids.deletion, state: 'access_revoked' }, { retainDrafts: true });
+        cache.close();
+        await committing;
+      });
+      await observer.close();
+      await peer.waitForFunction(() => document.querySelector('#ordinary-deletion-content')?.textContent === '');
+      await peer.evaluate(async () => {
+        await expectCode(ordinaryPeer.read(ordinaryReference), 'LOCKED');
+        await ordinaryPeer.unlockScope('drafts');
+        await expectCode(ordinaryPeer.read(ordinaryReference), 'GONE');
+        ordinaryPeer.close();
+      });
+    } finally {
+      await Promise.all([observer, peer].filter(tab => !tab.isClosed()).map(tab => tab.close()));
+    }
+  });
   await test('deletion-fences-peer-unlock-until-the-same-request-commits-across-tabs', async () => {
     const other = await context.newPage();
     try {
@@ -1082,10 +1122,10 @@ try {
         const first = notice();
         window.secondPendingDeletion = notice();
         await cache.lockForDeletion([first.deletion_id, secondPendingDeletion.deletion_id]);
-        await cache.applyDeletion(first, { retainDrafts: true });
+        await cache.applyDeletion(first, { retainDrafts: true, completeFence: true });
       });
       await other.evaluate(() => expectCode(oldOrdinary.unlockScope('drafts'), 'LOCKED'));
-      await page.evaluate(() => cache.applyDeletion(secondPendingDeletion, { retainDrafts: true }));
+      await page.evaluate(() => cache.applyDeletion(secondPendingDeletion, { retainDrafts: true, completeFence: true }));
       await other.evaluate(async () => {
         await oldOrdinary.unlockScope('drafts');
         await expectCode(oldOrdinary.read(ordinaryDraft), 'GONE');
@@ -1094,6 +1134,99 @@ try {
     } finally {
       await other.evaluate(() => { window.runtime?.close(); window.oldOrdinary?.close(); window.otherNamespaceCache?.close(); }).catch(() => {});
       await other.close();
+    }
+  });
+  await test('v4-preserves-v3-ciphertext-and-excludes-stale-cache-openers', async () => {
+    const oldPage = await context.newPage();
+    const name = 'pr08b-v3-to-v4-deletion-boundary';
+    try {
+      await install(oldPage);
+      const legacy = await oldPage.evaluate(async name => {
+        // Use the existing adapter's real encrypted storage path with the frozen v3 open request.
+        window.legacyNativeOpen = IDBFactory.prototype.open;
+        IDBFactory.prototype.open = function(nameToOpen, version) {
+          return legacyNativeOpen.call(this, nameToOpen, nameToOpen === name ? 3 : version);
+        };
+        const options = { enabled: true, databaseName: name,
+          limits: { draftBytes: 100000, draftOperations: 5, recordingBytes: 100000 } };
+        const identity = { ownerId: ids.owner, deviceId: ids.device, sessionId: ids.session };
+        const reference = { scope: 'drafts', objectId: ids.document, revision: 1, generation: 1,
+          operationId: crypto.randomUUID(), ancestry };
+        window.v3Cache = new NativeTrustedCache(options);
+        v3Cache.bind(identity);
+        await v3Cache.unlockScope('drafts');
+        await v3Cache.put(reference, new TextEncoder().encode('LEGACY ENCRYPTED PR-08A DRAFT'));
+        const plaintext = new TextDecoder().decode(await v3Cache.read(reference));
+        window.v3Connection = await lib.openCacheDatabase(name);
+        const closeOnUpgrade = v3Connection.onversionchange;
+        v3Connection.onversionchange = event => {
+          window.v3Upgrade = [event.oldVersion, event.newVersion];
+          closeOnUpgrade.call(v3Connection, event);
+        };
+        const stores = ['records', 'metadata', 'nonces', 'namespaces', 'tombstones'];
+        const snapshot = db => new Promise((resolve, reject) => {
+          const tx = db.transaction(stores, 'readonly');
+          const requests = stores.map(store => tx.objectStore(store).getAll());
+          tx.oncomplete = () => resolve(JSON.stringify(requests.map(request => request.result), (_, value) =>
+            value instanceof ArrayBuffer ? Array.from(new Uint8Array(value)) : ArrayBuffer.isView(value) ? Array.from(value) : value));
+          tx.onabort = () => reject(tx.error);
+        });
+        return { options, identity, reference, plaintext, version: v3Connection.version, sealed: await snapshot(v3Connection) };
+      }, name);
+      assert.equal(legacy.version, 3);
+      assert.equal(legacy.plaintext, 'LEGACY ENCRYPTED PR-08A DRAFT');
+
+      const upgraded = await page.evaluate(async ({ options, identity, reference }) => {
+        const db = await lib.openCacheDatabase(options.databaseName);
+        let sealed;
+        try {
+          const stores = ['records', 'metadata', 'nonces', 'namespaces', 'tombstones'];
+          sealed = await new Promise((resolve, reject) => {
+            const tx = db.transaction(stores, 'readonly');
+            const requests = stores.map(store => tx.objectStore(store).getAll());
+            tx.oncomplete = () => resolve(JSON.stringify(requests.map(request => request.result), (_, value) =>
+              value instanceof ArrayBuffer ? Array.from(new Uint8Array(value)) : ArrayBuffer.isView(value) ? Array.from(value) : value));
+            tx.onabort = () => reject(tx.error);
+          });
+        } finally { db.close(); }
+        const ordinary = new NativeTrustedCache(options);
+        ordinary.bind(identity);
+        try {
+          await ordinary.unlockScope('drafts');
+          return { sealed, version: db.version, plaintext: new TextDecoder().decode(await ordinary.read(reference)) };
+        } finally { ordinary.close(); }
+      }, legacy);
+      assert.deepEqual(upgraded, { sealed: legacy.sealed, version: 4, plaintext: legacy.plaintext });
+      const closed = await oldPage.evaluate(async ({ options, reference }) => {
+        let oldTransaction;
+        try { v3Connection.transaction('records', 'readonly'); } catch (error) { oldTransaction = error.name; }
+        await expectCode(v3Cache.read(reference), 'STORAGE_UNAVAILABLE');
+        const reopenError = await new Promise(resolve => {
+          const request = indexedDB.open(options.databaseName, 3);
+          request.onerror = () => resolve(request.error.name);
+          request.onsuccess = () => { request.result.close(); resolve(null); };
+        });
+        window.legacyFenceLocked = false;
+        v3Cache.addEventListener('locked', () => { legacyFenceLocked = true; });
+        return { oldTransaction, reopenError, versionchange: v3Upgrade };
+      }, legacy);
+      assert.deepEqual(closed, { oldTransaction: 'InvalidStateError', reopenError: 'VersionError', versionchange: [3, 4] });
+
+      await page.evaluate(async name => {
+        await create(name, {}, {}, null);
+        await cache.lockForDeletion([ids.deletion]);
+      }, name);
+      await oldPage.waitForFunction(() => window.legacyFenceLocked);
+      await oldPage.evaluate(async reference => {
+        await expectCode(v3Cache.unlockScope('drafts'), 'STORAGE_UNAVAILABLE');
+        await expectCode(v3Cache.read(reference), 'LOCKED');
+      }, legacy.reference);
+    } finally {
+      await oldPage.evaluate(() => {
+        window.v3Connection?.close(); window.v3Cache?.close();
+        if (window.legacyNativeOpen) IDBFactory.prototype.open = legacyNativeOpen;
+      }).catch(() => {});
+      await oldPage.close();
     }
   });
   await test('ordinary-change-preserves-unsent-merge-body-and-note-after-reopen', async () => {
@@ -1359,7 +1492,7 @@ try {
   await context.close();
   await new Promise(resolve => server.close(resolve));
   await writeFile(join(output, 'sync-browser.json'), JSON.stringify({ chromium: browserVersion, synthetic_transport: true,
-    native_crypto_indexeddb: true, results, passed: results.length === 52 && results.every(result => result.passed) }, null, 2));
+    native_crypto_indexeddb: true, results, passed: results.length === 54 && results.every(result => result.passed) }, null, 2));
 }
 console.log(JSON.stringify({ tests: results.length, passed: results.filter(result => result.passed).length, results }));
-if (results.length !== 52 || results.some(result => !result.passed)) process.exitCode = 1;
+if (results.length !== 54 || results.some(result => !result.passed)) process.exitCode = 1;

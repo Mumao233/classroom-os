@@ -35,7 +35,7 @@ export interface SyncCache extends EventTarget {
   retryRecoveryDrafts(): Promise<Array<{ objectId: string; error?: unknown }>>;
   read(reference: CacheReference): Promise<Uint8Array | null>;
   acknowledgeDraft(reference: CacheReference, operationId: string): Promise<void>;
-  applyDeletion(notice: DeletionNotice, options: { retainDrafts: true }): Promise<void>;
+  applyDeletion(notice: DeletionNotice, options: { retainDrafts: true; completeFence?: boolean }): Promise<void>;
 }
 
 export class SyncError extends Error {
@@ -52,6 +52,10 @@ const restrictedRecovery = (error: unknown) => ['AUTHORITY_UNAVAILABLE', 'GONE',
 const keyOf = (reference: CacheReference) => JSON.stringify([reference.objectId, reference.revision, reference.generation]);
 const operationKey = (reference: CacheWrite) => JSON.stringify([reference.scope, keyOf(reference), reference.operationId]);
 const projectionType = (operation: SyncOperation) => operation.object_type === 'personal_revision' ? 'review_document' : operation.object_type;
+const validChange = (change: unknown) => object(change) && uuid(change.event_id) && uuid(change.object_id)
+  && positive(change.revision) && typeof change.deleted === 'boolean' && typeof change.object_type === 'string'
+  && ['semester', 'course', 'class_session', 'transcript', 'slide', 'question', 'review_document', 'mark',
+    'preferences', 'task', 'deletion', 'notification'].includes(change.object_type);
 const resolvesDraft = (reference: CacheWrite, original: CacheWrite) => reference.objectId === original.objectId
   && reference.resolutionOf !== undefined && reference.resolutionOf.operationId === original.operationId
   && reference.resolutionOf.revision === original.revision && reference.resolutionOf.generation === original.generation;
@@ -213,7 +217,13 @@ export class OfflineSyncRuntime extends EventTarget {
     // Keep the bootstrap watermark until the pending changes can be applied.
     this.cursor ??= start;
     const reconciled = new Set<string>();
-    const pending = await this.cache.pendingDeletionIds();
+    let pending: readonly string[];
+    try { pending = await this.cache.pendingDeletionIds(); }
+    catch (error) {
+      this.sameEpoch(epoch);
+      this.cache.lock();
+      throw error;
+    }
     this.sameEpoch(epoch);
     if (pending.length) {
       const fencing = this.cache.lockForDeletion(pending);
@@ -235,9 +245,13 @@ export class OfflineSyncRuntime extends EventTarget {
       }
       this.sameEpoch(epoch);
       if (!page || !Array.isArray(page.items) || typeof page.next_cursor !== 'string' || !page.next_cursor
-        || typeof page.has_more !== 'boolean' || (page.has_more && page.next_cursor === cursor)) throw new SyncError('INCOMPATIBLE_CLIENT');
-      const discovered = page.items.filter(change => change?.object_type === 'deletion'
-        && uuid(change.object_id) && !reconciled.has(change.object_id)).map(change => change.object_id);
+        || typeof page.has_more !== 'boolean' || (page.has_more && page.next_cursor === cursor)
+        || !page.items.every(validChange)) {
+        this.cache.lock();
+        throw new SyncError('INCOMPATIBLE_CLIENT');
+      }
+      const discovered = page.items.filter(change => change.object_type === 'deletion'
+        && !reconciled.has(change.object_id)).map(change => change.object_id);
       if (discovered.length) {
         // Persist and announce the revocation barrier before querying its scope.
         const fencing = this.cache.lockForDeletion(discovered);
@@ -246,8 +260,6 @@ export class OfflineSyncRuntime extends EventTarget {
         this.sameEpoch(epoch);
       }
       for (const change of page.items) {
-        if (!uuid(change.event_id) || !uuid(change.object_id) || !positive(change.revision) || typeof change.deleted !== 'boolean'
-          || !['semester', 'course', 'class_session', 'transcript', 'slide', 'question', 'review_document', 'mark', 'preferences', 'task', 'deletion', 'notification'].includes(change.object_type)) throw new SyncError('INCOMPATIBLE_CLIENT');
         if (change.object_type === 'deletion') {
           if (!reconciled.has(change.object_id)) {
             epoch = await this.reconcileDeletionDetail(change.object_id, epoch);
@@ -290,7 +302,8 @@ export class OfflineSyncRuntime extends EventTarget {
     if (deletion.id !== id || !uuid(deletion.scope_id)
       || !['account', 'semester', 'course', 'class_session', 'audio', 'media_asset'].includes(deletion.scope_type)
       || !['access_revoked', 'pending_delete', 'delete_failed', 'deleted'].includes(deletion.state)) throw new SyncError('INCOMPATIBLE_CLIENT');
-    const applying = this.cache.applyDeletion({ object_type: deletion.scope_type, object_id: deletion.scope_id, deletion_id: deletion.id, state: deletion.state }, { retainDrafts: true });
+    const applying = this.cache.applyDeletion({ object_type: deletion.scope_type, object_id: deletion.scope_id,
+      deletion_id: deletion.id, state: deletion.state }, { retainDrafts: true, completeFence: true });
     const lockedEpoch = this.epoch;
     await applying;
     this.sameEpoch(lockedEpoch);

@@ -26,7 +26,7 @@ class MemoryCache extends EventTarget implements SyncCache {
   denied = false;
   recoveryHeads = new Map<string, number>();
   lock() { this.events.push('lock'); this.dispatchEvent(new Event('locked')); }
-  async lockForDeletion() { this.events.push('peer-lock'); this.lock(); }
+  async lockForDeletion(ids: readonly string[]) { if (ids.length) { this.events.push('peer-lock'); this.lock(); } }
   async pendingDeletionIds() { return []; }
   close() { this.lock(); }
   async unlockScope() { this.events.push('unlock'); }
@@ -295,6 +295,34 @@ describe('PR-08b encrypted operation queue', () => {
     expect(cursors).toEqual(['snapshot', 'snapshot']);
     expect(f.cache.events.lastIndexOf('delete')).toBeLessThan(f.cache.events.lastIndexOf('unlock'));
     expect(f.runtime.snapshot().cursor).toBe('after-deletion');
+  });
+
+  it('locks the open view when local deletion fence storage cannot be read', async () => {
+    const f = fixture(); await f.runtime.unlock('');
+    const reference = await f.runtime.enqueue(operation(), ancestry, 1);
+    f.cache.pendingDeletionIds = async () => { throw new SyncError('STORAGE_UNAVAILABLE'); };
+    let requested = false;
+    f.transport.changes = async () => { requested = true; throw new Error('Unexpected feed request'); };
+    await f.runtime.pollChanges();
+    expect(f.runtime.snapshot()).toMatchObject({ unlocked: false, cursor: 'consumed' });
+    expect(requested).toBe(false);
+    await expect(f.runtime.readDraft(reference)).rejects.toMatchObject({ code: 'LOCKED' });
+    expect(f.cache.records.size).toBe(1);
+  });
+
+  it('does not persist a deletion ID from a malformed changes page', async () => {
+    const f = fixture(); await f.runtime.unlock('');
+    const changes = f.transport.changes;
+    const fences: string[][] = [];
+    f.cache.lockForDeletion = async ids => { fences.push([...ids]); };
+    f.transport.changes = async () => ({ items: [{ event_id: 'invalid event ID', object_type: 'deletion',
+      object_id: id(400), revision: 1, deleted: true }], next_cursor: 'invalid-page', has_more: false });
+    await f.runtime.pollChanges();
+    expect(f.runtime.snapshot()).toMatchObject({ unlocked: false, cursor: 'consumed' });
+    expect(fences).toEqual([]);
+    f.transport.changes = changes;
+    await f.runtime.unlock('');
+    expect(f.runtime.snapshot()).toMatchObject({ unlocked: true, cursor: 'consumed' });
   });
 
   it('resumes from the last completed page after the bounded catch-up limit', async () => {

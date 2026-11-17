@@ -56,6 +56,11 @@ export class TrustedCache extends EventTarget {
         if (!Array.isArray(data.deletionIds)) { this.lock(); return; }
         const ids = data.deletionIds.filter((value): value is string =>
           typeof value === 'string' && value.length > 0 && !this.deletionLocks.has(value));
+        if (data.pending === false) {
+          // An ordinary notice locks the view but never claims a server deletion ID.
+          if (ids.length) this.lock();
+          return;
+        }
         if (ids.length && data.pending === true) {
           void this.fenceDeletions(namespaceOf(identity), ids).catch(() => this.dispatchEvent(new Event('storage-failed')));
         }
@@ -653,9 +658,11 @@ export class TrustedCache extends EventTarget {
     this.check(auth);
   }
 
-  async applyDeletion(notice: DeletionNotice, options: { retainDrafts?: boolean } = {}): Promise<void> {
+  async applyDeletion(notice: DeletionNotice, options: { retainDrafts?: boolean; completeFence?: boolean } = {}): Promise<void> {
     const retainDrafts = options.retainDrafts === true;
     this.enabled();
+    const completeFence = options.completeFence === true;
+    if (completeFence) this.requireSyncAuthority();
     const identity = this.identity;
     const { object_id: objectId, object_type: kind, deletion_id: deletionId } = notice;
     if (!identity || !objectId || !deletionId) throw new CacheError('INVALID_INPUT');
@@ -670,18 +677,17 @@ export class TrustedCache extends EventTarget {
         const previous = prior.result as Tombstone | undefined;
         const retainAllowed = retainDrafts && (!previous || previous.retainDrafts === true);
         const deletionIds = new Set(previous?.deletionIds);
-        const changed = !previous || previous.retainDrafts !== retainAllowed || (sync && !deletionIds.has(deletionId));
-        if (sync) deletionIds.add(deletionId);
+        const changed = !previous || previous.retainDrafts !== retainAllowed || (completeFence && !deletionIds.has(deletionId));
+        if (completeFence) deletionIds.add(deletionId);
         const states = tx.objectStore('namespaces');
         const loadState = states.get(namespace);
         loadState.onsuccess = () => {
           const state = loadState.result as NamespaceState | undefined;
           const pending = state?.pendingDeletionIds ?? [];
           if (!sync && pending.includes(deletionId)) { allowed = false; done(); return; }
-          if (!sync) this.notifyLock(identity);
-          if (changed || pending.includes(deletionId)) states.put({ ...state, id: namespace,
+          if (changed || (completeFence && pending.includes(deletionId))) states.put({ ...state, id: namespace,
             generation: (state?.generation ?? 0) + (changed ? 1 : 0),
-            pendingDeletionIds: sync ? pending.filter(id => id !== deletionId) : pending });
+            pendingDeletionIds: completeFence ? pending.filter(id => id !== deletionId) : pending });
           if (changed) {
             tombstones.put({ ...tombstone, retainDrafts: retainAllowed, deletionIds: [...deletionIds] });
             const request = tx.objectStore('metadata').index('namespace').getAll(namespace);
@@ -695,8 +701,15 @@ export class TrustedCache extends EventTarget {
         };
       };
     }));
-    if (!sync) this.lock();
-    else if (this.rememberDeletionLocks([deletionId])) this.notifyLock(identity, [deletionId]);
+    if (!sync) {
+      // Queue the signal while this view is live. Peers already processing the same
+      // request keep their epoch, including when the transaction rejects this caller.
+      this.notifyLock(identity, [deletionId], false);
+      this.lock();
+    } else {
+      const lockId = completeFence ? deletionId : JSON.stringify([kind, objectId]);
+      if (this.rememberDeletionLocks([lockId])) this.notifyLock(identity, [lockId]);
+    }
     await applying;
     if (!allowed) throw new CacheError('SYNC_AUTHORITY_REQUIRED');
   }
