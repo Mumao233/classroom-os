@@ -1,5 +1,12 @@
 # PR-06a simulated ASR protocol POC
 
+The 2026-11-17 closeout audit is recorded in [AUDIT-20261117.md](AUDIT-20261117.md).
+See [the verification record](CLOSEOUT-20261117.md) and
+[the real-interface verification plan](REAL-API-PLAN-20261117.md) for current
+evidence and remaining gates. The baseline and local report below describe the
+original simulation. Current Web source contains this simulator. DashScope
+transport and provider event parsing still require implementation and validation.
+
 **SIMULATION ONLY.** Contract baseline 0.1.0; wire protocol_version 1.
 Base: `1cc35d5db3117bce0585acbd9d9c7aa8d2d0498b`, branch
 `feature/web-pr06a-pilot-20261106`. No frozen source was changed.
@@ -15,6 +22,8 @@ provider SDK, audio device, database, thread, wall-clock dependency or I/O.
 `budget_permit`, `consent`, `dispatch_intent`. Supply canonical UUID strings for
 `class_session_id`, `capture_epoch_id`, `stream_id`. These injected facts do not
 implement authentication, consent capture, durable storage or a budget ledger.
+Missing identifiers and malformed UUIDs raise a fixed-message `ProtocolError`
+before state changes. Credential and provider-enable fields are rejected.
 
 `send(frame)` accepts a dict containing bytes `pcm`, `encoding='signed16le'`,
 `sample_rate=16000`, `channels=1`, `start_sample`, `end_sample`, `sample_count`,
@@ -42,6 +51,9 @@ byte accounting, and retains committed finals and sent-range evidence for
 unknown; this POC does not invent proof of silence. Without terminal, or while
 an earlier final commit remains queued for retry, the stream stays draining.
 Incomplete terminal evidence never completes a stream or triggers a resend.
+Repeated `finish()` returns the current receipt in draining and terminal states
+without changing the outcome or emitting events. Calling it before start remains
+an error. `query()` before start also raises `ProtocolError`.
 
 Script transcript actions use `kind` (`partial` or `final`), UUID `segment_id`,
 positive `revision`, nonnegative `sequence`, `start_sample`, `end_sample`, `text`;

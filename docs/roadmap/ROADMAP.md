@@ -208,7 +208,7 @@ flowchart TD
 | 04b 数据删除与备份恢复 | 🟡 可开工 | — | — | — | — | — | — |  |
 | 05a 缓存密钥安全 POC | 🟢 完成 | 林珈诚 | [#11](https://github.com/Mumao233/classroom-os/pull/11) | — | — | 开始日期未记录 | 2026-11-16 | 2026-11-16 按 Mumao233 合并 GitHub #11、并经 #10 进入 main 的记录同步已交付范围。Web Crypto/IndexedDB 安全 POC、03b 身份与 PostgreSQL 密钥解锁、同一有效设备恢复候选及增量安全复审完成。合流 VMware 回归包含真实缓存 TLS 浏览器验证。正式接入候选默认关闭，TBD-03、正式迁移与契约、录音同意及恢复产品策略仍待确认。证据见该 PR、docs/web-alpha/pr05a/FORMAL-INTEGRATION-20261115.md 与 outputs/integration-20261116/ci-repair/SUMMARY.md。 |
 | 05b 采集恢复与租约 | ⚪ 未开始 | — | — | 04b | — | — | — |  |
-| 06a ASR 协议与模拟 POC | 🔵 进行中 | 林珈诚 | [#3](https://github.com/Mumao233/classroom-os/pull/3) [#4](https://github.com/Mumao233/classroom-os/pull/4) | — | 真实付费接入还差 05b | 2026-11-06 | — | 模拟协议 POC 已验收并通过 GitHub #4 整合到 main，原模拟 PR 为 #3；模拟候选 24 项及可信断言 4 项通过。PR-06a 的真实接口验证尚未执行，须专项授权及原付费前置门禁；本状态不授权继续调用真实 API。 |
+| 06a ASR 协议与模拟 POC | 🔵 进行中 | 林珈诚 | [#3](https://github.com/Mumao233/classroom-os/pull/3) [#4](https://github.com/Mumao233/classroom-os/pull/4) | — | 真实付费接入还差 05b | 2026-11-06 | — | 2026-11-17收口基于main 8b1e44e，模拟器输入错误与重复finish已修复，本轮VMware模拟候选34项和可信断言4项通过。Web DashScope transport、wire解析、SDK/API锁定与连接生命周期仍缺实现。PR-06a真实接口验证待专项授权和原付费前置门禁。整体保持doing，见docs/web-alpha/pr06a/CLOSEOUT-20261117.md。 |
 | 06b 实时 ASR 与恢复 | ⚪ 未开始 | — | — | 05b, 06a | — | — | — |  |
 | 06c Filetrans 与候选采用 | ⚪ 未开始 | — | — | 04b, 06b | — | — | — |  |
 | 07a 问答与来源快照 | 🟡 可开工 | — | — | — | — | — | — |  |

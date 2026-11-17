@@ -16,7 +16,13 @@ def integer(value, minimum=0, maximum=2**53 - 1):
 
 
 def uid(value):
-    if type(value) is not str or str(UUID(value)) != value:
+    if type(value) is not str or len(value) != 36:
+        raise ProtocolError('canonical UUID required')
+    try:
+        canonical = str(UUID(value))
+    except ValueError:
+        raise ProtocolError('canonical UUID required') from None
+    if canonical != value:
         raise ProtocolError('canonical UUID required')
     return value
 
@@ -135,7 +141,8 @@ class Simulator:
         allowed = {'durable_audio', 'budget_permit', 'consent', 'dispatch_intent',
                    'class_session_id', 'capture_epoch_id', 'stream_id', 'script',
                    'commit_failures', 'query_result'}
-        if type(config) is not dict or set(config) - allowed:
+        required = {'class_session_id', 'capture_epoch_id', 'stream_id'}
+        if type(config) is not dict or set(config) - allowed or not required <= set(config):
             raise ProtocolError('invalid config')
         if any(config.get(k) is not True for k in
                ('durable_audio', 'budget_permit', 'consent', 'dispatch_intent')):
@@ -236,7 +243,7 @@ class Simulator:
     def finish(self):
         if self.state == 'streaming':
             self.state = 'draining'
-        elif self.state != 'draining':
+        elif self.state not in ('draining', 'unknown', 'succeeded', 'failed'):
             raise ProtocolError('cannot finish this state')
         return self._receipt()
 
@@ -331,7 +338,7 @@ class Simulator:
         return output
 
     def query(self, receipt):
-        if type(receipt) is not dict or receipt.get('stream_id') != self._stream:
+        if self.state == 'idle' or type(receipt) is not dict or receipt.get('stream_id') != self._stream:
             raise ProtocolError('receipt does not identify current stream')
         if self._query_result is None:
             return {'status': 'unsupported'}
