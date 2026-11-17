@@ -43,7 +43,18 @@ def test_only_required_tables_and_contract_columns_exist(pg):
     media_tables={'media_assets','media_uploads','media_tickets'}
     # PR-04b SQL tables have their own real-PG column, constraint and ACL checks.
     deletion_tables={'deletion_assets','deletion_executions','retention_policies','restore_task_quarantine'}
-    assert set(inspector.get_table_names()) == expected | set(task_tables) | set(identity_tables) | auth_tables | media_tables | set(QA_TABLES) | set(REVIEW_TABLES) | deletion_tables | {"alembic_version"}
+    cache_tables = {'cache_keys'}
+    assert set(inspector.get_table_names()) == expected | set(task_tables) | set(identity_tables) | auth_tables | media_tables | set(QA_TABLES) | set(REVIEW_TABLES) | deletion_tables | cache_tables | {"alembic_version"}
+    cache_columns = {column['name']: column['nullable'] for column in inspector.get_columns('cache_keys')}
+    assert cache_columns == {'id': False, 'created_at': False, 'owner_id': False, 'device_id': False,
+                             'purpose': False, 'class_session_id': True, 'wrapped_dek': False,
+                             'kek_version': False, 'key_version': False, 'revoked_at': True}
+    assert inspector.get_pk_constraint('cache_keys')['constrained_columns'] == ['id']
+    assert {(tuple(foreign['constrained_columns']), foreign['referred_table'], tuple(foreign['referred_columns']))
+            for foreign in inspector.get_foreign_keys('cache_keys')} == {
+                (('owner_id',), 'users', ('id',)),
+                (('owner_id', 'device_id'), 'devices', ('owner_id', 'id')),
+                (('owner_id', 'class_session_id'), 'class_sessions', ('owner_id', 'id'))}
     contract = json.loads((ROOT / "docs/web-alpha/architecture/contracts/domain-model.json").read_text("utf-8"))
     for table in contract["tables"]:
         if table["name"] in expected:
@@ -53,8 +64,8 @@ def test_only_required_tables_and_contract_columns_exist(pg):
                 assert actual[column["name"]]["nullable"] == column["nullable"]
     with pg.admin.connect() as connection:
         # This original gate still compares every legacy metadata object.
-        # Auth and media SQL objects have independent real-PG columns/constraints/ACL checks.
-        differences = compare_metadata(MigrationContext.configure(connection,opts={'include_object':lambda obj,name,kind,reflected,compare_to:not(kind=='table' and name in auth_tables|media_tables|deletion_tables)}), metadata)
+        # SQL-managed objects have independent real-PG columns/constraints/ACL checks.
+        differences = compare_metadata(MigrationContext.configure(connection,opts={'include_object':lambda obj,name,kind,reflected,compare_to:not(kind=='table' and name in auth_tables|media_tables|deletion_tables|cache_tables)}), metadata)
     assert differences == []
 
 
@@ -84,9 +95,9 @@ def test_runtime_role_is_restricted_and_force_rls_is_enabled(pg):
                    pg_get_userbyid(c.relowner)=current_user AS owns
             FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
             WHERE n.nspname='public' AND c.relname IN
-              ('semesters','courses','course_material_versions','class_sessions','deletion_requests','deletion_tombstones')
+              ('semesters','courses','course_material_versions','class_sessions','deletion_requests','deletion_tombstones','cache_keys')
         """)).all()
-        assert len(private) == 6
+        assert len(private) == 7
         assert all(row.relrowsecurity and row.relforcerowsecurity and not row.owns for row in private)
         assert not connection.execute(sa.text("SELECT has_table_privilege(current_user,'users','SELECT')")).scalar_one()
     with pytest.raises(sa.exc.DBAPIError):
