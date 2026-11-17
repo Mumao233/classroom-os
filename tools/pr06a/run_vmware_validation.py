@@ -7,9 +7,11 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 import uuid
+import xml.etree.ElementTree as ET
 import zipfile
 
 
@@ -36,6 +38,8 @@ def main():
                   if hashlib.sha256((root / name).read_bytes()).hexdigest() != digest]
     if mismatches:
         raise RuntimeError('Snapshot files differ from SOURCE.json')
+    from tools.pr02b.run_tests import NETWORK_GUARD
+
     environment = clean_environment(os.environ)
     environment['PYTHONPATH'] = os.pathsep.join((str(args.deps), str(root)))
     report = dict(source_sha256=manifest['source_zip_sha256'],
@@ -84,6 +88,75 @@ def main():
             raise SystemExit(124)
         return result
 
+    backend = root / 'web/backend'
+    suite = backend / 'tests/asr_dashscope'
+    scratch = root / 'work/pr06a/dashscope-tests'
+    guard = scratch / 'guard'
+    guard.mkdir(parents=True, exist_ok=False)
+    (guard / 'sitecustomize.py').write_text(NETWORK_GUARD, encoding='utf8')
+    guarded = dict(environment, PYTHONPATH=os.pathsep.join((str(guard), environment['PYTHONPATH'])))
+    probe = run('dashscope-network-guard', [sys.executable, '-B', '-c',
+        "import sys; sys.audit('socket.connect', None, ('198.51.100.1', 443))"],
+        child_environment=guarded)
+    report['steps'][-1]['exit_code'] = int(
+        probe.returncode != 1 or 'PR-02b tests deny non-loopback' not in probe.stderr)
+
+    def dashscope_pytest(name, target, env):
+        junit = output / (name + '.xml')
+        result = run(name, [sys.executable, '-B', '-m', 'pytest', target, '-q',
+            '-c', backend / 'pyproject.toml', '-o', 'pythonpath=', '-p', 'no:cacheprovider',
+            '--basetemp=' + str(scratch / name), '--junitxml=' + str(junit)], child_environment=env)
+        step = report['steps'][-1]
+        try:
+            cases = list(ET.parse(junit).iter('testcase'))
+        except (OSError, ET.ParseError) as error:
+            step.update(exit_code=1, validation_error=type(error).__name__)
+            return result, step, []
+        step['summary'] = dict(tests_run=len(cases),
+            failures=sum(case.find('failure') is not None for case in cases),
+            errors=sum(case.find('error') is not None for case in cases),
+            skipped=sum(case.find('skipped') is not None for case in cases))
+        return result, step, cases
+
+    suite_environment = dict(guarded, PYTHONPATH=os.pathsep.join((guarded['PYTHONPATH'], str(backend))))
+    _, suite_step, suite_cases = dashscope_pytest('dashscope', suite, suite_environment)
+    if not suite_cases or any(suite_step['summary'][part] for part in ('failures', 'errors', 'skipped')):
+        suite_step.update(exit_code=1, validation_error='Protocol suite must complete without failures, errors or skips')
+
+    def negative_control(name, source, needle, replacement, node, expected_failure):
+        shadow = scratch / (name + '-source')
+        shutil.copytree(backend / 'classroom_web', shadow / 'classroom_web')
+        target = shadow / 'classroom_web/asr_dashscope' / source
+        original = target.read_bytes()
+        before, after = needle.encode(), replacement.encode()
+        if original.count(before) != 1:
+            report['steps'].append(dict(name=name, exit_code=1,
+                validation_error='Expected exactly one matching mutation point in ' + source))
+            return
+        mutant = original.replace(before, after)
+        target.write_bytes(mutant)
+        env = dict(guarded, PYTHONPATH=os.pathsep.join((guarded['PYTHONPATH'], str(shadow), str(backend))))
+        result, step, cases = dashscope_pytest(name, str(suite / node), env)
+        step['mutation'] = dict(file=target.relative_to(shadow).as_posix(), node=node,
+            original_sha256=hashlib.sha256(original).hexdigest(),
+            mutant_sha256=hashlib.sha256(mutant).hexdigest(), before=needle, after=replacement,
+            expected_failure=expected_failure)
+        observed = cases[0].find('failure') if len(cases) == 1 else None
+        step['exit_code'] = int(result.returncode != 1 or observed is None
+            or step['summary'] != dict(tests_run=1, failures=1, errors=0, skipped=0)
+            or expected_failure not in (observed.get('message', '') + (observed.text or '')))
+        if step['exit_code']:
+            step['validation_error'] = 'Selected test must fail against the mutation for the expected reason'
+
+    negative_control('dashscope-mutant-task-id', 'wire.py',
+        'if uid(header.get("task_id")) != uid(provider_task_id):',
+        'if not uid(header.get("task_id")):',
+        'test_wire.py::test_task_identity_must_be_the_one_canonical_uuid_for_this_connection'
+        '[fb1b224a-c3bb-4504-9518-72a77b1190dc]', 'DID NOT RAISE')
+    negative_control('dashscope-mutant-real-mode', 'adapter.py',
+        "if config.get('mode', 'synthetic') != 'synthetic':", 'if False:',
+        'test_adapter.py::test_real_mode_rejected_before_connect_even_with_permit', 'DID NOT RAISE')
+
     binding = dict(head_sha=manifest['base_sha'], patch_sha256=manifest['source_zip_sha256'])
     for stage in ('candidate', 'trusted'):
         nonce = uuid.uuid4().hex
@@ -110,13 +183,13 @@ def main():
         counts.update({name: int(value) for name, value in
                        re.findall(r'(failures|errors|skipped)=(\d+)', outcome)})
         report['steps'][-1]['summary'] = counts
-    billing_test = root / 'web/backend/tests/integration/test_pr06a_billing_gate.py'
-    if not args.full and billing_test.is_file():
+    if not args.full:
         pg = Path('J:/class-assistant/worktrees/web-pr03b-sessions/work/pr03b/toolchains')
         pg = pg / 'pg17.11-win64-53b5364a5a04e8ec/runtime/Library/bin'
         run('billing-defaults', [sys.executable, '-I', '-X', 'utf8', '-B', 'tools/pr11a/run_tests.py',
             '--pg-bin', pg, '--suite', 'billing', '--test-target',
-            'tests/integration/test_pr06a_billing_gate.py'], timeout=300)
+            'tests/integration/test_pr06a_billing_gate.py', '--test-target',
+            'tests/integration/test_pr06a_dashscope_billing.py'], timeout=300)
     if args.full:
         run('backend', [sys.executable, '-I', '-X', 'utf8', '-B', 'tools/pr07b/run_combined.py',
                        '--root', root, '--auth-browser', '--deps', args.deps], timeout=2400)
