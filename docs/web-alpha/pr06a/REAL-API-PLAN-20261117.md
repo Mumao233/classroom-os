@@ -99,6 +99,6 @@ run-task 与 finish-task 共用 UUID task_id。结果句子身份及 partial/fin
 
 ## PR-06a 与 PR-06b 状态
 
-PR-06a 当前保持 `doing`。供应商 transport 等工程缺口与专项授权门禁均开放。本轮离线测试结果、Astra 结论和 CI 证据待主代理填入验收材料。
+PR-06a 当前保持 `doing`。供应商 transport 等工程缺口与专项授权门禁均开放。本轮模拟 34 项、可信断言 4 项及完整后端 1188 项通过，控制器仍有 1 项环境权限跳过。Astra 执行器完整性门禁失败，当前没有有效独审结论。CI 与各层测试证据已登记于验收材料。[验收记录](CLOSEOUT-20261117.md) · [审查记录](REVIEW-20261117.md)
 
 PR-06b 可参考冻结 Adapter、PCM、稳定版本与 unknown 语义。其正式实施还需要 06a 适配器与协议验证，以及 05b 采集持久化、02b 任务、11a 持续流计量接缝就绪。本计划没有启动 PR-06b。
