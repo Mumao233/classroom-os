@@ -798,6 +798,146 @@ def test_source_linked_mark_without_review_gets_revocation_event(sync_api):
     assert identity not in {item['object_id'] for item in a.client.get(BASE+'/sync/bootstrap').json()['projections']}
 
 
+@pytest.mark.parametrize('revocation', ['none', 'committed', 'concurrent'])
+def test_legacy_replay_never_substitutes_later_visible_revision(sync_api, revocation):
+    from classroom_web.infrastructure.qa_repository import PgQaRepository
+    from test_pr07b_versions import generate, output, prepare_review, REQUEST
+
+    a = sync_api
+    first_source, _, _, initial = generate(a.auth.pg, SimpleNamespace(a=a.owner), a)
+    document_id = UUID(initial['summary_document_id'])
+    first_candidate = initial['revision_ids'][0]
+    with a.auth.pg.db.transaction(a.owner) as tx:
+        original = PgReviewRepository(tx).document(document_id)
+        second_source = PgQaRepository(tx).add_source(a.classroom.id, kind='transcript_segment',
+            object_id=uuid4(), text='Independently revocable source', start_ms=6000, end_ms=8000)
+    request = dict(REQUEST, target_document_id=str(document_id), base_revision=original['revision'])
+    plan, task = prepare_review(a.auth.pg, a.owner, a, request=request)
+    aliases = {item['source_id']: item['alias'] for item in plan['source_snapshot']['items']}
+    assert set(aliases) == {str(first_source.source_id), str(second_source.source_id)}
+    structured = output(alias=aliases[str(second_source.source_id)], answer='Frozen historical candidate.')
+    op = operation(a, body_markdown='Historical local branch uses only source A.')
+    op.update(object_id=str(document_id), base_revision=original['revision'])
+    op['payload'].update(base_revision=original['revision'], base_content_revision_id=first_candidate)
+    key = UUID(op['op_id'])
+    with a.auth.pg.db.transaction(a.owner) as tx:
+        review = PgReviewRepository(tx)
+        candidate = review.publish(task, structured, UUID(plan['source_snapshot']['id']), request)
+        conflict = review.write_personal(document_id, op['payload'], key)
+        latest = review.write_personal(document_id, dict(op['payload'], base_revision=conflict['current_revision'],
+            draft_id=str(uuid4()), body_markdown='Later visible cloud uses source A.'), uuid4())
+    cloud_id = candidate['revision_ids'][0]
+    conflict_id = UUID(conflict['conflict_id'])
+    original_path = BASE + '/operations/' + str(key)
+    detail_path = BASE + '/sync/conflicts/' + str(conflict_id)
+    with a.auth.pg.admin.begin() as connection:
+        assert connection.scalar(sa.text('SELECT current_revision_id FROM review_conflicts WHERE id=:id'),
+                                  dict(id=conflict_id)) is None
+        # Model the pre-08b storage boundary. The actual 0013-to-0014 HTTPS gate
+        # exercises the same operations without this fixture-only removal.
+        connection.exec_driver_sql('ALTER TABLE sync_conflicts DISABLE TRIGGER sync_conflicts_immutable')
+        assert connection.execute(sa.text('DELETE FROM sync_conflicts WHERE id=:id'), dict(id=conflict_id)).rowcount == 1
+        connection.exec_driver_sql('ALTER TABLE sync_conflicts ENABLE TRIGGER sync_conflicts_immutable')
+    if revocation == 'committed':
+        with a.auth.pg.db.transaction(a.owner) as tx:
+            PgQaRepository(tx).revoke_source(second_source.source_id)
+    historical = a.client.get(BASE + '/review-revisions/' + cloud_id)
+    assert historical.status_code == (404 if revocation == 'committed' else 200)
+    for identity in (latest['id'], conflict['submitted_revision']['id']):
+        assert a.client.get(BASE + '/review-revisions/' + identity).status_code == 200
+    original_receipt = a.client.get(original_path, params=dict(operation='writePersonalRevision')).json()
+    assert original_receipt['conflict_id'] == str(conflict_id)
+    assert a.client.get(detail_path).status_code == 409
+
+    wrong_base = original['revision'] + 1
+    changed = dict(op, base_revision=wrong_base, payload=dict(op['payload'], base_revision=wrong_base))
+    assert batch(a, [changed]).status_code == 409
+    if revocation == 'concurrent':
+        revoker_ready, replay_ready, allow_commit = Event(), Event(), Event()
+        sessions = {}
+
+        def revoke():
+            with a.auth.pg.db.transaction(a.owner) as tx:
+                sessions['revoker'] = tx.connection.scalar(sa.text('SELECT pg_backend_pid()'))
+                PgQaRepository(tx).revoke_source(second_source.source_id)
+                revoker_ready.set()
+                assert allow_commit.wait(10)
+
+        def replay():
+            with a.auth.pg.db.transaction(a.owner) as tx:
+                sessions['replay'] = tx.connection.scalar(sa.text('SELECT pg_backend_pid()'))
+                replay_ready.set()
+                return PgSyncRepository(tx).apply(op)
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            revoker = pool.submit(revoke)
+            try:
+                assert revoker_ready.wait(5)
+                replayer = pool.submit(replay)
+                assert replay_ready.wait(5)
+                deadline = monotonic() + 4
+                while True:
+                    with a.auth.pg.admin.connect() as monitor:
+                        waits = monitor.scalar(sa.text('SELECT :revoker=ANY(pg_blocking_pids(:replay))'), sessions)
+                    if waits:
+                        break
+                    assert monotonic() < deadline, 'replay did not serialize with revocation'
+                    sleep(.01)
+            finally:
+                allow_commit.set()
+            revoker.result(timeout=10)
+            assert replayer.result(timeout=10)['conflict_id'] == str(conflict_id)
+    first = batch(a, [op])
+    assert first.status_code == 200, first.text
+    receipt_value = first.json()['receipts'][0]
+    assert receipt_value['status'] == 'conflict'
+    assert receipt_value['conflict_id'] == str(conflict_id)
+    assert receipt_value['request_sha256'] == _hash(op)
+    assert batch(a, [op]).json()['receipts'] == [receipt_value]
+    assert a.client.get(original_path, params=dict(operation='writePersonalRevision')).json() == original_receipt
+
+    detail = a.client.get(detail_path)
+    with a.auth.pg.admin.connect() as connection:
+        saved_id = connection.scalar(sa.text("SELECT server_content->>'id' FROM sync_conflicts WHERE id=:id"),
+                                     dict(id=conflict_id))
+        assert connection.scalar(sa.text('SELECT count(*) FROM review_conflicts WHERE document_id=:id'),
+                                 dict(id=document_id)) == 1
+    if revocation == 'none':
+        assert saved_id == cloud_id
+    else:
+        assert (saved_id, detail.status_code) == (None, 404)
+        # Re-expose only this synthetic source in the isolated database to
+        # prove access is checked afresh. Product revocation stays monotonic.
+        with a.auth.pg.admin.begin() as connection:
+            connection.exec_driver_sql('ALTER TABLE qa_sources DISABLE TRIGGER qa_source_guard')
+            connection.execute(sa.text('UPDATE qa_sources SET revoked_at=NULL WHERE id=:id'),
+                               dict(id=second_source.source_id))
+            connection.exec_driver_sql('ALTER TABLE qa_sources ENABLE TRIGGER qa_source_guard')
+        assert batch(a, [op]).json()['receipts'] == [receipt_value]
+        historical = a.client.get(BASE + '/review-revisions/' + cloud_id)
+        assert historical.status_code == 200
+        detail = a.client.get(detail_path)
+    assert detail.status_code == 200, detail.text
+    assert detail.json()['server_content'] == historical.json()
+    assert detail.json()['server_revision'] == conflict['current_revision']
+    assert detail.json()['local_operation'] == op
+    if revocation == 'none':
+        # Preserve the original identity even if a previous deployment had
+        # persisted the wrong comparison. That immutable row must stay hidden.
+        with a.auth.pg.admin.begin() as connection:
+            connection.exec_driver_sql('ALTER TABLE sync_conflicts DISABLE TRIGGER sync_conflicts_immutable')
+            connection.execute(sa.text('''UPDATE sync_conflicts SET server_content=CAST(:cloud AS jsonb)
+                WHERE id=:id'''), dict(cloud=json.dumps(latest), id=conflict_id))
+            connection.exec_driver_sql('ALTER TABLE sync_conflicts ENABLE TRIGGER sync_conflicts_immutable')
+        assert a.client.get(detail_path).status_code == 404
+        assert batch(a, [op]).json()['receipts'] == [receipt_value]
+    else:
+        with a.auth.pg.db.transaction(a.owner) as tx:
+            tx.tombstones.revoke(Resource.CLASS_SESSION, a.classroom.id, a.classroom.revision, 1)
+        assert a.client.get(detail_path).status_code == 404
+        assert batch(a, [op]).json()['receipts'][0]['status'] == 'deleted'
+
+
 def test_unadopted_multiple_candidates_freeze_actual_latest_cloud_candidate(sync_api):
     from test_pr07b_versions import generate,prepare_review,REQUEST,output
     a=sync_api

@@ -149,7 +149,10 @@ class PgSyncRepository:
         status = row['status']
         if status not in ('rejected', 'deleted'):
             try:
-                self.current(row['object_type'], row['object_id'])
+                if row['object_type'] == 'personal_revision' and status == 'conflict':
+                    self.review._conflict_dto(row['conflict_id'])
+                else:
+                    self.current(row['object_type'], row['object_id'])
             except (Gone, NotFound):
                 # A minimized known receipt proves the object belonged to this owner.
                 status = 'deleted'
@@ -164,9 +167,12 @@ class PgSyncRepository:
                     conflict_id=str(row['conflict_id']) if visible and row['conflict_id'] else None,
                     task_id=None, created_at=_stamp(row['created_at']))
 
-    def receipt(self, operation, key):
-        row = self.rows('''SELECT * FROM sync_operations WHERE owner_id=:owner
+    def _receipt_row(self, operation, key):
+        return self.rows('''SELECT * FROM sync_operations WHERE owner_id=:owner
             AND operation=:operation AND op_id=:key''', operation=operation, key=key).one_or_none()
+
+    def receipt(self, operation, key):
+        row = self._receipt_row(operation, key)
         if row is None:
             return self.legacy_receipt(operation,key)
         return self.receipt_dto(row)
@@ -233,15 +239,31 @@ class PgSyncRepository:
             raise QaRejected('VALIDATION_FAILED',422) from None
 
     def conflict(self, identity):
-        row = self.rows('SELECT * FROM sync_conflicts WHERE owner_id=:owner AND id=:id', id=identity).one_or_none()
-        if row is None:
-            legacy = self.rows('SELECT id FROM review_conflicts WHERE owner_id=:owner AND id=:id', id=identity).one_or_none()
-            if legacy:
+        reference = self.rows('''SELECT object_type,object_id,server_revision,server_content->>'id' AS cloud_id
+            FROM sync_conflicts WHERE owner_id=:owner AND id=:id''', id=identity).one_or_none()
+        if reference is None:
+            original = self.review._conflict_row(identity)
+            if original is not None:
+                synced = self.rows('''SELECT 1 FROM sync_operations WHERE owner_id=:owner AND conflict_id=:id
+                    LIMIT 1''', id=identity).first()
+                if synced and self.review._conflict_cloud(original) is None:
+                    raise NotFound('conflict unavailable')
                 raise QaRejected('INCOMPATIBLE_CLIENT', 409)
             raise NotFound('conflict unavailable')
-        self.current(row['object_type'], row['object_id'])
-        if row['object_type'] == 'personal_revision':
-            self.review._revision(UUID(row['server_content']['id']), row['object_id'])
+        if reference['object_type'] == 'personal_revision':
+            original = self.review._conflict_row(identity)
+            if (original is None or original['document_id'] != reference['object_id']
+                    or original['current_document_revision'] != reference['server_revision']):
+                raise NotFound('conflict unavailable')
+            self.review._revision(original['submitted_revision_id'], original['document_id'])
+            cloud = self.review._conflict_cloud(original)
+            if cloud is None or cloud['id'] != reference['cloud_id']:
+                raise NotFound('conflict unavailable')
+        else:
+            self.current(reference['object_type'], reference['object_id'])
+        row = self.rows('SELECT * FROM sync_conflicts WHERE owner_id=:owner AND id=:id', id=identity).one_or_none()
+        if row is None:
+            raise NotFound('conflict unavailable')
         resolved = self.rows('SELECT id FROM sync_resolutions WHERE owner_id=:owner AND conflict_id=:id', id=identity).one_or_none()
         return dict(id=str(identity), object_id=str(row['object_id']), base_revision=row['base_revision'],
                     server_revision=row['server_revision'], local_operation=row['local_operation'],
@@ -257,14 +279,38 @@ class PgSyncRepository:
             raise QaRejected('VALIDATION_FAILED', 422)
         digest = _hash(operation)
         old = self.tx.receipts.lock_and_get(operation_name, key, digest)
+        stored = None
         if old:
-            return self.receipt(operation_name, key)
-        self.validate_patch(kind,payload)
-        if kind=='personal_revision':
-            # Direct PR-07b writes acquire this before the document row.
+            if kind != 'personal_revision':
+                return self.receipt(operation_name, key)
+            stored = self._receipt_row(operation_name, key)
+            if stored is None:
+                return self.legacy_receipt(operation_name, key)
+            if stored['status'] != 'conflict':
+                return self.receipt_dto(stored)
+
+        original = None
+        if kind == 'personal_revision':
+            # The same owner lock serializes direct PR-07b writes. Check their
+            # receipt before considering any current cloud content.
             self.review._serialize()
+            _, original = self.review._personal_receipt(identity, payload, key)
+        historical_conflict = original is not None and original['resource_type'] == 'review_conflict'
+        if stored is not None:
+            if (historical_conflict and original['resource_id'] == stored['conflict_id']
+                    and not self.rows('SELECT 1 FROM sync_conflicts WHERE owner_id=:owner AND id=:id',
+                                      id=stored['conflict_id']).first()):
+                # A first replay may have recorded the receipt while its
+                # original comparison was unavailable. Retry only that backfill.
+                self.review.write_personal(identity, payload, key)
+            return self.receipt_dto(stored)
+
+        self.validate_patch(kind,payload)
         try:
-            revision, content, classroom = self.current(kind, identity, lock=True)
+            if historical_conflict:
+                classroom = self.review._document(identity, lock=True)['class_session_id']
+            else:
+                revision, content, classroom = self.current(kind, identity, lock=True)
         except Gone:
             return self.remember(operation_name, key, digest, kind, identity, None, 'deleted')
         except (NotFound, QaRejected) as error:
@@ -278,8 +324,6 @@ class PgSyncRepository:
             value = self.review.write_personal(identity, payload, key)
             updated = value['current_revision'] if 'conflict_id' in value else value['revision']+1
             conflict = UUID(value['conflict_id']) if 'conflict_id' in value else None
-            if conflict:
-                self.record_conflict(operation, updated, content, classroom, identity=conflict)
             return self.remember(operation_name, key, digest, kind, identity, updated,
                                  'conflict' if conflict else 'applied', conflict=conflict, classroom=classroom)
         if revision != operation['base_revision']:
@@ -315,6 +359,10 @@ class PgSyncRepository:
         old = self.tx.receipts.lock_and_get('resolveConflict', key, digest)
         if old:
             return self.receipt('resolveConflict', key)
+        if self.review._conflict_row(identity) is not None:
+            # Personal resolution can lock the document after taking source
+            # locks in conflict(). Serialize against direct Review writes first.
+            self.review._serialize()
         conflict = self.conflict(identity)
         operation = conflict['local_operation']
         kind, target = operation['object_type'], UUID(operation['object_id'])

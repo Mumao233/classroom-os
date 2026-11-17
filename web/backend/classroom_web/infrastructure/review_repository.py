@@ -332,8 +332,11 @@ class PgReviewRepository:
         self._remember('updateReviewDocument', op_id, digest, 'review_document', document_id, 200)
         return self._document_dto(updated)
 
+    def _conflict_row(self, identity):
+        return self._rows('SELECT * FROM review_conflicts WHERE owner_id=:owner AND id=:id', id=identity).one_or_none()
+
     def _conflict_dto(self, identity):
-        conflict = self._rows('SELECT * FROM review_conflicts WHERE owner_id=:owner AND id=:id', id=identity).one_or_none()
+        conflict = self._conflict_row(identity)
         if conflict is None:
             raise QaRejected('NOT_FOUND', 404)
         self._document(conflict['document_id'])
@@ -351,7 +354,7 @@ class PgReviewRepository:
         if current is None:
             return
         try:
-            return self.revision(current)
+            return self._revision_dto(self._revision(current, document_id))
         except QaRejected as error:
             if error.status!=404:
                 raise
@@ -359,16 +362,22 @@ class PgReviewRepository:
             # cannot be replaced with another visible candidate in sync metadata.
             return
 
+    def _conflict_cloud(self, conflict):
+        # The submitted branch advanced the CAS but did not change the cloud branch.
+        return self._sync_server_content(conflict['document_id'], conflict['current_revision_id'],
+                                         conflict['current_document_revision'] - 1)
+
     def _sync_conflict(self, identity, document_id, body, op_id, *, server_content=_SYNC_SERVER_UNREAD):
         # 07b can still be deployed at its own migration boundary. Once 08b is
         # present, an exact original request makes legacy conflict recovery safe.
         if self.connection.scalar(sql("SELECT to_regclass('public.sync_conflicts')")) is None:
             return
         from .sync_repository import PgSyncRepository
-        conflict = self._rows('SELECT * FROM review_conflicts WHERE owner_id=:owner AND id=:id', id=identity).one()
+        conflict = self._conflict_row(identity)
+        if conflict is None or conflict['document_id'] != document_id:
+            raise QaRejected('NOT_FOUND', 404)
         if server_content is _SYNC_SERVER_UNREAD:
-            server_content=self._sync_server_content(document_id,conflict['current_revision_id'],
-                                                     conflict['current_document_revision']-1)
+            server_content = self._conflict_cloud(conflict)
         if server_content is None:
             return
         document = self._document(document_id)
@@ -377,15 +386,20 @@ class PgReviewRepository:
         PgSyncRepository(self.tx).record_conflict(operation, conflict['current_document_revision'],
             server_content, document['class_session_id'], identity=identity)
 
+    def _personal_receipt(self, document_id, body, op_id):
+        digest = _hash(dict(document_id=str(document_id), body=body))
+        return digest, self.tx.receipts.lock_and_get('writePersonalRevision', op_id, digest)
+
     def write_personal(self, document_id, body, op_id):
         self._serialize()
         document = self._document(document_id, lock=True)
-        digest = _hash(dict(document_id=str(document_id), body=body))
-        old = self.tx.receipts.lock_and_get('writePersonalRevision', op_id, digest)
+        digest, old = self._personal_receipt(document_id, body, op_id)
         if old:
             if old['resource_type'] == 'review_conflict':
+                value = self._conflict_dto(old['resource_id'])
                 self._sync_conflict(old['resource_id'], document_id, body, op_id)
-            return self._conflict_dto(old['resource_id']) if old['resource_type']=='review_conflict' else self.revision(old['resource_id'])
+                return value
+            return self.revision(old['resource_id'])
         base = self._base(body)
         draft = self._uuid(body.get('draft_id'))
         content = self._text(body.get('body_markdown'), 120000)

@@ -8,7 +8,9 @@
 
 同步批次最多 50 个操作，HTTP 请求正文另有 8,000,000 bytes 的资源上限，超限返回 413 CAPACITY_EXCEEDED，调用方可保持每个原操作键并缩小批次。每个请求体指纹使用 UTF-8、按键排序、无额外空白、保留 Unicode 的规范 JSON。内层摘要覆盖完整 SyncOperation，resolve 摘要覆盖 conflict_id 与 body。
 
-`sync_conflicts` 保存冻结的 typed 本地操作与当时云端内容，`sync_resolutions` 追加用户决策。三张表的既有记录不可更新或删除。复习个人稿仍由 PR-07b 的不可变分支与文档 CAS 管理。新增直接个人稿写入同时保留精确冲突输入，历史冲突经原 op_id 与原请求体重交并验证原收据后可以补齐同步元数据。
+`sync_conflicts` 保存冻结的 typed 本地操作与当时云端内容，`sync_resolutions` 追加用户决策。三张表的既有记录不可更新或删除。复习个人稿仍由 PR-07b 的不可变分支与文档 CAS 管理。个人版本的同步冲突由 Review 仓库补写。补写使用原冲突的 `current_revision_id`；未选用个人稿或已采纳版本的旧冲突使用 CAS 递增前的文档历史快照确定当时的候选版本。
+
+旧操作重交先核对原收据指纹。历史比较暂时失权时保留原收据和冲突身份，详情按现有契约报告不可用。来源重新可读后，原请求可按同一身份补写缺失的元数据。读取详情会核对原提交分支授权、冻结的云端版本与 CAS。既有补充行与冻结引用不一致时隐藏该行，保留原始记录以供核查。
 
 冲突读取完整保留既有 ReviewRevision，包括生成候选的原 source_ids、structured_content 和 generation_task_id。main 的 PR-07b 来源别名为 S1 至 S512，使用 `tools/pr07b/contract_candidate.py::build(base)` 组合对应来源定义与生成任务导航。Sync 与 Review 的应用装配均要求既有 x-pr07b-candidate 标识，缺少 overlay 时在启动前明确拒绝。启用 Sync 时须同时注入已启用的 ReviewBrowser，供客户端通过既有精确文档与版本读取接口核验来源授权。
 
