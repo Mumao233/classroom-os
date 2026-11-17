@@ -104,3 +104,74 @@ class S3ObjectStore:
             return content
         except (ClientError, BotoCoreError, OSError):
             raise ObjectUnavailable('object read failed') from None
+
+    def _versions(self, key):
+        found, marker = [], {}
+        while True:
+            reply = self.client.list_object_versions(Bucket=self.bucket, Prefix=key, **marker)
+            for group in ('Versions', 'DeleteMarkers'):
+                found.extend(item.get('VersionId') for item in reply.get(group, []) if item['Key'] == key)
+            if not reply.get('IsTruncated'):
+                return found
+            marker = dict(KeyMarker=reply['NextKeyMarker'])
+            if reply.get('NextVersionIdMarker'):
+                marker['VersionIdMarker'] = reply['NextVersionIdMarker']
+
+    def erase(self, key):
+        """Delete all versions and delete markers of one key, then prove its absence."""
+        self._key(key)
+        try:
+            removed = 0
+            # A plain delete on a versioned bucket only adds a delete marker, so each
+            # listed version is removed by identity. Further passes cover a marker that
+            # an unversioned-style delete creates while an earlier pass runs.
+            for _ in range(3):
+                versions = self._versions(key)
+                for version in versions:
+                    remaining()
+                    if version is None:
+                        self.client.delete_object(Bucket=self.bucket, Key=key)
+                    else:
+                        try:
+                            self.client.delete_object(Bucket=self.bucket, Key=key, VersionId=version)
+                        except ClientError:
+                            # Some stores list the single copy in an unversioned bucket
+                            # as 'null' but reject that identifier on delete.
+                            if version != 'null':
+                                raise
+                            self.client.delete_object(Bucket=self.bucket, Key=key)
+                    removed += 1
+                if not versions:
+                    break
+            if self._versions(key):
+                raise ObjectUnavailable('object versions remain')
+        except (ClientError, BotoCoreError, KeyError):
+            raise ObjectUnavailable('object deletion failed') from None
+        if self.inspect(key) is not None:
+            raise ObjectUnavailable('object remains readable')
+        return removed
+
+    def keys(self, after=None, limit=500):
+        if not 1 <= limit <= 1000 or (after is not None and not after.startswith('media/')):
+            raise ValueError('invalid object listing bounds')
+        # Listed by version: a key whose latest version is a delete marker still
+        # holds older bytes and never appears in a plain object listing.
+        found, marker = {}, dict(KeyMarker=after) if after else {}
+        try:
+            while True:
+                remaining()
+                reply = self.client.list_object_versions(Bucket=self.bucket, Prefix='media/', MaxKeys=limit, **marker)
+                for group in ('Versions', 'DeleteMarkers'):
+                    for item in reply.get(group, []):
+                        known = found.get(item['Key'])
+                        found[item['Key']] = item['LastModified'] if known is None else max(known, item['LastModified'])
+                if not reply.get('IsTruncated') or len(found) > limit:
+                    break
+                marker = dict(KeyMarker=reply['NextKeyMarker'])
+                if reply.get('NextVersionIdMarker'):
+                    marker['VersionIdMarker'] = reply['NextVersionIdMarker']
+            # The last key of a truncated page may be incomplete; the caller resumes after
+            # the final key returned, and erase() enumerates every version of a key itself.
+            return sorted(found.items())[:limit]
+        except (ClientError, BotoCoreError, KeyError):
+            raise ObjectUnavailable('object listing failed') from None

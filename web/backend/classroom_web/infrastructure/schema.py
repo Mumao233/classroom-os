@@ -128,7 +128,7 @@ deletion_requests = sa.Table("deletion_requests", metadata, *_base(owner=True),
     sa.Column("completed_at", sa.DateTime(timezone=True)),
     sa.Column("last_error_code", sa.Text),
     sa.CheckConstraint("state IN ('access_revoked','pending','failed','complete')", name="state"),
-    sa.CheckConstraint("scope_type IN ('semester','course','class_session','account','course_material_version')",
+    sa.CheckConstraint("scope_type IN ('semester','course','class_session','account','course_material_version','media_asset','audio')",
                        name="scope_type"),
 )
 

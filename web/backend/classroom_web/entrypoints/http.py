@@ -68,7 +68,7 @@ def failure(error,request_id):
         headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'})
 
 
-def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admission=None,cache=None,media=None,media_spool_directory=None,billing=None,billing_admin=None,qa=None,review=None):
+def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admission=None,cache=None,media=None,media_spool_directory=None,billing=None,billing_admin=None,qa=None,review=None,deletion=None):
     parsed=urlsplit(origin)
     if parsed.scheme!='https' or not parsed.netloc or parsed.path or parsed.query or parsed.fragment or parsed.username:raise ValueError('one exact HTTPS origin is required')
     if contract.get('info',{}).get('version')!='0.2.0':raise ValueError('approved contract 0.2.0 required')
@@ -134,7 +134,12 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
            '/me/sessions':lambda c,p:auth.list_contexts(c,'sessions',p.get('cursor'),p.get('limit')),
            '/me/devices':lambda c,p:auth.list_contexts(c,'devices',p.get('cursor'),p.get('limit'))}
 
+    deletion_routes={}
+    if deletion is not None:
+        from ..application.deletion import ROUTES as deletion_routes
+
     def dispatch(path,ctx,body,key,params,method,operation_id):
+        if path in deletion_routes:return deletion.handle(path,method,ctx,body,key,params)
         if path in review_paths:
             return review.dispatch(operation_id,ctx,body,key,params,billing_fallback=billing)
         if path in qa_paths:
@@ -195,6 +200,7 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
     selected.update(review_paths)
     if billing is not None:selected.update(('/me/quota','/tasks/{task_id}/cancel'))
     if billing_admin is not None:selected.update(('/admin/switches','/admin/usage','/admin/quota-adjustments','/admin/users/{user_id}/quota'))
+    selected.update(deletion_routes)
     if cache is not None:
         selected.add('/me/cache-unlock')
         if cache.allow_recovery and contract.get('x-pr05a-candidate') is True:
@@ -249,7 +255,7 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
                             if not 1 <= len(value) <= 512:
                                 raise AuthRejected('VALIDATION_FAILED', 422)
                             params[name] = value
-                if path in ('/me/quota','/admin/switches','/admin/users/{user_id}/quota') and method=='get' and request.url.query:
+                if (path in ('/me/quota','/admin/switches','/admin/users/{user_id}/quota') or path in deletion_routes) and method=='get' and request.url.query:
                     raise AuthRejected('VALIDATION_FAILED',422)
                 if path=='/admin/usage':
                     pairs=list(request.query_params.multi_items())
@@ -319,6 +325,11 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
                     or (path=='/admin/switches' and method=='patch' and billing_admin is not None)
                     or (path in review_paths and method=='patch')):
                 app.add_api_route(PREFIX+path,endpoint(path,method,operation),methods=[method.upper()])
+
+    if deletion is not None:
+        # Covers every API route, including media and the event socket.
+        from .deletion_http import DeletionGate
+        app.add_middleware(DeletionGate,deletion=deletion,failure=failure,prefix=PREFIX)
 
     if media is not None:
         from .media_http import register_media

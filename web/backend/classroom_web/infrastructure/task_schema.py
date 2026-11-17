@@ -25,7 +25,7 @@ operation_receipts = sa.Table("operation_receipts", metadata, *_base(owner=True)
     sa.CheckConstraint("request_hash ~ '^[0-9a-f]{64}$'", name="hash"),
     sa.CheckConstraint("char_length(operation) BETWEEN 1 AND 100", name="operation"),
     sa.CheckConstraint("response_status BETWEEN 100 AND 599", name="response_status"),
-    sa.CheckConstraint("resource_type IN ('task','semester','course','class_session','course_material_version','media_asset','media_upload','generation_plan','question','review_document','review_revision','review_conflict')",
+    sa.CheckConstraint("resource_type IN ('task','semester','course','class_session','course_material_version','media_asset','media_upload','generation_plan','question','review_document','review_revision','review_conflict','deletion_request')",
                        name="resource_type"),
     sa.CheckConstraint("jsonb_typeof(response_body) = 'object' AND pg_column_size(response_body) <= 4096",
                        name="bounded_response"),
