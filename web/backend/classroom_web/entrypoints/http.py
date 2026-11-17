@@ -68,7 +68,7 @@ def failure(error,request_id):
         headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'})
 
 
-def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admission=None,cache=None,media=None,media_spool_directory=None,billing=None,billing_admin=None,qa=None,review=None,deletion=None,capture=None):
+def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admission=None,cache=None,media=None,media_spool_directory=None,billing=None,billing_admin=None,qa=None,review=None,deletion=None,capture=None,sync=None):
     parsed=urlsplit(origin)
     if parsed.scheme!='https' or not parsed.netloc or parsed.path or parsed.query or parsed.fragment or parsed.username:raise ValueError('one exact HTTPS origin is required')
     if contract.get('info',{}).get('version') not in ('0.2.0','0.2.1'):raise ValueError('approved contract 0.2.0 or 0.2.1 required')
@@ -78,6 +78,8 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
         raise ValueError('QA requires its explicit PR-07a contract candidate')
     if review is not None and contract.get('x-pr07b-candidate') != 'pr07b-1':
         raise ValueError('Review requires its explicit PR-07b contract candidate')
+    if sync is not None and contract.get('x-pr07b-candidate') != 'pr07b-1':
+        raise ValueError('Sync requires the existing PR-07b contract candidate for exact Review conflicts')
     qa_paths = {
         '/class-sessions/{class_session_id}/generation-plans',
         '/generation-plans/{plan_id}', '/generation-plans/{plan_id}/execute',
@@ -91,6 +93,8 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
         '/review-documents/{document_id}/adopt', '/review-revisions/{revision_id}',
         '/tasks/{task_id}/raw-output',
     } if review is not None else set()
+    from ..application.sync_browser import SYNC_PATHS
+    sync_paths = SYNC_PATHS if sync is not None else set()
     if billing_admin is not None:
         if auth.admin_reauth is not None and auth.admin_reauth is not billing_admin:
             raise ValueError('an existing admin reauth delegate must be coordinated')
@@ -120,12 +124,19 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
         if review is not None and (request.url.path == PREFIX+'/review-documents'
                 or re.fullmatch(re.escape(PREFIX)+r'/review-documents/[0-9a-fA-F-]{36}/personal-revisions', request.url.path)):
             limit=2_000_000
+        if sync is not None and (request.url.path == PREFIX+'/sync/operations'
+                or re.fullmatch(re.escape(PREFIX)+r'/sync/conflicts/[0-9a-fA-F-]{36}/resolve', request.url.path)):
+            limit=8_000_000
+        capacity_limited = limit == 8_000_000
         length=request.headers.get('content-length')
-        if length is not None and (not length.isdecimal() or int(length)>limit):raise AuthRejected('VALIDATION_FAILED',422)
+        if length is not None and not length.isdecimal():raise AuthRejected('VALIDATION_FAILED',422)
+        if length is not None and int(length)>limit:
+            raise AuthRejected('CAPACITY_EXCEEDED' if capacity_limited else 'VALIDATION_FAILED',413 if capacity_limited else 422)
         data=bytearray()
         async for chunk in request.stream():
             data.extend(chunk)
-            if len(data)>limit:raise AuthRejected('VALIDATION_FAILED',422)
+            if len(data)>limit:
+                raise AuthRejected('CAPACITY_EXCEEDED' if capacity_limited else 'VALIDATION_FAILED',413 if capacity_limited else 422)
         result=strict_json(bytes(data));check(schema,result);return result
 
     changes={'/auth/logout-all':'logoutAll','/auth/password/change':'changePassword','/auth/email/change':'requestEmailChange',
@@ -139,6 +150,7 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
         from ..application.deletion import ROUTES as deletion_routes
 
     def dispatch(path,ctx,body,key,params,method,operation_id):
+        if path in sync_paths:return sync.dispatch(operation_id,ctx,body,key,params)
         if path in deletion_routes:return deletion.handle(path,method,ctx,body,key,params)
         if path in review_paths:
             return review.dispatch(operation_id,ctx,body,key,params,billing_fallback=billing)
@@ -200,6 +212,7 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
     if business is not None:selected.add('/courses/{course_id}')
     selected.update(qa_paths)
     selected.update(review_paths)
+    selected.update(sync_paths)
     if billing is not None:selected.update(('/me/quota','/tasks/{task_id}/cancel'))
     if billing_admin is not None:selected.update(('/admin/switches','/admin/usage','/admin/quota-adjustments','/admin/users/{user_id}/quota'))
     selected.update(deletion_routes)
@@ -216,7 +229,7 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
             entered=time.monotonic();deadline=entered+5;deadline_token=DEADLINE.set(deadline);dispatched=False
             try:
                 secure(request,write=method!='get');ctx=request_context(request);key=None;body={};params=dict(request.path_params)
-                if path in review_paths and method == 'get':
+                if (path in review_paths or path in sync_paths) and method == 'get':
                     query_schemas = {item['name']: item['schema'] for item in operation.get('parameters', [])
                                      if item.get('in') == 'query'}
                     pairs = list(request.query_params.multi_items())
@@ -236,6 +249,11 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
                             value = value == 'true'
                         check(query_schema, value)
                         params[name] = value
+                    for name, query_schema in query_schemas.items():
+                        required = next(item.get('required', False) for item in operation.get('parameters', [])
+                                        if item.get('in') == 'query' and item['name'] == name)
+                        if required and name not in params:
+                            raise AuthRejected('VALIDATION_FAILED', 422)
                 if path in qa_paths and method == 'get':
                     pairs = list(request.query_params.multi_items())
                     allowed = {'class_session_id', 'cursor', 'limit'} if path == '/questions' else set()
@@ -325,7 +343,8 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
         for method,operation in contract['paths'][path].items():
             if (method in ('get','post')
                     or (path=='/admin/switches' and method=='patch' and billing_admin is not None)
-                    or (path in review_paths and method=='patch')):
+                    or (path in review_paths and method=='patch')
+                    or (path in sync_paths and method=='patch')):
                 app.add_api_route(PREFIX+path,endpoint(path,method,operation),methods=[method.upper()])
 
     if deletion is not None:

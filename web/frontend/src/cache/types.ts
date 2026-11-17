@@ -7,7 +7,11 @@ export type AudioReceipt = components['schemas']['AudioChunkReceipt'];
 
 export type CacheIdentity = { ownerId: string; deviceId: string; sessionId: string };
 export type CacheAncestry = { semesterId: string | null; courseId: string | null; classSessionId: string | null };
-export type CacheReference = { scope: CacheScope; objectId: string; revision: number; generation: number };
+export type CacheReference = {
+  scope: CacheScope; objectId: string; revision: number; generation: number;
+  /** PR-08b binds a learning object's domain type into its authenticated header. */
+  objectType?: string;
+};
 export type CacheWrite = CacheReference & {
   ancestry: CacheAncestry;
   /** Required for drafts. Stable across transport retries of this generation. */

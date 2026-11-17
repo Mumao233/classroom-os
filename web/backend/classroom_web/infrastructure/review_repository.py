@@ -337,12 +337,45 @@ class PgReviewRepository:
         return dict(conflict_id=str(conflict['id']), current_revision=conflict['current_document_revision'],
                     submitted_revision=self.revision(conflict['submitted_revision_id']))
 
+    def _sync_conflict(self, identity, document_id, body, op_id):
+        # 07b can still be deployed at its own migration boundary. Once 08b is
+        # present, an exact original request makes legacy conflict recovery safe.
+        if self.connection.scalar(sql("SELECT to_regclass('public.sync_conflicts')")) is None:
+            return
+        from .sync_repository import PgSyncRepository
+        conflict = self._rows('SELECT * FROM review_conflicts WHERE owner_id=:owner AND id=:id', id=identity).one()
+        current = conflict['current_revision_id']
+        if current is None:
+            history = self._rows('''SELECT projection FROM review_document_history WHERE owner_id=:owner
+                AND document_id=:document AND revision=:revision''',document=document_id,
+                revision=conflict['current_document_revision']-1).one_or_none()
+            if history:
+                candidates=history['projection']['candidate_revision_ids']
+                current=self._uuid(candidates[-1]) if candidates else None
+        if current is None:
+            return
+        try:
+            server=self.revision(current)
+        except QaRejected as error:
+            if error.status!=404:
+                raise
+            # Keep the original 07b branch. A hidden historical cloud version
+            # cannot be replaced with another visible candidate in sync metadata.
+            return
+        document = self._document(document_id)
+        operation = dict(op_id=str(op_id), object_type='personal_revision', object_id=str(document_id),
+                         draft_id=body['draft_id'], base_revision=body['base_revision'], payload=body)
+        PgSyncRepository(self.tx).record_conflict(operation, conflict['current_document_revision'],
+            server, document['class_session_id'], identity=identity)
+
     def write_personal(self, document_id, body, op_id):
         self._serialize()
         document = self._document(document_id, lock=True)
         digest = _hash(dict(document_id=str(document_id), body=body))
         old = self.tx.receipts.lock_and_get('writePersonalRevision', op_id, digest)
         if old:
+            if old['resource_type'] == 'review_conflict':
+                self._sync_conflict(old['resource_id'], document_id, body, op_id)
             return self._conflict_dto(old['resource_id']) if old['resource_type']=='review_conflict' else self.revision(old['resource_id'])
         base = self._base(body)
         draft = self._uuid(body.get('draft_id'))
@@ -362,6 +395,7 @@ class PgReviewRepository:
                 current_revision_id,current_document_revision) VALUES(:id,:owner,:document,:submitted,:current,:revision)''',
                 id=identity, document=document_id, submitted=revision['id'], current=current_id, revision=document['revision'])
             self._remember('writePersonalRevision', op_id, digest, 'review_conflict', identity, 409)
+            self._sync_conflict(identity, document_id, body, op_id)
             return self._conflict_dto(identity)
         self._advance(document, latest_personal_revision_id=revision['id'])
         self._remember('writePersonalRevision', op_id, digest, 'review_revision', revision['id'], 201)

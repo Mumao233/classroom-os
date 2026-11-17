@@ -73,14 +73,17 @@ def test_revoked_frozen_source_blocks_enqueue_even_after_classroom_move(
     source = moved_source(task_db, owners.a, tree)
     with task_db.transaction(owners.a) as tx:
         revoke_source(tx, owners.a, source, target)
+    events_before = persisted(pg, 'outbox_events', owner_id=owners.a.owner_id)
+    counters_before = persisted(pg, 'owner_event_counters', owner_id=owners.a.owner_id)
     provider = MockProvider()
     with pytest.raises(Gone):
         enqueue_source(task_db, owners.a, source, explicit)
     assert worker(task_db, scheduler, provider).run_once() is False
     assert provider.calls == 0
-    for name in ('tasks', 'task_attempts', 'provider_results', 'operation_receipts',
-                 'owner_event_counters', 'outbox_events'):
+    for name in ('tasks', 'task_attempts', 'provider_results', 'operation_receipts'):
         assert persisted(pg, name, owner_id=owners.a.owner_id) == []
+    assert persisted(pg, 'owner_event_counters', owner_id=owners.a.owner_id) == counters_before
+    assert persisted(pg, 'outbox_events', owner_id=owners.a.owner_id) == events_before
 
 
 @pytest.mark.parametrize('explicit', [False, True], ids=['omitted', 'explicit'])

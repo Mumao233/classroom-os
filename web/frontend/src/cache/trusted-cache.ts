@@ -1,4 +1,5 @@
 import canonicalize from 'canonicalize';
+import type { components } from '../generated/openapi';
 import { cacheTransaction, DATABASE_NAME, deleteCacheRecord, putCacheRecord } from './indexed-db';
 import { CacheError, LEARNING_LIMITS, namespaceOf, recordId } from './types';
 import type {
@@ -303,6 +304,7 @@ export class TrustedCache extends EventTarget {
         const value = request.result as CipherRecord | undefined;
         if (!value) { done(null); return; }
         this.guard(tx, auth, value.header, () => {
+          if (snapshot.objectType && snapshot.objectType !== value.header.objectType) { fail(new CacheError('REVISION_CONFLICT')); return; }
           if (value.header.scope === 'learning' && Date.now() - value.header.verifiedAt! >= LEARNING_LIMITS.ageMs) {
             if (mode === 'readwrite') deleteCacheRecord(tx, value.id);
             done(null); return;
@@ -374,7 +376,8 @@ export class TrustedCache extends EventTarget {
     this.check(auth);
   }
 
-  async applyDeletion(notice: DeletionNotice): Promise<void> {
+  async applyDeletion(notice: DeletionNotice, options: { retainDrafts?: boolean } = {}): Promise<void> {
+    const retainDrafts = options.retainDrafts === true;
     this.enabled();
     const identity = this.identity;
     if (!identity || !notice.object_id || !notice.deletion_id) throw new CacheError('INVALID_INPUT');
@@ -390,12 +393,50 @@ export class TrustedCache extends EventTarget {
       const request = tx.objectStore('metadata').index('namespace').getAll(namespace);
       request.onsuccess = () => {
         for (const record of request.result as CacheMetadata[]) {
-          if (this.matchesDeletion(record.header, tombstone)) deleteCacheRecord(tx, record.id);
+          if (this.matchesDeletion(record.header, tombstone) && !(retainDrafts && record.header.scope === 'drafts')) deleteCacheRecord(tx, record.id);
         }
         done();
       };
     }));
     return this.barrier;
+  }
+
+  /** Complete server metadata can invalidate replaceable learning copies before key release. */
+  async reconcileLearning(projections: components['schemas']['BootstrapProjection'][], options: { preserveKeys?: boolean } = {}): Promise<void> {
+    this.enabled();
+    const identity = this.identity;
+    if (!identity) throw new CacheError('LOCKED');
+    const namespace = namespaceOf(identity);
+    const available = new Map(projections.map(value => [value.object_id, structuredClone(value)]));
+    if (!options.preserveKeys) this.lock();
+    this.barrier = this.barrier.then(() => cacheTransaction<void>(this.databaseName, 'readwrite', (tx, done) => {
+      const request = tx.objectStore('metadata').index('pool').getAll([namespace, 'learning']);
+      request.onsuccess = () => {
+        for (const record of request.result as CacheMetadata[]) {
+          const projection = available.get(record.header.objectId);
+          const ancestry = record.header.ancestry;
+          // Source fragments, media and unrecognized cache identifiers require fresh authorized hydration.
+          const current = projection && projection.object_type === record.header.objectType && projection.revision === record.header.revision
+            && (!ancestry.semesterId || available.get(ancestry.semesterId)?.object_type === 'semester')
+            && (!ancestry.courseId || available.get(ancestry.courseId)?.object_type === 'course')
+            && (!ancestry.classSessionId || available.get(ancestry.classSessionId)?.object_type === 'class_session');
+          if (!current) deleteCacheRecord(tx, record.id);
+        }
+        done();
+      };
+    }));
+    return this.barrier;
+  }
+
+  /** Routing metadata only. Revoked unique drafts remain encrypted and can be reported as restricted. */
+  async pendingDraftReferences(): Promise<CacheWrite[]> {
+    const auth = this.authorized('drafts', null);
+    const references = await cacheTransaction<CacheWrite[]>(this.databaseName, 'readonly', (tx, done) => {
+      const request = tx.objectStore('metadata').index('pool').getAll([auth.namespace, 'drafts']);
+      request.onsuccess = () => done((request.result as CacheMetadata[]).map(value => structuredClone(value.header)));
+    }, this.track);
+    this.check(auth);
+    return references;
   }
 
   /** Explicit confirmed clearing affects only the bound account/device, retaining its invalidation barrier. */
