@@ -161,7 +161,7 @@ def main():
         '    def _accept(self, event):\n        if self._state in _TERMINAL:\n            return\n',
         '    def _accept(self, event):\n',
         'test_adapter.py::test_ready_reader_cannot_change_a_closed_stream_or_append_after_terminal'
-        '[result-generated]', 'asr.final_candidate')
+        '[result-generated]', 'post-terminal transcript escaped')
 
     binding = dict(head_sha=manifest['base_sha'], patch_sha256=manifest['source_zip_sha256'])
     for stage in ('candidate', 'trusted'):

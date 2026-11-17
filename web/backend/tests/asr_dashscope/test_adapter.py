@@ -581,7 +581,9 @@ async def test_ready_reader_cannot_change_a_closed_stream_or_append_after_termin
     peer.feed_json(wire(cfg, late_kind) if late_kind == 'task-failed'
                    else result(cfg, end=5, final=True, usage=usage(5, 1)))
     await adapter.aclose()
-    assert [event['type'] for event in adapter.events()] == ['asr.started', 'asr.terminal']
+    observed = adapter.events()
+    assert not just(observed, 'asr.final_candidate'), 'post-terminal transcript escaped'
+    assert [event['type'] for event in observed] == ['asr.started', 'asr.terminal']
     assert adapter.state == 'unknown' and adapter.usage is None
     assert peer.close_count == 1
     assert_clean(peer)
