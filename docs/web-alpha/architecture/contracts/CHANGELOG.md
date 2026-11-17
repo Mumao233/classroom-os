@@ -1,5 +1,15 @@
 # Classroom OS契约变更记录
 
+## 0.2.1 · 2026-11-17 · PR-05b / PR-08a 缓存解锁接入
+
+主控决定 B08A-003 经 Astra 审查，负责人林珈诚。AUTH-05/06、DATA-03/04、REC-02/03。API 前缀继续为 `/api/web/v1`。
+
+- `ReauthOperation` 新增 `unlockCache`，目标为当前设备，未来操作键与精确 `CacheUnlockRequest` 共同绑定。`/me/cache-unlock` 引用既有 `ReauthToken` header 并登记再认证策略。
+- `CacheUnlockRequest`、`CacheUnlockResult` 结构沿用已有定义。秘密响应 `no-store`，内存持钥，授权与策略期限取交集。服务和数据库策略初始关闭。
+- Meta、生成类型及合成 fixture 的版本元数据同步为 0.2.1。PR-07a/07b 候选构建接受 0.2.0/0.2.1，原用例保留。05a overlay 对已存在的同形 unlock 分支复用，历史恢复继续由候选入口隔离。
+- 生产者由 0011_cache_keys 增量迁移及既有 CacheKeyService 承接，消费者由 PR-08a AuthClient adapter 接入。旧客户端可继续调用既有操作，新增解锁需匹配新契约。WebSocket 与身份控制协议结构沿用现版本。
+- 本次没有产品窗口数值批准。TBD-03、录音授权、真实原音与生产启用继续受各自门禁约束。验证记录分别随两个工作包交付。
+
 ## 0.2.0 · 2026-11-06 · PR-03b S2 独立交审候选
 
 S1 已独立 APPROVE，用户授权本轮正式契约及实现门禁修改；**本条是规范候选，尚待S2独审，非实现/启用/发布批准**。D01–D03 CLOSED仅设计层，TBD-08 OPEN，条件风险未生效。AUTH-01/03/04为主体，AUTH-05/06保留权限及撤销，AUTH-02/07/08归属不扩。

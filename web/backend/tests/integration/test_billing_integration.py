@@ -534,6 +534,7 @@ def test_expired_admin_proof_changes_no_switches(fee_api):
 def test_composed_media_and_billing_migration_candidate(pg,tmp_path):
     import shutil
     from alembic import command
+    from alembic.script import ScriptDirectory
     from conftest import migration_config
     from classroom_web.infrastructure.database import Database
     name='pr02a_fee_composed_'+uuid4().hex[:24]
@@ -541,9 +542,12 @@ def test_composed_media_and_billing_migration_candidate(pg,tmp_path):
     admin=database=None
     migrations=tmp_path/'migrations'
     shutil.copytree(ROOT/'web/backend/migrations',migrations)
+    base_config=migration_config(pg.admin_url.render_as_string(hide_password=False),migrations)
+    heads=ScriptDirectory.from_config(base_config).get_heads()
+    assert len(heads)==1
     candidate=migrations/'versions/pr11a_review_candidate.py'
     candidate.write_text("from alembic import op\nfrom classroom_web.infrastructure.billing_schema import candidate_ddl,integration_ddl\n"
-        "revision='pr11a_review_candidate'\ndown_revision='0010_deletion_lifecycle'\nbranch_labels=None\ndepends_on=None\n"
+        f"revision='pr11a_review_candidate'\ndown_revision={heads[0]!r}\nbranch_labels=None\ndepends_on=None\n"
         "def upgrade():\n    op.get_bind().execution_options(no_parameters=True).exec_driver_sql(candidate_ddl()+integration_ddl())\n"
         "def downgrade():\n    raise RuntimeError('preserve billing history')\n",encoding='utf-8')
     try:

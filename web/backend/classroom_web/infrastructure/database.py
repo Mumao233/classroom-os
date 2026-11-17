@@ -68,7 +68,9 @@ class Database:
                       'identity_audit','identity_events','cache_keys','media_assets','media_uploads','media_tickets',
                       'qa_sources','qa_source_versions','source_snapshots','source_items','generation_plans','questions',
                       'review_batches','review_documents','review_revisions','review_document_history','review_conflicts',
-                      'deletion_assets','deletion_executions','retention_policies','restore_task_quarantine')
+                      'deletion_assets','deletion_executions','retention_policies','restore_task_quarantine',
+                      'capture_policy','consent_records','capture_epochs','capture_leases','capture_gaps',
+                      'audio_chunks','capture_epoch_state','capture_recovery_grants','audio_chunk_state')
                     AND pg_has_role(current_user, c.relowner, 'USAGE')
                 ) FROM pg_roles r WHERE r.rolname=current_user
             """))

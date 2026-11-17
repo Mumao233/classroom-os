@@ -35,7 +35,8 @@ def pg():
 @pytest.fixture(scope="module")
 def cache_schema(pg):
     with pg.admin.begin() as connection:
-        connection.exec_driver_sql(candidate_sql(ROOT), execution_options={"no_parameters": True})
+        if connection.scalar(sa.text("SELECT to_regclass('public.cache_keys')")) is None:
+            connection.exec_driver_sql(candidate_sql(ROOT), execution_options={"no_parameters": True})
     yield
 
 
@@ -110,6 +111,55 @@ def test_default_service_and_database_gates_are_closed(cache):
     with cache.a.pg.admin.begin() as connection:
         connection.execute(sa.text("UPDATE identity_control.cache_policy SET enabled=false"))
     assert unlock(cache, body, {"Idempotency-Key": str(uuid4()), "X-Reauth-Token": "A" * 43}).status_code == 503
+
+
+def test_cache_reauth_rechecks_verified_expiry_after_policy_lock(cache):
+    from concurrent.futures import ThreadPoolExecutor
+    import time
+
+    original = cache.a.repository.call
+    observed = []
+
+    def waiting_call(operation, payload, **options):
+        if operation != 'issue_reauth':
+            return original(operation, payload, **options)
+        with cache.a.pg.admin.begin() as connection:
+            connection.execute(sa.text("""UPDATE auth_challenges
+                SET expires_at=clock_timestamp()+interval '150 milliseconds'
+                WHERE token_hash=:hash"""), {'hash': payload['proof_hash']})
+        with cache.a.pg.admin.connect() as lock, ThreadPoolExecutor(max_workers=1) as executor:
+            transaction = lock.begin()
+            lock.execute(sa.text('SELECT singleton FROM identity_control.cache_policy FOR UPDATE'))
+            future = executor.submit(original, operation, payload, **options)
+            try:
+                deadline = time.monotonic() + 0.3
+                while time.monotonic() < deadline:
+                    with cache.a.pg.admin.connect() as probe:
+                        blocked = probe.scalar(sa.text("""SELECT count(*) FROM pg_stat_activity
+                            WHERE datname=current_database() AND wait_event_type='Lock'
+                            AND query LIKE 'SELECT identity_api.issue_reauth(%'"""))
+                    if blocked:
+                        observed.append(True)
+                        break
+                    time.sleep(0.005)
+                time.sleep(0.18)
+            finally:
+                transaction.rollback()
+            return future.result(timeout=2)
+
+    cache.a.repository.call = waiting_call
+    body = request_body(cache)
+    operation = dict(purpose='unlockCache', target=dict(kind='device', id=body['device_id']),
+                     candidate_parameters=dict(idempotency_key=str(uuid4()), body=body))
+    try:
+        response = post(cache.a, '/auth/reauth', dict(password=PASSWORD, operation=operation),
+                        cache.session['csrf_token'])
+    finally:
+        cache.a.repository.call = original
+    assert observed and response.status_code == 401
+    with cache.a.pg.admin.connect() as connection:
+        assert connection.scalar(sa.text("SELECT count(*) FROM reauth_proofs WHERE owner_id=:owner"),
+                                 {'owner': cache.a.uid}) == 0
 
 
 def test_candidate_schema_positive_and_negative_fixtures(cache):

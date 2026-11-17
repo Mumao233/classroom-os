@@ -3,7 +3,7 @@
   "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
   "info": {
     "title": "Classroom OS Web Alpha API",
-    "version": "0.2.0",
+    "version": "0.2.1",
     "description": "PR-03b S2 review candidate; not an implemented or approved service. API prefix remains /api/web/v1. S1 approves experimental inputs only; production parameters, implementation, real enrollment and deployment remain gated. Private and secret responses are no-store; business ownership, unknown-charge and existing idempotency/secret-replay semantics remain in force."
   },
   "servers": [
@@ -2335,6 +2335,9 @@
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
+          },
+          {
+            "$ref": "#/components/parameters/ReauthToken"
           }
         ],
         "requestBody": {
@@ -2347,7 +2350,13 @@
             }
           }
         },
-        "x-replay-policy": "reauthorize-and-reissue"
+        "x-replay-policy": "reauthorize-and-reissue",
+        "x-requires-reauth": true,
+        "x-reauth-policy": {
+          "purpose": "unlockCache",
+          "binding": "Current session and device, key epoch, exact request body and future Idempotency-Key. Single-use server-keyed commitment.",
+          "windows": "Explicit approved cache policy bounded by the current reauthentication and session deadlines. Default disabled."
+        }
       }
     },
     "/me/deletion-preview": {
@@ -10082,7 +10091,7 @@
             "maxLength": 64
           },
           "contract_version": {
-            "const": "0.2.0"
+            "const": "0.2.1"
           },
           "server_time": {
             "type": "string",
@@ -17590,6 +17599,56 @@
             ],
             "additionalProperties": false,
             "description": "Independent read-only proof for the original stable executor only. Local broker rechecks current Admin/MFA/session/device/epoch and dedicated permission, stored executor, own case/op, StatusPlan and durable operation facts. It does not require the target current role/epoch, old issue proof or verification details already minimized under policy. Insufficient durable facts remain unknown. No public manual action or recovery write is executed here."
+          },
+          {
+            "type": "object",
+            "properties": {
+              "purpose": {
+                "const": "unlockCache"
+              },
+              "target": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "device"
+                  },
+                  "id": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "id"
+                ],
+                "additionalProperties": false,
+                "description": "Locator only; server verifies current ownership and required role. An account target must equal the authenticated user."
+              },
+              "candidate_parameters": {
+                "type": "object",
+                "properties": {
+                  "idempotency_key": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "body": {
+                    "$ref": "#/components/schemas/CacheUnlockRequest"
+                  }
+                },
+                "required": [
+                  "idempotency_key",
+                  "body"
+                ],
+                "additionalProperties": false,
+                "description": "Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned."
+              }
+            },
+            "required": [
+              "purpose",
+              "target",
+              "candidate_parameters"
+            ],
+            "additionalProperties": false
           }
         ],
         "description": "Closed reviewed purpose set; no arbitrary operation/role/risk or parameters. Target and candidate body are strict. No generic proof for admin/cache/unreviewed routes. Stored server HMAC covers exact validated typed parameters plus current subject/session/device/epoch and operation identity; do not echo a low-entropy password fingerprint."

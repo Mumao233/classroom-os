@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0.0",
-  "contract_version": "0.2.0",
+  "contract_version": "0.2.1",
   "status": "PR-03b S2 identity contract proposal 0.2.0; S1 approved; no migrations applied; independent S2 review pending",
   "database": "PostgreSQL 17 target; patch/driver lock and actual validation in PR-02",
   "runtime": "Python 3.12 target; independent Web dependency environment",

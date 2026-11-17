@@ -68,10 +68,10 @@ def failure(error,request_id):
         headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'})
 
 
-def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admission=None,cache=None,media=None,media_spool_directory=None,billing=None,billing_admin=None,qa=None,review=None,deletion=None):
+def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admission=None,cache=None,media=None,media_spool_directory=None,billing=None,billing_admin=None,qa=None,review=None,deletion=None,capture=None):
     parsed=urlsplit(origin)
     if parsed.scheme!='https' or not parsed.netloc or parsed.path or parsed.query or parsed.fragment or parsed.username:raise ValueError('one exact HTTPS origin is required')
-    if contract.get('info',{}).get('version')!='0.2.0':raise ValueError('approved contract 0.2.0 required')
+    if contract.get('info',{}).get('version') not in ('0.2.0','0.2.1'):raise ValueError('approved contract 0.2.0 or 0.2.1 required')
     if billing_admin is not None and not contract.get('x-pr11a-candidate'):
         raise ValueError('billing administration requires its explicit contract candidate')
     if qa is not None and contract.get('x-pr07a-candidate') != 'pr07a-1':
@@ -167,7 +167,9 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
         if path=='/auth/password/reset':return auth.email_action(ctx,body,'reset')
         if path=='/auth/email/confirm':return auth.email_action(ctx,body,'confirm_email')
         if path in ('/auth/recovery/enroll','/auth/recovery/confirm'):return auth.automatic(ctx,body,key,path.rsplit('/',1)[-1])
-        if path=='/ws-tickets':return auth.ws_ticket(ctx,body)
+        if path=='/ws-tickets':
+            if capture is not None and body['channel']=='capture':return capture.issue_ws_ticket(ctx,body)
+            return auth.ws_ticket(ctx,body)
         if path=='/courses/{course_id}' and business is not None:return business.course(ctx,params['course_id'],params.get('revision'))
         if path in ('/auth/register','/auth/verify-email','/auth/resend-verification'):
             if identity is None:raise AuthRejected('SERVICE_DISABLED',503)
@@ -335,6 +337,14 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
         from .media_http import register_media
         register_media(app,media=media,contract=contract,secure=secure,request_context=request_context,
                        check=check,body_for=body_for,failure=failure,spool_directory=media_spool_directory)
+
+    if capture is not None:
+        from .capture_http import register_capture
+        register_capture(app,capture=capture,contract=contract,secure=secure,request_context=request_context,
+                         check=check,failure=failure)
+        from .capture_ws import register_capture_ws
+        register_capture_ws(app,capture=capture,auth=auth,admission=websocket_admission,
+                            secure=secure,request_context=request_context)
 
     @app.websocket(PREFIX+'/ws/events')
     async def events(ws:WebSocket):
