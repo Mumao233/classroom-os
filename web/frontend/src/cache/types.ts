@@ -21,6 +21,8 @@ export type CacheWrite = CacheReference & {
   ancestry: CacheAncestry;
   /** Required for drafts. Stable across transport retries of this generation. */
   operationId?: string;
+  /** A pending conflict resolution shares the operation slot of this exact original draft. */
+  resolutionOf?: { operationId: string; revision: number; generation: number };
   /** Learning TTL starts at an actual successful cloud-version verification. */
   verifiedAt?: number;
 };

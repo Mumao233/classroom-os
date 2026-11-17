@@ -57,6 +57,13 @@ def test_actual_browser_offline_recovery_conflict_and_deletion(cache, deploy, tm
     # also exercises browser refresh and user-driven conflict resolution within it.
     with cache.a.pg.admin.begin() as connection:
         connection.execute(sa.text('UPDATE identity_control.cache_policy SET unlock_window_seconds=120'))
+        # Model a known conflict receipt whose exact comparison has not been
+        # backfilled. Preserve both Review branches and the two original receipts.
+        connection.exec_driver_sql('ALTER TABLE sync_conflicts DISABLE TRIGGER sync_conflicts_immutable')
+        partial['frozen_cloud_revision_id'] = connection.scalar(sa.text('''DELETE FROM sync_conflicts
+            WHERE id=:id RETURNING server_content->>'id' '''), {'id': UUID(partial['conflict_id'])})
+        connection.exec_driver_sql('ALTER TABLE sync_conflicts ENABLE TRIGGER sync_conflicts_immutable')
+        assert partial['frozen_cloud_revision_id']
 
     contract = json.loads((ROOT / 'docs/web-alpha/architecture/contracts/openapi.json').read_text(encoding='utf-8'))
     spec = importlib.util.spec_from_file_location('pr08b_review_contract', ROOT / 'tools/pr07b/contract_candidate.py')
@@ -119,7 +126,9 @@ def test_actual_browser_offline_recovery_conflict_and_deletion(cache, deploy, tm
         assert result['actual_http_postgres'] and result['offline_refresh_recovery']
         assert result['lost_ack_idempotency'] and result['cas_conflict_preserved']
         assert result['explicit_resolution'] and result['actual_conflict_panel']
+        assert result['recovered_conflict_from_original_frozen_request']
         assert result['deletion_blocks_replay']
+        assert result['deletion_scope_outage_locks_and_retries']
         assert result['device_revocation_locks']
         assert result['partial_source_revocation_clears_view']
         assert result['partial_source_revocation_survives_reopen']

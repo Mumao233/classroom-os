@@ -18,7 +18,13 @@ async function initialize(page, login) {
     const { AuthClient } = await import('/sync.js');
     window.dropNextSyncResponse = false;
     window.lostResponseReceipt = null;
+    window.watchDeletionDetails = false;
+    window.deletionDetailAttempts = [];
     window.auth = new AuthClient(async (url, options) => {
+      if (window.watchDeletionDetails && String(url).includes('/deletions/')) {
+        window.deletionDetailAttempts.push(window.sync.snapshot().unlocked);
+        if (window.deletionDetailAttempts.length === 1) throw new TypeError('Synthetic deletion detail outage');
+      }
       const response = await fetch(url, options);
       if (window.dropNextSyncResponse && String(url).endsWith('/sync/operations')) {
         window.dropNextSyncResponse = false;
@@ -130,6 +136,11 @@ try {
   assert(retained.items.some(item => item.body_markdown === local.payload.body_markdown));
   await page.evaluate(() => window.conflictRoot.unmount());
 
+  const beforeBackfill = await page.evaluate(async id => {
+    const response = await fetch(`/api/web/v1/sync/conflicts/${id}`);
+    return { status: response.status, code: (await response.json()).error.code };
+  }, scenario.partial.conflict_id);
+  assert.deepEqual(beforeBackfill, { status: 409, code: 'INCOMPATIBLE_CLIENT' });
   const partialReference = await page.evaluate(async ({ partial, ancestry, password }) => {
     const { React, createRoot, ConflictPanel } = await import('/sync.js');
     window.partialSync = window.auth.createOfflineSync({ enabled: true, databaseName: 'pr08b-partial-revocation',
@@ -146,6 +157,11 @@ try {
     return reference;
   }, { partial: scenario.partial, ancestry, password: credentials.password });
   await page.getByRole('textbox', { name: '合并正文', exact: true }).waitFor();
+  const backfilled = await page.evaluate(reference => window.partialSync.inspectConflict(reference), partialReference);
+  assert.equal(backfilled.id, scenario.partial.conflict_id);
+  assert.equal(backfilled.server_content.id, scenario.partial.frozen_cloud_revision_id);
+  assert.equal(backfilled.server_revision, scenario.partial.document_revision);
+  assert.deepEqual(backfilled.local_operation, scenario.partial.operation);
   const partialText = scenario.partial.operation.payload.body_markdown;
   assert((await page.locator('body').innerText()).includes(partialText));
   const unsentBody = 'Unique manual merge remains local across an ordinary remote update.';
@@ -242,14 +258,19 @@ try {
   const deletedDraft = operation(resolved, 'The unique local draft remains encrypted after deletion.');
   const deletedReference = await page.evaluate(({ draft, ancestry }) => window.sync.enqueue(draft, ancestry, 4),
     { draft: deletedDraft, ancestry });
+  await page.evaluate(() => { window.watchDeletionDetails = true; });
   await other.evaluate(async id => {
     const preview = await window.auth.request(`/class-sessions/${id}/deletion-preview`);
     await window.auth.request(`/class-sessions/${id}/delete`, {
       base_revision: preview.revision, confirmation_token: preview.confirmation_token,
     });
   }, scenario.class_session_id);
+  await page.waitForFunction(() => window.deletionDetailAttempts.length > 0, null, { timeout: 15_000 });
+  assert.deepEqual(await page.evaluate(() => window.deletionDetailAttempts), [false]);
   await page.waitForFunction(() => !window.sync.snapshot().unlocked, null, { timeout: 15_000 });
   await page.evaluate(password => window.sync.unlock(password), credentials.password);
+  const retriedDetails = await page.evaluate(() => window.deletionDetailAttempts);
+  assert(retriedDetails.length >= 2 && retriedDetails.every(unlocked => unlocked === false));
   const restricted = await page.evaluate(() => window.sync.snapshot());
   assert.equal(restricted.pending.length, 1);
   assert.equal(restricted.pending[0].state, 'restricted');
@@ -273,9 +294,11 @@ try {
     actual_http_postgres: true, native_crypto_indexeddb: true, two_authenticated_devices: true,
     offline_refresh_recovery: true, lost_ack_idempotency: true, cas_conflict_preserved: true,
     explicit_resolution: true, actual_conflict_panel: true,
+    recovered_conflict_from_original_frozen_request: true,
     unconfirmed_merge_survives_remote_update_and_reopen: true, unconfirmed_merge_never_auto_submitted: true,
     unconfirmed_merge_denied_after_source_revocation: true,
     partial_source_revocation_clears_view: true, partial_source_revocation_survives_reopen: true,
+    deletion_scope_outage_locks_and_retries: true,
     deletion_blocks_replay: true, device_revocation_locks: true }));
 } finally {
   input.close();

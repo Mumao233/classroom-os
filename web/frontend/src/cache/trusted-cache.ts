@@ -190,6 +190,10 @@ export class TrustedCache extends EventTarget {
       || !positive(write.generation) || !write.ancestry || (write.scope === 'drafts' && !write.operationId)
       || (write.scope === 'learning' && (!Number.isFinite(write.verifiedAt) || write.verifiedAt! > Date.now()))
       || (write.scope === 'recording_recovery' && !write.ancestry.classSessionId)) throw new CacheError('INVALID_INPUT');
+    const original = write.resolutionOf;
+    if (original && (write.scope !== 'drafts' || write.objectType === 'sync_editor_recovery'
+      || !original.operationId || original.operationId === write.operationId || !positive(original.revision)
+      || !positive(original.generation) || original.generation >= write.generation)) throw new CacheError('INVALID_INPUT');
   }
 
   private async encrypt(header: CacheHeader, plaintext: Uint8Array, auth: Authorized): Promise<CipherRecord> {
@@ -346,8 +350,9 @@ export class TrustedCache extends EventTarget {
     if (incoming.header.scope !== 'learning') {
       const limits = this.options.limits;
       const maxBytes = incoming.header.scope === 'drafts' ? limits?.draftBytes : limits?.recordingBytes;
-      if (!maxBytes || !positive(maxBytes) || samePool.reduce((sum, record) => sum + record.bytes, incoming.bytes) > maxBytes
-        || (incoming.header.scope === 'drafts' && (!positive(limits!.draftOperations) || samePool.length >= limits!.draftOperations))) throw new CacheError('QUOTA_EXCEEDED');
+      if (!maxBytes || !positive(maxBytes)) throw new CacheError('QUOTA_EXCEEDED');
+      if (incoming.header.scope === 'drafts') this.checkDraftSlots(samePool, incoming, limits!.draftOperations);
+      if (samePool.reduce((sum, record) => sum + record.bytes, incoming.bytes) > maxBytes) throw new CacheError('QUOTA_EXCEEDED');
       return;
     }
     if (incoming.bytes > LEARNING_LIMITS.bytes || Date.now() - incoming.header.verifiedAt! >= LEARNING_LIMITS.ageMs) throw new CacheError('QUOTA_EXCEEDED');
@@ -373,6 +378,30 @@ export class TrustedCache extends EventTarget {
       deleteCacheRecord(tx, value.id);
       bytes -= value.bytes;
     }
+  }
+
+  /** Count one resolution per live original in the same transaction as the ciphertext insert. */
+  private checkDraftSlots(records: CacheMetadata[], incoming: CacheMetadata, limit: number) {
+    if (!positive(limit)) throw new CacheError('QUOTA_EXCEEDED');
+    const originals = new Map(records.filter(({ header }) => !header.resolutionOf && header.objectType !== 'sync_editor_recovery')
+      .map(record => [record.id, record.header]));
+    const originalId = ({ namespace, header }: CacheMetadata) => {
+      const source = header.resolutionOf;
+      if (!source) return undefined;
+      const id = recordId(namespace, { scope: 'drafts', objectId: header.objectId, revision: source.revision, generation: source.generation });
+      const original = originals.get(id);
+      if (!original || original.operationId !== source.operationId) return undefined;
+      const stored = original.ancestry;
+      const current = header.ancestry;
+      if (stored.semesterId === current.semesterId && stored.courseId === current.courseId && stored.classSessionId === current.classSessionId) return id;
+      return undefined;
+    };
+    const paired = new Set(records.map(originalId).filter(id => id !== undefined));
+    if (incoming.header.resolutionOf) {
+      const id = originalId(incoming);
+      if (!id) throw new CacheError('STALE_OPERATION');
+      if (paired.has(id)) throw new CacheError('REVISION_CONFLICT');
+    } else if (records.length - paired.size >= limit) throw new CacheError('QUOTA_EXCEEDED');
   }
 
   private async load(reference: CacheReference, classroom: string | null): Promise<{ record: CipherRecord; auth: Authorized } | null> {

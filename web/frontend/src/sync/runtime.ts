@@ -51,6 +51,9 @@ const positive = (value: unknown): value is number => Number.isSafeInteger(value
 const errorCode = (error: unknown) => object(error) && typeof error.code === 'string' ? error.code : 'SYNC_FAILED';
 const keyOf = (reference: CacheReference) => JSON.stringify([reference.objectId, reference.revision, reference.generation]);
 const projectionType = (operation: SyncOperation) => operation.object_type === 'personal_revision' ? 'review_document' : operation.object_type;
+const resolvesDraft = (reference: CacheWrite, original: CacheWrite) => reference.objectId === original.objectId
+  && reference.resolutionOf !== undefined && reference.resolutionOf.operationId === original.operationId
+  && reference.resolutionOf.revision === original.revision && reference.resolutionOf.generation === original.generation;
 
 function validateOperation(value: unknown): asserts value is SyncOperation {
   if (!object(value) || !uuid(value.op_id) || !uuid(value.object_id) || !uuid(value.draft_id)
@@ -208,6 +211,8 @@ export class OfflineSyncRuntime extends EventTarget {
   private async consumeChanges(start: string): Promise<void> {
     let epoch = this.epoch;
     let cursor = start;
+    // Keep the bootstrap watermark until the pending changes can be applied.
+    this.cursor ??= start;
     for (let pageNumber = 0; pageNumber < 100; pageNumber++) {
       let page: S['Changes'];
       try { page = await this.transport.changes(cursor); }
@@ -219,6 +224,11 @@ export class OfflineSyncRuntime extends EventTarget {
       this.sameEpoch(epoch);
       if (!page || !Array.isArray(page.items) || typeof page.next_cursor !== 'string' || !page.next_cursor
         || typeof page.has_more !== 'boolean' || (page.has_more && page.next_cursor === cursor)) throw new SyncError('INCOMPATIBLE_CLIENT');
+      if (this.scopes.size && page.items.some(change => change?.object_type === 'deletion')) {
+        // The event announces revocation before its scope can be fetched.
+        this.cache.lock();
+        epoch = this.epoch;
+      }
       for (const change of page.items) {
         if (!uuid(change.event_id) || !uuid(change.object_id) || !positive(change.revision) || typeof change.deleted !== 'boolean'
           || !['semester', 'course', 'class_session', 'transcript', 'slide', 'question', 'review_document', 'mark', 'preferences', 'task', 'deletion', 'notification'].includes(change.object_type)) throw new SyncError('INCOMPATIBLE_CLIENT');
@@ -315,6 +325,8 @@ export class OfflineSyncRuntime extends EventTarget {
     validateOperation(envelope.operation);
     if (envelope.operation.object_id !== reference.objectId || envelope.operation.op_id !== reference.operationId
       || envelope.operation.base_revision !== reference.revision || !this.permitted(reference, envelope.operation)) throw new SyncError('CORRUPT_DRAFT');
+    if (reference.resolutionOf && (envelope.kind !== 'resolve' || !envelope.original
+      || !resolvesDraft(reference, envelope.original))) throw new SyncError('CORRUPT_DRAFT');
     const value = envelope.kind === 'write' ? envelope.operation : { conflict_id: envelope.conflictId, body: envelope.resolution };
     if (await syncFingerprint(value) !== envelope.requestHash) throw new SyncError('CORRUPT_DRAFT');
     this.current(epoch);
@@ -375,12 +387,30 @@ export class OfflineSyncRuntime extends EventTarget {
     this.scoped(epoch);
   }
 
-  private async fetchConflict(id: string, documentId: string, epoch: number): Promise<SyncConflict> {
+  private async fetchConflict(id: string, documentId: string, epoch: number, original?: WriteEnvelope): Promise<SyncConflict> {
+    this.current(epoch);
     const key = JSON.stringify(['conflict', documentId, id]);
     this.protectedDocuments.add(documentId);
     let conflict: SyncConflict;
     try { conflict = await this.transport.conflict(id); }
-    catch (error) { this.current(epoch); this.authorizationFailure(error, key); }
+    catch (error) {
+      this.current(epoch);
+      if (!original || !object(error) || error.status !== 409 || error.code !== 'INCOMPATIBLE_CLIENT') {
+        this.authorizationFailure(error, key);
+      }
+      // The original receipt can predate the authorized comparison. Replay its exact write once.
+      const receipt = await this.pushWrite(original);
+      this.current(epoch);
+      this.validateReceipt(receipt, this.receiptBinding(original));
+      if (receipt.status !== 'conflict' || receipt.conflict_id !== id || receipt.object_id !== documentId
+        || !positive(receipt.revision)) {
+        throw new SyncError('INVALID_RECEIPT');
+      }
+      const recovered = await this.fetchConflict(id, documentId, epoch);
+      this.current(epoch);
+      if (recovered.server_revision !== receipt.revision) throw new SyncError('INCOMPATIBLE_CLIENT');
+      return recovered;
+    }
     this.current(epoch);
     if (conflict.id !== id || conflict.object_id !== documentId) throw new SyncError('INCOMPATIBLE_CLIENT');
     this.exactAuthority.add(key);
@@ -710,6 +740,13 @@ export class OfflineSyncRuntime extends EventTarget {
     }
   }
 
+  private async pushWrite(envelope: WriteEnvelope): Promise<SyncReceipt> {
+    const result = await this.transport.push(envelope.operation, envelope.batchId);
+    if (!result || !Array.isArray(result.receipts) || result.receipts.length !== 1) throw new SyncError('INVALID_RECEIPT');
+    // Only consumed changes can advance the local watermark.
+    return result.receipts[0];
+  }
+
   private async send(reference: CacheWrite, envelope: Envelope, epoch: number) {
     const operation = envelope.kind === 'write' ? 'syncOperation' : 'resolveConflict';
     let receipt: SyncReceipt;
@@ -718,12 +755,7 @@ export class OfflineSyncRuntime extends EventTarget {
       this.current(epoch);
       if (errorCode(error) !== 'NOT_FOUND') throw error;
       if (envelope.kind === 'resolve') receipt = await this.transport.resolve(envelope.conflictId, envelope.resolution, envelope.operation.op_id);
-      else {
-        const result = await this.transport.push(envelope.operation, envelope.batchId);
-        if (!result || !Array.isArray(result.receipts) || result.receipts.length !== 1) throw new SyncError('INVALID_RECEIPT');
-        receipt = result.receipts[0];
-        // result.cursor is a server hint. Only consumed changes can advance the local watermark.
-      }
+      else receipt = await this.pushWrite(envelope);
     }
     this.current(epoch);
     this.validateReceipt(receipt, this.receiptBinding(envelope));
@@ -757,9 +789,11 @@ export class OfflineSyncRuntime extends EventTarget {
     const row = this.rows.get(keyOf(frozen));
     if (!row?.conflictId) throw new SyncError('CONFLICT_UNAVAILABLE');
     const envelope = await this.load(frozen);
-    const conflict = await this.fetchConflict(row.conflictId, frozen.objectId, epoch);
+    const original = envelope.kind === 'write' && envelope.operation.object_type === 'personal_revision' ? envelope : undefined;
+    const conflict = await this.fetchConflict(row.conflictId, frozen.objectId, epoch, original);
     this.current(epoch);
     if (conflict.id !== row.conflictId || conflict.object_id !== frozen.objectId || conflict.resolved
+      || conflict.base_revision !== envelope.operation.base_revision
       || await syncFingerprint(conflict.local_operation) !== await syncFingerprint(envelope.operation)) throw new SyncError('INCOMPATIBLE_CLIENT');
     this.current(epoch);
     return structuredClone(conflict);
@@ -809,12 +843,27 @@ export class OfflineSyncRuntime extends EventTarget {
     return structuredClone(next);
   }
 
+  private async retrySavedResolution(original: CacheWrite, body: SyncResolution, epoch: number): Promise<boolean> {
+    const pending = (await this.cache.pendingDraftReferences()).find(reference => resolvesDraft(reference, original));
+    this.current(epoch);
+    if (!pending) return false;
+    const envelope = await this.load(pending);
+    const fingerprint = envelope.kind === 'resolve' ? await syncFingerprint({ conflict_id: envelope.conflictId, body }) : null;
+    this.current(epoch);
+    if (envelope.requestHash !== fingerprint) throw new SyncError('RESULT_UNKNOWN');
+    await this.flush();
+    return true;
+  }
+
   /** Each explicit resolution is itself persisted before sending, so an unknown response is recoverable. */
   async resolve(reference: CacheWrite, resolution: SyncResolution, generation: number, recoveryReferences: CacheWrite[] = []): Promise<void> {
     const epoch = this.epoch;
     this.current(epoch);
     const original = structuredClone(reference);
     const body = structuredClone(resolution);
+    if (!original.operationId || original.resolutionOf || !positive(generation) || generation <= original.generation
+      || !['edited_merge', 'copy_to_new_note', 'use_server'].includes(body.resolution)) throw new SyncError('INVALID_RESOLUTION');
+    if (await this.retrySavedResolution(original, body, epoch)) return;
     // Other resolutions do not submit the manually edited recovery body, so its ciphertext stays.
     const requestedRecoveries = body.resolution === 'edited_merge' ? structuredClone(recoveryReferences) : [];
     const recoveries: CacheWrite[] = [];
@@ -822,8 +871,7 @@ export class OfflineSyncRuntime extends EventTarget {
     this.current(epoch);
     const conflict = await this.inspectConflict(original);
     this.current(epoch);
-    if (!positive(generation) || generation <= original.generation || body.base_revision !== conflict.server_revision
-      || !['edited_merge', 'copy_to_new_note', 'use_server'].includes(body.resolution)) throw new SyncError('INVALID_RESOLUTION');
+    if (body.base_revision !== conflict.server_revision) throw new SyncError('INVALID_RESOLUTION');
     if (body.resolution === 'edited_merge') {
       validateOperation(body.merged_operation);
       if (body.merged_operation.object_type !== conflict.local_operation.object_type || body.merged_operation.object_id !== conflict.object_id
@@ -858,11 +906,17 @@ export class OfflineSyncRuntime extends EventTarget {
     operation.op_id = opId;
     operation.base_revision = body.base_revision;
     operation.payload.base_revision = body.base_revision;
-    const pending = { ...original, revision: body.base_revision, generation, operationId: opId };
+    const pending: CacheWrite = { ...original, revision: body.base_revision, generation, operationId: opId,
+      resolutionOf: { operationId: original.operationId, revision: original.revision, generation: original.generation } };
     const envelope: ResolutionEnvelope = { schema: 1, kind: 'resolve', operation, conflictId: conflict.id, resolution: body, original,
       requestHash: await syncFingerprint({ conflict_id: conflict.id, body }), supersedes: originalEnvelope.supersedes, recoveryReferences: recoveries };
     this.current(epoch);
-    await this.persist(pending, envelope);
+    try { await this.persist(pending, envelope); }
+    catch (error) {
+      // Two tabs can both look up the original before either writes. Reuse only an identical durable request.
+      if (errorCode(error) === 'REVISION_CONFLICT' && await this.retrySavedResolution(original, body, epoch)) return;
+      throw error;
+    }
     this.current(epoch);
     this.row(pending, 'local_only');
     await this.flush();

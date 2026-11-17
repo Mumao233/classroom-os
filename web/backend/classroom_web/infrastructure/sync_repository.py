@@ -307,7 +307,9 @@ class PgSyncRepository:
 
         self.validate_patch(kind,payload)
         try:
-            if historical_conflict:
+            if kind == 'personal_revision':
+                # The document and submitted parent govern write authority.
+                # Review reads the cloud revision only for a stale CAS.
                 classroom = self.review._document(identity, lock=True)['class_session_id']
             else:
                 revision, content, classroom = self.current(kind, identity, lock=True)

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { components } from '../src/generated/openapi';
 import type { CacheAncestry, CacheReference, CacheWrite, DeletionNotice } from '../src/cache/types';
 import { syncFingerprint } from '../src/sync/client';
+import { AuthError } from '../src/api/auth-client';
 import type { SyncOperation, SyncReceipt, SyncResolution, SyncTransport } from '../src/sync/client';
 import { OfflineSyncRuntime, SyncError } from '../src/sync/runtime';
 import type { SyncCache } from '../src/sync/runtime';
@@ -240,6 +241,60 @@ describe('PR-08b encrypted operation queue', () => {
     expect(f.runtime.snapshot().cursor).toBe('after-deletion'); expect(f.cache.records.size).toBe(1); expect(f.received).toHaveLength(0);
   });
 
+  it('locks before deletion detail arrives and retries the same cursor after a detail outage', async () => {
+    const f = fixture(); await f.runtime.unlock('');
+    const reference = await f.runtime.enqueue(operation(), ancestry, 1);
+    const saved = structuredClone(f.cache.records.get(key(reference)));
+    const cursors: string[] = [];
+    f.transport.changes = async cursor => {
+      cursors.push(cursor);
+      return { items: [{ event_id: id(401), object_type: 'deletion', object_id: id(400), revision: 1, deleted: true }],
+        next_cursor: 'after-deletion', has_more: false };
+    };
+    const readDeletion = f.transport.deletion;
+    let started!: () => void;
+    let fail!: (error: AuthError) => void;
+    const detailStarted = new Promise<void>(resolve => { started = resolve; });
+    f.transport.deletion = () => new Promise((_, reject) => { fail = reject; started(); });
+
+    const polling = f.runtime.pollChanges();
+    await detailStarted;
+    expect(f.runtime.snapshot()).toMatchObject({ unlocked: false, cursor: 'consumed' });
+    await expect(f.runtime.readDraft(reference)).rejects.toMatchObject({ code: 'LOCKED' });
+    expect(f.cache.events).not.toContain('delete');
+    fail(new AuthError('STORAGE_UNAVAILABLE'));
+    await polling;
+    expect(f.runtime.snapshot().cursor).toBe('consumed');
+
+    f.transport.deletion = readDeletion;
+    await f.runtime.unlock('');
+    expect(cursors).toEqual(['consumed', 'consumed']);
+    expect(f.runtime.snapshot()).toMatchObject({ cursor: 'after-deletion', pending: [{ state: 'restricted', reference }] });
+    expect(f.cache.records.get(key(reference))).toEqual(saved);
+    expect(f.received).toHaveLength(0);
+  });
+
+  it('retains the initial watermark when a newer bootstrap follows an unread deletion', async () => {
+    const f = fixture();
+    const cursors: string[] = [];
+    f.transport.changes = async cursor => {
+      cursors.push(cursor);
+      return { items: cursor === 'snapshot' ? [{ event_id: id(401), object_type: 'deletion', object_id: id(400), revision: 1, deleted: true }] : [],
+        next_cursor: 'after-deletion', has_more: false };
+    };
+    const readDeletion = f.transport.deletion;
+    f.transport.deletion = async () => { throw new AuthError('NOT_FOUND', 404); };
+    await expect(f.runtime.unlock('')).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    expect(f.runtime.snapshot()).toMatchObject({ unlocked: false, cursor: 'snapshot' });
+    const bootstrap = f.transport.bootstrap;
+    f.transport.bootstrap = async () => ({ ...await bootstrap(), watermark: 'after-deletion' });
+    f.transport.deletion = readDeletion;
+    await f.runtime.unlock('');
+    expect(cursors).toEqual(['snapshot', 'snapshot']);
+    expect(f.cache.events.lastIndexOf('delete')).toBeLessThan(f.cache.events.lastIndexOf('unlock'));
+    expect(f.runtime.snapshot().cursor).toBe('after-deletion');
+  });
+
   it('locks an open view after cursor expiry and rebuilds only during a fresh unlock', async () => {
     const f = fixture(); await f.runtime.unlock(''); await f.runtime.enqueue(operation(), ancestry, 1);
     f.transport.changes = async cursor => {
@@ -418,6 +473,70 @@ describe('PR-08b encrypted operation queue', () => {
     f.runtime.close(); const next = new OfflineSyncRuntime(f.cache, f.transport, { enabled: true }); await next.unlock('');
     await expect(next.readDraft(reference)).rejects.toMatchObject({ code: 'AUTHORITY_UNAVAILABLE' });
     expect(next.snapshot().pending[0].state).toBe('restricted'); expect(f.cache.records.size).toBe(1); expect(f.received).toHaveLength(0);
+  });
+
+  it('replays only the exact personal write to recover a reauthorized comparison', async () => {
+    const f = fixture(); f.setProjections([projection(id(100), 'review_document')]);
+    const op = personalOperation();
+    await f.runtime.unlock('');
+    const reference = await f.runtime.enqueue(op, ancestry, 4);
+    const saved = structuredClone(f.cache.records.get(key(reference)));
+    const originalReceipt = await receipt(op, 'conflict');
+    f.receipts.set(op.op_id, originalReceipt);
+    let reauthorized = false;
+    let recovered = false;
+    let detailReads = 0;
+    const pushes: [SyncOperation, string][] = [];
+    f.transport.conflict = async () => {
+      detailReads++;
+      if (!reauthorized) throw new AuthError('NOT_FOUND', 404);
+      if (!recovered) throw new AuthError('INCOMPATIBLE_CLIENT', 409);
+      return { id: id(300), object_id: id(100), base_revision: 1, server_revision: 2,
+        server_content: reviewRevision(id(801)), local_operation: op, resolved: false };
+    };
+    f.transport.push = async (value, batchId) => {
+      pushes.push([structuredClone(value), batchId]);
+      recovered = true;
+      return { receipts: [originalReceipt], cursor: 'unconsumed-server-hint' };
+    };
+
+    await f.runtime.flush();
+    await expect(f.runtime.inspectConflict(reference)).rejects.toMatchObject({ code: 'AUTHORITY_UNAVAILABLE' });
+    expect(pushes).toEqual([]);
+    expect(f.cache.records.get(key(reference))).toEqual(saved);
+    reauthorized = true;
+    await f.runtime.unlock(''); await f.runtime.flush();
+    expect(pushes).toEqual([]);
+    await expect(f.runtime.inspectConflict(reference)).resolves.toMatchObject({
+      id: originalReceipt.conflict_id, local_operation: op, server_content: { id: id(801) }, server_revision: 2,
+    });
+    expect(pushes).toEqual([[op, op.op_id]]);
+    expect(detailReads).toBe(3);
+    expect(f.runtime.snapshot()).toMatchObject({ cursor: 'consumed', pending: [{ reference, state: 'conflict' }] });
+    expect(f.cache.records.get(key(reference))).toEqual(saved);
+  });
+
+  it('does not fetch or acknowledge a repaired comparison if authorization changes during the replay', async () => {
+    const op = personalOperation();
+    const f = await editableConflict(op);
+    let detailReads = 0;
+    f.transport.conflict = async () => { detailReads++; throw new AuthError('INCOMPATIBLE_CLIENT', 409); };
+    f.transport.push = async () => { f.cache.lock(); return { receipts: [await receipt(op, 'conflict')], cursor: 'late' }; };
+    await expect(f.runtime.inspectConflict(f.reference)).rejects.toMatchObject({ code: 'LOCKED' });
+    expect(detailReads).toBe(1);
+    expect(f.runtime.snapshot()).toMatchObject({ unlocked: false, cursor: 'consumed' });
+    expect(f.cache.records.get(key(f.reference))?.reference).toEqual(f.reference);
+  });
+
+  it('never acknowledges a legacy comparison replay with a mismatched conflict receipt', async () => {
+    const op = personalOperation();
+    const f = await editableConflict(op);
+    let detailReads = 0;
+    f.transport.conflict = async () => { detailReads++; throw new AuthError('INCOMPATIBLE_CLIENT', 409); };
+    f.transport.push = async () => ({ receipts: [await receipt(op, 'applied')], cursor: 'unconsumed-server-hint' });
+    await expect(f.runtime.inspectConflict(f.reference)).rejects.toMatchObject({ code: 'INVALID_RECEIPT' });
+    expect(detailReads).toBe(1);
+    expect(f.cache.records.get(key(f.reference))?.reference).toEqual(f.reference);
   });
 
   it('uses exact authority only for its current unlock epoch and permits previously authorized offline drafts', async () => {

@@ -263,6 +263,74 @@ try {
     });
     assert.deepEqual(result, { code: 'QUOTA_EXCEEDED', pending: 0, count: 0 });
   });
+  await test('full-draft-operation-quota-pairs-one-durable-resolution-and-recovers-lost-ack', async () => {
+    const result = await page.evaluate(async () => {
+      const name = 'pr08b-full-draft-quota';
+      const reference = await editable(name, { draftOperations: 1 });
+      await expectCode(runtime.enqueue(operation('UNRELATED NEW DRAFT'), ancestry, 2), 'QUOTA_EXCEEDED');
+      const peerCache = new cache.constructor({ enabled: true, databaseName: name,
+        limits: { draftBytes: 2000000, draftOperations: 1, recordingBytes: 2000000 } });
+      peerCache.bind({ ownerId: ids.owner, deviceId: ids.device, sessionId: ids.session });
+      const peer = new lib.OfflineSyncRuntime(peerCache, transport, { enabled: true });
+      await peer.unlock('synthetic-password');
+      await peer.flush();
+
+      // Both runtimes see the same persistent original and race to put a different resolution.
+      let arriving = 0; let release;
+      const both = new Promise(resolve => { release = resolve; });
+      for (const instance of [cache, peerCache]) {
+        const put = instance.put.bind(instance);
+        instance.put = async (write, bytes) => {
+          if (write.resolutionOf) { if (++arriving === 2) release(); await both; }
+          return put(write, bytes);
+        };
+      }
+      const send = transport.resolve.bind(transport);
+      let durableBeforeSend;
+      transport.resolve = async (...args) => {
+        durableBeforeSend = await records(name);
+        await send(...args);
+        throw Object.assign(new Error('Lost resolution response after commit'), { code: 'RESULT_UNKNOWN' });
+      };
+      const attempts = await Promise.allSettled([
+        runtime.resolve(reference, { resolution: 'use_server', base_revision: 2 }, 2),
+        peer.resolve(reference, { resolution: 'copy_to_new_note', base_revision: 2, destination_class_session_id: ids.classroom }, 3),
+      ]);
+      const persisted = await records(name);
+      const sent = transport.resolutions[0];
+      const exact = persisted.filter(value => value.header.resolutionOf?.operationId === reference.operationId);
+      const receipts = [...transport.receipts]; const conflicts = [...transport.conflicts];
+      const before = {
+        failures: attempts.filter(value => value.status === 'rejected').map(value => value.reason.code),
+        count: persisted.length, sent: transport.resolutions.length, original: persisted.some(value => value.header.operationId === reference.operationId),
+        durable: durableBeforeSend?.some(value => value.header.operationId === sent?.opId),
+        exact: exact.length === 1 && exact[0].header.operationId === sent?.opId && exact[0].header.resolutionOf.generation === 1
+          && exact[0].header.resolutionOf.revision === reference.revision,
+      };
+      peer.close(); runtime.close();
+      await create(name, { draftOperations: 1 }, {}, 'drafts', { receipts, conflicts });
+      await runtime.resolve(reference, sent.body, 4);
+      return { before, sentAfterReopen: transport.resolutions.length, pending: runtime.snapshot().pending.length, remaining: (await records(name)).length };
+    });
+    assert.deepEqual(result, { before: { failures: ['RESULT_UNKNOWN'], count: 2, sent: 1, original: true, durable: true, exact: true },
+      sentAfterReopen: 0, pending: 0, remaining: 0 });
+  });
+  await test('resolution-still-respects-draft-byte-cap-and-retains-original-ciphertext', async () => {
+    const result = await page.evaluate(async () => {
+      const name = 'pr08b-resolution-byte-limits';
+      const reference = await editable(name, { draftOperations: 1 });
+      const [original] = await records(name);
+      const receipts = [...transport.receipts]; const conflicts = [...transport.conflicts];
+      runtime.close();
+      await create(name, { draftOperations: 1, draftBytes: original.bytes }, {}, 'drafts', { receipts, conflicts });
+      await runtime.flush();
+      await expectCode(runtime.resolve(reference, { resolution: 'use_server', base_revision: 2 }, 2), 'QUOTA_EXCEEDED');
+      const persisted = await records(name);
+      return { sent: transport.resolutions.length, count: persisted.length, sameId: persisted[0]?.id === original.id,
+        retained: (await runtime.readDraft(reference)).payload.body_markdown };
+    });
+    assert.deepEqual(result, { sent: 0, count: 1, sameId: true, retained: 'ORIGINAL FROZEN INPUT' });
+  });
   await test('bootstrap-authority-loss-retains-ciphertext-and-blocks-replay', async () => {
     const result = await page.evaluate(async () => {
       await create('pr08b-authority');

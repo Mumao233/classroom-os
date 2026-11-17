@@ -753,6 +753,33 @@ def test_partial_source_revocation_keeps_document_but_hides_exact_conflict_linea
                                     dict(id=UUID(state['conflict_id']))) is None
 
 
+def test_visible_personal_parent_can_be_updated_after_latest_source_revocation(sync_api):
+    from classroom_web.infrastructure.qa_repository import PgQaRepository
+
+    a = sync_api
+    state = build_partial_revocation_conflict(a.auth.pg, a.owner, a.classroom)
+    document_id = state['document_id']
+    with a.auth.pg.db.transaction(a.owner) as tx:
+        review = PgReviewRepository(tx)
+        hidden_id = review.document(UUID(document_id))['latest_personal_revision_id']
+        PgQaRepository(tx).revoke_source(UUID(state['revoked_source_id']))
+    assert a.client.get(BASE + '/review-revisions/' + hidden_id).status_code == 404
+    visible_id = state['unaffected_revision_id']
+    draft = operation(a, base=state['document_revision'], base_content_revision_id=visible_id,
+                      body_markdown='Personal edit grounded only in the visible revision.')
+    draft['object_id'] = document_id
+    result = batch(a, [draft])
+    assert result.status_code == 200, result.text
+    accepted = result.json()['receipts'][0]
+    assert accepted['status'] == 'applied' and accepted['object_id'] == document_id
+    assert accepted['revision'] == state['document_revision'] + 1
+    assert batch(a, [draft]).json()['receipts'] == [accepted]
+    document = a.client.get(BASE + '/review-documents/' + document_id).json()
+    current = a.client.get(BASE + '/review-revisions/' + document['latest_personal_revision_id']).json()
+    assert current['parent_revision_id'] == visible_id and current['body_markdown'] == draft['payload']['body_markdown']
+    assert a.client.get(BASE + '/review-revisions/' + hidden_id).status_code == 404
+
+
 @pytest.mark.parametrize('bad_field,bad_value',[('name','   '),('name','bad\x00name'),('teacher','bad\x00teacher')])
 def test_domain_invalid_course_does_not_rollback_other_batch_items(sync_api,bad_field,bad_value):
     a=sync_api
