@@ -1,9 +1,9 @@
 import canonicalize from 'canonicalize';
-import { cacheTransaction, DATABASE_NAME } from './indexed-db';
+import { cacheTransaction, DATABASE_NAME, deleteCacheRecord, putCacheRecord } from './indexed-db';
 import { CacheError, LEARNING_LIMITS, namespaceOf, recordId } from './types';
 import type {
   AudioDescriptor, AudioReceipt, CacheAncestry, CacheGrant, CacheHeader, CacheIdentity,
-  CacheOptions, CacheReference, CacheScope, CacheWrite, CipherRecord, DeletionNotice,
+  CacheMetadata, CacheOptions, CacheReference, CacheScope, CacheWrite, CipherRecord, DeletionNotice,
   NamespaceState, Tombstone,
 } from './types';
 
@@ -230,21 +230,23 @@ export class TrustedCache extends EventTarget {
     const existing = await cacheTransaction<CipherRecord | undefined>(this.databaseName, 'readwrite', (tx, done, fail) => {
       this.guard(tx, auth, header, () => {
         const records = tx.objectStore('records');
-        const request = records.getAll();
-        request.onsuccess = () => {
-          const all = request.result as CipherRecord[];
-          const previous = all.find(value => value.id === record.id);
+        const exact = records.get(record.id);
+        exact.onsuccess = () => {
+          const previous = exact.result as CipherRecord | undefined;
           if (previous) { done(previous); return; }
-          const own = all.filter(value => value.namespace === auth.namespace);
-          const versions = ordered ? own.filter(value => value.header.scope === header.scope && value.header.objectId === header.objectId) : [];
-          if (versions.some(value => value.header.revision > header.revision
-            || (value.header.revision === header.revision && value.header.generation >= header.generation))) { fail(new CacheError('REVISION_CONFLICT')); return; }
-          try { this.makeRoom(tx, own.filter(value => !versions.includes(value)), record); }
-          catch (error) { fail(error as CacheError); return; }
-          for (const version of versions) records.delete(version.id);
-          tx.objectStore('nonces').add({ id: `${record.header.keyId}:${Array.from(record.nonce).join('.')}`, namespace: auth.namespace });
-          records.add(record);
-          done(undefined);
+          const request = tx.objectStore('metadata').index('pool').getAll([auth.namespace, header.scope]);
+          request.onsuccess = () => {
+            const own = request.result as CacheMetadata[];
+            const versions = ordered ? own.filter(value => value.header.objectId === header.objectId) : [];
+            if (versions.some(value => value.header.revision > header.revision
+              || (value.header.revision === header.revision && value.header.generation >= header.generation))) { fail(new CacheError('REVISION_CONFLICT')); return; }
+            try { this.makeRoom(tx, own.filter(value => !versions.includes(value)), record); }
+            catch (error) { fail(error as CacheError); return; }
+            for (const version of versions) deleteCacheRecord(tx, version.id);
+            tx.objectStore('nonces').add({ id: `${record.header.keyId}:${Array.from(record.nonce).join('.')}`, namespace: auth.namespace });
+            putCacheRecord(tx, record);
+            done(undefined);
+          };
         };
       }, fail);
     }, this.track);
@@ -257,7 +259,7 @@ export class TrustedCache extends EventTarget {
     }
   }
 
-  private makeRoom(tx: IDBTransaction, own: CipherRecord[], incoming: CipherRecord) {
+  private makeRoom(tx: IDBTransaction, own: CacheMetadata[], incoming: CacheMetadata) {
     const samePool = own.filter(value => value.header.scope === incoming.header.scope);
     if (incoming.header.scope !== 'learning') {
       const limits = this.options.limits;
@@ -267,9 +269,8 @@ export class TrustedCache extends EventTarget {
       return;
     }
     if (incoming.bytes > LEARNING_LIMITS.bytes || Date.now() - incoming.header.verifiedAt! >= LEARNING_LIMITS.ageMs) throw new CacheError('QUOTA_EXCEEDED');
-    const records = tx.objectStore('records');
     const active = samePool.filter(value => {
-      if (!Number.isFinite(value.header.verifiedAt) || Date.now() - value.header.verifiedAt! >= LEARNING_LIMITS.ageMs) { records.delete(value.id); return false; }
+      if (!Number.isFinite(value.header.verifiedAt) || Date.now() - value.header.verifiedAt! >= LEARNING_LIMITS.ageMs) { deleteCacheRecord(tx, value.id); return false; }
       return true;
     });
     const currentClass = incoming.header.ancestry.classSessionId;
@@ -281,13 +282,13 @@ export class TrustedCache extends EventTarget {
     const excess = [...recent].filter(([id]) => id !== currentClass).sort((a, b) => a[1] - b[1]).slice(0, Math.max(0, recent.size - LEARNING_LIMITS.classes));
     const discarded = new Set(excess.map(([id]) => id));
     const retained = active.filter(value => {
-      if (value.header.ancestry.classSessionId && discarded.has(value.header.ancestry.classSessionId)) { records.delete(value.id); return false; }
+      if (value.header.ancestry.classSessionId && discarded.has(value.header.ancestry.classSessionId)) { deleteCacheRecord(tx, value.id); return false; }
       return true;
     }).sort((a, b) => a.accessedAt - b.accessedAt);
     let bytes = retained.reduce((sum, value) => sum + value.bytes, incoming.bytes);
     for (const value of retained) {
       if (bytes <= LEARNING_LIMITS.bytes) break;
-      records.delete(value.id);
+      deleteCacheRecord(tx, value.id);
       bytes -= value.bytes;
     }
   }
@@ -295,7 +296,7 @@ export class TrustedCache extends EventTarget {
   private async load(reference: CacheReference, classroom: string | null): Promise<{ record: CipherRecord; auth: Authorized } | null> {
     const snapshot = structuredClone(reference);
     const auth = this.authorized(snapshot.scope, classroom);
-    const record = await cacheTransaction<CipherRecord | null>(this.databaseName, 'readwrite', (tx, done, fail) => {
+    const loadRecord = (mode: IDBTransactionMode) => cacheTransaction<CipherRecord | null>(this.databaseName, mode, (tx, done, fail) => {
       const records = tx.objectStore('records');
       const request = records.get(recordId(auth.namespace, snapshot));
       request.onsuccess = () => {
@@ -303,12 +304,21 @@ export class TrustedCache extends EventTarget {
         if (!value) { done(null); return; }
         this.guard(tx, auth, value.header, () => {
           if (value.header.scope === 'learning' && Date.now() - value.header.verifiedAt! >= LEARNING_LIMITS.ageMs) {
-            records.delete(value.id); done(null); return;
+            if (mode === 'readwrite') deleteCacheRecord(tx, value.id);
+            done(null); return;
           }
-          value.accessedAt = Date.now(); records.put(value); done(value);
+          if (mode === 'readwrite') { value.accessedAt = Date.now(); putCacheRecord(tx, value); }
+          done(value);
         }, fail);
       };
     }, this.track);
+    let record: CipherRecord | null;
+    try { record = await loadRecord(snapshot.scope === 'learning' ? 'readwrite' : 'readonly'); }
+    catch (error) {
+      if (!(error instanceof CacheError) || error.code !== 'QUOTA_EXCEEDED') throw error;
+      // A rolled-back LRU touch must not make retained content unreadable on a full disk.
+      record = await loadRecord('readonly');
+    }
     this.check(auth);
     return record ? { record, auth } : null;
   }
@@ -327,10 +337,9 @@ export class TrustedCache extends EventTarget {
 
   async listPending(scope: 'drafts' | 'recording_recovery', classroom: string | null = null): Promise<CacheWrite[]> {
     const auth = this.authorized(scope, classroom);
-    const records = await cacheTransaction<CipherRecord[]>(this.databaseName, 'readonly', (tx, done) => {
-      const request = tx.objectStore('records').getAll();
-      request.onsuccess = () => done((request.result as CipherRecord[]).filter(value => value.namespace === auth.namespace && value.header.scope === scope
-        && (scope !== 'recording_recovery' || value.header.ancestry.classSessionId === classroom)));
+    const records = await cacheTransaction<CacheMetadata[]>(this.databaseName, 'readonly', (tx, done) => {
+      const request = tx.objectStore('metadata').index('pool').getAll([auth.namespace, scope]);
+      request.onsuccess = () => done((request.result as CacheMetadata[]).filter(value => scope !== 'recording_recovery' || value.header.ancestry.classSessionId === classroom));
     }, this.track);
     const result: CacheWrite[] = [];
     for (const record of records) {
@@ -358,7 +367,7 @@ export class TrustedCache extends EventTarget {
         if (!value) { done(); return; }
         this.guard(tx, auth, value.header, () => {
           if (!matches(value.header)) { fail(new CacheError('REVISION_CONFLICT')); return; }
-          records.delete(value.id); done();
+          deleteCacheRecord(tx, value.id); done();
         }, fail);
       };
     }, this.track);
@@ -378,11 +387,10 @@ export class TrustedCache extends EventTarget {
       const states = tx.objectStore('namespaces');
       const state = states.get(namespace);
       state.onsuccess = () => states.put({ id: namespace, generation: ((state.result as NamespaceState | undefined)?.generation ?? 0) + 1 });
-      const records = tx.objectStore('records');
-      const request = records.getAll();
+      const request = tx.objectStore('metadata').index('namespace').getAll(namespace);
       request.onsuccess = () => {
-        for (const record of request.result as CipherRecord[]) {
-          if (record.namespace === namespace && this.matchesDeletion(record.header, tombstone)) records.delete(record.id);
+        for (const record of request.result as CacheMetadata[]) {
+          if (this.matchesDeletion(record.header, tombstone)) deleteCacheRecord(tx, record.id);
         }
         done();
       };
@@ -398,16 +406,20 @@ export class TrustedCache extends EventTarget {
     const namespace = namespaceOf(identity);
     await this.invalidate();
     await cacheTransaction<void>(this.databaseName, 'readwrite', (tx, done) => {
-      for (const name of ['records', 'nonces']) {
-        const store = tx.objectStore(name);
-        const request = store.openCursor();
-        request.onsuccess = () => {
-          const cursor = request.result;
-          if (!cursor) return;
-          if (cursor.value.namespace === namespace) cursor.delete();
-          cursor.continue();
-        };
-      }
+      const records = tx.objectStore('metadata').index('namespace').openKeyCursor(namespace);
+      records.onsuccess = () => {
+        const cursor = records.result;
+        if (!cursor) return;
+        deleteCacheRecord(tx, cursor.primaryKey);
+        cursor.continue();
+      };
+      const nonces = tx.objectStore('nonces').openCursor();
+      nonces.onsuccess = () => {
+        const cursor = nonces.result;
+        if (!cursor) return;
+        if (cursor.value.namespace === namespace) cursor.delete();
+        cursor.continue();
+      };
       done();
     });
   }
@@ -428,7 +440,7 @@ export class TrustedCache extends EventTarget {
           const current = request.result as CipherRecord | undefined;
           if (!current || !equalBytes(new Uint8Array(current.ciphertext), new Uint8Array(record.ciphertext))) { fail(new CacheError('REVISION_CONFLICT')); return; }
           tx.objectStore('nonces').add({ id: `${replacement.header.keyId}:${Array.from(replacement.nonce).join('.')}`, namespace: auth.namespace });
-          store.put(replacement); done();
+          putCacheRecord(tx, replacement); done();
         };
       }, fail);
     }, this.track);
@@ -486,8 +498,14 @@ export class TrustedCache extends EventTarget {
 
   async readCaptureState(classSessionId: string, epochId: string): Promise<Uint8Array<ArrayBuffer> | null> {
     const objectId = JSON.stringify(['capture-state', classSessionId, epochId]);
-    const pending = await this.listPending('recording_recovery', classSessionId);
-    const current = pending.filter(value => value.objectId === objectId).sort((a, b) => b.revision - a.revision || b.generation - a.generation)[0];
-    return current ? this.read(current, classSessionId) : null;
+    const auth = this.authorized('recording_recovery', classSessionId);
+    const current = await cacheTransaction<CacheMetadata | null>(this.databaseName, 'readonly', (tx, done) => {
+      const prefix = [auth.namespace, 'recording_recovery', objectId];
+      const range = IDBKeyRange.bound([...prefix, 0, 0], [...prefix, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER]);
+      const request = tx.objectStore('metadata').index('objectVersion').openCursor(range, 'prev');
+      request.onsuccess = () => done((request.result?.value as CacheMetadata | undefined) ?? null);
+    }, this.track);
+    this.check(auth);
+    return current ? this.read(current.header, classSessionId) : null;
   }
 }

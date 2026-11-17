@@ -43,14 +43,16 @@ export type CacheHeader = CacheWrite & {
   keyVersion: number;
   schema: 1 | 2;
 };
-export type CipherRecord = {
+export type CacheMetadata = {
   id: string;
   namespace: string;
   header: CacheHeader;
-  nonce: Uint8Array<ArrayBuffer>;
-  ciphertext: ArrayBuffer;
   bytes: number;
   accessedAt: number;
+};
+export type CipherRecord = CacheMetadata & {
+  nonce: Uint8Array<ArrayBuffer>;
+  ciphertext: ArrayBuffer;
 };
 export type NamespaceState = { id: string; generation: number };
 export type Tombstone = { id: string; namespace: string; kind: string; objectId: string };

@@ -1,8 +1,9 @@
 #requires -Version 7.0
 [CmdletBinding()]
-param([Parameter(Mandatory)][ValidatePattern('^pr08a-[a-zA-Z0-9-]+$')][string]$RunId, [switch]$BrowserOnly, [string]$CaptureSource)
+param([Parameter(Mandatory)][ValidatePattern('^pr08a-[a-zA-Z0-9-]+$')][string]$RunId, [switch]$BrowserOnly, [string]$CaptureSource, [switch]$Combined)
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..\..')).Path
+if ($Combined -and (-not (Test-Path -LiteralPath "$root\web\frontend\src\capture\runtime.ts") -or $BrowserOnly)) { throw 'Combined verification requires capture source and the full frontend checks' }
 $brokerRoot = 'J:\class-assistant\worktrees\web-pr03b-sessions'
 $broker = Join-Path $brokerRoot 'work\pr03b\vmware-broker'
 $payload = Join-Path $broker $RunId
@@ -17,7 +18,8 @@ if ($CaptureSource) {
 $hash = (Get-FileHash -LiteralPath "$payload\source.zip").Hash.ToLowerInvariant()
 $script = Join-Path $broker "scripts\$RunId.ps1"
 $browserFlag = if ($BrowserOnly) { '$true' } else { '$false' }
-$text = "`$SnapshotTag = '$RunId'`r`n`$SourceHash = '$hash'`r`n`$BrowserOnly = $browserFlag`r`n" + (Get-Content -LiteralPath "$PSScriptRoot\guest.ps1" -Raw)
+$combinedFlag = if ($Combined) { '$true' } else { '$false' }
+$text = "`$SnapshotTag = '$RunId'`r`n`$SourceHash = '$hash'`r`n`$BrowserOnly = $browserFlag`r`n`$Combined = $combinedFlag`r`n" + (Get-Content -LiteralPath "$PSScriptRoot\guest.ps1" -Raw)
 Set-Content -LiteralPath $script -Value $text -Encoding utf8
 New-Item -ItemType Directory -Path (Join-Path $root "outputs\pr08a\$RunId") -Force | Out-Null
 Copy-Item -LiteralPath "$payload\SOURCE.json" -Destination (Join-Path $root "outputs\pr08a\$RunId\SOURCE.json")

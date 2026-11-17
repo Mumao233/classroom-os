@@ -34,10 +34,18 @@ def pg():
 
 @pytest.fixture(scope="module")
 def cache_schema(pg):
+    """Temporarily permit synthetic trusted devices only in this module's owned database."""
     with pg.admin.begin() as connection:
         if connection.scalar(sa.text("SELECT to_regclass('public.cache_keys')")) is None:
             connection.exec_driver_sql(candidate_sql(ROOT), execution_options={"no_parameters": True})
-    yield
+        assert connection.scalar(sa.text("SELECT convalidated FROM pg_constraint WHERE conrelid='public.devices'::regclass AND conname='devices_trusted_check'")) is True
+        connection.exec_driver_sql('ALTER TABLE public.devices DROP CONSTRAINT devices_trusted_check')
+    try:
+        yield
+    finally:
+        with pg.admin.begin() as connection:
+            connection.exec_driver_sql('UPDATE public.devices SET trusted=false WHERE trusted')
+            connection.exec_driver_sql('ALTER TABLE public.devices ADD CONSTRAINT devices_trusted_check CHECK (NOT trusted)')
 
 
 @pytest.fixture

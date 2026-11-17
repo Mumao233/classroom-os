@@ -17,7 +17,8 @@
 - AES-GCM 256-bit key 导入为不可导出 `CryptoKey`，仅存在实例内存中。导入缓冲区与临时明文副本在完成后覆盖。
 - 每次新加密使用随机 96-bit nonce，持久 nonce 唯一约束与 record 在同一 IDB 事务提交。重试返回既有不可变记录，同版本异体报 `REVISION_CONFLICT`。
 - AAD 包含 owner、device、scope、object、revision、generation、key ID/version、schema、祖先关联及操作/核验元数据。记录正文与录音描述、恢复状态均加密。
-- IndexedDB v2 包含 `records`、`nonces`、`namespaces`、`tombstones`。v1 升级增补失效控制表并保留密文，`migrate()` 使用已获授权的内存 key 将 schema1 记录重新加密为 schema2，CAS 检查期间的原密文。
+- IndexedDB v3 包含 `records`、`metadata`、`nonces`、`namespaces`、`tombstones`。v1/v2 升级逐 cursor 回填仅含路由头、字节数、访问时间的 metadata，原密文、AAD 与 nonce 历史保留。升级事务中止时 schema 与回填整体回滚。`migrate()` 使用已获授权的内存 key 将 schema1 记录重新加密为 schema2，CAS 检查期间的原密文。
+- 配额、LRU 与有序版本检查读取当前 pool 的 metadata。密文与 metadata 的写入、淘汰、ACK、删除、迁移与清理在同一事务完成。草稿与录音采用只读加载，学习池更新访问时间遇到明确配额失败后以原授权只读重试，继续检查墓碑、期限和解密后的屏障。
 - namespace 为 owner/device，session 仅用于内存授权。锁定不删除唯一未同步内容。新 key 无法解开旧 key 的记录时返回 `KEY_REQUIRED` 并保留旧密文。
 - 校验期限同时使用解锁请求开始时的墙钟和单调时间，网络耗时计入期限。每次读、写、解密完成和事务阶段复核期限与实例 generation。
 
@@ -45,6 +46,8 @@
 
 稳定录音 ID 为课堂、epoch、seq，外层 owner/device 由当前 identity 命名空间绑定。采集状态是 05b 定义的不透明字节，缓存按 `(fence, generation)` CAS 接收更大版本，同版本异体拒绝。05b 负责服务端 lease、fence、durable 确认和恢复状态机。08b 负责未来同步、CAS 冲突界面与收据核对。
 
+`readCaptureState` 按当前 namespace、scope 和目标 object 的复合索引倒序读取最高 fence/generation，再经正常 `read` 解密该条记录。无关 PCM 块的数量与损坏不影响目标状态查找。
+
 08a 占有 `src/cache/*`、`api/auth-client.ts`，05b 占有 `src/capture/*`。公共类型复用生成的 `AudioChunkDescriptor`、`AudioChunkReceipt` 等，A 的结构兼容 port 支持两个 PR 独立检查。
 
 ## 删除、撤权与并发
@@ -57,7 +60,7 @@
 
 ## 迁移、启用与边界
 
-08a 自身仅引入 IDB 迁移。共享前置由 05b 提供 `0011_cache_keys`，接在 `0010_deletion_lifecycle` 后。表/固定授权函数沿用 05a，出厂策略关闭且窗口为空。0.2.1 仅补正式 unlockCache purpose/header，历史 recover 与 trustDevice 继续遵循既有候选门禁。
+共享前置由 05b 提供 `0011_cache_keys`，接在 `0010_deletion_lifecycle` 后，05b 的 `0012_capture_recovery` 已合入 main。本轮08a新增前向 `0013_trusted_device_guard`，同一迁移事务把既有 trusted=true 归为 false 并恢复已验证的 CHECK(NOT trusted)，保留 wrapped keys 与 key_epoch。生产策略继续关闭且窗口为空，可信设备产品入口继续关闭。合成 cache 测试只在自身隔离数据库临时移除该约束，结束时清除 true 并恢复。0.2.1 公开契约沿用现状。
 
 产品解锁窗口、跨设备旧 key 恢复、信任设备入口与真实录音授权仍待对应产品决定。`CacheLimits` 的合成测试数值没有产品默认效力。当前功能只在合成配置下验收。浏览器离线撤权最迟在内存授权期限到期后生效，已交付的明文受页面/设备控制。托管运行时内存覆盖无法证明物理擦除。
 

@@ -40,6 +40,21 @@ try {
     window.reference = (objectId, generation = 1) => ({ scope: 'drafts', objectId, revision: 1, generation });
     window.write = (objectId, generation = 1) => ({ ...reference(objectId, generation), ancestry, operationId: 'op-' + objectId + '-' + generation });
     window.expectCode = async (promise, code) => { try { await promise; throw new Error('Expected ' + code); } catch (error) { if (error.code !== code) throw error; } };
+    window.assertMetadata = async databaseName => {
+      const db = await lib.openCacheDatabase(databaseName);
+      const data = await new Promise((resolve, reject) => {
+        const tx = db.transaction(['records', 'metadata']);
+        const records = tx.objectStore('records').getAll(); const metadata = tx.objectStore('metadata').getAll();
+        tx.oncomplete = () => resolve({ records: records.result, metadata: metadata.result }); tx.onabort = reject;
+      }); db.close();
+      if (data.records.length !== data.metadata.length) throw new Error('Metadata record count mismatch');
+      for (const record of data.records) {
+        const entry = data.metadata.find(value => value.id === record.id);
+        if (!entry || JSON.stringify(entry.header) !== JSON.stringify(record.header) || entry.namespace !== record.namespace
+          || entry.bytes !== record.bytes || entry.accessedAt !== record.accessedAt
+          || Object.keys(entry).sort().join(',') !== 'accessedAt,bytes,header,id,namespace') throw new Error('Metadata projection mismatch');
+      }
+    };
     window.cache = new lib.TrustedCache(options); cache.bind(identity);
   });
   await test('default-disabled', async () => {
@@ -183,6 +198,98 @@ try {
       await migrated.unlock('drafts', null, async () => ({ key_id: 'legacy-key', key_epoch: 1, key_material_b64: material, scope: 'drafts', expires_at: new Date(Date.now() + 60_000).toISOString(), cache_policy_revision: 'synthetic-only' }));
       await migrated.migrate(reference('legacy'));
       if (decoder.decode(await migrated.read(reference('legacy'))) !== 'legacy-private') throw new Error('Migration lost ciphertext'); migrated.close();
+      await assertMetadata(databaseName);
+    });
+  });
+  await test('v2-metadata-backfill-abort-is-atomic-and-retry-preserves-ciphertext', async () => {
+    await page.evaluate(async () => {
+      const value = new lib.TrustedCache({ ...options, databaseName: 'pr08a-backfill-source' }); value.bind(identity);
+      await value.unlock('drafts', null, () => issue('drafts')); await value.put(write('v2'), encoder.encode('v2-private'));
+      await value.unlock('learning', null, () => issue('learning'));
+      await value.put({ scope: 'learning', objectId: 'v2-learning', revision: 1, generation: 1, ancestry, verifiedAt: Date.now() }, encoder.encode('v2-learning'));
+      await value.unlock('recording_recovery', 'class-a', () => issue('recording_recovery'));
+      await value.putRecording({ ...descriptor, seq: 99 }, new Uint8Array([1, 0, 2, 0]), ancestry, 1);
+      await value.saveCaptureState('class-a', 'v2-state', encoder.encode('v2-state'), ancestry, 1, 1);
+      let db = await lib.openCacheDatabase('pr08a-backfill-source');
+      const source = await new Promise(resolve => { const tx = db.transaction(['records', 'nonces']);
+        const records = tx.objectStore('records').getAll(); const nonces = tx.objectStore('nonces').getAll();
+        tx.oncomplete = () => resolve({ records: records.result, nonces: nonces.result }); });
+      db.close(); value.close();
+      const name = 'pr08a-v2-backfill';
+      db = await new Promise(resolve => { const request = indexedDB.open(name, 2); request.onupgradeneeded = () => {
+        for (const store of ['records', 'nonces', 'namespaces', 'tombstones']) request.result.createObjectStore(store, { keyPath: 'id' });
+      }; request.onsuccess = () => resolve(request.result); });
+      await new Promise(resolve => { const tx = db.transaction(['records', 'nonces'], 'readwrite');
+        for (const record of source.records) tx.objectStore('records').put(record);
+        for (const nonce of source.nonces) tx.objectStore('nonces').put(nonce);
+        tx.oncomplete = resolve; }); db.close();
+      const original = IDBObjectStore.prototype.put;
+      let interrupted = false;
+      IDBObjectStore.prototype.put = function (...args) {
+        const request = original.apply(this, args);
+        if (this.name === 'metadata' && !interrupted) { interrupted = true; this.transaction.abort(); }
+        return request;
+      };
+      try { await expectCode(lib.openCacheDatabase(name), 'STORAGE_UNAVAILABLE'); }
+      finally { IDBObjectStore.prototype.put = original; }
+      db = await new Promise(resolve => { const request = indexedDB.open(name); request.onsuccess = () => resolve(request.result); });
+      if (db.version !== 2 || db.objectStoreNames.contains('metadata')) throw new Error('Interrupted upgrade committed partial schema'); db.close();
+      await assertMetadata(name);
+      const upgraded = new lib.TrustedCache({ ...options, databaseName: name }); upgraded.bind(identity);
+      await upgraded.unlock('drafts', null, () => issue('drafts'));
+      if (decoder.decode(await upgraded.read(reference('v2'))) !== 'v2-private') throw new Error('v2 upgrade changed ciphertext');
+      await upgraded.unlock('recording_recovery', 'class-a', () => issue('recording_recovery'));
+      if (decoder.decode(await upgraded.readCaptureState('class-a', 'v2-state')) !== 'v2-state') throw new Error('v2 upgrade lost capture metadata');
+      db = await lib.openCacheDatabase(name);
+      const nonces = await new Promise(resolve => { const request = db.transaction('nonces').objectStore('nonces').getAll(); request.onsuccess = () => resolve(request.result); }); db.close();
+      if (JSON.stringify(nonces) !== JSON.stringify(source.nonces)) throw new Error('Upgrade changed nonce history');
+      await upgraded.acknowledgeDraft(reference('v2'), 'op-v2-1'); await assertMetadata(name); upgraded.close();
+    });
+  });
+  await test('cache-writes-load-only-the-exact-retry-ciphertext', async () => {
+    await page.evaluate(async () => {
+      const name = 'pr08a-metadata-write'; const value = new lib.TrustedCache({ ...options, databaseName: name }); value.bind(identity);
+      await value.unlock('drafts', null, () => issue('drafts'));
+      for (let index = 0; index < 8; index++) await value.put(write('prior-' + index), new Uint8Array(64_000));
+      const originalGetAll = IDBObjectStore.prototype.getAll; const originalCursor = IDBObjectStore.prototype.openCursor;
+      const originalGet = IDBObjectStore.prototype.get;
+      const expectedId = JSON.stringify([JSON.stringify([identity.ownerId, identity.deviceId]), 'drafts', 'target-only', 1, 1]);
+      let reads = 0;
+      IDBObjectStore.prototype.getAll = function (...args) { if (this.name === 'records') throw new Error('Write cloned all ciphertext'); return originalGetAll.apply(this, args); };
+      IDBObjectStore.prototype.openCursor = function (...args) { if (this.name === 'records') throw new Error('Write scanned ciphertext'); return originalCursor.apply(this, args); };
+      IDBObjectStore.prototype.get = function (...args) { if (this.name === 'records') { reads++; if (args[0] !== expectedId) throw new Error('Write read unrelated ciphertext'); } return originalGet.apply(this, args); };
+      try { await value.put(write('target-only'), encoder.encode('target')); await value.put(write('target-only'), encoder.encode('target')); }
+      finally { IDBObjectStore.prototype.getAll = originalGetAll; IDBObjectStore.prototype.openCursor = originalCursor; IDBObjectStore.prototype.get = originalGet; }
+      if (reads !== 2) throw new Error('Expected one exact record lookup per write');
+      await assertMetadata(name); value.close();
+    });
+  });
+  await test('capture-state-read-decrypts-only-the-latest-target-with-unrelated-corrupt-pcm', async () => {
+    await page.evaluate(async () => {
+      const name = 'pr08a-target-state'; const value = new lib.TrustedCache({ ...options, databaseName: name }); value.bind(identity);
+      await value.unlock('recording_recovery', 'class-a', () => issue('recording_recovery'));
+      const chunk = { ...descriptor, capture_epoch_id: 'unrelated-pcm', seq: 0 };
+      await value.putRecording(chunk, new Uint8Array([1, 0, 2, 0]), ancestry, 1);
+      await value.saveCaptureState('class-a', 'target', encoder.encode('old'), ancestry, 1, 1);
+      await value.saveCaptureState('class-a', 'target', encoder.encode('latest'), ancestry, 2, 1);
+      const db = await lib.openCacheDatabase(name);
+      await new Promise(resolve => { const tx = db.transaction('records', 'readwrite'); const records = tx.objectStore('records');
+        const key = JSON.stringify([JSON.stringify([identity.ownerId, identity.deviceId]), 'recording_recovery', JSON.stringify(['class-a', 'unrelated-pcm', 0]), 1, 1]);
+        const request = records.get(key); request.onsuccess = () => { const record = request.result; record.ciphertext = new Uint8Array([0]).buffer; records.put(record); }; tx.oncomplete = resolve;
+      }); db.close();
+      const decrypt = crypto.subtle.decrypt.bind(crypto.subtle); const getAll = IDBObjectStore.prototype.getAll;
+      let decrypts = 0;
+      crypto.subtle.decrypt = (...args) => { decrypts++; return decrypt(...args); };
+      IDBObjectStore.prototype.getAll = function (...args) { if (this.name === 'records') throw new Error('State lookup cloned PCM pool'); return getAll.apply(this, args); };
+      try {
+        if (decoder.decode(await value.readCaptureState('class-a', 'target')) !== 'latest') throw new Error('Latest target state not selected');
+        if (await value.readCaptureState('class-a', 'missing') !== null) throw new Error('Missing state returned another record');
+      } finally { crypto.subtle.decrypt = decrypt; IDBObjectStore.prototype.getAll = getAll; }
+      if (decrypts !== 1) throw new Error('State lookup decrypted unrelated content');
+      await value.applyDeletion({ object_type: 'course', object_id: 'course-a', deletion_id: 'state-delete', state: 'access_revoked' });
+      await value.unlock('recording_recovery', 'class-a', () => issue('recording_recovery'));
+      if (await value.readCaptureState('class-a', 'target') !== null) throw new Error('Deleted capture state restored');
+      await assertMetadata(name); value.close();
     });
   });
   await test('native-idb-blocked-upgrade-reports-failure', async () => {
@@ -258,12 +365,15 @@ try {
     await cdp.send('Storage.overrideQuotaForOrigin', { origin, quotaSize: 1_048_576 });
     try {
       const result = await quotaPage.evaluate(async () => {
-        const { TrustedCache } = await import('/cache.js');
+        const { TrustedCache, openCacheDatabase } = await import('/cache.js');
         const value = new TrustedCache({ enabled: true, databaseName: 'pr08a-native-quota', limits: { draftBytes: 32_000_000, draftOperations: 100, recordingBytes: 1_000_000 } });
         value.bind({ ownerId: 'quota-owner', deviceId: 'quota-device', sessionId: 'quota-session' });
         await value.unlock('drafts', null, async () => ({ key_id: 'quota-key', key_epoch: 1, key_material_b64: btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32)))), scope: 'drafts', expires_at: new Date(Date.now() + 60_000).toISOString(), cache_policy_revision: 'synthetic-only' }));
         const entry = id => ({ scope: 'drafts', objectId: id, revision: 1, generation: 1, operationId: 'op-' + id, ancestry: { semesterId: null, courseId: null, classSessionId: null } });
         await value.put(entry('survivor'), new TextEncoder().encode('surviving-unique'));
+        await value.unlock('learning', null, async () => ({ key_id: 'quota-learning-key', key_epoch: 1, key_material_b64: btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32)))), scope: 'learning', expires_at: new Date(Date.now() + 60_000).toISOString(), cache_policy_revision: 'synthetic-only' }));
+        const lesson = { scope: 'learning', objectId: 'quota-lesson', revision: 1, generation: 1, ancestry: { semesterId: null, courseId: null, classSessionId: null }, verifiedAt: Date.now() };
+        await value.put(lesson, new TextEncoder().encode('surviving-learning'));
         let failure = null; let failedId = null;
         for (let i = 0; i < 16; i++) {
           const data = new Uint8Array(256_000);
@@ -271,10 +381,31 @@ try {
           try { await value.put(entry('fill-' + i), data); } catch (error) { failure = error.code; failedId = 'fill-' + i; break; }
         }
         const survived = new TextDecoder().decode(await value.read(entry('survivor'))) === 'surviving-unique';
+        const put = IDBObjectStore.prototype.put; let forcedTouch = false; let touchAbort;
+        IDBObjectStore.prototype.put = function (...args) {
+          const request = put.apply(this, args);
+          if (this.name === 'metadata' && args[0].header?.objectId === 'quota-lesson' && !forcedTouch) {
+            forcedTouch = true; const tx = this.transaction;
+            tx.addEventListener('abort', () => { touchAbort = tx.error?.name; });
+            const padding = new Uint8Array(2_000_000);
+            for (let offset = 0; offset < padding.length; offset += 32_000) crypto.getRandomValues(padding.subarray(offset, offset + 32_000));
+            put.call(this, { id: 'synthetic-over-quota-touch', padding });
+          }
+          return request;
+        };
+        let learningSurvived;
+        try { learningSurvived = new TextDecoder().decode(await value.read(lesson)) === 'surviving-learning'; }
+        finally { IDBObjectStore.prototype.put = put; }
+        if (!forcedTouch || touchAbort !== 'QuotaExceededError') throw new Error('Learning quota fallback was not exercised');
         const absent = failedId !== null && await value.read(entry(failedId)) === null;
-        value.close(); return { failure, survived, absent, mechanism: 'CDP native IndexedDB quota' };
+        const db = await openCacheDatabase('pr08a-native-quota');
+        await new Promise((resolve, reject) => { const tx = db.transaction(['records', 'metadata']);
+          const records = tx.objectStore('records').getAllKeys(); const metadata = tx.objectStore('metadata').getAllKeys();
+          tx.oncomplete = () => JSON.stringify(records.result) === JSON.stringify(metadata.result) ? resolve() : reject(new Error('Quota rollback left orphan metadata'));
+        }); db.close();
+        value.close(); return { failure, survived, learningSurvived, absent, mechanism: 'CDP native IndexedDB quota' };
       });
-      assert.deepEqual(result, { failure: 'QUOTA_EXCEEDED', survived: true, absent: true, mechanism: 'CDP native IndexedDB quota' });
+      assert.deepEqual(result, { failure: 'QUOTA_EXCEEDED', survived: true, learningSurvived: true, absent: true, mechanism: 'CDP native IndexedDB quota' });
     } finally { await cdp.send('Storage.overrideQuotaForOrigin', { origin }); await isolated.close(); }
   });
   await test('browser-process-restart-retains-ciphertext-and-requires-unlock', async () => {
@@ -356,6 +487,13 @@ try {
       const logout = auth.logout().catch(error => error.code);
       await expectCode(storage.read(reference('auth')), 'LOCKED');
       release(); if (await logout !== 'RESULT_UNKNOWN') throw new Error('Unknown logout status lost'); storage.close();
+    });
+  });
+  await test('metadata-projection-survives-migration-ack-lru-delete-and-purge', async () => {
+    await page.evaluate(async () => {
+      for (const database of await indexedDB.databases()) {
+        if (database.version === 3) await assertMetadata(database.name);
+      }
     });
   });
 } finally {

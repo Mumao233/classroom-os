@@ -87,7 +87,7 @@ def main():
         url = validate_test_database_target(f'postgresql+psycopg://{admin}@127.0.0.1:{port}/pr02a_control', environ=env)
         env['PR02A_TEST_ADMIN_URL'] = url.render_as_string(hide_password=False)
         selected = ['tests/integration/test_trusted_cache_browser.py', 'tests/integration/test_cache_keys.py',
-                    'tests/integration/test_capture_migration.py', 'tests/unit/test_pr07b_contract.py',
+                    'tests/integration/test_capture_migration.py', 'tests/integration/test_trusted_device_guard.py', 'tests/unit/test_pr07b_contract.py',
                     'tests/integration/test_authentication.py::test_additive_auth_migration_has_one_head_repeat_and_forced_RLS',
                     'tests/integration/test_billing_integration.py::test_composed_media_and_billing_migration_candidate',
                     'tests/integration/test_data_foundation.py::test_only_required_tables_and_contract_columns_exist',
