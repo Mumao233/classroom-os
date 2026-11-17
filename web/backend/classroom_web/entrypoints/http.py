@@ -71,7 +71,7 @@ def failure(error,request_id):
 def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admission=None,cache=None,media=None,media_spool_directory=None,billing=None,billing_admin=None,qa=None,review=None,deletion=None):
     parsed=urlsplit(origin)
     if parsed.scheme!='https' or not parsed.netloc or parsed.path or parsed.query or parsed.fragment or parsed.username:raise ValueError('one exact HTTPS origin is required')
-    if contract.get('info',{}).get('version')!='0.2.0':raise ValueError('approved contract 0.2.0 required')
+    if contract.get('info',{}).get('version') not in ('0.2.0','0.2.1'):raise ValueError('approved contract 0.2.0 or 0.2.1 required')
     if billing_admin is not None and not contract.get('x-pr11a-candidate'):
         raise ValueError('billing administration requires its explicit contract candidate')
     if qa is not None and contract.get('x-pr07a-candidate') != 'pr07a-1':
