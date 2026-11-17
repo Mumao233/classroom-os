@@ -86,6 +86,8 @@ def main():
         env['PR02A_TEST_ADMIN_URL'] = url.render_as_string(hide_password=False)
         selected = ['tests/integration/test_trusted_cache_browser.py', 'tests/integration/test_cache_keys.py',
                     'tests/integration/test_capture_migration.py', 'tests/unit/test_pr07b_contract.py',
+                    'tests/integration/test_authentication.py::test_additive_auth_migration_has_one_head_repeat_and_forced_RLS',
+                    'tests/integration/test_billing_integration.py::test_composed_media_and_billing_migration_candidate',
                     'tests/integration/test_authentication.py::test_real_login_cookie_context_logout_and_revoked_cookie',
                     'tests/integration/test_authentication.py::test_bound_reauth_changes_password_and_revokes_existing_session']
         execute([sys.executable, '-B', '-m', 'pytest', *selected, '-q', '-rA', '--basetemp=' + str(args.output / 'pytest'),
