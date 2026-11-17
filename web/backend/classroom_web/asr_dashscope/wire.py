@@ -39,6 +39,8 @@ class WireEvent:
     sentence: Sentence | None = None
     usage: TokenUsage | None = None
     usage_issue: bool = False
+    sentence_issue: bool = False
+    heartbeat: tuple[int, int | None] | None = None
 
 
 def run_task(provider_task_id: str) -> dict:
@@ -116,12 +118,17 @@ def _sentence(value: object) -> tuple[Sentence, bool]:
     return Sentence(sentence_id, begin_ms, end_ms, _text(body.get("text"), MAX_TEXT_CHARS), final), heartbeat
 
 
-def _request_id(output: dict) -> str | None:
-    if "request_id" not in output:
-        return None
-    request_id = _text(output["request_id"], 200)
-    if not request_id or not request_id.isprintable() or request_id.isspace():
-        raise ProtocolError("invalid DashScope request identity")
+def _request_id(*outputs: dict) -> str | None:
+    request_id = None
+    for output in outputs:
+        if "request_id" not in output:
+            continue
+        candidate = _text(output["request_id"], 200)
+        if not candidate or not candidate.isprintable() or candidate.isspace():
+            raise ProtocolError("invalid DashScope request identity")
+        if request_id is not None and request_id != candidate:
+            raise ProtocolError("conflicting DashScope request identities")
+        request_id = candidate
     return request_id
 
 
@@ -157,7 +164,7 @@ def _usage(*containers: dict) -> TokenUsage | None:
 
 
 def parse_event(raw: str, provider_task_id: str) -> WireEvent:
-    """Validate the documented envelope and compare known fields in mirrors."""
+    """Validate identity before separating transcript and metering evidence."""
     if not isinstance(raw, str) or len(raw) > MAX_MESSAGE_CHARS:
         raise ProtocolError("invalid DashScope JSON message size or type")
     try:
@@ -184,22 +191,39 @@ def parse_event(raw: str, provider_task_id: str) -> WireEvent:
             raise ProtocolError("invalid DashScope failure code")
         _text(header.get("error_message"), MAX_TEXT_CHARS)
         return WireEvent(kind)
-    if kind == "task-finished":
-        # The validated task-finished envelope confirms recognition ended.
-        # Invalid metering remains pending on that same request.
-        try:
-            return WireEvent(kind, usage=_usage(payload))
-        except UsageError:
-            return WireEvent(kind, usage_issue=True)
 
-    output = _object(payload.get("output"))
-    sentence, heartbeat = _sentence(output.get("sentence"))
-    request_id = _request_id(output)
-    mirror = _object(output["output"]) if "output" in output else {}
-    if "sentence" in mirror and _sentence(mirror["sentence"]) != (sentence, heartbeat):
-        raise ProtocolError("conflicting DashScope sentence copies")
-    mirror_request_id = _request_id(mirror)
-    if request_id is not None and mirror_request_id is not None and request_id != mirror_request_id:
-        raise ProtocolError("conflicting DashScope request identities")
-    return WireEvent(kind, request_id or mirror_request_id, None if heartbeat else sentence,
-                     _usage(payload, output, mirror))
+    output_value = payload.get("output")
+    output = output_value if isinstance(output_value, dict) else {}
+    mirror_value = output.get("output", {})
+    mirror = mirror_value if isinstance(mirror_value, dict) else {}
+    request_id = _request_id(output, mirror)
+
+    usage_issue = False
+    try:
+        usage = _usage(payload, output, mirror)
+        if kind == "task-finished":
+            if ("output" in payload and not isinstance(output_value, dict)
+                    or not isinstance(mirror_value, dict)):
+                raise UsageError("invalid DashScope terminal usage mirror")
+            if usage is not None and "input_tokens" not in payload.get("usage", {}):
+                raise UsageError("missing canonical DashScope terminal usage")
+    except UsageError:
+        usage, usage_issue = None, True
+
+    sentence, heartbeat, sentence_issue = None, None, False
+    if kind == "result-generated":
+        try:
+            candidate, is_heartbeat = _sentence(output.get("sentence"))
+            _object(mirror_value)
+            if "sentence" in mirror and _sentence(mirror["sentence"]) != (candidate, is_heartbeat):
+                raise ProtocolError("conflicting DashScope sentence copies")
+        except ProtocolError:
+            sentence_issue = True
+        else:
+            if is_heartbeat:
+                heartbeat = candidate.begin_ms, candidate.end_ms
+            else:
+                sentence = candidate
+
+    return WireEvent(kind, request_id=request_id, sentence=sentence, usage=usage,
+                     usage_issue=usage_issue, sentence_issue=sentence_issue, heartbeat=heartbeat)

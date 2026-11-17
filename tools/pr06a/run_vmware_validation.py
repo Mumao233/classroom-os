@@ -261,7 +261,8 @@ def main():
             '--pg-bin', pg, '--suite', 'billing', *billing_paths], timeout=300)
     if args.full:
         run('backend', [sys.executable, '-I', '-X', 'utf8', '-B', 'tools/pr07b/run_combined.py',
-                       '--root', root, '--auth-browser', '--deps', args.deps], timeout=2400)
+                       '--root', root, '--auth-browser', '--deps', args.deps,
+                       '--pytest-loopback-guard', guard / 'sitecustomize.py'], timeout=2400)
         if args.legacy_python is None:
             raise RuntimeError('Full validation requires a prepared Python 3.10 interpreter')
     if args.legacy_python is not None:

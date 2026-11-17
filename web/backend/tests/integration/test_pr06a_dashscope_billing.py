@@ -71,8 +71,8 @@ class _UsageTransport(FakeTransport):
         self.feed_json({'header': {'event': kind, 'task_id': self.identity.provider_task_id},
                         'payload': payload})
 
-    async def send_json(self, message):
-        await super().send_json(message)
+    async def send_json(self, message, *, on_dispatched=None):
+        await super().send_json(message, on_dispatched=on_dispatched)
         if message['header']['action'] == 'finish-task':
             self.event('task-finished', usage=self.terminal_usage)
 

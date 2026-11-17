@@ -11,7 +11,6 @@ from classroom_web.asr_dashscope.wire import (
     REGION,
     Sentence,
     TokenUsage,
-    UsageError,
     WireEvent,
     finish_task,
     parse_event,
@@ -86,7 +85,19 @@ def test_known_mirrors_agree_even_with_extra_fields_and_usage_is_counted_once():
 def test_heartbeat_only_duration_is_not_zero_tokens_or_a_transcript():
     body = sentence(sentence_id=0, text="", heartbeat=True)
     payload = {**result(body, request_id=REQUEST), "usage": {"duration": 2}}
-    assert parse("result-generated", payload) == WireEvent("result-generated", REQUEST)
+    assert parse("result-generated", payload) == WireEvent("result-generated", REQUEST, heartbeat=(0, None))
+
+
+def test_moving_heartbeat_is_distinct_from_a_replay_with_same_cumulative_usage():
+    body = sentence(sentence_id=0, text="", heartbeat=True)
+    payload = {**result(body), "usage": {"input_tokens": 5, "output_tokens": 0}}
+    first = parse("result-generated", payload)
+    repeat = parse("result-generated", payload)
+    later = parse("result-generated", {**payload, **result({**body, "begin_time": 25})})
+    assert first == repeat and first != later
+    assert first.sentence is later.sentence is None
+    assert first.usage == later.usage == TokenUsage(5, 0)
+    assert later.heartbeat == (25, None)
 
 
 @pytest.mark.parametrize("usage,expected", [
@@ -116,11 +127,11 @@ def test_malformed_usage_is_flagged_and_redacted(kind, usage):
     if kind == "task-finished":
         event = parse(kind, {"output": {}, "usage": usage})
         assert event == WireEvent("task-finished", usage_issue=True)
-        assert "sensitive-text" not in repr(event)
     else:
-        with pytest.raises(UsageError) as exc:
-            parse(kind, {**result(), "usage": usage})
-        assert "sensitive-text" not in str(exc.value)
+        body = sentence(sentence_end=True, end_time=10)
+        event = parse(kind, {**result(body), "usage": usage})
+        assert event == WireEvent(kind, sentence=Sentence(1, 0, 10, "测试", True), usage_issue=True)
+    assert "sensitive-text" not in repr(event)
 
 
 def test_malformed_terminal_usage_does_not_bypass_task_identity():
@@ -131,19 +142,49 @@ def test_malformed_terminal_usage_does_not_bypass_task_identity():
 @pytest.mark.parametrize("nested", [
     {"sentence": sentence(text="changed")},
     {"sentence": sentence(begin_time=1)},
-    {"request_id": "different-request"},
     {"sentence": []},
+    "invalid mirror container",
 ])
-def test_conflicting_known_output_mirror_fields_are_rejected(nested):
+def test_bad_sentence_mirror_keeps_valid_usage(nested):
+    payload = result(request_id=REQUEST, output=nested, usage={"input_tokens": 5, "output_tokens": 2})
+    assert parse("result-generated", payload) == WireEvent(
+        "result-generated", REQUEST, usage=TokenUsage(5, 2), sentence_issue=True,
+    )
+
+
+@pytest.mark.parametrize("kind", ["result-generated", "task-finished"])
+@pytest.mark.parametrize("nested_id", [None, "different-request"])
+def test_bad_request_mirror_cannot_emit_disputed_evidence(kind, nested_id):
+    payload = {"output": {"request_id": REQUEST, "output": {"request_id": nested_id}},
+               "usage": {"input_tokens": 5}}
     with pytest.raises(ProtocolError):
-        parse("result-generated", result(request_id=REQUEST, output=nested))
+        parse(kind, payload)
 
 
-def test_conflicting_usage_copies_are_rejected():
+def test_conflicting_usage_copies_keep_bound_transcript():
     payload = result(usage={"input_tokens": 5, "output_tokens": 2})
     payload["usage"] = {"input_tokens": 4, "output_tokens": 2}
-    with pytest.raises(UsageError, match="conflicting"):
-        parse("result-generated", payload)
+    assert parse("result-generated", payload) == WireEvent(
+        "result-generated", sentence=Sentence(1, 0, None, "测试", False), usage_issue=True,
+    )
+
+
+@pytest.mark.parametrize("mirror", ["outer", "inner"])
+def test_terminal_usage_mirrors_cannot_disagree_with_the_canonical_observation(mirror):
+    canonical = {"input_tokens": 4, "output_tokens": 2}
+    output = {"request_id": REQUEST, "usage": canonical.copy(), "output": {"usage": canonical.copy()}}
+    expected = WireEvent("task-finished", REQUEST, usage=TokenUsage(4, 2))
+    assert parse("task-finished", {"usage": canonical, "output": output}) == expected
+    disputed = output if mirror == "outer" else output["output"]
+    disputed["usage"]["output_tokens"] = 3
+    assert parse("task-finished", {"usage": canonical, "output": output}) == WireEvent(
+        "task-finished", REQUEST, usage_issue=True,
+    )
+
+
+def test_undocumented_nested_only_terminal_usage_remains_pending():
+    payload = {"output": {"usage": {"input_tokens": 4, "output_tokens": 2}}}
+    assert parse("task-finished", payload) == WireEvent("task-finished", usage_issue=True)
 
 
 @pytest.mark.parametrize("changes", [
@@ -161,13 +202,17 @@ def test_conflicting_usage_copies_are_rejected():
     {"text": "\ud800"},
 ])
 def test_malformed_sentence_never_constructs_revisions(changes):
-    with pytest.raises(ProtocolError):
-        parse("result-generated", result(sentence(**changes)))
+    event = parse("result-generated", {**result(sentence(**changes)),
+                                       "usage": {"input_tokens": 71, "output_tokens": 8}})
+    assert event == WireEvent("result-generated", usage=TokenUsage(71, 8), sentence_issue=True)
 
 
-def test_missing_canonical_sentence_is_rejected():
-    with pytest.raises(ProtocolError):
-        parse("result-generated", {"output": {"output": {"sentence": sentence()}}})
+@pytest.mark.parametrize("output", [None, [], {}, {"output": {"sentence": sentence()}}])
+def test_missing_canonical_sentence_cannot_discard_valid_usage(output):
+    usage = {"input_tokens": 80, "output_tokens": 16}
+    assert parse("result-generated", {"output": output, "usage": usage}) == WireEvent(
+        "result-generated", usage=TokenUsage(80, 16), sentence_issue=True,
+    )
 
 
 def test_vendor_failure_fields_are_consumed_without_echo():

@@ -1,5 +1,6 @@
 """The asynchronous boundary for one DashScope WebSocket connection."""
 import asyncio
+from collections.abc import Callable
 from copy import deepcopy
 import json
 from threading import Lock
@@ -18,15 +19,18 @@ class Transport(Protocol):
     """One owner, one reader and at most one writer on the same event loop.
 
     The caller supplies a configured transport. Its I/O must cooperate with
-    cancellation. Even after a partial connect or a failed close, abort must
-    immediately and idempotently release the connection.
+    cancellation. For a control write with on_dispatched, invoke the callback
+    synchronously when the frame has been handed to the underlying connection,
+    before yielding to a reader that could observe its acknowledgement.
+    A successful return confirms completion of the local write. After a partial
+    connect or a failed close, abort must immediately release the connection.
     """
 
     offline: bool
 
     def claim(self) -> None: ...
     async def connect(self) -> None: ...
-    async def send_json(self, message: dict) -> None: ...
+    async def send_json(self, message: dict, *, on_dispatched: Callable[[], None] | None = None) -> None: ...
     async def send_binary(self, frame: bytes) -> None: ...
     async def receive_text(self) -> str: ...
     async def close(self) -> None: ...
@@ -85,9 +89,11 @@ class FakeTransport:
         if not self.connected or self.closed:
             raise Disconnected('connection unavailable')
 
-    async def send_json(self, message):
+    async def send_json(self, message, *, on_dispatched=None):
         self._require_connection()
         self.sent.append(('json', deepcopy(message)))
+        if on_dispatched is not None:
+            on_dispatched()
 
     async def send_binary(self, frame):
         self._require_connection()

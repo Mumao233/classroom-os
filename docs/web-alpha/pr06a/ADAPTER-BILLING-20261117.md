@@ -15,7 +15,9 @@
 
 可信累计用量以单请求为单位，从 revision 1 开始，每次接受新的累计量或确认最终用量时递增。完全重复的累计包只产生一条 `asr.usage`。即使 Token 数完全相同，可信的最终计量也有独立 revision。PG 用例验证用相同 revision 重放观察的幂等性。正式接入需要保留原计量身份及版本，避免迟到凭证碰到早期已写入的同版本数据。
 
-供应商已结束且识别证据完整时，缺失或无效的终态 usage 会保留识别结果，同时费用仍待核对。此前已知金额和残余敞口继续保留，完整、可归属的迟到凭证可按更高版本核对。类型合法但超出 permit 上界或回退的累计量会产生 `asr.usage_anomaly`，包含观测的 Token 数和相应上界。异常观察保留给费用核对，此前可信高水位继续有效。非终态计量异常会停止新发送。`PgBillingRepository.reconcile` 会记录实际可证实的超额风险，正式组合层需要先核实该凭证的归属和可结算状态。 [适配器](../../../web/backend/classroom_web/asr_dashscope/adapter.py) · [费用操作契约](../architecture/06-COST-OPERATIONS.md)
+供应商已结束且识别证据完整时，缺失或无效的终态 usage 会保留识别结果，同时费用仍待核对。`provider_request_id` 缺失或归属不明时，即使有完整 Token 数，费用也保持待核对。由客户端生成的 `provider_task_id` 只用于串联同一供应商任务及本地发送意图。结算须等到核实真实 `provider_request_id` 与原 attempt 的关联。此前已知金额和残余敞口继续保留，完整、可归属的迟到凭证可按更高版本核对。 [适配器](../../../web/backend/classroom_web/asr_dashscope/adapter.py)
+
+身份与消息封套通过校验后，句子与计量分别校验并保留证据。只覆盖尝试发送范围、尚未获得发送确认的字幕仍是待核候选，正式提交前需核对样本范围。类型合法但超出 permit 上界或回退的累计量会产生 `asr.usage_anomaly`，包含观测的 Token 数和相应上界。异常观察保留给费用核对，此前可信高水位继续有效。非终态计量异常会停止新发送。`PgBillingRepository.reconcile` 会记录实际可证实的超额风险，正式组合层需要先核实凭证归属和可结算状态。 [费用操作契约](../architecture/06-COST-OPERATIONS.md)
 
 ## 真实 POC 仍需核对
 

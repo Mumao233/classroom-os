@@ -1,5 +1,6 @@
 """One locally bounded DashScope request, with no production composition."""
 import asyncio
+from collections import deque
 from dataclasses import dataclass, fields
 
 from ..asr_sim.simulator import ProtocolError, identity, uid, validate_frame
@@ -57,7 +58,7 @@ class DashScopeAdapter:
         self._terminal_event = asyncio.Event()
         self._reader = self._writer = self._finisher = self._closer = None
         self._run_attempted = self._finish_attempted = False
-        self._finish_dispatched = False
+        self._finish_handed_off = self._finish_write_complete = False
         self._pending_terminal: WireEvent | None = None
         self._attempted_ranges = []
         self._sent_ranges = []
@@ -66,6 +67,7 @@ class DashScopeAdapter:
         self._latest_id = 0
         self._sentences = {}
         self._seen_partials = {}
+        self._deferred_transcripts = deque()
         self._seen_results: set[WireEvent] = set()
         self._usage = None
         self._usage_final = False
@@ -91,7 +93,7 @@ class DashScopeAdapter:
 
     @property
     def billing_pending(self):
-        return self._state != 'succeeded' or not self._usage_final
+        return self._state != 'succeeded' or not self._usage_final or self._request_id is None
 
     @property
     def close_error(self):
@@ -209,7 +211,6 @@ class DashScopeAdapter:
                 self._stop_unconfirmed(reason)
                 await self._wait_closed()
                 raise ProtocolError(reason) from None
-            self._sent_ranges.append((start, end))
             return self._receipt()
 
     async def finish(self):
@@ -235,7 +236,7 @@ class DashScopeAdapter:
                 async with self._write_lock:
                     if self._state == 'draining':
                         await self._write(self._send_finish, expires_at=limit.when())
-                        self._finish_dispatched = True
+                        self._finish_write_complete = True
                         self._confirm_pending_terminal()
                 await self._terminal_event.wait()
         except Exception as exc:
@@ -275,11 +276,20 @@ class DashScopeAdapter:
         # A transport exception cannot prove that the bytes did not leave.
         self._attempted_ranges.append((start, end))
         await self._transport.send_binary(pcm)
+        self._sent_ranges.append((start, end))
+        if self._state not in _TERMINAL:
+            self._publish_confirmed_transcripts(end)
 
     async def _send_finish(self):
         message = finish_task(self._identity.provider_task_id)
         self._finish_attempted = True
-        await self._transport.send_json(message)
+        await self._transport.send_json(message, on_dispatched=self._mark_finish_handoff)
+        if not self._finish_handed_off:
+            raise ProtocolError('transport omitted finish handoff')
+
+    def _mark_finish_handoff(self):
+        if self._state == 'draining':
+            self._finish_handed_off = True
 
     async def _write(self, method, *args, seconds=None, expires_at=None):
         limit = self._timeout(self._deadlines.write if seconds is None else seconds,
@@ -333,6 +343,12 @@ class DashScopeAdapter:
             return
         if self._state == 'starting' and event.kind not in ('task-started', 'task-failed'):
             raise ProtocolError('provider event before task-started')
+        if event.kind == 'result-generated' and event in self._seen_results:
+            return
+        if event.request_id is not None:
+            if self._request_id is not None and event.request_id != self._request_id:
+                raise ProtocolError('provider request identity changed')
+            self._request_id = event.request_id
         if event.kind == 'task-started':
             if self._state == 'starting':
                 self._state = 'streaming'
@@ -347,22 +363,30 @@ class DashScopeAdapter:
                 raise ProtocolError('provider finished before finish-task')
             self._provider_terminal = event.kind
             self._pending_terminal = event
+            if not self._finish_handed_off:
+                self._stop_unconfirmed('finish_ack_before_dispatch')
+                return
             self._confirm_pending_terminal()
             return
 
-        # Compare a normalized packet, including its usage. An exact replay can
-        # arrive after newer cumulative readings; only new evidence can regress.
-        if event in self._seen_results:
-            return
-        if event.request_id is not None:
-            if self._request_id is not None and event.request_id != self._request_id:
-                raise ProtocolError('provider request identity changed')
-            self._request_id = event.request_id
+        self._accept_result(event)
+        self._seen_results.add(event)
+
+    def _accept_result(self, event):
+        # A valid sentence and a valid meter reading are independent evidence.
+        sentence_issue = event.sentence_issue
+        if event.sentence is not None:
+            try:
+                self._accept_sentence(event.sentence)
+            except ProtocolError:
+                sentence_issue = True
+        if event.usage_issue:
+            self._usage_anomaly('invalid_result_usage', final=False)
+            raise UsageError('invalid cumulative result usage')
         if event.usage is not None:
             self._accept_usage(event.usage, final=False)
-        if event.sentence is not None:
-            self._accept_sentence(event.sentence)
-        self._seen_results.add(event)
+        if sentence_issue:
+            raise ProtocolError('invalid result sentence')
 
     def _confirm_pending_terminal(self):
         if self._state != 'draining' or self._pending_terminal is None:
@@ -370,7 +394,7 @@ class DashScopeAdapter:
         if self._loop.time() >= self._finish_deadline:
             self._stop_unconfirmed('finish_timeout')
             return
-        if not self._finish_dispatched:
+        if not self._finish_write_complete:
             return
         event, self._pending_terminal = self._pending_terminal, None
         if event.usage_issue:
@@ -381,7 +405,8 @@ class DashScopeAdapter:
             except UsageError:
                 # The terminal separately proves that delivery of recognition ended.
                 pass
-        if not self._sentences or any(not sentence.final for sentence, _ in self._sentences.values()):
+        if (self._deferred_transcripts or not self._sentences
+                or any(not sentence.final for sentence, _ in self._sentences.values())):
             self._stop('unknown', 'incomplete_transcript')
         else:
             self._stop('succeeded', 'task_finished')
@@ -434,19 +459,30 @@ class DashScopeAdapter:
             seen.add(sentence)
         self._latest_id = max(self._latest_id, number)
         self._sentences[number] = (sentence, revision + 1)
-        self._emit('asr.final_candidate' if sentence.final else 'asr.partial',
-                   segment_id=identity('dashscope-sentence', self._identity.stream_id,
-                                        self._identity.provider_task_id, number),
-                   sequence=number - 1, revision=revision + 1, text=sentence.text,
-                   start_sample=start, end_sample=end, timestamp_source='provider_segment')
+        candidate = self._event('asr.final_candidate' if sentence.final else 'asr.partial',
+                                segment_id=identity('dashscope-sentence', self._identity.stream_id,
+                                                     self._identity.provider_task_id, number),
+                                sequence=number - 1, revision=revision + 1, text=sentence.text,
+                                start_sample=start, end_sample=end, timestamp_source='provider_segment')
+        self._deferred_transcripts.append((max(start + 1, end or 0), candidate))
+        if self._sent_ranges:
+            self._publish_confirmed_transcripts(self._sent_ranges[-1][1])
 
-    def _emit(self, kind, **data):
-        self._event_batch.append({'type': kind, 'data': {
+    def _publish_confirmed_transcripts(self, end_sample):
+        while self._deferred_transcripts and self._deferred_transcripts[0][0] <= end_sample:
+            _, event = self._deferred_transcripts.popleft()
+            self._event_batch.append(event)
+
+    def _event(self, kind, **data):
+        return {'type': kind, 'data': {
             **data, 'task_id': self._identity.task_id, 'attempt_id': self._identity.attempt_id,
             'stream_id': self._identity.stream_id, 'class_session_id': self._session,
             'capture_epoch_id': self._epoch, 'provider_task_id': self._identity.provider_task_id,
             'provider_request_id': self._request_id,
-        }})
+        }}
+
+    def _emit(self, kind, **data):
+        self._event_batch.append(self._event(kind, **data))
 
     def _stop_unconfirmed(self, reason):
         if self._state != 'idle' and self._state not in _TERMINAL:
@@ -458,6 +494,11 @@ class DashScopeAdapter:
         if self._pending_terminal is not None:
             self._usage_anomaly('unconfirmed_finish_dispatch', self._pending_terminal.usage, final=True)
             self._pending_terminal = None
+        for _, event in self._deferred_transcripts:
+            self._event_batch.append({'type': 'asr.transcript_unconfirmed', 'data': {
+                **event['data'], 'candidate_type': event['type'],
+            }})
+        self._deferred_transcripts.clear()
         self._state = state
         self._emit('asr.terminal', state=state, reason=reason,
                    provider_terminal=self._provider_terminal, billing_pending=self.billing_pending)
