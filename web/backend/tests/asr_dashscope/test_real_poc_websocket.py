@@ -84,12 +84,27 @@ def test_unrelated_duplicate_keys_do_not_discard_meter_evidence():
     implied_input = raw.replace('"input_tokens":200000,"output_tokens":1',
                                 '"total_tokens":180000,"output_tokens":0')
     assert metering_evidence(implied_input).usage.input_tokens == 180000
+    mirrored = {"header": {"task_id": task, "event": "task-started"},
+                "payload": {"usage": {"total_tokens": 180000}, "output": {"usage": {"output_tokens": 0}}}}
+    assert metering_evidence(json.dumps(mirrored)).usage.input_tokens == 180000
+    mirrored["payload"]["usage"]["input_tokens"] = None
+    inferred = metering_evidence(json.dumps(mirrored))
+    assert inferred.usage.input_tokens == 180000 and inferred.metering_conflict
     non_object = raw.replace('{"input_tokens":200000,"output_tokens":1}', '[]')
     assert metering_evidence(non_object).metering_conflict
     parsed = {"header": {"task_id": task, "event": "task-started"},
               "payload": {"usage": {"input_tokens": 100, "total_tokens": 5}}}
     assert metering_evidence(json.dumps(parsed)).metering_conflict
     assert observation_fingerprint(json.dumps(parsed)) == observation_fingerprint(json.dumps(parsed, sort_keys=True, indent=2))
+    conflict = {"header": {"task_id": task, "event": "task-started"},
+                "payload": {"usage": {"input_tokens": 100}, "output": {"usage": {"input_tokens": 80}}}}
+    issue = observation_fingerprint(json.dumps(conflict))
+    conflict["header"]["attributes"] = {"harmless": True}
+    assert observation_fingerprint(json.dumps(conflict)) == issue
+    conflict["payload"]["output"]["usage"]["input_tokens"] = 50
+    assert observation_fingerprint(json.dumps(conflict)) != issue
+    conflict["header"]["event"] = "synthetic-unknown-event"
+    assert observation_fingerprint(json.dumps(conflict)) == observation_fingerprint(json.dumps(conflict, indent=2))
 
 
 def _loopback_certificate(tmp_path):

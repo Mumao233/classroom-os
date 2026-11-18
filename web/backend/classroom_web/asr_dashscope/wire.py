@@ -182,6 +182,8 @@ class MeteringEvidence:
     attribution_conflict: bool = False
     request_fingerprint: str | None = None
     metering_conflict: bool = False
+    event_class: str | None = None
+    conflict_facts: tuple = ()
 
 
 class _ObjectPairs(list):
@@ -216,12 +218,16 @@ def _bounded_meter_decimal(value):
 
 def _meter_totals(containers):
     high = {}
+    alternatives = {}
+    facts = set()
     conflict = False
     for body in containers:
         if not isinstance(body, _ObjectPairs):
+            facts.add((("usage", (), True),))
             conflict = True
             continue
         current = {}
+        body_facts = []
         unambiguous = set()
         for meter in ("input_tokens", "output_tokens", "total_tokens"):
             values = _values(body, meter)
@@ -229,7 +235,10 @@ def _meter_totals(containers):
                 continue
             counts = {min(int(value), 2**53 - 1) for value in values
                       if type(value) in (int, _NoncanonicalMeter) and value >= 0}
-            conflict |= (len(counts) != 1 or any(type(v) is not int or not 0 <= v <= 2**53 - 1 for v in values))
+            invalid = any(type(v) is not int or not 0 <= v <= 2**53 - 1 for v in values)
+            body_facts.append((meter, tuple(sorted(counts)), invalid))
+            alternatives.setdefault(meter, set()).update(counts)
+            conflict |= len(counts) != 1 or invalid
             if not counts:
                 continue
             count = min(counts)
@@ -239,6 +248,8 @@ def _meter_totals(containers):
             if meter in high and high[meter] != count:
                 conflict = True
             high[meter] = max(high.get(meter, 0), count)
+        if body_facts:
+            facts.add(tuple(body_facts))
         if "total_tokens" in current:
             floor = current.get("input_tokens", 0) + current.get("output_tokens", 0)
             conflict |= current["total_tokens"] < floor
@@ -252,6 +263,11 @@ def _meter_totals(containers):
                     if missing in high and high[missing] != inferred:
                         conflict = True
                     high[missing] = max(high.get(missing, 0), inferred)
+    if len(alternatives.get("total_tokens", ())) == 1:
+        for known, missing in (("input_tokens", "output_tokens"), ("output_tokens", "input_tokens")):
+            if (missing not in high and len(alternatives.get(known, ())) == 1
+                    and high[known] <= high["total_tokens"]):
+                high[missing] = high["total_tokens"] - high[known]
     floor = high.get("input_tokens", 0) + high.get("output_tokens", 0)
     both = "input_tokens" in high and "output_tokens" in high
     if "total_tokens" in high:
@@ -261,7 +277,7 @@ def _meter_totals(containers):
     split = None
     if "input_tokens" in high or "output_tokens" in high:
         split = RiskTokens(high.get("input_tokens"), high.get("output_tokens"))
-    return split, high.get("total_tokens"), conflict
+    return split, high.get("total_tokens"), conflict, tuple(sorted(facts)) if conflict else ()
 
 
 def metering_evidence(raw: str) -> MeteringEvidence | None:
@@ -271,7 +287,12 @@ def metering_evidence(raw: str) -> MeteringEvidence | None:
     try:
         obj = json.loads(raw, object_pairs_hook=_ObjectPairs, parse_constant=_unknown_number,
                          parse_float=_bounded_meter_decimal, parse_int=_bounded_meter_int)
-        tasks = {uid(task) for header in _values(obj, "header") for task in _values(header, "task_id")}
+        headers = _values(obj, "header")
+        tasks = {uid(task) for header in headers for task in _values(header, "task_id")}
+        kinds = {value for header in headers for value in _values(header, "event") if isinstance(value, str)}
+        event_class = None
+        if kinds:
+            event_class = sha256(json.dumps(sorted(kinds), ensure_ascii=True).encode("ascii")).hexdigest()
         if len(tasks) != 1:
             return None
         task = tasks.pop()
@@ -285,39 +306,23 @@ def metering_evidence(raw: str) -> MeteringEvidence | None:
             return MeteringEvidence(task, None, None, None, attribution_conflict=True)
         if len(ids) > 1:
             return MeteringEvidence(task, None, None, None, attribution_conflict=True)
-        usage, total, conflict = _meter_totals(
+        usage, total, conflict, facts = _meter_totals(
             body for container in (*payloads, *outputs, *mirrors) for body in _values(container, "usage"))
-        return MeteringEvidence(task, next(iter(ids), None), usage, total, metering_conflict=conflict)
+        return MeteringEvidence(task, next(iter(ids), None), usage, total, metering_conflict=conflict,
+                                event_class=event_class, conflict_facts=facts)
     except (ValueError, RecursionError):
         return None
 
 
-def _canonical_pairs(pairs):
-    return {"pairs": sorted(pairs, key=lambda item: (
-        item[0], json.dumps(item[1], sort_keys=True, separators=(",", ":"), ensure_ascii=True)))}
-
-
-def _literal_number(value):
-    return {"number": value}
-
-
 def observation_fingerprint(raw: str, evidence: MeteringEvidence | None = None) -> str:
     evidence = evidence or metering_evidence(raw)
-    if evidence is not None and evidence.metering_conflict:
+    if evidence is not None:
         try:
-            obj = json.loads(raw, object_pairs_hook=_canonical_pairs, parse_int=_literal_number,
-                             parse_float=_literal_number, parse_constant=_literal_number)
-            raw = json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
-        except (ValueError, RecursionError):
-            pass
-    elif evidence is not None:
-        try:
-            event = parse_event(raw, evidence.task_id)
+            event = asdict(parse_event(raw, evidence.task_id))
         except ProtocolError:
-            pass
-        else:
-            normalized = {"event": asdict(event), "metering": asdict(evidence)}
-            raw = json.dumps(normalized, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+            event = None
+        raw = json.dumps({"event": event, "metering": asdict(evidence)},
+                         sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     return sha256(raw.encode("utf-8")).hexdigest()
 
 
