@@ -1,0 +1,29 @@
+[
+  {
+    "slot": 1,
+    "name": "1_mandarin.wav",
+    "wav_hash": "e0ec352274858132b04d52db85ed2047485e1e1537bcc9f47a6f88803f43a509",
+    "pcm_hash": "f8022f15370f16cb6752bd1c8edef9885261c78866312c587f9dd512404ea5c0",
+    "samples": 69888,
+    "send_samples": 69888,
+    "send_hash": "f8022f15370f16cb6752bd1c8edef9885261c78866312c587f9dd512404ea5c0"
+  },
+  {
+    "slot": 2,
+    "name": "2_mixed.wav",
+    "wav_hash": "d006c9c11e021e4e15bf934b71f7f88bd5ebb98d792c957bfa4ce279e8499a7b",
+    "pcm_hash": "2d2a37fbbf63e32d0245e1d996c2fe121d3c23b6674ad5e58cc18b17ab243db2",
+    "samples": 82176,
+    "send_samples": 82176,
+    "send_hash": "2d2a37fbbf63e32d0245e1d996c2fe121d3c23b6674ad5e58cc18b17ab243db2"
+  },
+  {
+    "slot": 3,
+    "name": "3_long.wav",
+    "wav_hash": "4f4e93eee0e6d036cd57b60f66ee87d7d4c14d74b627b19a054fa8f3e421a326",
+    "pcm_hash": "a27033e0bec1c74ff49d3e81259234733301404d3737008cc1983858713a1a37",
+    "samples": 137472,
+    "send_samples": 32000,
+    "send_hash": "e8e7098ccede40dfd05964a6e3ee6b3b54bfddb66bfa531a0e13c2f8c6684c27"
+  }
+]
