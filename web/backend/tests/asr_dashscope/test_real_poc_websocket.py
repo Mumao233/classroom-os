@@ -52,7 +52,8 @@ def test_credential_echo_retains_only_attributable_cost_evidence():
     secret_request = text.replace("approved-request", encoded)
     with pytest.raises(UnsafeInbound) as exc:
         websocket._safe_evidence(InboundText(secret_request, 1, 1), FAKE_KEY)
-    assert exc.value.metering.request_id is None and exc.value.metering.request_redacted
+    assert exc.value.metering.request_id is None
+    assert exc.value.metering.request_fingerprint == digest(FAKE_KEY.encode("utf-8"))
     assert exc.value.metering.usage.input_tokens == 200000
 
 
@@ -63,11 +64,14 @@ def test_unrelated_duplicate_keys_do_not_discard_meter_evidence():
     assert metering_evidence(raw).usage.input_tokens == 200000
     assert metering_evidence(raw.replace('"request_id":"r"', '"request_id":"r","request_id":"s"')).attribution_conflict
     split = metering_evidence(raw.replace('"output_tokens":1', '"output_tokens":1,"output_tokens":2')).usage
-    assert split.input_tokens == 200000 and split.output_tokens is None
+    assert split.input_tokens == 200000 and split.output_tokens == 1
     ambiguous_mirror = raw.replace('"sentence":{"x":0,"x":1}', '"output":{},"output":{}')
     assert metering_evidence(ambiguous_mirror).usage.input_tokens == 200000
     out_of_range = raw.replace('"x":1', '"x":1e999')
     assert metering_evidence(out_of_range).usage.input_tokens == 200000
+    huge_integer = raw.replace('"x":1', '"x":' + "9" * 5000)
+    assert websocket._safe_evidence(InboundText(huge_integer, 1, 1), FAKE_KEY).text == huge_integer
+    assert metering_evidence(huge_integer).usage.input_tokens == 200000
 
 
 def _loopback_certificate(tmp_path):

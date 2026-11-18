@@ -30,7 +30,7 @@ def _credential_echo(text, key, control):
         if key in meter.task_id:
             meter = None
         elif meter.request_id and key in meter.request_id:
-            meter = replace(meter, request_id=None, request_redacted=True)
+            meter = replace(meter, request_id=None, request_fingerprint=digest(meter.request_id.encode("utf-8")))
     event = final = None
     if meter is not None and not meter.attribution_conflict:
         try:
@@ -45,6 +45,10 @@ def _credential_echo(text, key, control):
                          control=control, event=event, final_sentence=final)
 
 
+def _ignore_number(_value):
+    return None
+
+
 def _safe_evidence(frame, key):
     text = frame.text
     if key in text:
@@ -52,7 +56,8 @@ def _safe_evidence(frame, key):
     try:
         # Keep duplicate keys intact in the original wire text for parse_event.
         # Inspect values AND keys as decoded strings before retaining that text.
-        pending = [json.loads(text, object_pairs_hook=list)]
+        pending = [json.loads(text, object_pairs_hook=list, parse_int=_ignore_number,
+                              parse_float=_ignore_number, parse_constant=_ignore_number)]
         while pending:
             value = pending.pop()
             if isinstance(value, (list, tuple)):
@@ -82,7 +87,7 @@ class _Connection(ClientConnection):
     def __init__(self, protocol, *, before_handshake, **kwargs):
         super().__init__(protocol, **kwargs)
         self._before_handshake = before_handshake
-        self.control = self.audio = 0
+        self.control = self.audio = self.buffered_messages = 0
         self.stamps = deque()
 
     async def handshake(self, additional_headers=None, user_agent_header=None):
@@ -96,11 +101,14 @@ class _Connection(ClientConnection):
     def process_event(self, event):
         if isinstance(event, Frame) and event.opcode in (Opcode.TEXT, Opcode.BINARY):
             self.stamps.append((self.control, self.audio))
+        if isinstance(event, Frame) and event.fin and event.opcode in (Opcode.TEXT, Opcode.BINARY, Opcode.CONT):
+            self.buffered_messages += 1
         super().process_event(event)
 
     async def stamped_text(self):
         message = await self.recv()
         control, audio = self.stamps.popleft()
+        self.buffered_messages -= 1
         if not isinstance(message, str):
             raise UnsafeInbound("binary_provider_response", digest(message))
         return InboundText(message, control, audio)
@@ -183,6 +191,9 @@ class _WebSocket:
 
     def has_pending(self):
         return self._socket is not None and bool(self._socket.stamps)
+
+    def has_buffered(self):
+        return self._socket is not None and self._socket.buffered_messages > 0
 
     async def receive_text(self):
         try:

@@ -36,7 +36,7 @@ class _Session:
         self.dispatch_ready.set()
         self.run_control = self.finish_control = 0
         self.ready = self.recognition_ok = self.recognition_tainted = self.provider_failed = False
-        self.accounting_only = False
+        self.accounting_only = self.network_closed = False
         self.stop = None
         self.ranges = [0]
         self.sentences = {}
@@ -44,6 +44,9 @@ class _Session:
         self.seen_results = set()
         self.request = None
         self.usage = None
+        self.meter_high = (None, None, None)
+        self.meter_packets = set()
+        self.meter_regressed = False
         self.received_count = self.received_bytes = 0
         self.retention_capped = False
 
@@ -83,7 +86,7 @@ class _Session:
         attributable = evidence is not None and evidence.task_id == str(self.attempt.task_id)
         if attributable:
             usage = evidence.usage
-            packet.update(request_id=evidence.request_id, request_redacted=evidence.request_redacted,
+            packet.update(request_id=evidence.request_id, request_fingerprint=evidence.request_fingerprint,
                           attribution_conflict=evidence.attribution_conflict,
                           input=usage.input_tokens if usage else None,
                           output=usage.output_tokens if usage else None, total=evidence.total)
@@ -95,7 +98,35 @@ class _Session:
             self.request = evidence.request_id or self.request
             if evidence.metering_conflict:
                 self.stop = self.stop or "usage_unresolved"
+            self._meter_high_water(evidence, packet["raw_hash"])
         return accepted
+
+    def _meter_high_water(self, evidence, raw_hash):
+        usage = evidence.usage
+        values = (usage.input_tokens if usage else None, usage.output_tokens if usage else None, evidence.total)
+        if not any(value is not None for value in values):
+            return
+        if raw_hash not in self.meter_packets and any(
+                value is not None and previous is not None and value < previous
+                for value, previous in zip(values, self.meter_high)):
+            self.stop = self.stop or "usage_regression"
+            self.meter_regressed = True
+        if not self.retention_capped:
+            self.meter_packets.add(raw_hash)
+        self.meter_high = tuple(max((v for v in pair if v is not None), default=None)
+                                for pair in zip(values, self.meter_high))
+
+    def recognition_state(self):
+        if self.recognition_ok:
+            return "succeeded"
+        return "failed" if self.provider_failed else "unknown"
+
+    async def _note_provider_failure(self):
+        if self.terminal_event is not None:
+            self.recognition_ok = False
+        elif not self.provider_failed:
+            self.provider_failed = True
+            await self.ledger.protocol(self.attempt, "task-failed")
 
     def _check_terminal_contradiction(self, event):
         if event.request_id and self.request and event.request_id != self.request:
@@ -120,6 +151,8 @@ class _Session:
         if (usage is not None and self.usage is not None
                 and (usage.input_tokens < self.usage.input_tokens or usage.output_tokens < self.usage.output_tokens)):
             await self._anomaly("usage_regression", inbound)
+            usage = None
+        if self.meter_regressed:
             usage = None
         if usage is not None:
             self.usage = usage
@@ -146,8 +179,7 @@ class _Session:
             return
         if event.kind == "task-failed":
             self.stop = "provider_failed"
-            self.provider_failed = True
-            await self.ledger.protocol(self.attempt, "task-failed")
+            await self._note_provider_failure()
             raise PocStopped(self.stop)
         if event.kind == "task-started":
             if not self.ready:
@@ -210,13 +242,16 @@ class _Session:
             packet.update(sequence=self.received_count, control=inbound.control_sequence,
                           frame=inbound.audio_attempt, payload=inbound.text)
         accepted = await self._retain(packet, metering_evidence(inbound.text))
-        if accepted and self.terminal_event is not None:
+        if accepted and self.run_control and inbound.control_sequence >= self.run_control:
             try:
                 event = parse_event(inbound.text, str(self.attempt.task_id))
             except ProtocolError:
                 pass
             else:
-                self._check_terminal_contradiction(event)
+                if event.kind == "task-failed":
+                    await self._note_provider_failure()
+                elif self.terminal_event is not None:
+                    self._check_terminal_contradiction(event)
         return accepted
 
     async def _retain_unsafe(self, exc):
@@ -226,11 +261,7 @@ class _Session:
                 or not self.run_control or exc.control < self.run_control):
             return
         if exc.event == "task-failed":
-            if self.terminal_event is not None:
-                self.recognition_ok = False
-            elif not self.provider_failed:
-                self.provider_failed = True
-                await self.ledger.protocol(self.attempt, "task-failed")
+            await self._note_provider_failure()
         if self.terminal_event is not None and exc.final_sentence is not None:
             seen = self.sentences.get(exc.final_sentence[0])
             if seen is not None and sentence_proof(seen[0]) != exc.final_sentence:
@@ -238,7 +269,7 @@ class _Session:
 
     async def _read(self):
         try:
-            while True:
+            while not self.network_closed or self.transport.has_buffered():
                 try:
                     inbound = await self.transport.receive_text()
                 except EndOfStream:
@@ -286,13 +317,11 @@ class _Session:
         finally:
             if not closed:
                 self.transport.abort()
+            self.network_closed = True
             try:
                 if reader is not None:
-                    _, pending = await asyncio.wait((reader,), timeout=2)
-                    if pending:
-                        self.transport.abort()
-                        reader.cancel()
-                        self.stop = self.stop or "accounting_cleanup_timeout"
+                    # Only the frozen complete backlog can be drained now.
+                    # Each PG transaction is independently time-bounded.
                     await asyncio.gather(reader, return_exceptions=True)
             finally:
                 self.transport.dispose()
@@ -448,7 +477,7 @@ async def execute_batch(ledger, samples, reviewed_sha, account_ref, credential_f
                     admitted = True
                     session = _Session(transport_for(attempt), ledger, attempt, sample)
                     await session.run(deadline)
-                state = "succeeded" if session.recognition_ok else "unknown"
+                state = session.recognition_state()
                 reason = session.stop
                 await ledger.complete(attempt, state, reason)
                 receipts.append(Receipt(sample.spec.slot, state, reason))
@@ -476,10 +505,9 @@ async def execute_batch(ledger, samples, reviewed_sha, account_ref, credential_f
             reason = "connection_failed"
         else:
             reason = "protocol_invalid"
-        if session and (session.recognition_ok or session.provider_failed):
-            state = "succeeded" if session.recognition_ok else "failed"
-        else:
-            state = "failed" if isinstance(exc, AuthenticationRejected) else "unknown"
+        state = session.recognition_state() if session else "unknown"
+        if isinstance(exc, AuthenticationRejected):
+            state = "failed"
         if admitted:
             # Audit persistence after the I/O deadline cannot grant more I/O.
             try:

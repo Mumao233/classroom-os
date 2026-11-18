@@ -151,7 +151,7 @@ CREATE TABLE pr06a_control.attempts (
   usage_final boolean NOT NULL DEFAULT false,
   gross_microyuan bigint CHECK (gross_microyuan>=0),
   metering_revision integer NOT NULL DEFAULT 0,
-  redacted_request_seen boolean NOT NULL DEFAULT false,
+  redacted_request_fingerprint text CHECK (redacted_request_fingerprint ~ '^[a-f0-9]{64}$'),
   observed_input bigint CHECK (observed_input>=0),
   observed_output bigint CHECK (observed_output>=0),
   observed_total bigint CHECK (observed_total>=0),
@@ -208,8 +208,11 @@ CREATE TABLE pr06a_control.bill_evidence (
   reviewed_metering_revision integer NOT NULL CHECK (reviewed_metering_revision>=0),
   discrepancy_resolved boolean NOT NULL,
   created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  request_fingerprint text CHECK (request_fingerprint ~ '^[a-f0-9]{64}$'),
   PRIMARY KEY (attempt,revision),
-  CHECK (request_id IS NOT NULL OR (input_tokens=0 AND output_tokens=0 AND gross_microyuan=0 AND net_microyuan=0))
+  CHECK (request_id IS NULL OR request_fingerprint IS NULL),
+  CHECK (request_id IS NOT NULL OR request_fingerprint IS NOT NULL OR
+         (input_tokens=0 AND output_tokens=0 AND gross_microyuan=0 AND net_microyuan=0))
 );
 
 CREATE FUNCTION pr06a_control.risk_microyuan(p_input bigint, p_output bigint, p_total bigint) RETURNS numeric
@@ -449,7 +452,7 @@ BEGIN
     WHERE pr06a_control.owns_batch(b0,f) AND c.executor_login=session_user FOR UPDATE OF b0;
   SELECT * INTO STRICT a FROM pr06a_control.attempts WHERE attempt=p_attempt AND authorization_id=b.authorization_id FOR UPDATE;
   PERFORM billing_api.lock_budget(b.period_start);
-  IF p_request IS NOT NULL AND (a.redacted_request_seen OR (a.request_id IS NOT NULL AND p_request<>a.request_id)) THEN
+  IF p_request IS NOT NULL AND (a.redacted_request_fingerprint IS NOT NULL OR (a.request_id IS NOT NULL AND p_request<>a.request_id)) THEN
     RAISE EXCEPTION 'PR06A_REQUEST_ID_CONFLICT' USING ERRCODE='P6201';
   END IF;
   IF ((p_in IS NULL)<>(p_out IS NULL))
@@ -549,7 +552,8 @@ BEGIN
 END $f$;
 
 CREATE FUNCTION pr06a_api.settle(p_attempt uuid,p_revision integer,p_request text,p_in bigint,p_out bigint,
-    p_gross bigint,p_net bigint,p_month text,p_evidence text,p_metering_revision integer,p_resolved boolean) RETURNS void
+    p_gross bigint,p_net bigint,p_month text,p_evidence text,p_metering_revision integer,p_resolved boolean,
+    p_request_fingerprint text DEFAULT NULL) RETURNS void
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $f$
 DECLARE b pr06a_control.batch%ROWTYPE; a pr06a_control.attempts%ROWTYPE;
   prior pr06a_control.bill_evidence%ROWTYPE; total numeric; matches_usage boolean;
@@ -562,8 +566,8 @@ BEGIN
   IF FOUND THEN
     IF ROW(prior.request_id,prior.input_tokens,prior.output_tokens,prior.gross_microyuan,
       prior.net_microyuan,prior.bill_month,prior.evidence_hash,
-      prior.reviewed_metering_revision,prior.discrepancy_resolved) IS DISTINCT FROM
-      ROW(p_request,p_in,p_out,p_gross,p_net,p_month,p_evidence,p_metering_revision,p_resolved) THEN
+      prior.reviewed_metering_revision,prior.discrepancy_resolved,prior.request_fingerprint) IS DISTINCT FROM
+      ROW(p_request,p_in,p_out,p_gross,p_net,p_month,p_evidence,p_metering_revision,p_resolved,p_request_fingerprint) THEN
       RAISE EXCEPTION 'PR06A_BILL_REVISION_CONFLICT';
     END IF;
     RETURN;
@@ -571,12 +575,15 @@ BEGIN
   IF (NOT b.closed AND clock_timestamp()<b.lease_until)
      OR p_revision IS DISTINCT FROM 1+(SELECT coalesce(max(revision),0) FROM pr06a_control.bill_evidence WHERE attempt=p_attempt)
      OR p_metering_revision IS NULL OR p_metering_revision>a.metering_revision
+     OR p_request_fingerprint IS DISTINCT FROM a.redacted_request_fingerprint
+     OR (p_request_fingerprint IS NOT NULL AND p_request IS NOT NULL)
      OR (a.request_id IS NOT NULL AND p_request IS DISTINCT FROM a.request_id) THEN
     RAISE EXCEPTION 'PR06A_BILL_ATTRIBUTION_CONFLICT';
   END IF;
   INSERT INTO pr06a_control.bill_evidence(attempt,revision,request_id,input_tokens,output_tokens,
-      gross_microyuan,net_microyuan,bill_month,evidence_hash,reviewed_metering_revision,discrepancy_resolved)
-    VALUES(p_attempt,p_revision,p_request,p_in,p_out,p_gross,p_net,p_month,p_evidence,p_metering_revision,p_resolved);
+      gross_microyuan,net_microyuan,bill_month,evidence_hash,reviewed_metering_revision,discrepancy_resolved,request_fingerprint)
+    VALUES(p_attempt,p_revision,p_request,p_in,p_out,p_gross,p_net,p_month,p_evidence,p_metering_revision,
+           p_resolved,p_request_fingerprint);
   matches_usage:= p_metering_revision=a.metering_revision AND (p_resolved OR a.metering_revision=0 OR
     (p_in=a.input_tokens AND p_out=a.output_tokens AND p_in>=coalesce(a.observed_input,0)
      AND p_out>=coalesce(a.observed_output,0) AND p_in+p_out>=coalesce(a.observed_total,0)));
@@ -648,7 +655,7 @@ END $f$;
 CREATE FUNCTION pr06a_api.retain_packet(f uuid,p_attempt uuid,p_packet jsonb) RETURNS boolean
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $f$
 DECLARE b pr06a_control.batch%ROWTYPE; a pr06a_control.attempts%ROWTYPE;
-  rid text:=p_packet->>'request_id'; redacted boolean:=coalesce((p_packet->>'request_redacted')::boolean,false);
+  rid text:=p_packet->>'request_id'; fingerprint text:=p_packet->>'request_fingerprint';
   conflict boolean:=coalesce((p_packet->>'attribution_conflict')::boolean,false);
   raw_hash text:=p_packet->>'raw_hash';
 BEGIN
@@ -662,7 +669,9 @@ BEGIN
   IF p_packet->>'anomaly' IS NOT NULL THEN
     PERFORM pr06a_api.anomaly(f,p_attempt,p_packet->>'anomaly',raw_hash);
   END IF;
-  IF conflict OR (redacted AND a.request_id IS NOT NULL) OR (rid IS NOT NULL AND a.redacted_request_seen) THEN
+  IF conflict OR (fingerprint IS NOT NULL AND (rid IS NOT NULL OR a.request_id IS NOT NULL
+      OR (a.redacted_request_fingerprint IS NOT NULL AND a.redacted_request_fingerprint<>fingerprint)))
+      OR (rid IS NOT NULL AND a.redacted_request_fingerprint IS NOT NULL) THEN
     PERFORM pr06a_api.anomaly(f,p_attempt,'request_identity_conflict',raw_hash);
     RETURN false;
   END IF;
@@ -674,8 +683,8 @@ BEGIN
       RETURN false;
     END;
   END IF;
-  IF redacted AND NOT a.redacted_request_seen THEN
-    UPDATE pr06a_control.attempts SET redacted_request_seen=true,metering_revision=metering_revision+1
+  IF fingerprint IS NOT NULL AND a.redacted_request_fingerprint IS NULL THEN
+    UPDATE pr06a_control.attempts SET redacted_request_fingerprint=fingerprint,metering_revision=metering_revision+1
       WHERE attempt=p_attempt;
   END IF;
   IF p_packet->>'input' IS NOT NULL OR p_packet->>'output' IS NOT NULL OR p_packet->>'total' IS NOT NULL THEN
@@ -730,5 +739,5 @@ GRANT EXECUTE ON FUNCTION pr06a_api.open_batch(uuid,jsonb,text,jsonb),
   pr06a_api.lock_dispatch(uuid,boolean),
   pr06a_api.interrupt(uuid,uuid,text)
   TO classroom_pr06a_executor;
-GRANT EXECUTE ON FUNCTION pr06a_api.settle(uuid,integer,text,bigint,bigint,bigint,bigint,text,text,integer,boolean),
+GRANT EXECUTE ON FUNCTION pr06a_api.settle(uuid,integer,text,bigint,bigint,bigint,bigint,text,text,integer,boolean,text),
   pr06a_api.release_reconciled() TO classroom_pr06a_reconciler;

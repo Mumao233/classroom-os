@@ -107,6 +107,9 @@ class Peer(FakeTransport):
     def has_pending(self):
         return not self._inbound.empty()
 
+    def has_buffered(self):
+        return self.has_pending()
+
     def dispose(self):
         self.abort()
 
@@ -129,7 +132,9 @@ class Peer(FakeTransport):
     async def send_json(self, message, *, on_dispatched=None):
         await super().send_json(message, on_dispatched=on_dispatched)
         if message["header"]["action"] == "run-task":
-            if self.mode != "silent":
+            if self.mode == "start-regression":
+                self.event("task-started", usage={"input_tokens": 100, "output_tokens": 1})
+            elif self.mode != "silent":
                 self.event("task-started")
         else:
             usage = {} if self.mode == "missing" else {"usage": {"input_tokens": 200000 if self.mode == "limit" else 5,
@@ -201,6 +206,7 @@ class Peer(FakeTransport):
                                                  ("missing", "usage_unresolved", 1), ("limit", "cost_limit", 1),
                                                  ("foreign", "request_identity_conflict", 1),
                                                  ("regression", "usage_regression", 1),
+                                                 ("start-regression", "usage_regression", 1),
                                                  ("mirrors", "usage_unresolved", 1),
                                                  ("terminal-conflict", "post_terminal_conflict", 1),
                                                  ("terminal-invalid", "protocol_invalid", 1),
@@ -357,13 +363,24 @@ def test_receipt_risk_and_attribution_are_atomic(poc):
             with pg.admin.connect() as db:
                 assert db.scalar(sa.text("SELECT count(*) FROM pr06a_control.inbound")) == 0
                 assert db.scalar(sa.text("SELECT observed_input FROM pr06a_control.attempts")) is None
-            assert await ledger.retain(attempt, packet | dict(output=1, request_redacted=True))
+            assert await ledger.retain(attempt, packet | dict(output=1, request_fingerprint="b" * 64))
             assert not await ledger.retain(attempt, packet | dict(sequence=2, request_id="other-request", output=9))
             with pg.admin.connect() as db:
                 assert db.scalar(sa.text("SELECT count(*) FROM pr06a_control.inbound")) == 2
-                assert db.execute(sa.text("""SELECT observed_input,observed_output,request_id,redacted_request_seen
-                    FROM pr06a_control.attempts""")).one() == (200000, 1, None, True)
+                assert db.execute(sa.text("""SELECT observed_input,observed_output,request_id,redacted_request_fingerprint
+                    FROM pr06a_control.attempts""")).one() == (200000, 1, None, "b" * 64)
                 assert db.scalar(sa.text("SELECT code FROM pr06a_control.anomalies")) == "request_identity_conflict"
+                revision = db.scalar(sa.text("SELECT metering_revision FROM pr06a_control.attempts"))
+            await ledger.complete(attempt, "unknown", "synthetic_close")
+            with pg.admin.begin() as db:
+                bill = sa.text("""SELECT pr06a_api.settle(:attempt,1,:request,200000,1,1200005,1200005,
+                  '2027-01',:proof,:revision,true,:fingerprint)""")
+                args = dict(attempt=attempt.id, proof="c" * 64, revision=revision)
+                with pytest.raises(sa.exc.DBAPIError, match="PR06A_BILL_ATTRIBUTION_CONFLICT"), db.begin_nested():
+                    db.execute(bill, args | dict(request="wrong-clean-id", fingerprint=None))
+                db.execute(bill, args | dict(request=None, fingerprint="b" * 64))
+                db.exec_driver_sql("SELECT pr06a_api.release_reconciled()")
+                assert db.scalar(sa.text("SELECT request_id FROM pr06a_control.bill_evidence")) is None
 
     _run(run())
 

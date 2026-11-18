@@ -178,7 +178,7 @@ class MeteringEvidence:
     usage: RiskTokens | None
     total: int | None
     attribution_conflict: bool = False
-    request_redacted: bool = False
+    request_fingerprint: str | None = None
     metering_conflict: bool = False
 
 
@@ -202,6 +202,7 @@ def _meter_totals(containers):
     high = {}
     conflict = False
     for body in containers:
+        current = {}
         for meter in ("input_tokens", "output_tokens", "total_tokens"):
             values = _values(body, meter)
             if not values:
@@ -213,11 +214,13 @@ def _meter_totals(containers):
                 continue
             if len(counts) != 1:
                 conflict = True
-                continue
-            count = counts.pop()
+            count = min(counts)
+            current[meter] = count
             if meter in high and high[meter] != count:
                 conflict = True
             high[meter] = max(high.get(meter, 0), count)
+        if all(meter in current for meter in ("input_tokens", "output_tokens", "total_tokens")):
+            conflict |= current["input_tokens"] + current["output_tokens"] != current["total_tokens"]
     split = None
     if "input_tokens" in high or "output_tokens" in high:
         split = RiskTokens(high.get("input_tokens"), high.get("output_tokens"))
