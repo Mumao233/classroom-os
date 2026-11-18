@@ -13,9 +13,10 @@ from zipfile import ZipFile
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "web" / "backend"))
 
-from classroom_web.pr06a_real_poc.policy import (AUTHORIZATION, AUTH_SHA256, BASELINE, ENDPOINT,
+from classroom_web.pr06a_real_poc.policy import (AUTHORIZATION, BASELINE, ENDPOINT,
                                                     KEY_ID, MODEL, REGION, WORKSPACE,
-                                                    PocStopped, digest, load_samples)
+                                                    PocStopped, authorization_digest, digest, load_samples,
+                                                    verify_authorization)
 
 AUTH_FILE = ROOT / "docs" / "web-alpha" / "pr06a" / f"{AUTHORIZATION}.md"
 RISK_REPORT = AUTH_FILE.parent / "risk-acceptance" / "REPORT.md"
@@ -36,6 +37,11 @@ class _Parser(argparse.ArgumentParser):
 
 def _emit(record):
     print(json.dumps(record, ensure_ascii=True, separators=(",", ":")), flush=True)
+
+
+def _authorization_path(authorization_id):
+    authorization_digest(authorization_id)
+    return AUTH_FILE.with_name(f"{authorization_id}.md")
 
 
 def _git(*args):
@@ -142,6 +148,8 @@ def _verify_review(args, head):
 
 
 def _verify_receipts(args, head):
+    authorization = _authorization_path(args.authorization_id)
+    auth_sha = verify_authorization(authorization, args.authorization_id)
     risk_sha = _verify_review(args, head)
     vmware = _receipt(args.vmware_receipt, args.vmware_sha256, "vmware_receipt_digest_mismatch")
     if (vmware.get("commit") != head or vmware.get("mode") != "full"
@@ -159,6 +167,8 @@ def _verify_receipts(args, head):
             or vmware.get("executed_runner_sha256") != manifest["runner_sha256"]
             or vmware.get("source_archive_sha256") != manifest.get("source_zip_sha256")):
         raise PocStopped("vmware_git_tree_mismatch")
+    if files.get(authorization.relative_to(ROOT).as_posix()) != auth_sha:
+        raise PocStopped("authorization_not_in_reviewed_source")
     return risk_sha
 
 
@@ -171,11 +181,12 @@ async def _arm(args, head, fingerprint):
                review_receipt,vmware_receipt,approval_ref,account_ref,workspace,key_id,region,model,endpoint,
                credential_sha256,executor_login,risk_acceptance_sha256,enabled)
                VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,true)""",
-            (AUTHORIZATION, AUTH_SHA256, BASELINE, head, args.review_sha256, args.vmware_sha256,
+            (args.authorization_id, authorization_digest(args.authorization_id), BASELINE, head,
+             args.review_sha256, args.vmware_sha256,
              args.approval_ref, args.account_ref,
              WORKSPACE, KEY_ID, REGION, MODEL, ENDPOINT, fingerprint, args.executor_login, risk_sha),
         )
-    receipt = {"authorization": AUTHORIZATION, "candidate": head, "status": "armed"}
+    receipt = {"authorization": args.authorization_id, "candidate": head, "status": "armed"}
     if risk_sha is not None:
         receipt["risk_acceptance_sha256"] = risk_sha
     _emit(receipt)
@@ -189,10 +200,11 @@ async def _execute(args, head, key, fingerprint, samples):
     if _reviewed_head() != head:
         raise PocStopped("reviewed_checkout_changed")
     async with await _db(False) as db:
-        receipts = await execute_batch(PgLedger(db), samples, head, args.account_ref, fingerprint,
+        receipts = await execute_batch(PgLedger(db, args.authorization_id), samples, head, args.account_ref, fingerprint,
                                        lambda _: _WebSocket(key))
     for receipt in receipts:
-        _emit({"slot": receipt.slot, "recognition": receipt.state, "stop": receipt.stop})
+        _emit({"authorization": args.authorization_id, "slot": receipt.slot,
+               "recognition": receipt.state, "stop": receipt.stop})
     return int(len(receipts) != len(samples) or any(item.stop or item.state != "succeeded" for item in receipts))
 
 
@@ -202,6 +214,7 @@ def main():
     action.add_argument("--arm", action="store_true")
     action.add_argument("--execute", action="store_true")
     parser.add_argument("--samples", type=Path, required=True)
+    parser.add_argument("--authorization-id", default=AUTHORIZATION)
     parser.add_argument("--account-ref")
     parser.add_argument("--approval-ref")
     parser.add_argument("--executor-login")
@@ -212,7 +225,7 @@ def main():
     parser.add_argument("--vmware-sha256")
     try:
         args = parser.parse_args()
-        samples = load_samples(args.samples, AUTH_FILE)
+        samples = load_samples(args.samples, _authorization_path(args.authorization_id), args.authorization_id)
         if not args.arm and not args.execute:
             for sample in samples:
                 _emit(vars(sample.spec))

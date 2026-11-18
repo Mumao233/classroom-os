@@ -13,7 +13,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 from zipfile import ZipFile
 
-from psycopg import AsyncConnection
+from psycopg import AsyncConnection, errors
 import pytest
 import sqlalchemy as sa
 from test_billing import billing_pg
@@ -27,6 +27,7 @@ from classroom_web.test_support import SYNTHETIC_PASSWORD
 
 REVIEWED = "8" * 40
 ACCOUNT = "synthetic-console-attestation"
+SECOND_ACCOUNT = "PR06A-ACCT-ATTEST-20261118-R2"
 FINGERPRINT = policy.digest(b"synthetic-pr06a-key")
 PACKAGE = Path(policy.__file__).parent
 
@@ -81,6 +82,7 @@ def arm_receipts(tmp_path, monkeypatch, poc_operator):
     args = SimpleNamespace(review=str(tmp_path / "status.json"), review_sha256=None,
                            risk_acceptance_sha256=operator.RISK_REPORT_SHA256,
                            vmware_receipt=str(tmp_path / "digest.json"), vmware_sha256=None,
+                           authorization_id=policy.AUTHORIZATION,
                            approval_ref="synthetic approval", account_ref=ACCOUNT, executor_login="synthetic_executor")
     markdown = (f"VERDICT: PASS {REVIEWED}\n\nRISK-ACCEPTANCE: {args.risk_acceptance_sha256}\n\n"
                 f"Full review comments:\n\n{findings_block}\n")
@@ -107,11 +109,16 @@ def arm_receipts(tmp_path, monkeypatch, poc_operator):
 
     archive = BytesIO()
     runner_path = "tools/pr06a/run_vmware_validation.py"
+    files = {runner_path: b"synthetic frozen runner"}
+    for authorization_id in policy.AUTHORIZATION_DIGESTS:
+        path = operator._authorization_path(authorization_id)
+        files[path.relative_to(operator.ROOT).as_posix()] = path.read_bytes()
     with ZipFile(archive, "w") as snapshot:
-        snapshot.writestr(runner_path, b"synthetic frozen runner")
+        for name, data in files.items():
+            snapshot.writestr(name, data)
     runner_hash = policy.digest(b"synthetic frozen runner")
     source_hash = policy.digest(archive.getvalue())
-    manifest = dict(base_sha=REVIEWED, full=True, files_sha256={runner_path: runner_hash},
+    manifest = dict(base_sha=REVIEWED, full=True, files_sha256={name: policy.digest(data) for name, data in files.items()},
                     runner_sha256=runner_hash, source_zip_sha256=source_hash)
     manifest_file = tmp_path / "host-SOURCE.json"
     manifest_file.write_bytes(json.dumps(manifest).encode())
@@ -181,6 +188,38 @@ def test_risk_acceptance_rejects_before_db(arm_receipts, monkeypatch, mutation, 
         _run(operator._arm(args, REVIEWED, FINGERPRINT))
 
 
+@pytest.mark.parametrize("mutation,reason", [
+    ("unregistered-id", "unregistered_authorization"),
+    ("changed-file", "authorization_digest_mismatch"),
+    ("wrong-review-head", "review_receipt_not_accepted"),
+    ("wrong-vmware-head", "vmware_receipt_not_accepted"),
+])
+def test_second_authorization_rejects_before_db(arm_receipts, tmp_path, monkeypatch, mutation, reason):
+    operator, args, status, markdown, write_review = arm_receipts
+    args.authorization_id = policy.SECOND_AUTHORIZATION
+    if mutation == "unregistered-id":
+        args.authorization_id += "-unregistered"
+    elif mutation == "changed-file":
+        changed = tmp_path / "modified-authorization.md"
+        changed.write_bytes(operator._authorization_path(args.authorization_id).read_bytes() + b"changed")
+        monkeypatch.setattr(operator, "_authorization_path", lambda _: changed)
+    elif mutation == "wrong-review-head":
+        status["head"] = "7" * 40
+        write_review(markdown)
+    else:
+        receipt = Path(args.vmware_receipt)
+        data = json.loads(receipt.read_bytes())
+        receipt.write_bytes(json.dumps(data | {"commit": "7" * 40}).encode())
+        args.vmware_sha256 = policy.digest(receipt.read_bytes())
+
+    async def no_database(_arm):
+        pytest.fail("invalid authorization reached the activation database")
+
+    monkeypatch.setattr(operator, "_db", no_database)
+    with pytest.raises(policy.PocStopped, match=f"^{reason}$"):
+        _run(operator._arm(args, REVIEWED, FINGERPRINT))
+
+
 @pytest.mark.parametrize("use_exception", [False, True], ids=["ordinary-pass", "accepted-risks"])
 def test_arm_audit_records_only_the_validated_risk_digest(poc, arm_receipts, monkeypatch, capsys, use_exception):
     pg, _, connect = poc
@@ -230,13 +269,15 @@ def test_documented_risk_audit_upgrade_checks_overlay(poc, compatible):
 
 
 @pytest.fixture
-def poc(billing_pg):
+def poc(billing_pg, request):
     pg = billing_pg
     executor = "pr06a_executor_" + uuid4().hex[:16]
     with pg.admin.begin() as db:
         db.exec_driver_sql(f'CREATE ROLE "{executor}" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS')
         db.exec_driver_sql(f'ALTER ROLE "{executor}" PASSWORD \'{SYNTHETIC_PASSWORD}\'')
         db.exec_driver_sql(open_overlay(), execution_options={"no_parameters": True})
+        if getattr(request, "param", None) != "legacy":
+            db.exec_driver_sql(batch_migration(), execution_options={"no_parameters": True})
         db.exec_driver_sql(f'GRANT classroom_pr06a_executor TO "{executor}"')
         registry = json.loads((PACKAGE / "samples.json").read_bytes())
         assert [dict(row) for row in db.execute(sa.text(
@@ -266,11 +307,11 @@ def poc(billing_pg):
               10,gen_random_uuid(),gen_random_uuid(),'synthetic PR-06a cycle')"""))
 
     @asynccontextmanager
-    async def connect(role=executor):
+    async def connect(role=executor, authorization_id=policy.AUTHORIZATION):
         url = pg.admin_url
         async with await AsyncConnection.connect(host=url.host, port=url.port, dbname=url.database,
                 user=role, password=SYNTHETIC_PASSWORD, autocommit=True) as db:
-            yield PgLedger(db)
+            yield PgLedger(db, authorization_id)
 
     try:
         connect.executor = executor
@@ -287,7 +328,16 @@ def open_overlay():
     # Dedicated fixtures can move the authorization window independently of
     # the calendar where CI is run. No client clock override exists in the SQL.
     ddl = (PACKAGE / "install.sql").read_text(encoding="utf-8")
+    return fixture_dates(ddl)
+
+
+def batch_migration():
+    return fixture_dates((PACKAGE / "authorization_batches.sql").read_text(encoding="utf-8"))
+
+
+def fixture_dates(ddl):
     return (ddl.replace("'2026-11-18 00:00:00+08'", "clock_timestamp()-interval '1 day'")
+            .replace("'2026-11-19 00:00:00+08'", "clock_timestamp()-interval '1 day'")
             .replace("'2027-01-01 00:00:00+08'::timestamptz", "(clock_timestamp()+interval '1 day')")
             .replace("'2027-01-01 00:00:00+08'", "clock_timestamp()+interval '1 day'"))
 
@@ -519,7 +569,7 @@ def test_rejected_before_transport_exists(poc, monkeypatch, invalid):
             db.exec_driver_sql("UPDATE pr06a_control.activation SET " +
                                ("revoked=true" if invalid == "revoked" else "enabled=false"))
         elif invalid == "expired":
-            definition = db.scalar(sa.text("SELECT pg_get_functiondef('pr06a_control.check_activation()'::regprocedure)"))
+            definition = db.scalar(sa.text("SELECT pg_get_functiondef('pr06a_control.check_activation(text)'::regprocedure)"))
             db.exec_driver_sql(definition.replace("clock_timestamp()+interval '1 day'", "'2000-01-01 00:00:00+08'"),
                                execution_options={"no_parameters": True})
         elif invalid == "production-switch":
@@ -547,6 +597,115 @@ def test_rejected_before_transport_exists(poc, monkeypatch, invalid):
             db.exec_driver_sql("""UPDATE billing_control.switches SET flags=flags||'{"billing":false}'::jsonb""")
             db.exec_driver_sql("UPDATE billing_control.platform_budgets SET fixed_microyuan=100000000 "
                                "WHERE period_start<=now() AND period_end>now()")
+
+
+@pytest.mark.parametrize("poc", ["legacy"], indirect=True)
+def test_migration_and_second_batch_preserve_first_exposure(poc, arm_receipts, monkeypatch):
+    pg, samples, connect = poc
+    operator, args, _, _, _ = arm_receipts
+    args.authorization_id = policy.SECOND_AUTHORIZATION
+    args.account_ref = SECOND_ACCOUNT
+    args.executor_login = connect.executor
+
+    async def close_first():
+        async with connect() as ledger:
+            await ledger.open(REVIEWED, ACCOUNT, FINGERPRINT, samples)
+            attempt = Attempt.create()
+            await ledger.claim(samples[0], attempt)
+            await ledger.complete(attempt, "unknown", "connection_failed")
+
+    def first_snapshot(db):
+        return tuple(db.scalar(sa.text(f"""SELECT to_jsonb(r) FROM pr06a_control.{table} r
+                            WHERE authorization_id=:id"""), {"id": policy.AUTHORIZATION})
+                     for table in ("activation", "batch", "attempts"))
+
+    _run(close_first())
+    with pg.admin.begin() as db:
+        first = first_snapshot(db)
+        assert first[1]["closed"] and first[1]["held_microyuan"] == 1_000_000
+        db.exec_driver_sql(batch_migration(), execution_options={"no_parameters": True})
+        assert first_snapshot(db) == first
+        assert db.scalar(sa.text("SELECT count(*) FROM pr06a_control.activation")) == 1
+        assert db.scalar(sa.text("SELECT count(*) FROM pr06a_control.batch")) == 1
+
+    async def control_db(arm):
+        assert arm
+        url = pg.admin_url
+        return await AsyncConnection.connect(host=url.host, port=url.port, dbname=url.database,
+                                             user=url.username, password=url.password, autocommit=True)
+
+    monkeypatch.setattr(operator, "_db", control_db)
+    _run(operator._arm(args, REVIEWED, FINGERPRINT))
+    with pytest.raises(errors.UniqueViolation):
+        _run(operator._arm(args, REVIEWED, FINGERPRINT))
+
+    peers = []
+
+    def peer(attempt):
+        instance = Peer(attempt)
+        peers.append(instance)
+        return instance
+
+    def forbidden(_):
+        pytest.fail("duplicate or invalid second activation reached the transport")
+
+    async def execute_second(factory, reviewed_sha=REVIEWED):
+        async with connect(authorization_id=policy.SECOND_AUTHORIZATION) as ledger:
+            return await execute_batch(ledger, samples, reviewed_sha, SECOND_ACCOUNT, FINGERPRINT, factory)
+
+    with pytest.raises(policy.PocStopped):
+        _run(execute_second(forbidden, reviewed_sha="7" * 40))
+    receipts = _run(execute_second(peer))
+    assert [(item.slot, item.state, item.stop) for item in receipts] == [
+        (1, "succeeded", None), (2, "succeeded", None), (3, "succeeded", None)]
+    assert all(transport.connect_count == 1 and len(transport.sent_binary) == 2 and transport.closed
+               for transport in peers) and len(peers) == 3
+    with pytest.raises(policy.PocStopped):
+        _run(execute_second(forbidden))
+
+    second = {"id": policy.SECOND_AUTHORIZATION}
+    with pg.admin.begin() as db:
+        assert first_snapshot(db) == first
+        assert db.execute(sa.text("""SELECT source_sha256,reviewed_sha,account_ref FROM pr06a_control.activation
+                                     WHERE authorization_id=:id"""), second).one() == (
+            policy.SECOND_AUTH_SHA256, REVIEWED, SECOND_ACCOUNT)
+        batch = db.execute(sa.text("""SELECT held_microyuan,closed,period_start FROM pr06a_control.batch
+                                      WHERE authorization_id=:id"""), second).one()
+        assert batch[:2] == (1_000_000, True)
+        exposure = db.scalar(sa.text("SELECT billing_api.lock_budget(:cycle)"), {"cycle": batch.period_start})
+        assert exposure["unknown"] == exposure["pool_risk"]["asr"] == 2_000_000
+        release = sa.text("SELECT pr06a_api.release_reconciled(:id)")
+        with pytest.raises(sa.exc.DBAPIError, match="PR06A_EXPOSURE_UNRESOLVED"), db.begin_nested():
+            db.execute(release, second)
+        db.execute(sa.text("SELECT pr06a_api.revoke(:id)"), second)
+        assert db.scalar(sa.text("SELECT authorization_id FROM pr06a_control.revocation")) == policy.SECOND_AUTHORIZATION
+        attempts = db.execute(sa.text("""SELECT attempt,request_id,input_tokens,output_tokens,metering_revision
+                                     FROM pr06a_control.attempts WHERE authorization_id=:id"""), second).mappings().all()
+        bill = sa.text("""SELECT pr06a_api.settle(:attempt,1,:request_id,:input_tokens,:output_tokens,0,0,
+                         '2027-01',:evidence,:metering_revision,true)""")
+        for attempt in attempts:
+            db.execute(bill, dict(attempt) | {"evidence": "d" * 64})
+        db.execute(release, second)
+        assert first_snapshot(db) == first
+        assert db.execute(sa.text("""SELECT held_microyuan,released FROM pr06a_control.batch
+                                     WHERE authorization_id=:id"""), second).one() == (0, True)
+
+
+@pytest.mark.parametrize("poc", ["legacy"], indirect=True)
+def test_batch_migration_refuses_an_open_first_batch(poc):
+    pg, samples, connect = poc
+
+    async def open_first():
+        async with connect() as ledger:
+            await ledger.open(REVIEWED, ACCOUNT, FINGERPRINT, samples)
+
+    _run(open_first())
+    with pg.admin.begin() as db:
+        with pytest.raises(sa.exc.DBAPIError, match="PR06A_BATCH_MIGRATION_REQUIRES_CLOSED_BATCH"), db.begin_nested():
+            db.exec_driver_sql(batch_migration(), execution_options={"no_parameters": True})
+        assert db.execute(sa.text("SELECT closed,held_microyuan FROM pr06a_control.batch")).one() == (False, 1_000_000)
+        assert db.scalar(sa.text("SELECT to_regprocedure('pr06a_api.revoke()') IS NOT NULL"))
+        assert not db.scalar(sa.text("SELECT to_regprocedure('pr06a_api.revoke(text)') IS NOT NULL"))
 
 
 def test_concurrent_last_slot_and_unconfirmed_ranges(poc):
@@ -616,7 +775,7 @@ def test_receipt_risk_and_attribution_are_atomic(poc):
                 with pytest.raises(sa.exc.DBAPIError, match="PR06A_BILL_ATTRIBUTION_CONFLICT"), db.begin_nested():
                     db.execute(bill, args | dict(request="wrong-clean-id", fingerprint=None))
                 db.execute(bill, args | dict(request=None, fingerprint="b" * 64))
-                db.exec_driver_sql("SELECT pr06a_api.release_reconciled()")
+                db.execute(sa.text("SELECT pr06a_api.release_reconciled(:id)"), {"id": policy.AUTHORIZATION})
                 assert db.scalar(sa.text("SELECT request_id FROM pr06a_control.bill_evidence")) is None
 
     _run(run())
@@ -627,7 +786,7 @@ def test_revoke_before_arm_is_durable(poc):
     with pg.admin.begin() as db:
         original = db.scalar(sa.text("SELECT to_jsonb(a) FROM pr06a_control.activation a"))
         db.exec_driver_sql("DELETE FROM pr06a_control.activation")
-        db.exec_driver_sql("SELECT pr06a_api.revoke()")
+        db.execute(sa.text("SELECT pr06a_api.revoke(:id)"), {"id": policy.AUTHORIZATION})
         assert db.scalar(sa.text("SELECT count(*) FROM pr06a_control.revocation")) == 1
         with pytest.raises(sa.exc.DBAPIError, match="PR06A_AUTHORIZATION_REVOKED"), db.begin_nested():
             db.execute(sa.text("""INSERT INTO pr06a_control.activation
@@ -640,7 +799,7 @@ def test_control_revoke_serializes_with_dispatch(poc):
 
     def revoke():
         with pg.admin.begin() as db:
-            db.exec_driver_sql("SELECT pr06a_api.revoke()")
+            db.execute(sa.text("SELECT pr06a_api.revoke(:id)"), {"id": policy.AUTHORIZATION})
 
     async def run():
         async with connect() as ledger, asyncio.timeout(5):
@@ -814,11 +973,11 @@ def test_bill_revision_cannot_clear_unmetered_attempt(poc, second_mode):
         ledger = db.scalar(sa.text("SELECT billing_api.lock_budget(period_start) FROM pr06a_control.batch"))
         assert ledger["settled"] == 1100000 and ledger["unknown"] == 1000000
         with pytest.raises(sa.exc.DBAPIError), db.begin_nested():
-            db.exec_driver_sql("SELECT pr06a_api.release_reconciled()")
+            db.execute(sa.text("SELECT pr06a_api.release_reconciled(:id)"), {"id": policy.AUTHORIZATION})
         db.execute(bill, evidence | dict(rev=2, metering=first["metering_revision"], hash="b" * 64))
         db.execute(bill, dict(id=second["attempt"], rev=1, request=second["request_id"], i=0, o=0, gross=0,
                               metering=second["metering_revision"], hash="c" * 64))
-        db.exec_driver_sql("SELECT pr06a_api.release_reconciled()")
+        db.execute(sa.text("SELECT pr06a_api.release_reconciled(:id)"), {"id": policy.AUTHORIZATION})
         assert db.scalar(sa.text("SELECT overrun_microyuan FROM pr06a_control.batch")) == 100000
         ledger = db.scalar(sa.text("SELECT billing_api.lock_budget(period_start) FROM pr06a_control.batch"))
         assert ledger["settled"] == 1100000 and ledger["unknown"] == 0
@@ -838,7 +997,7 @@ def test_reconcile_keeps_unresolved_hold_and_books_late_overspend(poc):
     attempt = _run(run())
     with pg.admin.begin() as db:
         with pytest.raises(sa.exc.DBAPIError), db.begin_nested():
-            db.exec_driver_sql("SELECT pr06a_api.release_reconciled()")
+            db.execute(sa.text("SELECT pr06a_api.release_reconciled(:id)"), {"id": policy.AUTHORIZATION})
         bill = sa.text("""SELECT pr06a_api.settle(:id,:rev,'verified-request',2,3,:gross,:net,'2027-01',:hash,0,false)""")
         args = dict(id=attempt.id, rev=1, gross=200000, net=150000, hash="a" * 64)
         db.execute(bill, args)
@@ -846,7 +1005,7 @@ def test_reconcile_keeps_unresolved_hold_and_books_late_overspend(poc):
         assert db.execute(sa.text("SELECT held_microyuan,confirmed_microyuan FROM pr06a_control.batch")).one() == (
             800000, 200000)
         db.execute(bill, args | dict(rev=2, gross=1100000, net=950000, hash="b" * 64))
-        db.exec_driver_sql("SELECT pr06a_api.release_reconciled()")
+        db.execute(sa.text("SELECT pr06a_api.release_reconciled(:id)"), {"id": policy.AUTHORIZATION})
         assert db.execute(sa.text("SELECT held_microyuan,confirmed_microyuan FROM pr06a_control.batch")).one() == (
             0, 1100000)
         b = db.scalar(sa.text("SELECT billing_api.lock_budget(period_start) FROM pr06a_control.batch"))

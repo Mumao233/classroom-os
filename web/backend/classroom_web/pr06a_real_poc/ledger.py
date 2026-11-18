@@ -10,7 +10,7 @@ from psycopg.pq import TransactionStatus
 from psycopg.types.json import Jsonb
 
 from ..asr_dashscope.wire import MODEL, REGION
-from .policy import AUTHORIZATION, AUTH_SHA256, BASELINE, ENDPOINT, KEY_ID, WORKSPACE, PocStopped, RequestConflict
+from .policy import AUTHORIZATION, BASELINE, ENDPOINT, KEY_ID, WORKSPACE, PocStopped, RequestConflict, authorization_digest
 
 
 @dataclass(frozen=True)
@@ -40,9 +40,11 @@ async def finish_on_cancel(work):
 
 
 class PgLedger:
-    def __init__(self, db):
+    def __init__(self, db, authorization_id=AUTHORIZATION):
         if not db.autocommit:
             raise PocStopped("top_level_transactions_required")
+        self.authorization_id = authorization_id
+        self.authorization_sha256 = authorization_digest(authorization_id)
         self.db = db
         self.fence = uuid4()
         self._lock = asyncio.Lock()
@@ -76,7 +78,7 @@ class PgLedger:
 
     async def open(self, reviewed_sha, account_ref, credential_fingerprint, samples):
         identity = {
-            "authorization": AUTHORIZATION, "source_sha256": AUTH_SHA256,
+            "authorization": self.authorization_id, "source_sha256": self.authorization_sha256,
             "baseline": BASELINE, "reviewed_sha": reviewed_sha, "workspace": WORKSPACE,
             "key_id": KEY_ID, "region": REGION, "model": MODEL, "endpoint": ENDPOINT,
             "account_ref": account_ref,

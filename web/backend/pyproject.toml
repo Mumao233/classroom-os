@@ -34,7 +34,7 @@ classroom-recovery = "classroom_web.entrypoints.recovery_cli:main"
 include = ["classroom_web*"]
 
 [tool.setuptools.package-data]
-"classroom_web.pr06a_real_poc" = ["samples.json", "install.sql"]
+"classroom_web.pr06a_real_poc" = ["samples.json", "install.sql", "authorization_batches.sql"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

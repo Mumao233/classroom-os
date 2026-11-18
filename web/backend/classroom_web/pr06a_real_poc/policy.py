@@ -10,6 +10,9 @@ from ..asr_dashscope.wire import MODEL, REGION
 
 AUTHORIZATION = "PR06A-REAL-POC-AUTH-20261118"
 AUTH_SHA256 = "233859c7a90ea2ddb0b3b7069edb39b20a82a88cc889c363297d31e96809b777"
+SECOND_AUTHORIZATION = "PR06A-REAL-POC-AUTH-20261119-B2"
+SECOND_AUTH_SHA256 = "9a56d2ea65799d821b19120a080b00d51689bc9644dce013f04213e4169d8047"
+AUTHORIZATION_DIGESTS = {AUTHORIZATION: AUTH_SHA256, SECOND_AUTHORIZATION: SECOND_AUTH_SHA256}
 BASELINE = "6ecd364d20bbd06a25fa4654570e454a04807e07"
 OPERATOR = "林珈诚"
 WORKSPACE = "ws-bm2ftvz01aej1eof"
@@ -72,9 +75,22 @@ def digest(data: bytes) -> str:
     return sha256(data).hexdigest()
 
 
-def load_samples(directory: Path, authorization: Path) -> tuple[Sample, ...]:
-    if digest(authorization.read_bytes()) != AUTH_SHA256:
+def authorization_digest(authorization_id: str) -> str:
+    try:
+        return AUTHORIZATION_DIGESTS[authorization_id]
+    except KeyError:
+        raise PocStopped("unregistered_authorization") from None
+
+
+def verify_authorization(authorization: Path, authorization_id: str) -> str:
+    expected = authorization_digest(authorization_id)
+    if digest(authorization.read_bytes()) != expected:
         raise PocStopped("authorization_digest_mismatch")
+    return expected
+
+
+def load_samples(directory: Path, authorization: Path, authorization_id: str = AUTHORIZATION) -> tuple[Sample, ...]:
+    verify_authorization(authorization, authorization_id)
     registry = json.loads(Path(__file__).with_name("samples.json").read_bytes())
     result = []
     for entry in registry:
