@@ -30,20 +30,41 @@ class PgLedger:
         self.fence = uuid4()
         self._lock = asyncio.Lock()
 
+    async def _transaction(self, statement, args):
+        if self.db.info.transaction_status != TransactionStatus.IDLE:
+            raise PocStopped("top_level_transactions_required")
+        try:
+            async with asyncio.timeout(2), self.db.transaction():
+                await self.db.execute("SET LOCAL statement_timeout = '900ms'")
+                await self.db.execute("SET LOCAL lock_timeout = '600ms'")
+                await self.db.execute("SET LOCAL synchronous_commit = 'on'")
+                cursor = await self.db.execute(statement, (self.fence, *args))
+                row = await cursor.fetchone()
+            return row[0]
+        except TimeoutError:
+            # Closing the PG session fences any unresolved transaction.
+            await self.db.close()
+            raise
+
     async def _change(self, statement, *args):
         try:
             async with self._lock:
-                if self.db.info.transaction_status != TransactionStatus.IDLE:
-                    raise PocStopped("top_level_transactions_required")
-                async with self.db.transaction():
-                    await self.db.execute("SET LOCAL statement_timeout = '900ms'")
-                    await self.db.execute("SET LOCAL lock_timeout = '600ms'")
-                    await self.db.execute("SET LOCAL synchronous_commit = 'on'")
-                    cursor = await self.db.execute(statement, (self.fence, *args))
-                    row = await cursor.fetchone()
-            # The caller gets no permit until the transaction manager has
-            # confirmed COMMIT. Errors and cancellation never yield a permit.
-            return row[0]
+                operation = asyncio.create_task(self._transaction(statement, args))
+                try:
+                    # No permission leaves this method before COMMIT completes.
+                    return await asyncio.shield(operation)
+                except asyncio.CancelledError:
+                    # psycopg can be cancelled inside BEGIN or COMMIT. Let the
+                    # bounded transaction finish so the same connection cannot
+                    # advance while its transaction state is unresolved.
+                    while not operation.done():
+                        try:
+                            await asyncio.wait((operation,))
+                        except asyncio.CancelledError:
+                            continue
+                    if not operation.cancelled():
+                        operation.exception()
+                    raise
         except Exception:
             raise PocStopped("ledger_rejected_or_commit_unknown") from None
 
@@ -70,6 +91,9 @@ class PgLedger:
     async def frame(self, attempt, start, end, frame_hash):
         await self._change("SELECT pr06a_api.frame_intent(%s,%s,%s,%s,%s)", attempt.id, start, end, frame_hash)
 
+    async def check_frame(self, attempt, start):
+        await self._change("SELECT pr06a_api.check_frame(%s,%s,%s)", attempt.id, start)
+
     async def confirm_frame(self, attempt, start):
         await self._change("SELECT pr06a_api.confirm_frame(%s,%s,%s)", attempt.id, start)
 
@@ -87,6 +111,10 @@ class PgLedger:
         return await self._change("SELECT pr06a_api.observe(%s,%s,%s,%s,%s,%s)",
                                   attempt.id, request, usage.input_tokens if usage else None,
                                   usage.output_tokens if usage else None, final)
+
+    async def observe_risk(self, attempt, usage):
+        await self._change("SELECT pr06a_api.observe_risk(%s,%s,%s,%s)", attempt.id,
+                           usage.input_tokens, usage.output_tokens)
 
     async def sentence(self, attempt, sentence, revision, required_sample):
         await self._change("SELECT pr06a_api.record_sentence(%s,%s,%s,%s,%s,%s,%s,%s,%s)",

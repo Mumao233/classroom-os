@@ -121,6 +121,8 @@ async def _execute(args, head, key, fingerprint, samples):
     from classroom_web.pr06a_real_poc.runner import execute_batch
     from classroom_web.pr06a_real_poc.websocket import _WebSocket
 
+    if _reviewed_head() != head:
+        raise PocStopped("reviewed_checkout_changed")
     async with await _db(False) as db:
         receipts = await execute_batch(PgLedger(db), samples, head, args.account_ref, fingerprint,
                                        lambda _: _WebSocket(key))
@@ -157,6 +159,8 @@ def main():
         head = _reviewed_head()
         if not sys.stdin.isatty() or input("授权后输入「开始真实调用」：") != "开始真实调用":
             raise PocStopped("interactive_authorization_required")
+        if _reviewed_head() != head:
+            raise PocStopped("reviewed_checkout_changed")
         key = _credential()
         fingerprint = digest(key.encode("ascii"))
         with asyncio.Runner(loop_factory=asyncio.SelectorEventLoop) as run:

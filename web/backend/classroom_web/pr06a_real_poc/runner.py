@@ -1,12 +1,13 @@
 """One fenced batch. PG owns the hold, connection slots and frame intents."""
 import asyncio
+from bisect import bisect_left
 from dataclasses import dataclass
 
 from ..asr_dashscope.transport import AuthenticationRejected, Disconnected
 from ..asr_dashscope.wire import finish_task, parse_event, run_task
 from ..asr_sim.simulator import ProtocolError
 from .ledger import Attempt
-from .policy import FRAME_SAMPLES, MAX_BATCH_SECONDS, MAX_CONNECTION_SECONDS, PocStopped, digest
+from .policy import FRAME_SAMPLES, MAX_BATCH_SECONDS, MAX_CONNECTION_SECONDS, PocStopped, UnsafeInbound, digest
 
 
 @dataclass(frozen=True)
@@ -52,7 +53,10 @@ class _Session:
             await self._anomaly("sentence_identity_or_range", inbound)
             return
         revision = last[1] + 1 if last else 1
-        await self.ledger.sentence(self.attempt, sentence, revision, frontier)
+        required = frontier
+        if sentence.end_ms is not None:
+            required = self.ranges[bisect_left(self.ranges, 16 * sentence.end_ms, lo=1)]
+        await self.ledger.sentence(self.attempt, sentence, revision, required)
         self.sentences[sentence.sentence_id] = (sentence, revision)
         self.seen_sentences.add(sentence)
 
@@ -63,6 +67,7 @@ class _Session:
             await self._anomaly("usage_unresolved", inbound)
         if (usage is not None and self.usage is not None
                 and (usage.input_tokens < self.usage.input_tokens or usage.output_tokens < self.usage.output_tokens)):
+            await self.ledger.observe_risk(self.attempt, usage)
             await self._anomaly("usage_regression", inbound)
             usage = None
         if usage is not None:
@@ -87,12 +92,13 @@ class _Session:
             self.provider_failed = True
             await self.ledger.protocol(self.attempt, "task-failed")
             raise PocStopped(self.stop)
-        if event.kind == "task-started" and not self.ready:
-            await self.ledger.protocol(self.attempt, "task-started")
-            self.ready = True
-            self.started.set()
+        if event.kind == "task-started":
+            if not self.ready:
+                await self.ledger.protocol(self.attempt, "task-started")
+                self.ready = True
+                self.started.set()
             return False
-        if not self.ready or event.kind == "task-started":
+        if not self.ready:
             raise PocStopped("event_order")
 
         final = event.kind == "task-finished"
@@ -113,12 +119,15 @@ class _Session:
             if event.sentence_issue:
                 self.recognition_tainted = True
                 await self._anomaly("sentence_invalid", inbound)
-            await self._sentence(event.sentence, inbound)
+            # The PG request binding must succeed before writing recognized text.
+            if not final:
+                await self._usage(event, inbound, False)
+                await self._sentence(event.sentence, inbound)
             # Recognition and billing have independent validity boundaries.
             if final:
                 self.recognition_ok = (not self.recognition_tainted and bool(self.sentences)
                                        and all(item.final for item, _ in self.sentences.values()))
-            await self._usage(event, inbound, final)
+                await self._usage(event, inbound, True)
         if final and not self.recognition_ok:
             self.stop = self.stop or "incomplete_recognition"
         return final
@@ -126,7 +135,16 @@ class _Session:
     async def _read(self):
         try:
             while True:
-                inbound = await self.transport.receive_text()
+                try:
+                    inbound = await self.transport.receive_text()
+                except UnsafeInbound as exc:
+                    self.dispatch_ready.clear()
+                    self.stop = str(exc)
+                    try:
+                        await self.ledger.anomaly(self.attempt, self.stop, exc.checksum)
+                    finally:
+                        self.dispatch_ready.set()
+                    raise
                 self.dispatch_ready.clear()
                 try:
                     received = inbound.text.encode("utf-8")
@@ -172,7 +190,9 @@ class _Session:
                 self.run_recorded.set()
                 await self.started.wait()
                 await self._send_audio(reader)
-                if reader.done():
+                await asyncio.sleep(0)
+                await self._wait_dispatch()
+                if reader.done() or self.provider_failed:
                     await reader
                     raise PocStopped("premature_reader_exit")
                 await transport.send_json(finish_task(str(self.attempt.task_id)),
@@ -214,7 +234,17 @@ class _Session:
                 self.stop = self.stop or str(exc)
                 return
             await asyncio.sleep(0)
-            await self._wait_dispatch()
+            while True:
+                await self._wait_dispatch()
+                if self.stop or reader.done():
+                    break
+                try:
+                    await self.ledger.check_frame(self.attempt, start)
+                except PocStopped as exc:
+                    self.stop = self.stop or str(exc)
+                    break
+                if self.dispatch_ready.is_set():
+                    break
             if self.stop or reader.done():
                 await self.ledger.discard_frame(self.attempt, start)
                 return
@@ -260,6 +290,14 @@ async def execute_batch(ledger, samples, reviewed_sha, account_ref, credential_f
                     break
             if not reason:
                 await ledger.complete(None, None, "sequence_complete")
+    except asyncio.CancelledError:
+        if opened:
+            try:
+                async with asyncio.timeout(1):
+                    await ledger.complete(attempt, "unknown", "operator_interrupted")
+            except (PocStopped, TimeoutError):
+                pass
+        raise
     except (PocStopped, AuthenticationRejected, Disconnected, ProtocolError, TimeoutError) as exc:
         if isinstance(exc, PocStopped):
             reason = str(exc)
@@ -272,7 +310,7 @@ async def execute_batch(ledger, samples, reviewed_sha, account_ref, credential_f
         else:
             reason = "protocol_invalid"
         if session and (session.recognition_ok or session.provider_failed):
-            state = "succeeded" if session.terminal else "failed"
+            state = "succeeded" if session.recognition_ok else "failed"
         else:
             state = "failed" if isinstance(exc, AuthenticationRejected) else "unknown"
         if attempt is not None:

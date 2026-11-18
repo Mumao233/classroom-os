@@ -13,12 +13,31 @@ from websockets.frames import Frame, Opcode
 
 from ..asr_dashscope.transport import AuthenticationRejected, Disconnected, InboundText
 from ..asr_dashscope.wire import MAX_MESSAGE_CHARS
-from .policy import ENDPOINT, LIB_VERSION, PocStopped
+from .policy import ENDPOINT, LIB_VERSION, PocStopped, UnsafeInbound, digest
 
 _wire_log = logging.Logger("pr06a.websocket")
 _wire_log.addHandler(logging.NullHandler())
 _wire_log.propagate = False
 _wire_log.setLevel(logging.CRITICAL + 1)
+
+
+def _safe_evidence(frame, key):
+    text = frame.text
+    if key in text:
+        raise UnsafeInbound("credential_echo", digest(text.encode("utf-8")))
+    try:
+        # Keep duplicate keys intact in the original wire text for parse_event.
+        # Inspect values AND keys as decoded strings before retaining that text.
+        pending = [json.loads(text, object_pairs_hook=list)]
+        while pending:
+            value = pending.pop()
+            if isinstance(value, (list, tuple)):
+                pending.extend(value)
+            elif isinstance(value, str) and key in value:
+                raise UnsafeInbound("credential_echo", digest(text.encode("utf-8")))
+    except (ValueError, RecursionError):
+        raise UnsafeInbound("undecodable_provider_response", digest(text.encode("utf-8"))) from None
+    return frame
 
 
 class _SingleDial(connect):
@@ -130,8 +149,9 @@ class _WebSocket:
     async def receive_text(self):
         try:
             frame = await self._connected().stamped_text()
-            text = frame.text.replace(self._redaction_key, "[redacted]")
-            return InboundText(text, frame.control_sequence, frame.audio_attempt)
+            return _safe_evidence(frame, self._redaction_key)
+        except UnsafeInbound:
+            raise
         except Exception:
             raise Disconnected("read_failed") from None
 

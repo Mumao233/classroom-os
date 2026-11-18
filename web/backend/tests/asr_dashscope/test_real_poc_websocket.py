@@ -14,15 +14,25 @@ from cryptography.x509.oid import NameOID
 import pytest
 from websockets.asyncio.server import serve
 
-from classroom_web.asr_dashscope.transport import AuthenticationRejected, Disconnected
+from classroom_web.asr_dashscope.transport import AuthenticationRejected, Disconnected, InboundText
 from classroom_web.pr06a_real_poc import websocket
-from classroom_web.pr06a_real_poc.policy import ENDPOINT, PocStopped
+from classroom_web.pr06a_real_poc.policy import ENDPOINT, PocStopped, UnsafeInbound, digest
 
 FAKE_KEY = "synthetic-pr06a-test-key"
 
 
 async def _allow():
     pass
+
+
+def test_escaped_credential_is_never_returned_as_evidence():
+    encoded = "\\u0073" + FAKE_KEY[1:]
+    text = '{"duplicate":"nothing","duplicate":{"text":"' + encoded + '"}}'
+    assert FAKE_KEY not in text
+    with pytest.raises(UnsafeInbound, match="credential_echo") as exc:
+        websocket._safe_evidence(InboundText(text, 1, 1), FAKE_KEY)
+    assert exc.value.checksum == digest(text.encode("utf-8"))
+    assert FAKE_KEY not in str(exc.value)
 
 
 def _loopback_certificate(tmp_path):

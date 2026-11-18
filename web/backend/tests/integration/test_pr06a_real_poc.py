@@ -132,6 +132,11 @@ class Peer(FakeTransport):
                 "sentence_id": 1, "begin_time": 0, "end_time": 100,
                 "sentence_end": True, "text": "synthetic transcript"}},
                 usage={"input_tokens": 200000 if self.mode == "limit" else 5, "output_tokens": 1})
+            if self.mode == "regression":
+                self.event("result-generated", output={"request_id": self.task, "sentence": {
+                    "sentence_id": 1, "begin_time": 0, "end_time": 100,
+                    "sentence_end": True, "text": "synthetic transcript"}},
+                    usage={"input_tokens": 200000, "output_tokens": 0})
             if self.mode == "foreign":
                 self.event("result-generated", output={"request_id": "wrong-request", "sentence": {
                     "sentence_id": 2, "begin_time": 0, "end_time": 100,
@@ -146,6 +151,7 @@ class Peer(FakeTransport):
                                                  ("silent", "timeout", 1),
                                                  ("missing", "usage_unresolved", 1), ("limit", "cost_limit", 1),
                                                  ("foreign", "request_identity_conflict", 1),
+                                                 ("regression", "usage_regression", 1),
                                                  ("partial", "incomplete_recognition", 1)])
 def test_fenced_batch_against_postgres(poc, monkeypatch, mode, expected, count):
     pg, samples, connect = poc
@@ -170,14 +176,14 @@ def test_fenced_batch_against_postgres(poc, monkeypatch, mode, expected, count):
     assert all(peer.connect_count == 1 and peer.closed for peer in peers)
     if mode == "normal":
         assert all([kind for kind, _ in peer.sent] == ["json", "binary", "binary", "json"] for peer in peers)
-    if mode in ("limit", "foreign"):
+    if mode in ("limit", "foreign", "regression"):
         assert len(peers[0].sent_binary) == 1
     if mode in ("partial", "foreign"):
         assert receipts[0].state == "unknown"
     with pg.admin.connect() as db:
         batch = db.execute(sa.text("SELECT * FROM pr06a_control.batch")).mappings().one()
         exposure = db.scalar(sa.text("SELECT billing_api.lock_budget(:cycle)"), dict(cycle=batch["period_start"]))
-        expected_exposure = 1_200_005 if mode == "limit" else 1_000_000
+        expected_exposure = 1_200_005 if mode in ("limit", "regression") else 1_000_000
         assert exposure["unknown"] == exposure["pool_risk"]["asr"] == expected_exposure
         assert batch["input_token_limit"] is None and batch["held_microyuan"] == 1_000_000
         if mode == "foreign":
@@ -207,7 +213,8 @@ def test_rejected_before_transport_exists(poc, monkeypatch, invalid):
                                ("revoked=true" if invalid == "revoked" else "enabled=false"))
         elif invalid == "expired":
             definition = db.scalar(sa.text("SELECT pg_get_functiondef('pr06a_control.check_activation()'::regprocedure)"))
-            db.exec_driver_sql(definition.replace("clock_timestamp()+interval '1 day'", "'2000-01-01 00:00:00+08'"))
+            db.exec_driver_sql(definition.replace("clock_timestamp()+interval '1 day'", "'2000-01-01 00:00:00+08'"),
+                               execution_options={"no_parameters": True})
         elif invalid == "production-switch":
             db.exec_driver_sql("""UPDATE billing_control.switches SET flags=flags||'{"billing":true}'::jsonb""")
         elif invalid == "platform-risk":
@@ -248,6 +255,7 @@ def test_concurrent_last_slot_and_unconfirmed_ranges(poc):
 
     async def run():
         async with connect() as ledger, connect() as other:
+            await ledger.db.execute("CREATE TEMP TABLE pg_stat_activity(pid integer, backend_start timestamptz)")
             await ledger.open(REVIEWED, ACCOUNT, FINGERPRINT, samples)
             for sample in samples[:2]:
                 attempt = Attempt.create()
@@ -313,7 +321,8 @@ with connect(**request["database"], autocommit=True) as db:
           """)
         definition = db.scalar(sa.text(
             "SELECT pg_get_functiondef('pr06a_api.open_batch(uuid,jsonb,text,jsonb)'::regprocedure)"))
-        db.exec_driver_sql(definition.replace("date_trunc('month',t AT TIME ZONE 'Asia/Shanghai')", cycle))
+        db.exec_driver_sql(definition.replace("date_trunc('month',t AT TIME ZONE 'Asia/Shanghai')", cycle),
+                           execution_options={"no_parameters": True})
 
     async def restart():
         async with connect() as ledger:
@@ -327,7 +336,7 @@ with connect(**request["database"], autocommit=True) as db:
             db.exec_driver_sql("DELETE FROM billing_control.platform_budgets WHERE period_start>clock_timestamp()")
 
 
-@pytest.mark.parametrize("mode", ["stamp", "unconfirmed", "pending-failure"])
+@pytest.mark.parametrize("mode", ["stamp", "unconfirmed", "pending-failure", "revoked-after-intent"])
 def test_frame_and_sentence_evidence_preserves_dispatch_boundary(poc, monkeypatch, mode):
     pg, samples, connect = poc
     peers = []
@@ -336,6 +345,9 @@ def test_frame_and_sentence_evidence_preserves_dispatch_boundary(poc, monkeypatc
 
     async def reserve_frame(self, attempt, start, end, checksum):
         await original_frame(self, attempt, start, end, checksum)
+        if mode == "revoked-after-intent":
+            with pg.admin.begin() as db:
+                db.exec_driver_sql("UPDATE pr06a_control.activation SET revoked=true")
         if mode == "pending-failure" and start > 0:
             peers[0].feed_json({"header": {"event": "task-failed", "task_id": str(attempt.task_id),
                                            "error_code": "synthetic", "error_message": "synthetic failure"},
@@ -365,15 +377,50 @@ def test_frame_and_sentence_evidence_preserves_dispatch_boundary(poc, monkeypatc
 
     receipt, = _run(run())
     assert receipt.state == ("failed" if mode == "pending-failure" else "unknown")
-    assert len(peers[0].sent_binary) == (0 if mode == "stamp" else 1)
+    assert len(peers[0].sent_binary) == (0 if mode in ("stamp", "revoked-after-intent") else 1)
     with pg.admin.connect() as db:
         frames = db.execute(sa.text("SELECT disposition FROM pr06a_control.frames ORDER BY start_sample")).scalars().all()
         assert frames == (["confirmed", "not_sent"] if mode == "pending-failure"
-                          else ["not_sent"] if mode == "stamp" else ["intent"])
+                          else ["not_sent"] if mode in ("stamp", "revoked-after-intent") else ["intent"])
         if mode == "unconfirmed":
             assert db.execute(sa.text("""SELECT r.required_sample,f.disposition FROM pr06a_control.recognition r
                 JOIN pr06a_control.frames f ON f.attempt=r.attempt AND f.end_sample=r.required_sample""")).one() == (
                 1600,"intent")
+
+
+def test_bill_revision_cannot_clear_unmetered_attempt(poc):
+    pg, samples, connect = poc
+
+    peers = []
+
+    def create(attempt):
+        peer = Peer(attempt, mode="auth" if peers else "normal")
+        peers.append(peer)
+        return peer
+
+    async def run():
+        async with connect() as ledger:
+            return await execute_batch(ledger, samples, REVIEWED, ACCOUNT, FINGERPRINT, create)
+    assert [r.state for r in _run(run())] == ["succeeded", "failed"]
+
+    with pg.admin.begin() as db:
+        first, second = db.execute(sa.text("SELECT * FROM pr06a_control.attempts ORDER BY slot")).mappings()
+        bill = sa.text("""SELECT pr06a_api.settle(:id,:rev,:request,:i,:o,:gross,:gross,
+          '2027-01',:hash,:metering,false)""")
+        evidence = dict(id=first["attempt"], request=first["request_id"], i=5, o=1, gross=1100000)
+        db.execute(bill, evidence | dict(rev=1, metering=0, hash="a" * 64))
+        assert db.scalar(sa.text("SELECT reconciled_metering_revision FROM pr06a_control.attempts WHERE slot=1")) is None
+        ledger = db.scalar(sa.text("SELECT billing_api.lock_budget(period_start) FROM pr06a_control.batch"))
+        assert ledger["settled"] == 1100000 and ledger["unknown"] == 1000000
+        with pytest.raises(sa.exc.DBAPIError), db.begin_nested():
+            db.exec_driver_sql("SELECT pr06a_api.release_reconciled()")
+        db.execute(bill, evidence | dict(rev=2, metering=first["metering_revision"], hash="b" * 64))
+        db.execute(bill, dict(id=second["attempt"], rev=1, request=None, i=0, o=0, gross=0,
+                              metering=0, hash="c" * 64))
+        db.exec_driver_sql("SELECT pr06a_api.release_reconciled()")
+        assert db.scalar(sa.text("SELECT overrun_microyuan FROM pr06a_control.batch")) == 100000
+        ledger = db.scalar(sa.text("SELECT billing_api.lock_budget(period_start) FROM pr06a_control.batch"))
+        assert ledger["settled"] == 1100000 and ledger["unknown"] == 0
 
 
 def test_reconcile_keeps_unresolved_hold_and_books_late_overspend(poc):
@@ -391,7 +438,7 @@ def test_reconcile_keeps_unresolved_hold_and_books_late_overspend(poc):
     with pg.admin.begin() as db:
         with pytest.raises(sa.exc.DBAPIError), db.begin_nested():
             db.exec_driver_sql("SELECT pr06a_api.release_reconciled()")
-        bill = sa.text("""SELECT pr06a_api.settle(:id,:rev,'verified-request',2,3,:gross,:net,'2027-01',:hash)""")
+        bill = sa.text("""SELECT pr06a_api.settle(:id,:rev,'verified-request',2,3,:gross,:net,'2027-01',:hash,0,false)""")
         args = dict(id=attempt.id, rev=1, gross=200000, net=150000, hash="a" * 64)
         db.execute(bill, args)
         db.execute(bill, args)
