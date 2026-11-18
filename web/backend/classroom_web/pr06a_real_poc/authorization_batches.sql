@@ -27,6 +27,29 @@ BEGIN
   END IF;
 END $migration$;
 
+DO $owner_access$
+DECLARE required record;
+BEGIN
+  -- The new authorization predicates read these columns as existing
+  -- SECURITY DEFINER owners. Preserve column-restricted legacy installs.
+  FOR required IN SELECT grants.*,pg_get_userbyid(p.proowner) AS owner_name
+    FROM (VALUES
+      ('pr06a_api.revoke()', 'pr06a_control.activation', 'authorization_id'),
+      ('pr06a_api.open_batch(uuid,jsonb,text,jsonb)', 'pr06a_control.batch', 'authorization_id'),
+      ('pr06a_api.open_batch(uuid,jsonb,text,jsonb)', 'pr06a_control.batch', 'closed')
+    ) grants(signature,table_name,column_name)
+    JOIN pg_proc p ON p.oid=grants.signature::regprocedure
+  LOOP
+    IF NOT has_column_privilege(required.owner_name,required.table_name,required.column_name,'SELECT') THEN
+      EXECUTE format('GRANT SELECT (%I) ON %s TO %I',
+        required.column_name,required.table_name,required.owner_name);
+      IF NOT has_column_privilege(required.owner_name,required.table_name,required.column_name,'SELECT') THEN
+        RAISE EXCEPTION 'PR06A_BATCH_MIGRATION_OWNER_ACCESS_BLOCKED';
+      END IF;
+    END IF;
+  END LOOP;
+END $owner_access$;
+
 ALTER TABLE pr06a_control.activation
   DROP CONSTRAINT activation_authorization_id_check,
   DROP CONSTRAINT activation_source_sha256_check,

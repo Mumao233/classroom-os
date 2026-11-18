@@ -718,6 +718,7 @@ def test_control_login_can_arm_and_revoke(poc, arm_receipts, monkeypatch):
     args.executor_login = connect.executor
     control = "pr06a_control_" + uuid4().hex[:16]
     arm_only = "pr06a_arm_only_" + uuid4().hex[:16]
+    revoke_owner = "pr06a_revoke_owner_" + uuid4().hex[:16]
     legacy = connect.legacy_overlay
     use_arm_only_role = False
 
@@ -742,16 +743,30 @@ def test_control_login_can_arm_and_revoke(poc, arm_receipts, monkeypatch):
         db.exec_driver_sql(f'GRANT "{arm_only}" TO "{control}"')
         db.exec_driver_sql(f'GRANT classroom_pr06a_executor TO "{control}" WITH ADMIN TRUE, INHERIT FALSE, SET FALSE')
         signature = "" if legacy else "text"
+        if legacy:
+            db.exec_driver_sql(f'CREATE ROLE "{revoke_owner}" NOLOGIN')
+            db.exec_driver_sql(f'GRANT classroom_pr06a_reconciler TO "{revoke_owner}"')
+            db.exec_driver_sql(f'GRANT USAGE,CREATE ON SCHEMA pr06a_api TO "{revoke_owner}"')
+            db.exec_driver_sql(f'GRANT USAGE ON SCHEMA pr06a_control TO "{revoke_owner}"')
+            db.exec_driver_sql(f'GRANT INSERT ON pr06a_control.revocation TO "{revoke_owner}"')
+            db.exec_driver_sql(f'GRANT SELECT (revoked),UPDATE (revoked) ON pr06a_control.activation TO "{revoke_owner}"')
+            db.exec_driver_sql(f'ALTER FUNCTION pr06a_api.revoke() OWNER TO "{revoke_owner}"')
         db.exec_driver_sql(f'GRANT EXECUTE ON FUNCTION pr06a_api.revoke({signature}) TO "{control}"')
+    migrated = False
     try:
         with pg.admin.begin() as db:
             if legacy:
                 owner = db.scalar(sa.text(
                     "SELECT proowner FROM pg_proc WHERE oid='pr06a_api.revoke()'::regprocedure"))
+                can_read_auth = sa.text("""SELECT has_column_privilege(
+                    :owner,'pr06a_control.activation','authorization_id','SELECT')""")
+                assert not db.scalar(can_read_auth, {"owner": revoke_owner})
                 db.exec_driver_sql(batch_migration(), execution_options={"no_parameters": True})
+                assert db.scalar(can_read_auth, {"owner": revoke_owner})
                 assert db.scalar(sa.text(
                     "SELECT proowner FROM pg_proc WHERE oid='pr06a_api.revoke(text)'::regprocedure")) == owner
             db.exec_driver_sql("GRANT EXECUTE ON FUNCTION pr06a_api.revoke(text) TO classroom_pr06a_reconciler")
+        migrated = True
         with pytest.raises(policy.PocStopped, match="^emergency_revoke_privileges_invalid$"):
             _run(operator._arm(args, REVIEWED, FINGERPRINT))
         with pg.admin.begin() as db:
@@ -795,6 +810,11 @@ def test_control_login_can_arm_and_revoke(poc, arm_receipts, monkeypatch):
             db.exec_driver_sql(f'GRANT CONNECT ON DATABASE "{pg.admin_url.database}" TO PUBLIC')
             db.exec_driver_sql(f'DROP OWNED BY "{control}", "{arm_only}"')
             db.exec_driver_sql(f'DROP ROLE "{control}", "{arm_only}"')
+            if legacy:
+                signature = "text" if migrated else ""
+                db.exec_driver_sql(f"ALTER FUNCTION pr06a_api.revoke({signature}) OWNER TO CURRENT_USER")
+                db.exec_driver_sql(f'DROP OWNED BY "{revoke_owner}"')
+                db.exec_driver_sql(f'DROP ROLE "{revoke_owner}"')
 
 
 @pytest.mark.parametrize("poc", ["legacy"], indirect=True)
@@ -842,7 +862,10 @@ def test_batch_migration_preserves_installation_owner_and_restricts_release(poc)
         db.exec_driver_sql(f'CREATE ROLE "{helper_owner}"')
         db.exec_driver_sql(f'GRANT USAGE,CREATE ON SCHEMA pr06a_api,pr06a_control TO "{owner}"')
         db.exec_driver_sql(f'GRANT USAGE,CREATE ON SCHEMA pr06a_control TO "{helper_owner}"')
-        db.exec_driver_sql(f'GRANT ALL ON ALL TABLES IN SCHEMA pr06a_control TO "{owner}"')
+        db.exec_driver_sql(f'GRANT SELECT ON pr06a_control.activation,pr06a_control.revocation,'
+                           f'pr06a_control.samples TO "{owner}"')
+        db.exec_driver_sql(f'GRANT UPDATE (enabled) ON pr06a_control.activation TO "{owner}"')
+        db.exec_driver_sql(f'GRANT INSERT ON pr06a_control.batch TO "{owner}"')
         db.exec_driver_sql(f'GRANT EXECUTE ON FUNCTION pr06a_control.alert_budget(timestamptz) TO "{owner}"')
         db.exec_driver_sql(f'GRANT USAGE ON SCHEMA billing_api,billing_control TO "{owner}"')
         db.exec_driver_sql(f'GRANT INSERT ON billing_control.alerts TO "{owner}"')
@@ -852,30 +875,46 @@ def test_batch_migration_preserves_installation_owner_and_restricts_release(poc)
         for signature in functions[1:]:
             db.exec_driver_sql(f'ALTER FUNCTION {signature} OWNER TO "{helper_owner}"')
             db.exec_driver_sql(f'GRANT EXECUTE ON FUNCTION {signature} TO "{owner}"')
-        db.exec_driver_sql("ALTER DEFAULT PRIVILEGES IN SCHEMA pr06a_api "
-                           "GRANT EXECUTE ON FUNCTIONS TO classroom_pr06a_executor")
-        db.exec_driver_sql(batch_migration(), execution_options={"no_parameters": True})
-        db.exec_driver_sql("ALTER DEFAULT PRIVILEGES IN SCHEMA pr06a_api "
-                           "REVOKE EXECUTE ON FUNCTIONS FROM classroom_pr06a_executor")
-        assert db.scalar(sa.text(
-            "SELECT has_function_privilege('classroom_pr06a_reconciler',"
-            "'pr06a_api.release_reconciled(text)','EXECUTE')"))
 
-    async def run():
+    async def close_first():
         async with connect() as ledger:
             await ledger.open(REVIEWED, ACCOUNT, FINGERPRINT, samples)
-            with pytest.raises(errors.InsufficientPrivilege):
-                await ledger.db.execute("SELECT pr06a_api.release_reconciled(%s)", (policy.AUTHORIZATION,))
+            attempt = Attempt.create()
+            await ledger.claim(samples[0], attempt)
+            await ledger.complete(attempt, "unknown", "connection_failed")
 
+    async def open_second():
+        async with connect(authorization_id=policy.SECOND_AUTHORIZATION) as ledger:
+            await ledger.open(REVIEWED, SECOND_ACCOUNT, FINGERPRINT, samples)
+            with pytest.raises(errors.InsufficientPrivilege):
+                await ledger.db.execute("SELECT pr06a_api.release_reconciled(%s)", (policy.SECOND_AUTHORIZATION,))
+
+    migrated = False
     try:
-        _run(run())
+        _run(close_first())
+        with pg.admin.begin() as db:
+            db.exec_driver_sql("ALTER DEFAULT PRIVILEGES IN SCHEMA pr06a_api "
+                               "GRANT EXECUTE ON FUNCTIONS TO classroom_pr06a_executor")
+            db.exec_driver_sql(batch_migration(), execution_options={"no_parameters": True})
+            db.exec_driver_sql("ALTER DEFAULT PRIVILEGES IN SCHEMA pr06a_api "
+                               "REVOKE EXECUTE ON FUNCTIONS FROM classroom_pr06a_executor")
+            assert db.scalar(sa.text(
+                "SELECT has_function_privilege('classroom_pr06a_reconciler',"
+                "'pr06a_api.release_reconciled(text)','EXECUTE')"))
+            db.execute(sa.text("""INSERT INTO pr06a_control.activation
+                SELECT (jsonb_populate_record(a,jsonb_build_object(
+                  'authorization_id',cast(:auth AS text), 'source_sha256',cast(:sha AS text),
+                  'account_ref',cast(:account AS text)))).*
+                FROM pr06a_control.activation a"""),
+                       {"auth": policy.SECOND_AUTHORIZATION, "sha": policy.SECOND_AUTH_SHA256,
+                        "account": SECOND_ACCOUNT})
+        migrated = True
+        _run(open_second())
     finally:
         with pg.admin.begin() as db:
-            for signature in (
-                functions[0],
-                "pr06a_control.check_activation(text)",
-                "pr06a_control.check_budget(text,timestamptz,bigint)",
-            ):
+            installed = (functions[0], "pr06a_control.check_activation(text)",
+                         "pr06a_control.check_budget(text,timestamptz,bigint)") if migrated else functions
+            for signature in installed:
                 db.exec_driver_sql(f'ALTER FUNCTION {signature} OWNER TO CURRENT_USER')
             db.exec_driver_sql(f'DROP OWNED BY "{owner}", "{helper_owner}"')
             db.exec_driver_sql(f'DROP ROLE "{owner}", "{helper_owner}"')

@@ -178,20 +178,22 @@ async def _arm(args, head, fingerprint):
         await db.execute("SET LOCAL synchronous_commit = 'on'")
         access = await db.execute(
             """WITH roles AS (
-                 SELECT oid,rolname,rolsuper,
+                 SELECT oid,rolname,rolsuper,rolcanlogin,
                    pg_has_role(oid,'classroom_pr06a_executor','USAGE')
                      OR pg_has_role(oid,'classroom_pr06a_reconciler','USAGE') AS can_operate,
                    has_function_privilege(oid,'pr06a_api.revoke(text)','EXECUTE') AS can_revoke
                  FROM pg_catalog.pg_roles
                ), operational_roles AS (
                  SELECT p.oid FROM roles p WHERE p.rolname=%s
-                   OR (NOT p.rolsuper AND EXISTS (
+                   OR (NOT p.rolsuper AND (p.rolcanlogin OR p.rolname IN (
+                     'classroom_pr06a_executor','classroom_pr06a_reconciler'
+                   )) AND EXISTS (
                      SELECT FROM roles r WHERE r.can_operate AND pg_has_role(p.oid,r.oid,'SET')
                    ))
                )
                SELECT has_schema_privilege(current_user,'pr06a_api','USAGE')
                  AND has_function_privilege(current_user,'pr06a_api.revoke(text)','EXECUTE')
-                 AND EXISTS (SELECT FROM roles WHERE rolname=%s)
+                 AND EXISTS (SELECT FROM roles WHERE rolname=%s AND rolcanlogin)
                  AND NOT EXISTS (
                    SELECT FROM roles r WHERE r.can_revoke AND EXISTS (
                      SELECT FROM operational_roles o WHERE pg_has_role(o.oid,r.oid,'SET')
