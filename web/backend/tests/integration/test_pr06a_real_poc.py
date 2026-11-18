@@ -135,6 +135,9 @@ class Peer(FakeTransport):
             usage = {} if self.mode == "missing" else {"usage": {"input_tokens": 200000 if self.mode == "limit" else 5,
                                                                   "output_tokens": 1}}
             self.event("task-finished", **usage)
+            if self.mode == "terminal-cap":
+                self.event("task-finished", **usage)
+                self.event("task-finished", usage={"input_tokens": 200000, "output_tokens": 1})
             if self.mode == "terminal-invalid":
                 self.event("invalid-kind")
                 self.event("task-finished", usage={"input_tokens": 200000, "output_tokens": 1})
@@ -201,6 +204,7 @@ class Peer(FakeTransport):
                                                  ("mirrors", "usage_unresolved", 1),
                                                  ("terminal-conflict", "post_terminal_conflict", 1),
                                                  ("terminal-invalid", "protocol_invalid", 1),
+                                                 ("terminal-cap", "inbound_evidence_limit", 1),
                                                  ("early-terminal", "terminal_before_finish", 1),
                                                  ("pre-run", "pre_run_message", 1),
                                                  ("partial", "incomplete_recognition", 1)])
@@ -208,6 +212,8 @@ def test_fenced_batch_against_postgres(poc, monkeypatch, mode, expected, count):
     pg, samples, connect = poc
     if mode == "silent":
         monkeypatch.setattr(runner, "MAX_CONNECTION_SECONDS", 0.8)
+    if mode == "terminal-cap":
+        monkeypatch.setattr(runner, "MAX_INBOUND_PACKETS", 3)
     peers = []
 
     def create(attempt):
@@ -238,7 +244,8 @@ def test_fenced_batch_against_postgres(poc, monkeypatch, mode, expected, count):
         exposure = db.scalar(sa.text("SELECT billing_api.lock_budget(:cycle)"), dict(cycle=batch["period_start"]))
         expected_exposure = {"limit": 1_200_005, "regression": 1_200_005,
                              "mirrors": 1_200_011, "terminal-conflict": 1_200_005,
-                             "early-terminal": 1_350_000, "terminal-invalid": 1_200_005}.get(mode, 1_000_000)
+                             "early-terminal": 1_350_000, "terminal-invalid": 1_200_005,
+                             "terminal-cap": 1_200_005}.get(mode, 1_000_000)
         assert exposure["unknown"] == exposure["pool_risk"]["asr"] == expected_exposure
         assert batch["input_token_limit"] is None and batch["held_microyuan"] == 1_000_000
         if mode == "terminal-conflict":

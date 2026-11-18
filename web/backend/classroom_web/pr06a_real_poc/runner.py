@@ -8,7 +8,11 @@ from ..asr_dashscope.transport import AuthenticationRejected, Disconnected
 from ..asr_dashscope.wire import finish_task, metering_evidence, parse_event, run_task
 from ..asr_sim.simulator import ProtocolError
 from .ledger import Attempt, finish_on_cancel
-from .policy import FRAME_SAMPLES, MAX_BATCH_SECONDS, MAX_CONNECTION_SECONDS, EndOfStream, PocStopped, UnsafeInbound, digest
+from .policy import FRAME_SAMPLES, MAX_BATCH_SECONDS, MAX_CONNECTION_SECONDS, EndOfStream, PocStopped, RequestConflict, UnsafeInbound, digest
+
+
+MAX_INBOUND_PACKETS = 512
+MAX_INBOUND_BYTES = 2 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -41,6 +45,7 @@ class _Session:
         self.request = None
         self.usage = None
         self.received_count = self.received_bytes = 0
+        self.retention_capped = False
 
     async def _anomaly(self, code, inbound):
         self.stop = self.stop or code
@@ -74,13 +79,29 @@ class _Session:
             await self.ledger.observe(self.attempt, event.request_id, None, False)
             self.request = event.request_id
 
-    async def _risk(self, evidence):
+    async def _risk(self, evidence, raw_hash):
         if evidence is None or evidence.task_id != str(self.attempt.task_id):
             return
-        if evidence.request_id and self.request and evidence.request_id != self.request:
+        try:
+            if evidence.request_id and self.request and evidence.request_id != self.request:
+                raise RequestConflict("request_identity_conflict")
+            await self._bind_request(evidence)
+        except RequestConflict as exc:
+            self.recognition_tainted = self.terminal_event is None or self.recognition_tainted
+            self._stop_for_accounting(str(exc))
+            await self.ledger.anomaly(self.attempt, str(exc), raw_hash)
             return
-        await self._bind_request(evidence)
-        await self.ledger.observe_risk(self.attempt, evidence.usage, evidence.total)
+        if evidence.usage is not None or evidence.total is not None:
+            await self.ledger.observe_risk(self.attempt, evidence.usage, evidence.total)
+
+    def _check_terminal_contradiction(self, event):
+        if event.request_id and self.request and event.request_id != self.request:
+            return
+        sentence = event.sentence
+        accepted = self.sentences.get(sentence.sentence_id) if sentence is not None else None
+        if event.kind == "task-failed" or (sentence is not None and sentence.final and accepted
+                                          and sentence != accepted[0]):
+            self.recognition_ok = False
 
     def _stop_for_accounting(self, reason):
         self.stop = self.stop or reason
@@ -117,11 +138,7 @@ class _Session:
         if self.terminal_event is not None:
             if event != self.terminal_event and event not in self.terminal_conflicts:
                 self.terminal_conflicts.add(event)
-                sentence = event.sentence
-                accepted = self.sentences.get(sentence.sentence_id) if sentence is not None else None
-                if event.kind == "task-failed" or (sentence is not None and sentence.final and accepted
-                                                  and sentence != accepted[0]):
-                    self.recognition_ok = False
+                self._check_terminal_contradiction(event)
                 await self._anomaly("post_terminal_conflict", inbound)
             return
         if event.kind == "task-failed":
@@ -190,7 +207,7 @@ class _Session:
                     try:
                         self._stop_for_accounting(str(exc))
                         await self.ledger.anomaly(self.attempt, str(exc), exc.checksum)
-                        await self._risk(exc.metering)
+                        await self._risk(exc.metering, exc.checksum)
                     finally:
                         self.dispatch_ready.set()
                     continue
@@ -199,13 +216,24 @@ class _Session:
                     received = inbound.text.encode("utf-8")
                     self.received_count += 1
                     self.received_bytes += len(received)
-                    if self.received_count > 512 or self.received_bytes > 2 * 1024 * 1024:
-                        await self._risk(metering_evidence(inbound.text))
-                        await self._anomaly("inbound_evidence_limit", inbound)
-                        raise PocStopped("inbound_evidence_limit")
-                    await self.ledger.inbound(self.attempt, self.received_count, inbound)
-                    await self._risk(metering_evidence(inbound.text))
-                    if not self.accounting_only:
+                    packet_hash = digest(received)
+                    if self.received_count > MAX_INBOUND_PACKETS or self.received_bytes > MAX_INBOUND_BYTES:
+                        if not self.retention_capped:
+                            self.retention_capped = True
+                            self._stop_for_accounting("inbound_evidence_limit")
+                            await self.ledger.anomaly(self.attempt, "inbound_evidence_limit", packet_hash)
+                    else:
+                        await self.ledger.inbound(self.attempt, self.received_count, inbound)
+                    await self._risk(metering_evidence(inbound.text), packet_hash)
+                    if self.accounting_only:
+                        if self.terminal_event is not None:
+                            try:
+                                event = parse_event(inbound.text, str(self.attempt.task_id))
+                            except ProtocolError:
+                                pass
+                            else:
+                                self._check_terminal_contradiction(event)
+                    else:
                         try:
                             await self._receive(inbound)
                         except ProtocolError:
@@ -269,9 +297,11 @@ class _Session:
                 async with self.ledger.dispatch_lock():
                     requested = loop.time()
                     seconds = await self.ledger.check_connection(self.attempt)
-                    if loop.time() >= min(write_deadline, requested + seconds):
+                    dial_deadline = min(write_deadline, requested + seconds)
+                    if loop.time() >= dial_deadline:
                         raise PocStopped("dial_deadline")
-                    await transport.connect(before_handshake=authorize_handshake)
+                    async with asyncio.timeout_at(dial_deadline):
+                        await transport.connect(before_handshake=authorize_handshake)
                 await self.ledger.protocol(self.attempt, "handshake")
                 async with self.ledger.dispatch_lock():
                     requested = loop.time()

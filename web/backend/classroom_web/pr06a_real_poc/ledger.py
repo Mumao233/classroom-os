@@ -5,11 +5,12 @@ from dataclasses import asdict, dataclass
 import logging
 from uuid import UUID, uuid4
 
+from psycopg import Error
 from psycopg.pq import TransactionStatus
 from psycopg.types.json import Jsonb
 
 from ..asr_dashscope.wire import MODEL, REGION
-from .policy import AUTHORIZATION, AUTH_SHA256, BASELINE, ENDPOINT, KEY_ID, WORKSPACE, PocStopped
+from .policy import AUTHORIZATION, AUTH_SHA256, BASELINE, ENDPOINT, KEY_ID, WORKSPACE, PocStopped, RequestConflict
 
 
 @dataclass(frozen=True)
@@ -68,7 +69,9 @@ class PgLedger:
                 # No permit leaves this method before COMMIT. Cancelling its
                 # caller cannot interrupt BEGIN or COMMIT on the shared socket.
                 return await finish_on_cancel(self._transaction(statement, args))
-        except Exception:
+        except Exception as exc:
+            if isinstance(exc, Error) and exc.sqlstate == "P6201":
+                raise RequestConflict("request_identity_conflict") from None
             raise PocStopped("ledger_rejected_or_commit_unknown") from None
 
     async def open(self, reviewed_sha, account_ref, credential_fingerprint, samples):

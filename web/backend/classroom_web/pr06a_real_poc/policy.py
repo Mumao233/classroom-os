@@ -27,6 +27,10 @@ class PocStopped(Exception):
     """Fixed error code safe for ordinary operational output."""
 
 
+class RequestConflict(PocStopped):
+    """The database definitely rejected a conflicting request identity."""
+
+
 class EndOfStream(ConnectionError):
     """The peer closed the WebSocket normally."""
 

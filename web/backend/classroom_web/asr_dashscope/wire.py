@@ -191,24 +191,42 @@ class MeteringEvidence:
     total: int | None
 
 
+class _ObjectPairs(list):
+    pass
+
+
+def _metering_fields(pairs, fields):
+    result = {}
+    if not isinstance(pairs, _ObjectPairs):
+        return result
+    for key, value in pairs:
+        if key in fields:
+            if key in result:
+                raise UsageError("ambiguous DashScope metering field")
+            result[key] = value
+    return result
+
+
 def metering_evidence(raw: str) -> MeteringEvidence | None:
     """Extract only attributable counters. No event-order or finality decisions."""
     if len(raw) > MAX_MESSAGE_CHARS:
         return None
     try:
-        obj = _object(json.loads(raw, object_pairs_hook=_unique_object,
-                                 parse_constant=_invalid_constant, parse_float=_finite_float))
-        task = uid(_object(obj.get("header")).get("task_id"))
-        payload = _object(obj.get("payload"))
-        output = payload.get("output")
-        output = output if isinstance(output, dict) else {}
-        mirror = output.get("output")
-        mirror = mirror if isinstance(mirror, dict) else {}
+        obj = _metering_fields(json.loads(raw, object_pairs_hook=_ObjectPairs,
+                                          parse_constant=_invalid_constant, parse_float=_finite_float),
+                               {"header", "payload"})
+        task = uid(_metering_fields(obj.get("header"), {"task_id"}).get("task_id"))
+        payload = _metering_fields(obj.get("payload"), {"usage", "output"})
+        output = _metering_fields(payload.get("output"), {"usage", "output", "request_id"})
+        mirror = _metering_fields(output.get("output"), {"usage", "request_id"})
         request = _request_id(output, mirror)
+        for part in (payload, output, mirror):
+            if "usage" in part:
+                part["usage"] = _metering_fields(part["usage"], {"input_tokens", "output_tokens", "total_tokens"})
         usage, total = _conflicting_token_evidence(payload, output, mirror)
     except (ValueError, RecursionError):
         return None
-    return MeteringEvidence(task, request, usage, total) if usage is not None or total is not None else None
+    return MeteringEvidence(task, request, usage, total) if request or usage is not None or total is not None else None
 
 
 def parse_event(raw: str, provider_task_id: str) -> WireEvent:

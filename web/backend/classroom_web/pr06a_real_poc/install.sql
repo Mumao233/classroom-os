@@ -448,16 +448,22 @@ BEGIN
     WHERE pr06a_control.owns_batch(b0,f) AND c.executor_login=session_user FOR UPDATE OF b0;
   SELECT * INTO STRICT a FROM pr06a_control.attempts WHERE attempt=p_attempt AND authorization_id=b.authorization_id FOR UPDATE;
   PERFORM billing_api.lock_budget(b.period_start);
-  IF (p_request IS NOT NULL AND a.request_id IS NOT NULL AND p_request<>a.request_id)
-     OR ((p_in IS NULL)<>(p_out IS NULL))
+  IF p_request IS NOT NULL AND a.request_id IS NOT NULL AND p_request<>a.request_id THEN
+    RAISE EXCEPTION 'PR06A_REQUEST_ID_CONFLICT' USING ERRCODE='P6201';
+  END IF;
+  IF ((p_in IS NULL)<>(p_out IS NULL))
      OR (p_in IS NOT NULL AND (p_in<coalesce(a.input_tokens,0) OR p_out<coalesce(a.output_tokens,0)
           OR a.usage_final))
      OR (p_final AND (p_in IS NULL OR coalesce(p_request,a.request_id) IS NULL)) THEN
     RAISE EXCEPTION 'PR06A_USAGE_CONFLICT';
   END IF;
-  UPDATE pr06a_control.attempts SET request_id=coalesce(p_request,a.request_id),
-    metering_revision=metering_revision+CASE WHEN a.request_id IS NULL AND p_request IS NOT NULL THEN 1 ELSE 0 END
-    WHERE attempt=a.attempt;
+  BEGIN
+    UPDATE pr06a_control.attempts SET request_id=coalesce(p_request,a.request_id),
+      metering_revision=metering_revision+CASE WHEN a.request_id IS NULL AND p_request IS NOT NULL THEN 1 ELSE 0 END
+      WHERE attempt=a.attempt;
+  EXCEPTION WHEN unique_violation THEN
+    RAISE EXCEPTION 'PR06A_REQUEST_ID_CONFLICT' USING ERRCODE='P6201';
+  END;
   IF p_in IS NOT NULL AND (p_in IS DISTINCT FROM a.input_tokens OR p_out IS DISTINCT FROM a.output_tokens OR p_final) THEN
     rev:=a.usage_revision+1;
     INSERT INTO pr06a_control.usage(attempt,revision,request_id,input_tokens,output_tokens,final)

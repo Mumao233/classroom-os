@@ -1,6 +1,7 @@
 """Single-use WSS client, private to the isolated PR-06a executor."""
 import asyncio
 from collections import deque
+from dataclasses import replace
 from functools import partial
 import json
 import logging
@@ -23,8 +24,11 @@ _wire_log.setLevel(logging.CRITICAL + 1)
 
 def _credential_echo(text, key):
     meter = metering_evidence(text)
-    if meter is not None and any(key in s for s in (meter.task_id, meter.request_id or "")):
-        meter = None
+    if meter is not None:
+        if key in meter.task_id:
+            meter = None
+        elif meter.request_id and key in meter.request_id:
+            meter = replace(meter, request_id=None)
     return UnsafeInbound("credential_echo", digest(text.encode("utf-8")), meter)
 
 

@@ -16,6 +16,7 @@ import pytest
 from websockets.asyncio.server import serve
 
 from classroom_web.asr_dashscope.transport import AuthenticationRejected, Disconnected, InboundText
+from classroom_web.asr_dashscope.wire import metering_evidence
 from classroom_web.pr06a_real_poc import websocket
 from classroom_web.pr06a_real_poc.policy import ENDPOINT, PocStopped, UnsafeInbound, digest
 
@@ -48,6 +49,14 @@ def test_credential_echo_retains_only_attributable_cost_evidence():
     assert exc.value.metering.request_id == "approved-request"
     assert exc.value.metering.usage.input_tokens == 200000
     assert not hasattr(exc.value, "text")
+
+
+def test_unrelated_duplicate_keys_do_not_discard_meter_evidence():
+    task = "075d00fe-4cde-47dc-b05f-f24b31a94ab7"
+    raw = ('{"header":{"task_id":"' + task + '"},"payload":{"usage":{"input_tokens":200000,'
+           '"output_tokens":1},"output":{"sentence":{"x":0,"x":1},"request_id":"r"}}}')
+    assert metering_evidence(raw).usage.input_tokens == 200000
+    assert metering_evidence(raw.replace('"request_id":"r"', '"request_id":"r","request_id":"s"')) is None
 
 
 def _loopback_certificate(tmp_path):
