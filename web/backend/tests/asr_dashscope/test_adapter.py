@@ -1138,3 +1138,34 @@ async def test_open_partial_uses_the_audio_attempt_at_ingress():
         await writer
     assert not just(adapter.events(), 'asr.transcript_unconfirmed')
     assert_clean(peer)
+
+
+@offline
+async def test_failed_audio_attempt_stamp_keeps_the_frame_definitely_unsent():
+    class StampFailurePeer(ScriptedPeer):
+        def note_audio_attempt(self, number):
+            raise RuntimeError('audio stamp unavailable')
+
+    cfg = config()
+    peer = StampFailurePeer()
+    adapter = await open_adapter(cfg, peer)
+    with pytest.raises(ProtocolError, match='send_failed'):
+        await adapter.send(pcm())
+    assert not peer.sent_binary and not adapter.attempted_ranges and not adapter.sent_ranges
+    assert adapter.state == 'unknown'
+    assert just(adapter.events(), 'asr.terminal')[0]['billing_pending']
+    assert_clean(peer)
+
+
+@offline
+async def test_fake_transport_stamps_audio_attempt_before_dequeue():
+    peer = FakeTransport()
+    await peer.connect()
+    peer.note_audio_attempt(1)
+    peer.feed_text('{}')
+    peer.note_audio_attempt(2)
+    frame = await peer.receive_text()
+    assert frame.audio_attempt == 1
+    assert frame.text == '{}'
+    await peer.close()
+    assert_clean(peer)

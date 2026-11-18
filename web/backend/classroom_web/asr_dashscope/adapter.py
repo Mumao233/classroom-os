@@ -285,8 +285,8 @@ class DashScopeAdapter:
 
     async def _send_frame(self, pcm, start, end):
         # A transport exception cannot prove that the bytes did not leave.
+        self._transport.note_audio_attempt(len(self._attempted_ranges) + 1)
         self._attempted_ranges.append((start, end))
-        self._transport.note_audio_attempt(len(self._attempted_ranges))
         await self._transport.send_binary(pcm)
         self._sent_ranges.append((start, end))
         if not self._stopping:
