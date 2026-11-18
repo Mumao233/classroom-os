@@ -14,8 +14,9 @@ from websockets.exceptions import ConnectionClosedOK, InvalidStatus
 from websockets.frames import Frame, Opcode
 
 from ..asr_dashscope.transport import AuthenticationRejected, Disconnected, InboundText
-from ..asr_dashscope.wire import MAX_MESSAGE_CHARS, metering_evidence
-from .policy import ENDPOINT, LIB_VERSION, EndOfStream, PocStopped, UnsafeInbound, digest
+from ..asr_dashscope.wire import MAX_MESSAGE_CHARS, metering_evidence, parse_event
+from ..asr_sim.simulator import ProtocolError
+from .policy import ENDPOINT, LIB_VERSION, EndOfStream, PocStopped, UnsafeInbound, digest, sentence_proof
 
 _wire_log = logging.Logger("pr06a.websocket")
 _wire_log.addHandler(logging.NullHandler())
@@ -23,20 +24,31 @@ _wire_log.propagate = False
 _wire_log.setLevel(logging.CRITICAL + 1)
 
 
-def _credential_echo(text, key):
+def _credential_echo(text, key, control):
     meter = metering_evidence(text)
     if meter is not None:
         if key in meter.task_id:
             meter = None
         elif meter.request_id and key in meter.request_id:
             meter = replace(meter, request_id=None, request_redacted=True)
-    return UnsafeInbound("credential_echo", digest(text.encode("utf-8")), meter)
+    event = final = None
+    if meter is not None and not meter.attribution_conflict:
+        try:
+            observed = parse_event(text, meter.task_id)
+        except ProtocolError:
+            pass
+        else:
+            event = observed.kind
+            if observed.sentence is not None and observed.sentence.final:
+                final = sentence_proof(observed.sentence)
+    return UnsafeInbound("credential_echo", digest(text.encode("utf-8")), meter,
+                         control=control, event=event, final_sentence=final)
 
 
 def _safe_evidence(frame, key):
     text = frame.text
     if key in text:
-        raise _credential_echo(text, key)
+        raise _credential_echo(text, key, frame.control_sequence)
     try:
         # Keep duplicate keys intact in the original wire text for parse_event.
         # Inspect values AND keys as decoded strings before retaining that text.
@@ -46,7 +58,7 @@ def _safe_evidence(frame, key):
             if isinstance(value, (list, tuple)):
                 pending.extend(value)
             elif isinstance(value, str) and key in value:
-                raise _credential_echo(text, key)
+                raise _credential_echo(text, key, frame.control_sequence)
     except (ValueError, RecursionError):
         raise UnsafeInbound("undecodable_provider_response", digest(text.encode("utf-8"))) from None
     return frame

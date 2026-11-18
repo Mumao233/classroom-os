@@ -151,6 +151,7 @@ CREATE TABLE pr06a_control.attempts (
   usage_final boolean NOT NULL DEFAULT false,
   gross_microyuan bigint CHECK (gross_microyuan>=0),
   metering_revision integer NOT NULL DEFAULT 0,
+  redacted_request_seen boolean NOT NULL DEFAULT false,
   observed_input bigint CHECK (observed_input>=0),
   observed_output bigint CHECK (observed_output>=0),
   observed_total bigint CHECK (observed_total>=0),
@@ -448,7 +449,7 @@ BEGIN
     WHERE pr06a_control.owns_batch(b0,f) AND c.executor_login=session_user FOR UPDATE OF b0;
   SELECT * INTO STRICT a FROM pr06a_control.attempts WHERE attempt=p_attempt AND authorization_id=b.authorization_id FOR UPDATE;
   PERFORM billing_api.lock_budget(b.period_start);
-  IF p_request IS NOT NULL AND a.request_id IS NOT NULL AND p_request<>a.request_id THEN
+  IF p_request IS NOT NULL AND (a.redacted_request_seen OR (a.request_id IS NOT NULL AND p_request<>a.request_id)) THEN
     RAISE EXCEPTION 'PR06A_REQUEST_ID_CONFLICT' USING ERRCODE='P6201';
   END IF;
   IF ((p_in IS NULL)<>(p_out IS NULL))
@@ -644,6 +645,46 @@ BEGIN
   IF NOT FOUND THEN RAISE EXCEPTION 'PR06A_ANOMALY_BLOCKED'; END IF;
 END $f$;
 
+CREATE FUNCTION pr06a_api.retain_packet(f uuid,p_attempt uuid,p_packet jsonb) RETURNS boolean
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $f$
+DECLARE b pr06a_control.batch%ROWTYPE; a pr06a_control.attempts%ROWTYPE;
+  rid text:=p_packet->>'request_id'; redacted boolean:=coalesce((p_packet->>'request_redacted')::boolean,false);
+  conflict boolean:=coalesce((p_packet->>'attribution_conflict')::boolean,false);
+  raw_hash text:=p_packet->>'raw_hash';
+BEGIN
+  SELECT b0.* INTO STRICT b FROM pr06a_control.batch b0 JOIN pr06a_control.activation c USING(authorization_id)
+    WHERE pr06a_control.owns_batch(b0,f) AND c.executor_login=session_user FOR UPDATE OF b0;
+  SELECT * INTO STRICT a FROM pr06a_control.attempts WHERE attempt=p_attempt AND authorization_id=b.authorization_id FOR UPDATE;
+  IF p_packet->>'payload' IS NOT NULL THEN
+    PERFORM pr06a_api.record_inbound(f,p_attempt,(p_packet->>'sequence')::integer,
+       (p_packet->>'control')::integer,(p_packet->>'frame')::integer,p_packet->>'payload');
+  END IF;
+  IF p_packet->>'anomaly' IS NOT NULL THEN
+    PERFORM pr06a_api.anomaly(f,p_attempt,p_packet->>'anomaly',raw_hash);
+  END IF;
+  IF conflict OR (redacted AND a.request_id IS NOT NULL) OR (rid IS NOT NULL AND a.redacted_request_seen) THEN
+    PERFORM pr06a_api.anomaly(f,p_attempt,'request_identity_conflict',raw_hash);
+    RETURN false;
+  END IF;
+  IF rid IS NOT NULL THEN
+    BEGIN
+      PERFORM pr06a_api.observe(f,p_attempt,rid,NULL,NULL,false);
+    EXCEPTION WHEN SQLSTATE 'P6201' THEN
+      PERFORM pr06a_api.anomaly(f,p_attempt,'request_identity_conflict',raw_hash);
+      RETURN false;
+    END;
+  END IF;
+  IF redacted AND NOT a.redacted_request_seen THEN
+    UPDATE pr06a_control.attempts SET redacted_request_seen=true,metering_revision=metering_revision+1
+      WHERE attempt=p_attempt;
+  END IF;
+  IF p_packet->>'input' IS NOT NULL OR p_packet->>'output' IS NOT NULL OR p_packet->>'total' IS NOT NULL THEN
+    PERFORM pr06a_api.observe_risk(f,p_attempt,(p_packet->>'input')::bigint,(p_packet->>'output')::bigint,
+                                  (p_packet->>'total')::bigint);
+  END IF;
+  RETURN true;
+END $f$;
+
 CREATE TABLE pr06a_control.protocol (
   attempt uuid NOT NULL REFERENCES pr06a_control.attempts(attempt),
   event text NOT NULL CHECK (event IN ('handshake-intent','handshake','run-task','task-started','finish-task','task-finished','task-failed')),
@@ -684,8 +725,8 @@ GRANT EXECUTE ON FUNCTION pr06a_api.open_batch(uuid,jsonb,text,jsonb),
   pr06a_api.record_sentence(uuid,uuid,bigint,integer,bigint,bigint,boolean,text,integer), pr06a_api.complete(uuid,uuid,text,text),
   pr06a_api.protocol(uuid,uuid,text),pr06a_api.check_connection(uuid,uuid,boolean),
   pr06a_api.discard_frame(uuid,uuid,integer),pr06a_api.anomaly(uuid,uuid,text,text),
-  pr06a_api.record_inbound(uuid,uuid,integer,integer,integer,text),
-  pr06a_api.check_frame(uuid,uuid,integer),pr06a_api.observe_risk(uuid,uuid,bigint,bigint,bigint),
+  pr06a_api.retain_packet(uuid,uuid,jsonb),
+  pr06a_api.check_frame(uuid,uuid,integer),
   pr06a_api.lock_dispatch(uuid,boolean),
   pr06a_api.interrupt(uuid,uuid,text)
   TO classroom_pr06a_executor;

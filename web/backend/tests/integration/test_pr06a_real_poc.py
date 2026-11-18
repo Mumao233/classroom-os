@@ -342,6 +342,32 @@ def test_concurrent_last_slot_and_unconfirmed_ranges(poc):
     _run(run())
 
 
+def test_receipt_risk_and_attribution_are_atomic(poc):
+    pg, samples, connect = poc
+
+    async def run():
+        async with connect() as ledger:
+            await ledger.open(REVIEWED, ACCOUNT, FINGERPRINT, samples)
+            attempt = Attempt.create()
+            await ledger.claim(samples[0], attempt)
+            packet = dict(raw_hash="a" * 64, sequence=1, control=1, frame=0, payload="{}",
+                          input=200000, output=-1)
+            with pytest.raises(policy.PocStopped):
+                await ledger.retain(attempt, packet)
+            with pg.admin.connect() as db:
+                assert db.scalar(sa.text("SELECT count(*) FROM pr06a_control.inbound")) == 0
+                assert db.scalar(sa.text("SELECT observed_input FROM pr06a_control.attempts")) is None
+            assert await ledger.retain(attempt, packet | dict(output=1, request_redacted=True))
+            assert not await ledger.retain(attempt, packet | dict(sequence=2, request_id="other-request", output=9))
+            with pg.admin.connect() as db:
+                assert db.scalar(sa.text("SELECT count(*) FROM pr06a_control.inbound")) == 2
+                assert db.execute(sa.text("""SELECT observed_input,observed_output,request_id,redacted_request_seen
+                    FROM pr06a_control.attempts""")).one() == (200000, 1, None, True)
+                assert db.scalar(sa.text("SELECT code FROM pr06a_control.anomalies")) == "request_identity_conflict"
+
+    _run(run())
+
+
 def test_revoke_before_arm_is_durable(poc):
     pg, _, _ = poc
     with pg.admin.begin() as db:
@@ -450,13 +476,13 @@ def test_frame_and_sentence_evidence_preserves_dispatch_boundary(poc, monkeypatc
     peers = []
     original_frame = PgLedger.frame
     original_sentence = PgLedger.sentence
-    original_inbound = PgLedger.inbound
+    original_retain = PgLedger.retain
 
-    async def record_inbound(self, attempt, sequence, frame):
-        if mode == "pending-meter" and frame.audio_attempt:
+    async def retain_packet(self, attempt, packet):
+        if mode == "pending-meter" and packet.get("frame"):
             peers[0].inbound_started.set()
             await asyncio.sleep(0.05)
-        await original_inbound(self, attempt, sequence, frame)
+        return await original_retain(self, attempt, packet)
 
     async def reserve_frame(self, attempt, start, end, checksum):
         await original_frame(self, attempt, start, end, checksum)
@@ -475,7 +501,7 @@ def test_frame_and_sentence_evidence_preserves_dispatch_boundary(poc, monkeypatc
 
     monkeypatch.setattr(PgLedger, "frame", reserve_frame)
     monkeypatch.setattr(PgLedger, "sentence", record_sentence)
-    monkeypatch.setattr(PgLedger, "inbound", record_inbound)
+    monkeypatch.setattr(PgLedger, "retain", retain_packet)
 
     def create(attempt):
         peer = Peer(attempt, mode=mode)

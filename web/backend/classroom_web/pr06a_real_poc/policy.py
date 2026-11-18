@@ -35,11 +35,19 @@ class EndOfStream(ConnectionError):
     """The peer closed the WebSocket normally."""
 
 
+def sentence_proof(sentence):
+    return (sentence.sentence_id, sentence.begin_ms, sentence.end_ms,
+            sha256(sentence.text.encode("utf-8")).hexdigest())
+
+
 class UnsafeInbound(PocStopped):
-    def __init__(self, reason, checksum, metering=None):
+    def __init__(self, reason, checksum, metering=None, *, control=0, event=None, final_sentence=None):
         super().__init__(reason)
         self.checksum = checksum
         self.metering = metering
+        self.control = control
+        self.event = event
+        self.final_sentence = final_sentence
 
 
 @dataclass(frozen=True)

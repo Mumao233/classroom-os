@@ -64,6 +64,10 @@ def test_unrelated_duplicate_keys_do_not_discard_meter_evidence():
     assert metering_evidence(raw.replace('"request_id":"r"', '"request_id":"r","request_id":"s"')).attribution_conflict
     split = metering_evidence(raw.replace('"output_tokens":1', '"output_tokens":1,"output_tokens":2')).usage
     assert split.input_tokens == 200000 and split.output_tokens is None
+    ambiguous_mirror = raw.replace('"sentence":{"x":0,"x":1}', '"output":{},"output":{}')
+    assert metering_evidence(ambiguous_mirror).usage.input_tokens == 200000
+    out_of_range = raw.replace('"x":1', '"x":1e999')
+    assert metering_evidence(out_of_range).usage.input_tokens == 200000
 
 
 def _loopback_certificate(tmp_path):

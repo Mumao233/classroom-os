@@ -8,7 +8,7 @@ from ..asr_dashscope.transport import AuthenticationRejected, Disconnected
 from ..asr_dashscope.wire import finish_task, metering_evidence, parse_event, run_task
 from ..asr_sim.simulator import ProtocolError
 from .ledger import Attempt, finish_on_cancel
-from .policy import FRAME_SAMPLES, MAX_BATCH_SECONDS, MAX_CONNECTION_SECONDS, EndOfStream, PocStopped, RequestConflict, UnsafeInbound, digest
+from .policy import FRAME_SAMPLES, MAX_BATCH_SECONDS, MAX_CONNECTION_SECONDS, EndOfStream, PocStopped, UnsafeInbound, digest, sentence_proof
 
 
 MAX_INBOUND_PACKETS = 512
@@ -79,25 +79,23 @@ class _Session:
             await self.ledger.observe(self.attempt, event.request_id, None, False)
             self.request = event.request_id
 
-    async def _risk(self, evidence, raw_hash):
-        if evidence is None or evidence.task_id != str(self.attempt.task_id):
-            return True
-        try:
-            if (evidence.attribution_conflict or
-                    (self.request and (evidence.request_redacted or
-                                       (evidence.request_id and evidence.request_id != self.request)))):
-                raise RequestConflict("request_identity_conflict")
-            await self._bind_request(evidence)
-        except RequestConflict as exc:
+    async def _retain(self, packet, evidence):
+        attributable = evidence is not None and evidence.task_id == str(self.attempt.task_id)
+        if attributable:
+            usage = evidence.usage
+            packet.update(request_id=evidence.request_id, request_redacted=evidence.request_redacted,
+                          attribution_conflict=evidence.attribution_conflict,
+                          input=usage.input_tokens if usage else None,
+                          output=usage.output_tokens if usage else None, total=evidence.total)
+        accepted = await self.ledger.retain(self.attempt, packet)
+        if not accepted:
             self.recognition_tainted = self.terminal_event is None or self.recognition_tainted
-            self._stop_for_accounting(str(exc))
-            await self.ledger.anomaly(self.attempt, str(exc), raw_hash)
-            return False
-        if evidence.usage is not None or evidence.total is not None:
-            await self.ledger.observe_risk(self.attempt, evidence.usage, evidence.total)
-        if self.terminal_event is not None and evidence.provider_failed:
-            self.recognition_ok = False
-        return True
+            self._stop_for_accounting("request_identity_conflict")
+        elif attributable:
+            self.request = evidence.request_id or self.request
+            if evidence.metering_conflict:
+                self.stop = self.stop or "usage_unresolved"
+        return accepted
 
     def _check_terminal_contradiction(self, event):
         if event.request_id and self.request and event.request_id != self.request:
@@ -202,20 +200,41 @@ class _Session:
         received = inbound.text.encode("utf-8")
         self.received_count += 1
         self.received_bytes += len(received)
-        packet_hash = digest(received)
+        packet = {"raw_hash": digest(received)}
         if self.received_count > MAX_INBOUND_PACKETS or self.received_bytes > MAX_INBOUND_BYTES:
             if not self.retention_capped:
                 self.retention_capped = True
                 self._stop_for_accounting("inbound_evidence_limit")
-                await self.ledger.anomaly(self.attempt, "inbound_evidence_limit", packet_hash)
+                packet["anomaly"] = "inbound_evidence_limit"
         else:
-            await self.ledger.inbound(self.attempt, self.received_count, inbound)
-        return await self._risk(metering_evidence(inbound.text), packet_hash)
+            packet.update(sequence=self.received_count, control=inbound.control_sequence,
+                          frame=inbound.audio_attempt, payload=inbound.text)
+        accepted = await self._retain(packet, metering_evidence(inbound.text))
+        if accepted and self.terminal_event is not None:
+            try:
+                event = parse_event(inbound.text, str(self.attempt.task_id))
+            except ProtocolError:
+                pass
+            else:
+                self._check_terminal_contradiction(event)
+        return accepted
 
     async def _retain_unsafe(self, exc):
         self._stop_for_accounting(str(exc))
-        await self.ledger.anomaly(self.attempt, str(exc), exc.checksum)
-        await self._risk(exc.metering, exc.checksum)
+        accepted = await self._retain({"raw_hash": exc.checksum, "anomaly": str(exc)}, exc.metering)
+        if (not accepted or exc.metering is None or exc.metering.task_id != str(self.attempt.task_id)
+                or not self.run_control or exc.control < self.run_control):
+            return
+        if exc.event == "task-failed":
+            if self.terminal_event is not None:
+                self.recognition_ok = False
+            elif not self.provider_failed:
+                self.provider_failed = True
+                await self.ledger.protocol(self.attempt, "task-failed")
+        if self.terminal_event is not None and exc.final_sentence is not None:
+            seen = self.sentences.get(exc.final_sentence[0])
+            if seen is not None and sentence_proof(seen[0]) != exc.final_sentence:
+                self.recognition_ok = False
 
     async def _read(self):
         try:
@@ -237,15 +256,7 @@ class _Session:
                 try:
                     if not await finish_on_cancel(self._retain_packet(inbound)):
                         continue
-                    if self.accounting_only:
-                        if self.terminal_event is not None:
-                            try:
-                                event = parse_event(inbound.text, str(self.attempt.task_id))
-                            except ProtocolError:
-                                pass
-                            else:
-                                self._check_terminal_contradiction(event)
-                    else:
+                    if not self.accounting_only:
                         try:
                             await self._receive(inbound)
                         except ProtocolError:

@@ -118,9 +118,8 @@ class PgLedger:
     async def discard_frame(self, attempt, start):
         await self._change("SELECT pr06a_api.discard_frame(%s,%s,%s)", attempt.id, start)
 
-    async def inbound(self, attempt, sequence, frame):
-        await self._change("SELECT pr06a_api.record_inbound(%s,%s,%s,%s,%s,%s)",
-                           attempt.id, sequence, frame.control_sequence, frame.audio_attempt, frame.text)
+    async def retain(self, attempt, packet):
+        return await self._change("SELECT pr06a_api.retain_packet(%s,%s,%s)", attempt.id, Jsonb(packet))
 
     async def anomaly(self, attempt, code, raw_hash):
         await self._change("SELECT pr06a_api.anomaly(%s,%s,%s,%s)", attempt.id, code, raw_hash)
@@ -129,10 +128,6 @@ class PgLedger:
         return await self._change("SELECT pr06a_api.observe(%s,%s,%s,%s,%s,%s)",
                                   attempt.id, request, usage.input_tokens if usage else None,
                                   usage.output_tokens if usage else None, final)
-
-    async def observe_risk(self, attempt, usage, total=None):
-        await self._change("SELECT pr06a_api.observe_risk(%s,%s,%s,%s,%s)", attempt.id,
-                           usage.input_tokens if usage else None, usage.output_tokens if usage else None, total)
 
     async def sentence(self, attempt, sentence, revision, required_sample):
         await self._change("SELECT pr06a_api.record_sentence(%s,%s,%s,%s,%s,%s,%s,%s,%s)",

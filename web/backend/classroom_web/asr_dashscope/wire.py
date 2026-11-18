@@ -171,24 +171,6 @@ class RiskTokens:
     output_tokens: int | None
 
 
-def _conflicting_token_evidence(*containers: dict) -> tuple[RiskTokens | None, int | None]:
-    high = {}
-    for container in containers:
-        usage = container.get("usage")
-        if not isinstance(usage, dict):
-            continue
-        for meter in ("input_tokens", "output_tokens", "total_tokens"):
-            try:
-                count = integer(usage.get(meter))
-            except ProtocolError:
-                continue
-            high[meter] = max(high.get(meter, 0), count)
-    split = None
-    if "input_tokens" in high or "output_tokens" in high:
-        split = RiskTokens(high.get("input_tokens"), high.get("output_tokens"))
-    return split, high.get("total_tokens")
-
-
 @dataclass(frozen=True)
 class MeteringEvidence:
     task_id: str
@@ -197,56 +179,77 @@ class MeteringEvidence:
     total: int | None
     attribution_conflict: bool = False
     request_redacted: bool = False
-    provider_failed: bool = False
+    metering_conflict: bool = False
 
 
 class _ObjectPairs(list):
     pass
 
 
-_AMBIGUOUS = object()
+def _values(obj, key):
+    return [value for name, value in obj if name == key] if isinstance(obj, _ObjectPairs) else []
 
 
-def _metering_fields(pairs, fields):
-    result = {}
-    if not isinstance(pairs, _ObjectPairs):
-        return result
-    for key, value in pairs:
-        if key in fields:
-            result[key] = _AMBIGUOUS if key in result else value
-    return result
+def _unknown_number(_value):
+    return None
+
+
+def _bounded_meter_int(value):
+    return int(value) if len(value) <= 17 else None
+
+
+def _meter_totals(containers):
+    high = {}
+    conflict = False
+    for body in containers:
+        for meter in ("input_tokens", "output_tokens", "total_tokens"):
+            values = _values(body, meter)
+            if not values:
+                continue
+            try:
+                counts = {integer(value) for value in values}
+            except ProtocolError:
+                conflict = True
+                continue
+            if len(counts) != 1:
+                conflict = True
+                continue
+            count = counts.pop()
+            if meter in high and high[meter] != count:
+                conflict = True
+            high[meter] = max(high.get(meter, 0), count)
+    split = None
+    if "input_tokens" in high or "output_tokens" in high:
+        split = RiskTokens(high.get("input_tokens"), high.get("output_tokens"))
+    return split, high.get("total_tokens"), conflict
 
 
 def metering_evidence(raw: str) -> MeteringEvidence | None:
-    """Extract only attributable counters. No event-order or finality decisions."""
+    """Extract only task, request, and counters from known metering paths."""
     if len(raw) > MAX_MESSAGE_CHARS:
         return None
     try:
-        obj = _metering_fields(json.loads(raw, object_pairs_hook=_ObjectPairs,
-                                          parse_constant=_invalid_constant, parse_float=_finite_float),
-                               {"header", "payload"})
-        header = _metering_fields(obj.get("header"), {"task_id", "event", "error_code", "error_message"})
-        task = uid(header.get("task_id"))
-        payload = _metering_fields(obj.get("payload"), {"usage", "output"})
-        output = _metering_fields(payload.get("output"), {"usage", "output", "request_id"})
-        mirror = _metering_fields(output.get("output"), {"usage", "request_id"})
-        if any(value is _AMBIGUOUS for value in (obj.get("payload"), payload.get("output"), output.get("output"))):
-            return MeteringEvidence(task, None, None, None, attribution_conflict=True)
+        obj = json.loads(raw, object_pairs_hook=_ObjectPairs, parse_constant=_unknown_number,
+                         parse_float=_unknown_number, parse_int=_bounded_meter_int)
+        tasks = {uid(task) for header in _values(obj, "header") for task in _values(header, "task_id")}
+        if len(tasks) != 1:
+            return None
+        task = tasks.pop()
+        payloads = _values(obj, "payload")
+        outputs = [out for payload in payloads for out in _values(payload, "output")]
+        mirrors = [mirror for out in outputs for mirror in _values(out, "output")]
         try:
-            request = _request_id(output, mirror)
+            ids = {_request_id({"request_id": item})
+                   for container in (*outputs, *mirrors) for item in _values(container, "request_id")}
         except ProtocolError:
             return MeteringEvidence(task, None, None, None, attribution_conflict=True)
-        for part in (payload, output, mirror):
-            if "usage" in part:
-                part["usage"] = _metering_fields(part["usage"], {"input_tokens", "output_tokens", "total_tokens"})
-        usage, total = _conflicting_token_evidence(payload, output, mirror)
-        failed = (header.get("event") == "task-failed" and isinstance(header.get("error_code"), str)
-                  and bool(header["error_code"]) and isinstance(header.get("error_message"), str))
+        if len(ids) > 1:
+            return MeteringEvidence(task, None, None, None, attribution_conflict=True)
+        usage, total, conflict = _meter_totals(
+            body for container in (*payloads, *outputs, *mirrors) for body in _values(container, "usage"))
+        return MeteringEvidence(task, next(iter(ids), None), usage, total, metering_conflict=conflict)
     except (ValueError, RecursionError):
         return None
-    if request or usage is not None or total is not None or failed:
-        return MeteringEvidence(task, request, usage, total, provider_failed=failed)
-    return None
 
 
 def parse_event(raw: str, provider_task_id: str) -> WireEvent:
