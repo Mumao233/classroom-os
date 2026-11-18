@@ -21,6 +21,11 @@ AUTH_FILE = ROOT / "docs" / "web-alpha" / "pr06a" / f"{AUTHORIZATION}.md"
 RISK_REPORT = AUTH_FILE.parent / "risk-acceptance" / "REPORT.md"
 RISK_REPORT_SHA256 = "c8f6eb43c3ec7d041bb8a63a847d70f7175e45e446528b89fc68ec607078451c"
 RISK_REVIEW_BASE = "05559351bd709a07f7eee88fb357b749a6f49288"
+ASTRA_INTEGRITY_GATES = frozenset((
+    "no_dangerous_flags", "codex_exit_zero", "turn_completed", "review_output_present",
+    "actual_model", "actual_effort", "actual_sandbox_read_only", "sandbox_commands_worked",
+    "no_unsandboxed_tools", "working_tree_unchanged",
+))
 DATABASE = "classroom_pr06a_real_poc"
 
 
@@ -127,6 +132,8 @@ def _verify_review(args, head):
     if (digest(verdict) != review.get("review_sha256") or verdict_lines != [f"VERDICT: PASS {head}"]):
         raise PocStopped("explicit_review_verdict_required")
     if risk_sha is not None:
+        if review["gates"].keys() != ASTRA_INTEGRITY_GATES:
+            raise PocStopped("review_receipt_not_accepted")
         _git("merge-base", "--is-ancestor", RISK_REVIEW_BASE, head)
         return _verify_risk_acceptance(review, lines, risk_sha)
     if review.get("findings_by_priority", [1])[:2] != [0, 0]:

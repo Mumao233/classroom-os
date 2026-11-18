@@ -61,7 +61,8 @@ def arm_receipts(tmp_path, monkeypatch):
         (2, "Preserve heartbeat timing when duplicate identity fields agree", "asr_dashscope/wire.py", 290),
     ]
     status = dict(head=REVIEWED, state="review_completed", scope="base", scope_value=operator.RISK_REVIEW_BASE,
-                  untracked_files_excluded_from_scope=False, gates={str(i): {"ok": True} for i in range(10)},
+                  untracked_files_excluded_from_scope=False,
+                  gates={name: {"ok": True} for name in sorted(operator.ASTRA_INTEGRITY_GATES)},
                   findings_total=4, findings_by_priority=[0, 2, 2, 0], findings=[
                       dict(priority=p, title=t, file=f"web/backend/classroom_web/{f}", line=n, missing_fields=[])
                       for p, t, f, n in findings])
@@ -107,6 +108,8 @@ def arm_receipts(tmp_path, monkeypatch):
     ("extra-status-finding", "risk_acceptance_findings_mismatch"),
     ("changed-finding-body", "risk_acceptance_findings_mismatch"),
     ("wrong-head", "review_receipt_not_accepted"),
+    ("wrong-integrity-gate", "review_receipt_not_accepted"),
+    ("ordinary-pass-with-p1", "review_receipt_not_accepted"),
     ("changed-report", "risk_acceptance_digest_mismatch"),
     ("forged-report-digest", "risk_acceptance_digest_mismatch"),
     ("no-attestation", "explicit_risk_acceptance_attestation_required"),
@@ -122,6 +125,12 @@ def test_risk_acceptance_rejects_before_db(arm_receipts, monkeypatch, mutation, 
         markdown = markdown.replace("¥1.05", "¥1.04")
     elif mutation == "wrong-head":
         status["head"] = operator.RISK_REVIEW_BASE
+    elif mutation == "wrong-integrity-gate":
+        status["gates"]["unrecognized_gate"] = status["gates"].pop("working_tree_unchanged")
+    elif mutation == "ordinary-pass-with-p1":
+        status["scope_value"] = operator.BASELINE
+        markdown = markdown.replace(f"RISK-ACCEPTANCE: {args.risk_acceptance_sha256}\n\n", "")
+        args.risk_acceptance_sha256 = None
     elif mutation in ("changed-report", "forged-report-digest"):
         operator.RISK_REPORT.write_bytes(operator.RISK_REPORT.read_bytes() + b"unexpected revision\n")
         if mutation == "forged-report-digest":
@@ -148,7 +157,8 @@ def test_arm_audit_records_only_the_validated_risk_digest(poc, arm_receipts, mon
     operator, args, status, _, write_review = arm_receipts
     if not use_exception:
         args.risk_acceptance_sha256 = None
-        status.update(scope_value=operator.BASELINE, findings_by_priority=[0, 0, 1, 0])
+        status.update(scope_value=operator.BASELINE, findings_by_priority=[0, 0, 0, 0],
+                      findings_total=0, findings=[])
         write_review(f"VERDICT: PASS {REVIEWED}\n")
     args.executor_login = connect.executor
     with pg.admin.begin() as db:
@@ -168,6 +178,25 @@ def test_arm_audit_records_only_the_validated_risk_digest(poc, arm_receipts, mon
         assert row == (REVIEWED, args.review_sha256, args.vmware_sha256, args.risk_acceptance_sha256)
         assert db.scalar(sa.text("SELECT count(*) FROM pr06a_control.attempts")) == 0
     assert json.loads(capsys.readouterr().out).get("risk_acceptance_sha256") == args.risk_acceptance_sha256
+
+
+@pytest.mark.parametrize("compatible", [True, False], ids=["verified-overlay", "missing-receipt-function"])
+def test_documented_risk_audit_upgrade_checks_overlay(poc, compatible):
+    pg, _, _ = poc
+    runbook = Path(__file__).resolve().parents[4] / "docs/web-alpha/pr06a/REAL-POC-RUNBOOK-20261118.md"
+    upgrade = runbook.read_text(encoding="utf-8").split("```sql\n")[1].split("\n```")[0]
+    with pg.admin.begin() as db:
+        db.exec_driver_sql("ALTER TABLE pr06a_control.activation DROP COLUMN risk_acceptance_sha256")
+        before = db.scalar(sa.text("SELECT to_jsonb(a) FROM pr06a_control.activation a"))
+        if not compatible:
+            db.exec_driver_sql("DROP FUNCTION pr06a_api.retain_packet(uuid,uuid,jsonb)")
+            with pytest.raises(sa.exc.DBAPIError, match="PR06A_OVERLAY_UPGRADE_BLOCKED"), db.begin_nested():
+                db.exec_driver_sql(upgrade, execution_options={"no_parameters": True})
+            assert db.scalar(sa.text("SELECT to_jsonb(a) FROM pr06a_control.activation a")) == before
+        else:
+            db.exec_driver_sql(upgrade, execution_options={"no_parameters": True})
+            assert db.scalar(sa.text("SELECT to_jsonb(a) FROM pr06a_control.activation a")) == (
+                before | {"risk_acceptance_sha256": None})
 
 
 @pytest.fixture

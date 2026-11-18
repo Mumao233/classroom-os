@@ -37,12 +37,18 @@ python -I -B tools/pr06a/real_poc.py --samples $pocSamples
 2. 在这个库撤销 PUBLIC 的 CONNECT，分别建立专用 `NOSUPERUSER` 登录并授予 `classroom_pr06a_executor`、`classroom_pr06a_reconciler`。Web、worker、浏览器、本项目的其他数据库用户无权进入。控制角色仅由 DBA 持有。执行登录无底表权限，复核登录只有对账和确认释放两项函数权限。以 DBA 为该库将 `log_parameter_max_length` 和 `log_parameter_max_length_on_error` 均设为 0，把 `log_error_verbosity` 设为 `terse`，在新连接中生效。保持转录和账户证明访问受控。
 3. DBA 按既有 `billing_api.open_period` 签开北京时间当月的隔离 ASR 预算周期，保留预算池、安全余量及固定费用。检查 `billing`、`asr_streaming` 为 false，`pr06a_control.activation` 和 `pr06a_control.batch` 均为空。设置来宾安全连接参数。仅控制进程使用 `PR06A_CONTROL_DSN`，执行进程使用 `PR06A_EXECUTOR_DSN`，两者须使用 `host=127.0.0.1 dbname=classroom_pr06a_real_poc` 和已授权的专用登录。
 
-若专用库已安装旧版覆盖层，DBA 先在原库事务执行以下增列，再确认字段类型和约束。原激活行的风险摘要为空。保留既有授权、激活、撤销和批次记录。
+若专用库已经安装覆盖层，以下增列仅适用于安装证据可证明与 `05559351` 覆盖层一致的数据库。核对实际安装源。该提交 Git 源树中 `install.sql` 的 SHA-256 为 `e9487b357965e30d4264ffcaa322d2b0ecaed1fc15c6d0cf9d35e3e451d9e3f0`。安装版本更早、无法确认或数据库有未核实变更时，停在此步，先完成经验证且保留既有数据的迁移。对确认无误的原库由 DBA 事务执行以下增列。原激活行的风险摘要为空，保留既有授权、激活、撤销和批次记录。
 
 ```sql
-ALTER TABLE pr06a_control.activation
-  ADD COLUMN IF NOT EXISTS risk_acceptance_sha256 text
-  CHECK (risk_acceptance_sha256 ~ '^[a-f0-9]{64}$');
+DO $upgrade$
+BEGIN
+  IF pg_catalog.to_regprocedure('pr06a_api.retain_packet(uuid,uuid,jsonb)') IS NULL THEN
+    RAISE EXCEPTION 'PR06A_OVERLAY_UPGRADE_BLOCKED';
+  END IF;
+  ALTER TABLE pr06a_control.activation
+    ADD COLUMN IF NOT EXISTS risk_acceptance_sha256 text
+    CHECK (risk_acceptance_sha256 ~ '^[a-f0-9]{64}$');
+END $upgrade$;
 ```
 
 ## 明确启动授权后
