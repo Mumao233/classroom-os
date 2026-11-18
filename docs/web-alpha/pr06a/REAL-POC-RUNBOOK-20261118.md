@@ -39,7 +39,7 @@ python -I -B tools/pr06a/real_poc.py --samples $pocSamples
 
 ## 明确启动授权后
 
-1. 操作员在控制会话核对用户本次「开始真实调用」记录、Astra `status.json` 和 VMware `digest.json` 的 SHA-256、干净候选 HEAD、账号证明和费用基线。以安全输入在来宾当前进程设置 `DASHSCOPE_API_KEY`。例如 `[System.Net.NetworkCredential]::new('', (Read-Host -AsSecureString)).Password` 的结果直接赋给环境变量，勿打印。运行一次预授权登记，按提示输入用户已给出的启动词。此步骤写入 PG 并绑定候选、账号证明、Key 指纹和专用执行登录。
+1. 操作员在控制会话核对用户本次「开始真实调用」记录、Astra `status.json` 和 VMware `digest.json` 的 SHA-256、与 VMware 回执放在同一目录的 `host-SOURCE.json`、干净候选 HEAD、账号证明和费用基线。以安全输入在来宾当前进程设置 `DASHSCOPE_API_KEY`。例如 `[System.Net.NetworkCredential]::new('', (Read-Host -AsSecureString)).Password` 的结果直接赋给环境变量，勿打印。运行一次预授权登记，按提示输入用户已给出的启动词。此步骤写入 PG 并绑定候选、账号证明、Key 指纹和专用执行登录。
 
    ```powershell
    python -I -B tools/pr06a/real_poc.py --samples $pocSamples --arm `

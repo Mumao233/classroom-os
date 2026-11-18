@@ -42,6 +42,7 @@ class WireEvent:
     sentence_issue: bool = False
     heartbeat: tuple[int, int | None] | None = None
     heartbeat_duration: int | None = None
+    risk_usage: TokenUsage | None = None
 
 
 def run_task(provider_task_id: str) -> dict:
@@ -165,7 +166,22 @@ def _usage(*containers: dict) -> tuple[TokenUsage | None, int | None]:
     return tokens, observed.get("duration")
 
 
-def parse_event(raw: str, provider_task_id: str) -> WireEvent:
+def _conflicting_token_evidence(*containers: dict) -> TokenUsage | None:
+    high = {}
+    for container in containers:
+        usage = container.get("usage")
+        if not isinstance(usage, dict):
+            continue
+        for meter in ("input_tokens", "output_tokens"):
+            try:
+                count = integer(usage.get(meter))
+            except ProtocolError:
+                continue
+            high[meter] = max(high.get(meter, 0), count)
+    return TokenUsage(high.get("input_tokens", 0), high.get("output_tokens", 0)) if high else None
+
+
+def parse_event(raw: str, provider_task_id: str, *, capture_risk: bool = False) -> WireEvent:
     """Validate identity before separating transcript and metering evidence."""
     if not isinstance(raw, str) or len(raw) > MAX_MESSAGE_CHARS:
         raise ProtocolError("invalid DashScope JSON message size or type")
@@ -231,4 +247,6 @@ def parse_event(raw: str, provider_task_id: str) -> WireEvent:
     # supplies neither 3.1 token evidence nor a chargeable audio measurement.
     return WireEvent(kind, request_id=request_id, sentence=sentence, usage=usage,
                      usage_issue=usage_issue, sentence_issue=sentence_issue, heartbeat=heartbeat,
-                     heartbeat_duration=duration if heartbeat is not None else None)
+                     heartbeat_duration=duration if heartbeat is not None else None,
+                     risk_usage=_conflicting_token_evidence(payload, output, mirror)
+                     if capture_risk and usage_issue else None)

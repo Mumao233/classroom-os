@@ -90,8 +90,9 @@ def open_overlay():
     # Dedicated fixtures can move the authorization window independently of
     # the calendar where CI is run. No client clock override exists in the SQL.
     ddl = (PACKAGE / "install.sql").read_text(encoding="utf-8")
-    return ddl.replace("'2026-11-18 00:00:00+08'", "clock_timestamp()-interval '1 day'").replace(
-        "'2027-01-01 00:00:00+08'", "clock_timestamp()+interval '1 day'")
+    return (ddl.replace("'2026-11-18 00:00:00+08'", "clock_timestamp()-interval '1 day'")
+            .replace("'2027-01-01 00:00:00+08'::timestamptz", "(clock_timestamp()+interval '1 day')")
+            .replace("'2027-01-01 00:00:00+08'", "clock_timestamp()+interval '1 day'"))
 
 
 class Peer(FakeTransport):
@@ -102,6 +103,9 @@ class Peer(FakeTransport):
 
     def event(self, event, **payload):
         self.feed_json({"header": {"event": event, "task_id": self.task}, "payload": payload})
+
+    def has_pending(self):
+        return not self._inbound.empty()
 
     async def connect(self, *, before_handshake):
         await before_handshake()
@@ -118,9 +122,25 @@ class Peer(FakeTransport):
             usage = {} if self.mode == "missing" else {"usage": {"input_tokens": 200000 if self.mode == "limit" else 5,
                                                                   "output_tokens": 1}}
             self.event("task-finished", **usage)
+            if self.mode == "terminal-conflict":
+                self.event("task-finished", usage={"input_tokens": 200000, "output_tokens": 1})
 
     async def send_binary(self, frame):
         await super().send_binary(frame)
+        if self.mode == "pending-meter":
+            self.event("result-generated", output={"request_id": self.task, "sentence": {
+                "sentence_id": 1, "begin_time": 0, "end_time": 100,
+                "sentence_end": True, "text": "synthetic high exposure"}},
+                usage={"input_tokens": 200000, "output_tokens": 1})
+            await self.inbound_started.wait()
+            raise Disconnected("synthetic send failure during raw receipt")
+        if self.mode == "provisional":
+            self.event("result-generated", output={"request_id": self.task, "sentence": {
+                "sentence_id": 1, "begin_time": 0, "end_time": 100,
+                "sentence_end": True, "text": "synthetic provisional"}},
+                usage={"input_tokens": 0, "output_tokens": 0})
+            self.feed_disconnect()
+            return
         if self.mode == "unconfirmed":
             self.event("result-generated", output={"request_id": self.task, "sentence": {
                 "sentence_id": 1, "begin_time": 0, "end_time": 100,
@@ -137,6 +157,12 @@ class Peer(FakeTransport):
                     "sentence_id": 1, "begin_time": 0, "end_time": 100,
                     "sentence_end": True, "text": "synthetic transcript"}},
                     usage={"input_tokens": 200000, "output_tokens": 0})
+            if self.mode == "mirrors":
+                self.event("result-generated", output={"request_id": self.task, "sentence": {
+                    "sentence_id": 1, "begin_time": 0, "end_time": 100,
+                    "sentence_end": True, "text": "synthetic transcript"},
+                    "usage": {"input_tokens": 200001, "output_tokens": 1}},
+                    usage={"input_tokens": 200000, "output_tokens": 1})
             if self.mode == "foreign":
                 self.event("result-generated", output={"request_id": "wrong-request", "sentence": {
                     "sentence_id": 2, "begin_time": 0, "end_time": 100,
@@ -152,6 +178,8 @@ class Peer(FakeTransport):
                                                  ("missing", "usage_unresolved", 1), ("limit", "cost_limit", 1),
                                                  ("foreign", "request_identity_conflict", 1),
                                                  ("regression", "usage_regression", 1),
+                                                 ("mirrors", "usage_unresolved", 1),
+                                                 ("terminal-conflict", "post_terminal_conflict", 1),
                                                  ("partial", "incomplete_recognition", 1)])
 def test_fenced_batch_against_postgres(poc, monkeypatch, mode, expected, count):
     pg, samples, connect = poc
@@ -176,14 +204,15 @@ def test_fenced_batch_against_postgres(poc, monkeypatch, mode, expected, count):
     assert all(peer.connect_count == 1 and peer.closed for peer in peers)
     if mode == "normal":
         assert all([kind for kind, _ in peer.sent] == ["json", "binary", "binary", "json"] for peer in peers)
-    if mode in ("limit", "foreign", "regression"):
+    if mode in ("limit", "foreign", "regression", "mirrors"):
         assert len(peers[0].sent_binary) == 1
     if mode in ("partial", "foreign"):
         assert receipts[0].state == "unknown"
     with pg.admin.connect() as db:
         batch = db.execute(sa.text("SELECT * FROM pr06a_control.batch")).mappings().one()
         exposure = db.scalar(sa.text("SELECT billing_api.lock_budget(:cycle)"), dict(cycle=batch["period_start"]))
-        expected_exposure = 1_200_005 if mode in ("limit", "regression") else 1_000_000
+        expected_exposure = {"limit": 1_200_005, "regression": 1_200_005,
+                             "mirrors": 1_200_011, "terminal-conflict": 1_200_005}.get(mode, 1_000_000)
         assert exposure["unknown"] == exposure["pool_risk"]["asr"] == expected_exposure
         assert batch["input_token_limit"] is None and batch["held_microyuan"] == 1_000_000
         if mode == "foreign":
@@ -336,12 +365,19 @@ with connect(**request["database"], autocommit=True) as db:
             db.exec_driver_sql("DELETE FROM billing_control.platform_budgets WHERE period_start>clock_timestamp()")
 
 
-@pytest.mark.parametrize("mode", ["stamp", "unconfirmed", "pending-failure", "revoked-after-intent"])
+@pytest.mark.parametrize("mode", ["stamp", "unconfirmed", "pending-failure", "revoked-after-intent", "pending-meter"])
 def test_frame_and_sentence_evidence_preserves_dispatch_boundary(poc, monkeypatch, mode):
     pg, samples, connect = poc
     peers = []
     original_frame = PgLedger.frame
     original_sentence = PgLedger.sentence
+    original_inbound = PgLedger.inbound
+
+    async def record_inbound(self, attempt, sequence, frame):
+        if mode == "pending-meter" and frame.audio_attempt:
+            peers[0].inbound_started.set()
+            await asyncio.sleep(0.05)
+        await original_inbound(self, attempt, sequence, frame)
 
     async def reserve_frame(self, attempt, start, end, checksum):
         await original_frame(self, attempt, start, end, checksum)
@@ -360,10 +396,12 @@ def test_frame_and_sentence_evidence_preserves_dispatch_boundary(poc, monkeypatc
 
     monkeypatch.setattr(PgLedger, "frame", reserve_frame)
     monkeypatch.setattr(PgLedger, "sentence", record_sentence)
+    monkeypatch.setattr(PgLedger, "inbound", record_inbound)
 
     def create(attempt):
         peer = Peer(attempt, mode=mode)
         peer.sentence_recorded = asyncio.Event()
+        peer.inbound_started = asyncio.Event()
         peers.append(peer)
         if mode == "stamp":
             def fail(_):
@@ -382,26 +420,30 @@ def test_frame_and_sentence_evidence_preserves_dispatch_boundary(poc, monkeypatc
         frames = db.execute(sa.text("SELECT disposition FROM pr06a_control.frames ORDER BY start_sample")).scalars().all()
         assert frames == (["confirmed", "not_sent"] if mode == "pending-failure"
                           else ["not_sent"] if mode in ("stamp", "revoked-after-intent") else ["intent"])
+        if mode == "pending-meter":
+            exposure = db.scalar(sa.text("SELECT billing_api.lock_budget(period_start) FROM pr06a_control.batch"))
+            assert exposure["unknown"] == 1200005
         if mode == "unconfirmed":
             assert db.execute(sa.text("""SELECT r.required_sample,f.disposition FROM pr06a_control.recognition r
                 JOIN pr06a_control.frames f ON f.attempt=r.attempt AND f.end_sample=r.required_sample""")).one() == (
                 1600,"intent")
 
 
-def test_bill_revision_cannot_clear_unmetered_attempt(poc):
+@pytest.mark.parametrize("second_mode", ["auth", "provisional"])
+def test_bill_revision_cannot_clear_unmetered_attempt(poc, second_mode):
     pg, samples, connect = poc
 
     peers = []
 
     def create(attempt):
-        peer = Peer(attempt, mode="auth" if peers else "normal")
+        peer = Peer(attempt, mode=second_mode if peers else "normal")
         peers.append(peer)
         return peer
 
     async def run():
         async with connect() as ledger:
             return await execute_batch(ledger, samples, REVIEWED, ACCOUNT, FINGERPRINT, create)
-    assert [r.state for r in _run(run())] == ["succeeded", "failed"]
+    assert [r.state for r in _run(run())] == ["succeeded", "failed" if second_mode == "auth" else "unknown"]
 
     with pg.admin.begin() as db:
         first, second = db.execute(sa.text("SELECT * FROM pr06a_control.attempts ORDER BY slot")).mappings()
@@ -415,8 +457,8 @@ def test_bill_revision_cannot_clear_unmetered_attempt(poc):
         with pytest.raises(sa.exc.DBAPIError), db.begin_nested():
             db.exec_driver_sql("SELECT pr06a_api.release_reconciled()")
         db.execute(bill, evidence | dict(rev=2, metering=first["metering_revision"], hash="b" * 64))
-        db.execute(bill, dict(id=second["attempt"], rev=1, request=None, i=0, o=0, gross=0,
-                              metering=0, hash="c" * 64))
+        db.execute(bill, dict(id=second["attempt"], rev=1, request=second["request_id"], i=0, o=0, gross=0,
+                              metering=second["metering_revision"], hash="c" * 64))
         db.exec_driver_sql("SELECT pr06a_api.release_reconciled()")
         assert db.scalar(sa.text("SELECT overrun_microyuan FROM pr06a_control.batch")) == 100000
         ledger = db.scalar(sa.text("SELECT billing_api.lock_budget(period_start) FROM pr06a_control.batch"))

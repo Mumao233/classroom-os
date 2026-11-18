@@ -55,7 +55,9 @@ class _Connection(ClientConnection):
     async def handshake(self, additional_headers=None, user_agent_header=None):
         # websockets calls this after TCP/TLS setup. No HTTP headers have gone
         # out yet. Its connect() aborts this transport if the gate rejects.
-        await self._before_handshake()
+        deadline = await self._before_handshake()
+        if deadline is not None and asyncio.get_running_loop().time() >= deadline:
+            raise PocStopped("handshake_deadline")
         await super().handshake(additional_headers, user_agent_header)
 
     def process_event(self, event):
@@ -146,6 +148,9 @@ class _WebSocket:
         except Exception:
             raise Disconnected("audio_write_failed") from None
 
+    def has_pending(self):
+        return self._socket is not None and bool(self._socket.stamps)
+
     async def receive_text(self):
         try:
             frame = await self._connected().stamped_text()
@@ -157,15 +162,17 @@ class _WebSocket:
 
     async def close(self):
         if self._socket is not None:
+            self._closed = True
             try:
                 async with asyncio.timeout(0.25):
                     await self._socket.close()
                     if self._socket.close_code != 1000:
                         raise Disconnected("abnormal_close")
-            except Exception:
-                raise Disconnected("close_failed") from None
-            finally:
+            except BaseException as exc:
                 self.abort()
+                if not isinstance(exc, Exception):
+                    raise
+                raise Disconnected("close_failed") from None
         else:
             self.abort()
 

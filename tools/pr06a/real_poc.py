@@ -1,12 +1,14 @@
 """Operator command for the isolated PR-06a batch. Default is sample inspection."""
 import argparse
 import asyncio
+from io import BytesIO
 import json
 import os
 from pathlib import Path
 import re
 import subprocess
 import sys
+from zipfile import ZipFile
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "web" / "backend"))
@@ -28,20 +30,21 @@ def _emit(record):
     print(json.dumps(record, ensure_ascii=True, separators=(",", ":")), flush=True)
 
 
-def _reviewed_head():
+def _git(*args):
     environment = {k: v for k, v in os.environ.items()
                    if not k.startswith(("GIT_", "PR06A_", "PG")) and k != "DASHSCOPE_API_KEY"}
 
-    def git(*args):
-        return subprocess.check_output(["git", "-c", "core.fsmonitor=false", "-C", str(ROOT), *args],
-                                       env=environment, stderr=subprocess.DEVNULL, timeout=4).decode().strip()
+    return subprocess.check_output(["git", "-c", "core.fsmonitor=false", "-C", str(ROOT), *args],
+                                   env=environment, stderr=subprocess.DEVNULL, timeout=10)
 
-    head = git("rev-parse", "HEAD")
-    files = git("ls-files", "-v").splitlines()
-    if (not re.fullmatch("[0-9a-f]{40}", head) or head == BASELINE or git("status", "--porcelain")
+
+def _reviewed_head():
+    head = _git("rev-parse", "HEAD").decode().strip()
+    files = _git("ls-files", "-v").decode().splitlines()
+    if (not re.fullmatch("[0-9a-f]{40}", head) or head == BASELINE or _git("status", "--porcelain").strip()
             or any(not line.startswith("H ") for line in files)):
         raise PocStopped("reviewed_clean_checkout_required")
-    git("merge-base", "--is-ancestor", BASELINE, head)
+    _git("merge-base", "--is-ancestor", BASELINE, head)
     return head
 
 
@@ -98,6 +101,15 @@ def _verify_receipts(args, head):
             or any(vmware.get(check) is not True for check in ("same_source_manifest", "source_reread_matches",
                     "evidence_sha256_matches_guest", "transport_succeeded"))):
         raise PocStopped("vmware_receipt_not_accepted")
+    manifest = _receipt(Path(args.vmware_receipt).with_name("host-SOURCE.json"),
+                        vmware.get("manifest_sha256"), "vmware_manifest_digest_mismatch")
+    with ZipFile(BytesIO(_git("archive", "--format=zip", head))) as snapshot:
+        files = {entry.filename: digest(snapshot.read(entry)) for entry in snapshot.infolist() if not entry.is_dir()}
+    if (manifest.get("base_sha") != head or manifest.get("files_sha256") != files
+            or manifest.get("runner_sha256") != files.get("tools/pr06a/run_vmware_validation.py")
+            or vmware.get("executed_runner_sha256") != manifest["runner_sha256"]
+            or vmware.get("source_archive_sha256") != manifest.get("source_zip_sha256")):
+        raise PocStopped("vmware_git_tree_mismatch")
 
 
 async def _arm(args, head, fingerprint):

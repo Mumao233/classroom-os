@@ -171,7 +171,7 @@ CREATE TABLE pr06a_control.bill_evidence (
 -- Existing ordinary admission sees the specialized hold and actuals in
 -- the same locked budget row. The production schema alone is unchanged.
 GRANT SELECT (authorization_id, observed_input, observed_output, gross_microyuan,
-              reconciled_metering_revision, metering_revision) ON pr06a_control.attempts TO classroom_billing_control;
+              reconciled_metering_revision, metering_revision,usage_final) ON pr06a_control.attempts TO classroom_billing_control;
 CREATE VIEW billing_control.pr06a_combined_exposures AS
 SELECT period_start,pool,held,unknown,settled FROM billing_control.exposures
 UNION ALL
@@ -184,7 +184,7 @@ FROM pr06a_control.batch b
 LEFT JOIN LATERAL (
   SELECT ceil(sum(greatest(0,6::numeric*a.observed_input+4.5::numeric*a.observed_output
                                   -coalesce(a.gross_microyuan,0)))) AS unresolved,
-         bool_or(a.observed_input IS NULL OR a.observed_output IS NULL) AS unmetered
+         bool_or(NOT a.usage_final OR a.observed_input IS NULL OR a.observed_output IS NULL) AS unmetered
   FROM pr06a_control.attempts a WHERE a.authorization_id=b.authorization_id
     AND (a.gross_microyuan IS NULL OR a.reconciled_metering_revision IS DISTINCT FROM a.metering_revision)
 ) u ON true;
@@ -330,7 +330,15 @@ BEGIN
   UPDATE pr06a_control.attempts SET reserved_samples=p_end WHERE attempt=a.attempt;
 END $f$;
 
-CREATE FUNCTION pr06a_api.check_frame(f uuid, p_attempt uuid, p_start integer) RETURNS void
+CREATE FUNCTION pr06a_control.dispatch_seconds(b pr06a_control.batch, p_attempt uuid) RETURNS double precision
+LANGUAGE sql SET search_path=pg_catalog,pg_temp AS $f$
+  SELECT extract(epoch FROM least(a.lease_until,b.lease_until,budget.period_end,
+      '2027-01-01 00:00:00+08'::timestamptz) - clock_timestamp())::double precision
+  FROM pr06a_control.attempts a JOIN billing_control.platform_budgets budget ON budget.period_start=b.period_start
+  WHERE a.attempt=p_attempt AND a.authorization_id=b.authorization_id
+$f$;
+
+CREATE FUNCTION pr06a_api.check_frame(f uuid, p_attempt uuid, p_start integer) RETURNS double precision
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $f$
 DECLARE b pr06a_control.batch%ROWTYPE;
 BEGIN
@@ -340,6 +348,7 @@ BEGIN
         AND clock_timestamp()<a.lease_until AND fr.start_sample=p_start AND fr.disposition='intent') THEN
     RAISE EXCEPTION 'PR06A_FRAME_BLOCKED';
   END IF;
+  RETURN pr06a_control.dispatch_seconds(b,p_attempt);
 END $f$;
 
 CREATE FUNCTION pr06a_api.confirm_frame(f uuid, p_attempt uuid, p_start integer) RETURNS void
@@ -443,6 +452,19 @@ BEGIN
     UPDATE pr06a_control.batch SET closed=true,stop_code=coalesce(stop_code,p_stop)
       WHERE authorization_id=b.authorization_id;
   END IF;
+END $f$;
+
+CREATE FUNCTION pr06a_api.interrupt(f uuid, p_attempt uuid, p_stop text) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $f$
+DECLARE b pr06a_control.batch%ROWTYPE;
+BEGIN
+  SELECT b0.* INTO b FROM pr06a_control.batch b0 JOIN pr06a_control.activation c USING(authorization_id)
+    WHERE pr06a_control.owns_batch(b0,f) AND c.executor_login=session_user FOR UPDATE OF b0;
+  IF NOT FOUND THEN RETURN; END IF;
+  UPDATE pr06a_control.attempts SET state='unknown'
+    WHERE authorization_id=b.authorization_id AND attempt=p_attempt AND state='submitting';
+  UPDATE pr06a_control.batch SET closed=true,stop_code=coalesce(stop_code,p_stop)
+    WHERE authorization_id=b.authorization_id;
 END $f$;
 
 CREATE FUNCTION pr06a_api.settle(p_attempt uuid,p_revision integer,p_request text,p_in bigint,p_out bigint,
@@ -558,7 +580,7 @@ BEGIN
   IF NOT FOUND THEN RAISE EXCEPTION 'PR06A_PROTOCOL_BLOCKED'; END IF;
 END $f$;
 
-CREATE FUNCTION pr06a_api.check_connection(f uuid, p_attempt uuid, p_handshake boolean) RETURNS void
+CREATE FUNCTION pr06a_api.check_connection(f uuid, p_attempt uuid, p_handshake boolean) RETURNS double precision
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $f$
 DECLARE b pr06a_control.batch%ROWTYPE;
 BEGIN
@@ -570,6 +592,7 @@ BEGIN
   IF p_handshake THEN
     INSERT INTO pr06a_control.protocol(attempt,event) VALUES(p_attempt,'handshake-intent');
   END IF;
+  RETURN pr06a_control.dispatch_seconds(b,p_attempt);
 END $f$;
 
 REVOKE ALL ON ALL FUNCTIONS IN SCHEMA pr06a_api,pr06a_control FROM PUBLIC;
@@ -580,7 +603,8 @@ GRANT EXECUTE ON FUNCTION pr06a_api.open_batch(uuid,jsonb,text,jsonb),
   pr06a_api.protocol(uuid,uuid,text),pr06a_api.check_connection(uuid,uuid,boolean),
   pr06a_api.discard_frame(uuid,uuid,integer),pr06a_api.anomaly(uuid,uuid,text,text),
   pr06a_api.record_inbound(uuid,uuid,integer,integer,integer,text),
-  pr06a_api.check_frame(uuid,uuid,integer),pr06a_api.observe_risk(uuid,uuid,bigint,bigint)
+  pr06a_api.check_frame(uuid,uuid,integer),pr06a_api.observe_risk(uuid,uuid,bigint,bigint),
+  pr06a_api.interrupt(uuid,uuid,text)
   TO classroom_pr06a_executor;
 GRANT EXECUTE ON FUNCTION pr06a_api.settle(uuid,integer,text,bigint,bigint,bigint,bigint,text,text,integer,boolean),
   pr06a_api.release_reconciled() TO classroom_pr06a_reconciler;

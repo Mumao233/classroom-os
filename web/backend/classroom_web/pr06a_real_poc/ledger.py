@@ -86,13 +86,13 @@ class PgLedger:
         await self._change("SELECT pr06a_api.protocol(%s,%s,%s)", attempt.id, event)
 
     async def check_connection(self, attempt, *, handshake=False):
-        await self._change("SELECT pr06a_api.check_connection(%s,%s,%s)", attempt.id, handshake)
+        return await self._change("SELECT pr06a_api.check_connection(%s,%s,%s)", attempt.id, handshake)
 
     async def frame(self, attempt, start, end, frame_hash):
         await self._change("SELECT pr06a_api.frame_intent(%s,%s,%s,%s,%s)", attempt.id, start, end, frame_hash)
 
     async def check_frame(self, attempt, start):
-        await self._change("SELECT pr06a_api.check_frame(%s,%s,%s)", attempt.id, start)
+        return await self._change("SELECT pr06a_api.check_frame(%s,%s,%s)", attempt.id, start)
 
     async def confirm_frame(self, attempt, start):
         await self._change("SELECT pr06a_api.confirm_frame(%s,%s,%s)", attempt.id, start)
@@ -123,6 +123,10 @@ class PgLedger:
 
     async def complete(self, attempt, state, reason):
         await self._change("SELECT pr06a_api.complete(%s,%s,%s,%s)", attempt.id if attempt else None, state, reason)
+
+
+    async def interrupt(self, attempt, reason):
+        await self._change("SELECT pr06a_api.interrupt(%s,%s,%s)", attempt.id if attempt else None, reason)
 
 
 def quiet_database_logger():

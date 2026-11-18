@@ -117,6 +117,16 @@ def test_pinned_driver_protocol_and_logging(monkeypatch, caplog, tmp_path, abnor
             with pytest.raises(PocStopped, match="synthetic_revocation_before_bearer"):
                 await refused.connect(before_handshake=stop_before_bearer)
             assert refused._socket is None
+
+            expired = websocket._WebSocket(FAKE_KEY)
+            expired.claim()
+
+            async def stale_commit():
+                return asyncio.get_running_loop().time() - 0.01
+
+            with pytest.raises(PocStopped, match="handshake_deadline"):
+                await expired.connect(before_handshake=stale_commit)
+            assert expired._socket is None
         assert sent == [1, 2]
         assert seen == [f"Bearer {FAKE_KEY}", {"action": "run-task"}, b"\0\0", {"action": "finish-task"}]
 
