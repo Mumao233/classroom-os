@@ -966,6 +966,91 @@ def test_legacy_replay_never_substitutes_later_visible_revision(sync_api, revoca
         assert batch(a, [op]).json()['receipts'][0]['status'] == 'deleted'
 
 
+def test_hidden_legacy_submitted_revision_keeps_exact_conflict_receipt_retryable(sync_api):
+    from classroom_web.infrastructure.qa_repository import PgQaRepository
+    from test_pr07b_versions import generate, output, prepare_review, REQUEST
+
+    a = sync_api
+    _, _, _, initial = generate(a.auth.pg, SimpleNamespace(a=a.owner), a)
+    document_id = UUID(initial['summary_document_id'])
+    first_candidate = initial['revision_ids'][0]
+    with a.auth.pg.db.transaction(a.owner) as tx:
+        original = PgReviewRepository(tx).document(document_id)
+        second_source = PgQaRepository(tx).add_source(a.classroom.id, kind='transcript_segment', object_id=uuid4(),
+            text='This synthetic source only supports the submitted branch.', start_ms=6000, end_ms=8000)
+    request = dict(REQUEST, target_document_id=str(document_id), base_revision=original['revision'])
+    plan, task = prepare_review(a.auth.pg, a.owner, a, request=request)
+    alias = next(item['alias'] for item in plan['source_snapshot']['items'] if item['source_id'] == str(second_source.source_id))
+    with a.auth.pg.db.transaction(a.owner) as tx:
+        review = PgReviewRepository(tx)
+        candidate = review.publish(task, output(alias=alias, answer='Candidate tied to the independently revoked source.'),
+                                   UUID(plan['source_snapshot']['id']), request)
+        base = review.document(document_id)['revision']
+        op = operation(a, base=base, base_content_revision_id=candidate['revision_ids'][0], body_markdown='Hidden submitted text.')
+        op['object_id'] = str(document_id)
+        cloud = review.write_personal(document_id, dict(op['payload'], base_content_revision_id=first_candidate,
+            draft_id=str(uuid4()), body_markdown='The cloud branch remains authorized.'), uuid4())
+        conflict = review.write_personal(document_id, op['payload'], UUID(op['op_id']))
+
+    conflict_id = UUID(conflict['conflict_id'])
+    submitted_id = conflict['submitted_revision']['id']
+    original_path = BASE + '/operations/' + op['op_id']
+    detail_path = BASE + '/sync/conflicts/' + str(conflict_id)
+    original_receipt = a.client.get(original_path, params=dict(operation='writePersonalRevision')).json()
+    assert original_receipt['conflict_id'] == str(conflict_id)
+    # Model a conflict written before the 08b sync projection existed.
+    with a.auth.pg.admin.begin() as connection:
+        connection.exec_driver_sql('ALTER TABLE sync_conflicts DISABLE TRIGGER sync_conflicts_immutable')
+        assert connection.execute(sa.text('DELETE FROM sync_conflicts WHERE id=:id'), dict(id=conflict_id)).rowcount == 1
+        connection.exec_driver_sql('ALTER TABLE sync_conflicts ENABLE TRIGGER sync_conflicts_immutable')
+    with a.auth.pg.db.transaction(a.owner) as tx:
+        PgQaRepository(tx).revoke_source(second_source.source_id)
+        assert PgReviewRepository(tx)._conflict_row(conflict_id) is None
+    assert a.client.get(BASE + '/review-documents/' + str(document_id)).status_code == 200
+    assert a.client.get(BASE + '/review-revisions/' + cloud['id']).status_code == 200
+    assert a.client.get(BASE + '/review-revisions/' + submitted_id).status_code == 404
+
+    result = batch(a, [op])
+    assert result.status_code == 200, result.text
+    assert 'Hidden submitted text.' not in result.text
+    hidden = result.json()['receipts'][0]
+    assert hidden == dict(hidden, op_id=op['op_id'], request_sha256=_hash(op), status='deleted',
+                          object_id=None, revision=None, conflict_id=None, task_id=None)
+    assert receipt(a, op) == hidden
+    assert batch(a, [op]).json()['receipts'] == [hidden]
+    assert a.client.get(detail_path).status_code == 404
+    changed = dict(op, payload=dict(op['payload'], body_markdown='Replacement text with an old key.'))
+    assert batch(a, [changed]).status_code == 409
+    with a.auth.pg.admin.begin() as connection:
+        durable = connection.execute(sa.text('''SELECT id,status,conflict_id,result_revision,request_hash FROM sync_operations
+            WHERE op_id=:op AND operation='syncOperation' '''), dict(op=UUID(op['op_id']))).mappings().one()
+        assert (durable['status'], durable['conflict_id'], durable['result_revision'], durable['request_hash']) == (
+            'conflict', conflict_id, None, _hash(op))
+        assert connection.scalar(sa.text('SELECT count(*) FROM sync_conflicts WHERE id=:id'), dict(id=conflict_id)) == 0
+        # Restore only the synthetic permission fixture. Runtime revocations remain monotonic.
+        connection.exec_driver_sql('SET CONSTRAINTS ALL IMMEDIATE')
+        connection.exec_driver_sql('ALTER TABLE qa_sources DISABLE TRIGGER qa_source_guard')
+        connection.execute(sa.text('UPDATE qa_sources SET revoked_at=NULL WHERE id=:id'), dict(id=second_source.source_id))
+        connection.exec_driver_sql('ALTER TABLE qa_sources ENABLE TRIGGER qa_source_guard')
+
+    restored = receipt(a, op)
+    assert restored == dict(hidden, status='conflict', object_id=str(document_id), revision=conflict['current_revision'],
+                            conflict_id=str(conflict_id))
+    assert a.client.get(detail_path).status_code == 409
+    assert batch(a, [op]).json()['receipts'] == [restored]
+    assert a.client.get(original_path, params=dict(operation='writePersonalRevision')).json() == original_receipt
+    detail = a.client.get(detail_path)
+    assert detail.status_code == 200, detail.text
+    assert detail.json()['server_content'] == cloud
+    assert detail.json()['server_revision'] == conflict['current_revision']
+    assert detail.json()['local_operation'] == op
+    with a.auth.pg.admin.connect() as connection:
+        confirmed = connection.execute(sa.text('''SELECT id,status,conflict_id,result_revision,request_hash FROM sync_operations
+            WHERE op_id=:op AND operation='syncOperation' '''), dict(op=UUID(op['op_id']))).mappings().one()
+        assert confirmed == durable
+        assert connection.scalar(sa.text('SELECT count(*) FROM review_conflicts WHERE document_id=:id'), dict(id=document_id)) == 1
+
+
 def test_unadopted_multiple_candidates_freeze_actual_latest_cloud_candidate(sync_api):
     from test_pr07b_versions import generate,prepare_review,REQUEST,output
     a=sync_api

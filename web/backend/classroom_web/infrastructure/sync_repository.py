@@ -147,10 +147,14 @@ class PgSyncRepository:
 
     def receipt_dto(self, row):
         status = row['status']
+        revision = row['result_revision']
         if status not in ('rejected', 'deleted'):
             try:
                 if row['object_type'] == 'personal_revision' and status == 'conflict':
-                    self.review._conflict_dto(row['conflict_id'])
+                    conflict = self.review._conflict_dto(row['conflict_id'])
+                    if conflict['submitted_revision']['document_id'] != str(row['object_id']):
+                        raise NotFound('conflict unavailable')
+                    revision = conflict['current_revision']
                 else:
                     self.current(row['object_type'], row['object_id'])
             except (Gone, NotFound):
@@ -163,7 +167,7 @@ class PgSyncRepository:
         visible = status not in ('deleted', 'rejected')
         return dict(op_id=str(row['op_id']), operation=row['operation'], request_sha256=row['request_hash'],
                     status=status, object_id=str(row['object_id']) if visible else None,
-                    revision=row['result_revision'] if visible else None,
+                    revision=revision if visible else None,
                     conflict_id=str(row['conflict_id']) if visible and row['conflict_id'] else None,
                     task_id=None, created_at=_stamp(row['created_at']))
 
@@ -269,6 +273,16 @@ class PgSyncRepository:
                     server_revision=row['server_revision'], local_operation=row['local_operation'],
                     server_content=row['server_content'], resolved=resolved is not None)
 
+    def _replay_personal_conflict(self, identity, payload, key):
+        try:
+            return self.review.write_personal(identity, payload, key)
+        except QaRejected as error:
+            if error.status != 404:
+                raise
+            # The exact legacy receipt proves the conflict, independent of this view's
+            # current access to the submitted branch. That access can be rechecked.
+            return None
+
     def apply(self, operation, *, operation_name='syncOperation'):
         self.serialize()
         key = UUID(operation['op_id'])
@@ -302,7 +316,7 @@ class PgSyncRepository:
                                       id=stored['conflict_id']).first()):
                 # A first replay may have recorded the receipt while its
                 # original comparison was unavailable. Retry only that backfill.
-                self.review.write_personal(identity, payload, key)
+                self._replay_personal_conflict(identity, payload, key)
             return self.receipt_dto(stored)
 
         self.validate_patch(kind,payload)
@@ -323,7 +337,10 @@ class PgSyncRepository:
                 raise
             return self.remember(operation_name, key, digest, kind, identity, None, 'deleted')
         if kind == 'personal_revision':
-            value = self.review.write_personal(identity, payload, key)
+            value = self._replay_personal_conflict(identity, payload, key) if historical_conflict else self.review.write_personal(identity, payload, key)
+            if value is None:
+                return self.remember(operation_name, key, digest, kind, identity, None, 'conflict',
+                                     conflict=original['resource_id'], classroom=classroom)
             updated = value['current_revision'] if 'conflict_id' in value else value['revision']+1
             conflict = UUID(value['conflict_id']) if 'conflict_id' in value else None
             return self.remember(operation_name, key, digest, kind, identity, updated,

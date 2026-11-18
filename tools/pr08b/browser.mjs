@@ -344,7 +344,8 @@ try {
         merged_operation: operation('REJECTED MERGE UNIQUE INPUT', 2) };
       const storedRecovery = preexisting ? await runtime.saveConflictDraft(reference, rejected.merged_operation.payload.body_markdown,
         rejected.merged_operation.payload.personal_note, crypto.randomUUID(), 1) : null;
-      const rejectedResponse = () => Object.assign(new Error('Rejected merge'), { code: 'VALIDATION_FAILED', status: 422 });
+      const rejectedResponse = () => Object.assign(new Error('Rejected merge'), preexisting
+        ? { code: 'CAPACITY_EXCEEDED', status: 409 } : { code: 'VALIDATION_FAILED', status: 422 });
       transport.resolve = async () => { throw rejectedResponse(); };
       await runtime.resolve(reference, rejected, 2);
       const [frozen] = (await records(name)).filter(value => value.header.resolutionOf);
@@ -390,38 +391,93 @@ try {
         recovery: [['REJECTED MERGE UNIQUE INPUT', 'Synthetic personal note']], remaining: 1, reusedRecovery: true });
     }
   });
-  await test('rejected-personal-merge-retains-its-exact-revision-authority', async () => {
+  await test('reuses-compact-course-recovery-when-the-operation-quota-is-full', async () => {
     const result = await page.evaluate(async () => {
-      const name = 'pr08b-rejected-merge-exact-authority';
-      const reference = await editable(name);
-      const merged = operation('Body based on a separately revocable revision', 2);
-      merged.payload.base_content_revision_id = ids.revisionB;
-      await runtime.saveConflictDraft(reference, 'Readable independent editor branch', '', crypto.randomUUID(), 1);
+      const name = 'pr08b-equivalent-course-recovery';
+      await create(name, { draftOperations: 2 });
+      transport.mode = 'conflict';
+      const draft = { ...operation(), object_type: 'course', object_id: ids.course,
+        payload: { base_revision: 1, name: 'Original course edit' } };
+      const reference = await runtime.enqueue(draft, ancestry, 1);
+      await runtime.flush();
+      await runtime.inspectConflict(reference);
+      const raw = '{"base_revision":1,"name":"   "}';
+      const editor = await runtime.saveConflictDraft(reference, raw, '', crypto.randomUUID(), 1);
+      const merged = { ...draft, op_id: crypto.randomUUID(), base_revision: 2, payload: { base_revision: 2, name: '   ' } };
       const resolve = transport.resolve.bind(transport);
       transport.resolve = (id, body, key) => {
-        if (body.resolution === 'edited_merge') {
-          throw Object.assign(new Error('Rejected merge'), { code: 'VALIDATION_FAILED', status: 422 });
-        }
+        if (body.resolution === 'edited_merge') throw Object.assign(new Error('Rejected course edit'), { code: 'VALIDATION_FAILED', status: 422 });
         return resolve(id, body, key);
       };
       await runtime.resolve(reference, { resolution: 'edited_merge', base_revision: 2, merged_operation: merged }, 2);
       await runtime.resolve(reference, { resolution: 'use_server', base_revision: 2 }, 3);
-      const draft = (await runtime.readConflictDrafts(reference)).find(value => value.reference.contentRevisionId === ids.revisionB);
-      if (draft.body !== merged.payload.body_markdown || draft.reference.contentRevisionId !== ids.revisionB) {
-        throw new Error('Recovered merge did not retain its exact revision');
-      }
-      const before = (await records(name)).find(value => value.header.contentRevisionId === ids.revisionB);
+      const [retained] = await runtime.readConflictDrafts(reference);
+      return { pending: runtime.snapshot().pending.length, records: (await records(name)).length,
+        body: retained.body, sameOperation: editor.operationId === retained.reference.operationId };
+    });
+    assert.deepEqual(result, { pending: 0, records: 1, body: '{"base_revision":1,"name":"   "}', sameOperation: true });
+  });
+  await test('rejected-personal-merge-retains-its-exact-revision-authority', async () => {
+    const name = 'pr08b-rejected-merge-exact-authority';
+    const selected = await page.evaluate(async name => {
+      await create(name);
+      transport.mode = 'conflict';
+      const reference = window.exactRecoveryOriginal = await runtime.enqueue(operation('Original on source A', 1, ids.revisionA), ancestry, 1);
+      await runtime.flush();
+      await runtime.inspectConflict(reference);
+      const merged = operation('Body based on a separately revocable revision', 2, ids.revisionB);
+      await runtime.saveConflictDraft(reference, 'Readable independent editor branch', '', crypto.randomUUID(), 1);
+      window.attemptedPersonalEdits = [];
+      transport.resolve = (_id, body) => {
+        if (body.resolution === 'edited_merge') attemptedPersonalEdits.push(structuredClone(body.merged_operation.payload));
+        // Keep the conflict open so its recovered branch can be edited in the actual panel.
+        throw Object.assign(new Error('Rejected synthetic decision'), { code: 'VALIDATION_FAILED', status: 422 });
+      };
+      await runtime.resolve(reference, { resolution: 'edited_merge', base_revision: 2, merged_operation: merged }, 2);
+      await runtime.resolve(reference, { resolution: 'use_server', base_revision: 2 }, 3);
+      const drafts = await runtime.readConflictDrafts(reference);
+      const index = drafts.findIndex(value => value.reference.contentRevisionId === ids.revisionB);
+      if (drafts[index]?.body !== merged.payload.body_markdown) throw new Error('Missing exact B recovery');
+      const mount = document.createElement('div'); document.body.append(mount);
+      window.uiRoot = lib.createRoot(mount);
+      uiRoot.render(lib.React.createElement(lib.ConflictPanel, { runtime, reference, generation: 4 }));
+      return { index, body: merged.payload.body_markdown, revision: ids.revisionB };
+    }, name);
+
+    await page.getByRole('combobox', { name: '本机合并草稿', exact: true }).selectOption(String(selected.index));
+    const editor = page.getByRole('textbox', { name: '合并正文', exact: true });
+    assert.equal(await editor.inputValue(), selected.body);
+    await editor.fill('Edited text derived from source B');
+    await page.getByRole('textbox', { name: '个人补充', exact: true }).fill('Edited note derived from source B');
+    await page.evaluate(() => runtime.awaitEditorDraftSaves());
+    const saved = await page.evaluate(async () => (await runtime.readConflictDrafts(exactRecoveryOriginal)).find(value =>
+      value.body === 'Edited text derived from source B'));
+    assert.equal(saved.reference.contentRevisionId, selected.revision);
+    assert.equal(saved.note, 'Edited note derived from source B');
+
+    await page.getByRole('button', { name: '确认处理', exact: true }).click();
+    await page.getByText('操作结果仍待确认，草稿已保留。', { exact: true }).waitFor();
+    const submitted = await page.evaluate(() => attemptedPersonalEdits.find(value => value.body_markdown === 'Edited text derived from source B'));
+    assert.equal(submitted?.base_content_revision_id, selected.revision);
+    assert.equal(submitted?.personal_note, 'Edited note derived from source B');
+
+    const result = await page.evaluate(async name => {
+      const boundRecords = async () => (await records(name)).filter(value => value.header.contentRevisionId === ids.revisionB)
+        .map(({ id, header, nonce, ciphertext }) => [id, header, [...nonce], [...new Uint8Array(ciphertext)]]);
+      const before = await boundRecords();
       transport.revokedRevisions.add(ids.revisionB);
-      await expectCode(runtime.readConflictDrafts(reference), 'AUTHORITY_UNAVAILABLE');
+      transport.pages.push({ items: [{ event_id: crypto.randomUUID(), object_id: ids.document, object_type: 'review_document',
+        revision: 1, deleted: false }], next_cursor: 'exact-recovery-revoked', has_more: false });
+      await runtime.pollChanges();
       await runtime.unlock('synthetic-password');
       const states = (await runtime.listConflictDraftSources()).map(value => value.state).sort();
-      const readable = (await runtime.readConflictDrafts(reference)).map(value => value.body);
-      const after = (await records(name)).find(value => value.header.contentRevisionId === ids.revisionB);
-      return { states, readable, sameId: before.id === after.id,
-        sameCiphertext: JSON.stringify([...new Uint8Array(before.ciphertext)]) === JSON.stringify([...new Uint8Array(after.ciphertext)]) };
-    });
-    assert.deepEqual(result, { states: ['available', 'restricted'], readable: ['Readable independent editor branch'],
-      sameId: true, sameCiphertext: true });
+      const readable = (await runtime.readConflictDrafts(exactRecoveryOriginal)).map(value => value.body);
+      const after = await boundRecords();
+      return { states, readable, boundCount: before.length, unchanged: JSON.stringify(before) === JSON.stringify(after) };
+    }, name);
+    await editor.waitFor({ state: 'hidden' });
+    assert.deepEqual(result, { states: ['available', 'restricted', 'restricted'], readable: ['Readable independent editor branch'],
+      boundCount: 2, unchanged: true });
   });
   await test('legacy-pending-decisions-resolve-only-through-their-exact-receipts', async () => {
     const runScenario = scenario => page.evaluate(async scenario => {
@@ -1557,7 +1613,7 @@ try {
   await context.close();
   await new Promise(resolve => server.close(resolve));
   await writeFile(join(output, 'sync-browser.json'), JSON.stringify({ chromium: browserVersion, synthetic_transport: true,
-    native_crypto_indexeddb: true, results, passed: results.length === 54 && results.every(result => result.passed) }, null, 2));
+    native_crypto_indexeddb: true, results, passed: results.length === 55 && results.every(result => result.passed) }, null, 2));
 }
 console.log(JSON.stringify({ tests: results.length, passed: results.filter(result => result.passed).length, results }));
-if (results.length !== 54 || results.some(result => !result.passed)) process.exitCode = 1;
+if (results.length !== 55 || results.some(result => !result.passed)) process.exitCode = 1;

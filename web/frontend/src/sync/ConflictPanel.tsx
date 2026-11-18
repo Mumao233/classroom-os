@@ -12,6 +12,11 @@ type Props = {
   destinations?: Array<{ id: string; name: string }>;
 };
 
+type EditorInput = { body: string; note: string; contentRevisionId?: string };
+const restoredInput = (draft: ConflictDraft): EditorInput => ({
+  body: draft.body, note: draft.note, contentRevisionId: draft.reference.contentRevisionId,
+});
+
 const explanation = (error: unknown) => {
   const code = (error as { code?: string }).code;
   if (code === 'INCOMPATIBLE_CLIENT') return '此冲突的历史记录需要兼容处理。本机草稿仍保留，请从原始操作核对。';
@@ -22,12 +27,12 @@ const explanation = (error: unknown) => {
 
 /** Reusable PR-08b conflict interaction for the authenticated editor. All content is rendered as text. */
 export function ConflictPanel(props: Props) {
-  const { scope, objectId, revision, generation, operationId, objectType, verifiedAt, ancestry } = props.reference;
+  const { scope, objectId, revision, generation, operationId, objectType, contentRevisionId, verifiedAt, ancestry } = props.reference;
   const { semesterId, courseId, classSessionId } = ancestry;
-  const reference = useMemo<CacheWrite>(() => ({ scope, objectId, revision, generation, operationId, objectType, verifiedAt,
+  const reference = useMemo<CacheWrite>(() => ({ scope, objectId, revision, generation, operationId, objectType, contentRevisionId, verifiedAt,
     ancestry: { semesterId, courseId, classSessionId } }),
-  [scope, objectId, revision, generation, operationId, objectType, verifiedAt, semesterId, courseId, classSessionId]);
-  return <ConflictEditor {...props} reference={reference} key={JSON.stringify([objectId, revision, generation, operationId])} />;
+  [scope, objectId, revision, generation, operationId, objectType, contentRevisionId, verifiedAt, semesterId, courseId, classSessionId]);
+  return <ConflictEditor {...props} reference={reference} key={JSON.stringify([objectId, revision, generation, operationId, contentRevisionId])} />;
 }
 
 function ConflictEditor({ runtime, reference, generation, destinations = [] }: Props) {
@@ -42,7 +47,7 @@ function ConflictEditor({ runtime, reference, generation, destinations = [] }: P
   const [nextGeneration, setNextGeneration] = useState(generation);
   const [drafts, setDrafts] = useState<ConflictDraft[]>([]);
   const [saveStatus, setSaveStatus] = useState('');
-  const input = useRef({ body: '', note: '' });
+  const input = useRef<EditorInput>({ body: '', note: '' });
   const editorId = useRef(crypto.randomUUID());
   const editGeneration = useRef(0);
   const savedReferences = useRef<CacheWrite[]>([]);
@@ -55,7 +60,7 @@ function ConflictEditor({ runtime, reference, generation, destinations = [] }: P
     const epoch = ++viewEpoch.current;
     const invalidate = () => { viewEpoch.current++; };
     const lock = () => {
-      invalidate(); input.current = { body: '', note: '' }; setDrafts([]);
+      invalidate(); input.current = { body: '', note: '' }; savedReferences.current = []; setDrafts([]);
       setBusy(false); setConflict(null); setBody(''); setNote('');
       setSaveStatus(saveFailed.current ? '合并输入尚未保存。请重试已加密的恢复副本。' : '');
       setMessage('同步已锁定，请重新验证身份。合并输入的保存结果会在下方显示。');
@@ -69,7 +74,7 @@ function ConflictEditor({ runtime, reference, generation, destinations = [] }: P
       const payload = value?.local_operation.payload;
       const initial = { body: payload ? ('body_markdown' in payload ? payload.body_markdown : JSON.stringify(payload, null, 2)) : '', note: payload && 'personal_note' in payload ? payload.personal_note : '' };
       const selected = recovered.length === 1 ? recovered[0] : null;
-      input.current = selected ? { body: selected.body, note: selected.note } : initial;
+      input.current = selected ? restoredInput(selected) : initial;
       setBody(input.current.body); setNote(input.current.note); setDrafts(recovered);
       savedReferences.current = selected ? [selected.reference] : [];
       if (selected) setSaveStatus('合并输入已加密保存在本机。');
@@ -82,13 +87,14 @@ function ConflictEditor({ runtime, reference, generation, destinations = [] }: P
   function saveInput(source = activeReference) {
     const epoch = viewEpoch.current;
     const sequence = ++editGeneration.current;
+    const { body, note, contentRevisionId } = input.current;
     setSaveStatus('合并输入正在保存…');
     let saving: Promise<CacheWrite>;
-    try { saving = runtime.saveConflictDraft(source, input.current.body, input.current.note, editorId.current, sequence); }
+    try { saving = runtime.saveConflictDraft(source, body, note, editorId.current, sequence, contentRevisionId); }
     catch { saveFailed.current = true; setSaveStatus('合并输入尚未保存，请保留当前输入并重试。'); return; }
     void saving.then(saved => {
       if (!mounted.current || editGeneration.current !== sequence) return;
-      savedReferences.current = [...savedReferences.current.filter(value => value.objectId !== saved.objectId), saved];
+      if (viewEpoch.current === epoch) savedReferences.current = [...savedReferences.current.filter(value => value.objectId !== saved.objectId), saved];
       saveFailed.current = false;
       setSaveStatus(viewEpoch.current === epoch ? '合并输入已加密保存在本机。' : '合并输入已加密保存在本机。重新验证后可恢复。');
     }).catch(() => {
@@ -112,7 +118,7 @@ function ConflictEditor({ runtime, reference, generation, destinations = [] }: P
   function recover(index: string) {
     const selected = drafts[Number(index)];
     if (!selected) return;
-    input.current = { body: selected.body, note: selected.note };
+    input.current = restoredInput(selected);
     setBody(selected.body); setNote(selected.note); savedReferences.current = [selected.reference];
     setSaveStatus('合并输入已加密保存在本机。'); setMessage('已恢复所选本机草稿，其他分支继续保留。');
   }
@@ -120,6 +126,7 @@ function ConflictEditor({ runtime, reference, generation, destinations = [] }: P
   async function submit() {
     if (!conflict) return;
     const epoch = viewEpoch.current;
+    const submitted = input.current;
     setBusy(true); setMessage('');
     const submittedGeneration = nextGeneration;
     setNextGeneration(value => value + 1);
@@ -130,8 +137,9 @@ function ConflictEditor({ runtime, reference, generation, destinations = [] }: P
       if (resolution === 'edited_merge') {
         const local = conflict.local_operation;
         const payload = local.object_type === 'personal_revision'
-          ? { ...local.payload, base_revision: conflict.server_revision, body_markdown: body, personal_note: note }
-          : { ...JSON.parse(body), base_revision: conflict.server_revision };
+          ? { ...local.payload, base_revision: conflict.server_revision, body_markdown: submitted.body, personal_note: submitted.note,
+            base_content_revision_id: submitted.contentRevisionId ?? local.payload.base_content_revision_id }
+          : { ...JSON.parse(submitted.body), base_revision: conflict.server_revision };
         request.merged_operation = { ...local, op_id: crypto.randomUUID(), base_revision: conflict.server_revision, payload } as SyncOperation;
       }
       if (resolution === 'copy_to_new_note') request.destination_class_session_id = destination;
@@ -143,7 +151,7 @@ function ConflictEditor({ runtime, reference, generation, destinations = [] }: P
         const remaining = await runtime.readConflictDrafts(activeReference);
         if (viewEpoch.current !== epoch) return;
         setConflict(null); setDrafts(remaining);
-        if (remaining.length === 1) { input.current = { body: remaining[0].body, note: remaining[0].note }; setBody(remaining[0].body); setNote(remaining[0].note); }
+        if (remaining.length === 1) { input.current = restoredInput(remaining[0]); setBody(remaining[0].body); setNote(remaining[0].note); }
         else { input.current = { body: '', note: '' }; setBody(''); setNote(''); }
         if (remaining.length) setMessage('冲突处理已由服务器确认。尚未提交的合并输入保留在本机，可在下方查看和复制。');
         else setSaveStatus('');

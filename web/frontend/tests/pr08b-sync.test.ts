@@ -347,6 +347,19 @@ describe('PR-08b encrypted operation queue', () => {
     expect(f.runtime.snapshot()).toMatchObject({ unlocked: false, cursor: 'consumed' });
   });
 
+  it.each([{ next_cursor: '', has_more: false }, { next_cursor: 'consumed', has_more: true }])(
+    'fences valid items even when the page cursor cannot advance %#', async pagination => {
+      const f = fixture(); await f.runtime.unlock('');
+      const pending: string[] = [];
+      f.cache.lockForDeletion = async ids => { pending.push(...ids); f.cache.lock(); };
+      const change = { event_id: id(401), object_type: 'deletion' as const, object_id: id(400), revision: 1, deleted: true };
+      f.transport.changes = async () => ({ items: [change], ...pagination });
+      await f.runtime.pollChanges();
+      expect(pending).toEqual([change.object_id]);
+      expect(f.runtime.snapshot()).toMatchObject({ unlocked: false, cursor: 'consumed' });
+    },
+  );
+
   it('resumes from the last completed page after the bounded catch-up limit', async () => {
     const f = fixture();
     const cursors: string[] = [];
