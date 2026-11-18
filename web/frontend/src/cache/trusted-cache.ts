@@ -19,6 +19,14 @@ const slot = (scope: CacheScope, classroom: string | null) => JSON.stringify([sc
 const recordingId = (descriptor: AudioDescriptor) => JSON.stringify([descriptor.class_session_id, descriptor.capture_epoch_id, descriptor.seq]);
 type MemoryKey = { key: CryptoKey; id: string; version: number; deadline: number; wallDeadline: number; generation: number; recoveryGeneration: number };
 type Authorized = { localGeneration: number; namespace: string; identity: CacheIdentity; key: MemoryKey };
+type KnownDeletion = { deletionId: string; kind: string; objectId: string; retainDrafts: boolean };
+type OrdinaryDeletion = KnownDeletion & { token: string };
+
+function ordinaryDeletion(value: unknown): value is OrdinaryDeletion {
+  return object(value) && typeof value.token === 'string' && !!value.token
+    && typeof value.deletionId === 'string' && !!value.deletionId && typeof value.kind === 'string' && !!value.kind
+    && typeof value.objectId === 'string' && !!value.objectId && typeof value.retainDrafts === 'boolean';
+}
 
 function isLegacySyncDraft(header: CacheWrite, plaintext: Uint8Array): boolean {
   const envelope = decodeSyncDraftEnvelope(plaintext);
@@ -36,6 +44,7 @@ export class TrustedCache extends EventTarget {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private barrier: Promise<void> = Promise.resolve();
   private deletionLocks = new Set<string>();
+  private activeServerDeletions = new Set<string>();
   private recoveryPending = new Map<string, { record: CipherRecord; recoveryGeneration: number }>();
   private readonly databaseName: string;
   private readonly hide = () => this.lock();
@@ -53,6 +62,11 @@ export class TrustedCache extends EventTarget {
         if (!identity) return;
         if (data === 'lock') { this.lock(); return; }
         if (!object(data) || data.namespace !== namespaceOf(identity)) return;
+        if (ordinaryDeletion(data.ordinaryDeletion)) {
+          void this.queueOrdinaryDeletion(identity, data.ordinaryDeletion)
+            .catch(() => this.dispatchEvent(new Event('storage-failed')));
+          return;
+        }
         if (!Array.isArray(data.deletionIds)) { this.lock(); return; }
         const ids = data.deletionIds.filter((value): value is string =>
           typeof value === 'string' && value.length > 0 && !this.deletionLocks.has(value));
@@ -74,6 +88,7 @@ export class TrustedCache extends EventTarget {
     if (JSON.stringify(identity) === JSON.stringify(this.identity)) return;
     this.lock();
     this.deletionLocks.clear();
+    this.activeServerDeletions.clear();
     this.identity = identity ? { ...identity } : null;
   }
 
@@ -116,6 +131,7 @@ export class TrustedCache extends EventTarget {
   }
 
   private fenceDeletions(namespace: string, ids: readonly string[]): Promise<void> {
+    for (const id of ids) this.activeServerDeletions.add(id);
     this.barrier = this.barrier.then(() => cacheTransaction<void>(this.databaseName, 'readwrite', (tx, done) => {
       const states = tx.objectStore('namespaces');
       const loadState = states.get(namespace);
@@ -140,7 +156,7 @@ export class TrustedCache extends EventTarget {
   async pendingDeletionIds(): Promise<readonly string[]> {
     this.enabled();
     this.requireSyncAuthority();
-    await this.barrier;
+    await this.awaitBarrier();
     const identity = this.identity;
     if (!identity) throw new CacheError('LOCKED');
     const state = await this.namespaceState(namespaceOf(identity));
@@ -153,6 +169,7 @@ export class TrustedCache extends EventTarget {
     const identity = this.identity;
     this.lock();
     this.deletionLocks.clear();
+    this.activeServerDeletions.clear();
     this.identity = null;
     this.notifyLock(identity);
     if (!identity || !this.options.enabled) return this.barrier;
@@ -185,11 +202,19 @@ export class TrustedCache extends EventTarget {
     });
   }
 
+  private async awaitBarrier(): Promise<void> {
+    let current: Promise<void>;
+    do {
+      current = this.barrier;
+      await current;
+    } while (current !== this.barrier);
+  }
+
   /** The issuer performs authenticated, purpose-bound online reauthorization. Its result is never persisted. */
   async unlock(scope: CacheScope, classroom: string | null, issue: () => Promise<CacheGrant>) {
     this.enabled(scope);
     if (!this.identity || !scopes.includes(scope) || (scope === 'recording_recovery') !== (classroom !== null)) throw new CacheError('INVALID_INPUT');
-    await this.barrier;
+    await this.awaitBarrier();
     if (!this.identity) throw new CacheError('LOCKED');
     const identity = { ...this.identity };
     const generation = this.localGeneration;
@@ -224,6 +249,7 @@ export class TrustedCache extends EventTarget {
     if ((latestState?.generation ?? 0) !== persistedGeneration) throw new CacheError('STALE_OPERATION');
     if (generation !== this.localGeneration || this.unlockAttempts.get(keySlot) !== attempt) throw new CacheError('STALE_OPERATION');
     this.keys.set(keySlot, { key, id: grant.key_id, version: grant.key_epoch, deadline, wallDeadline, generation: persistedGeneration, recoveryGeneration });
+    this.activeServerDeletions.clear();
     this.scheduleExpiry();
     this.dispatchEvent(new Event('unlocked'));
   }
@@ -667,7 +693,33 @@ export class TrustedCache extends EventTarget {
     const { object_id: objectId, object_type: kind, deletion_id: deletionId } = notice;
     if (!identity || !objectId || !deletionId) throw new CacheError('INVALID_INPUT');
     const namespace = namespaceOf(identity);
-    const sync = this.allowsSyncRecords;
+    const scope = { deletionId, kind, objectId, retainDrafts };
+    if (!this.allowsSyncRecords) {
+      const ordinary = { ...scope, token: crypto.randomUUID() };
+      // Notify while this adapter is live. A peer can complete the known scope even if this view closes.
+      this.channel?.postMessage({ namespace, ordinaryDeletion: ordinary });
+      if (!await this.queueOrdinaryDeletion(identity, ordinary)) throw new CacheError('SYNC_AUTHORITY_REQUIRED');
+      return;
+    }
+    const applying = this.queueDeletion(namespace, scope, completeFence, false);
+    const lockId = completeFence ? deletionId : JSON.stringify([kind, objectId]);
+    if (this.rememberDeletionLocks([lockId])) this.notifyLock(identity, [lockId]);
+    await applying;
+    if (completeFence && this.identity === identity) this.activeServerDeletions.delete(deletionId);
+  }
+
+  private queueOrdinaryDeletion(identity: CacheIdentity, notice: OrdinaryDeletion): Promise<boolean> {
+    const token = 'ordinary:' + notice.token;
+    if (this.deletionLocks.has(token)) return Promise.resolve(true);
+    this.deletionLocks.add(token);
+    const applying = this.queueDeletion(namespaceOf(identity), notice, false, true);
+    // An ordinary request cannot complete an active server fence or interrupt its detail check.
+    if (this.keys.size || !this.activeServerDeletions.has(notice.deletionId)) this.lock();
+    return applying;
+  }
+
+  private async queueDeletion(namespace: string, { kind, objectId, deletionId, retainDrafts }: KnownDeletion,
+    completeFence: boolean, ordinary: boolean): Promise<boolean> {
     let allowed = true;
     const tombstone: Tombstone = { id: JSON.stringify([namespace, kind, objectId]), namespace, kind, objectId, retainDrafts };
     const applying = this.barrier = this.barrier.then(() => cacheTransaction<void>(this.databaseName, 'readwrite', (tx, done) => {
@@ -684,7 +736,7 @@ export class TrustedCache extends EventTarget {
         loadState.onsuccess = () => {
           const state = loadState.result as NamespaceState | undefined;
           const pending = state?.pendingDeletionIds ?? [];
-          if (!sync && pending.includes(deletionId)) { allowed = false; done(); return; }
+          if (ordinary && pending.includes(deletionId)) { allowed = false; done(); return; }
           if (changed || (completeFence && pending.includes(deletionId))) states.put({ ...state, id: namespace,
             generation: (state?.generation ?? 0) + (changed ? 1 : 0),
             pendingDeletionIds: completeFence ? pending.filter(id => id !== deletionId) : pending });
@@ -701,17 +753,8 @@ export class TrustedCache extends EventTarget {
         };
       };
     }));
-    if (!sync) {
-      // Queue the signal while this view is live. Peers already processing the same
-      // request keep their epoch, including when the transaction rejects this caller.
-      this.notifyLock(identity, [deletionId], false);
-      this.lock();
-    } else {
-      const lockId = completeFence ? deletionId : JSON.stringify([kind, objectId]);
-      if (this.rememberDeletionLocks([lockId])) this.notifyLock(identity, [lockId]);
-    }
     await applying;
-    if (!allowed) throw new CacheError('SYNC_AUTHORITY_REQUIRED');
+    return allowed;
   }
 
   /** Complete server metadata can invalidate replaceable learning copies before key release. */

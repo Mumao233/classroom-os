@@ -325,6 +325,18 @@ describe('PR-08b encrypted operation queue', () => {
     expect(f.runtime.snapshot()).toMatchObject({ unlocked: true, cursor: 'consumed' });
   });
 
+  it('fences a valid deletion before rejecting its malformed page neighbor', async () => {
+    const f = fixture(); await f.runtime.unlock('');
+    const pending: string[] = [];
+    f.cache.lockForDeletion = async ids => { pending.push(...ids); f.cache.lock(); };
+    const correct = { event_id: id(401), object_type: 'deletion' as const, object_id: id(400), revision: 1, deleted: true };
+    f.transport.changes = async () => ({ items: [correct, { ...correct, event_id: 'invalid', object_id: id(402) }],
+      next_cursor: 'bad-page', has_more: false });
+    await f.runtime.pollChanges();
+    expect(pending).toEqual([correct.object_id]);
+    expect(f.runtime.snapshot()).toMatchObject({ unlocked: false, cursor: 'consumed' });
+  });
+
   it('resumes from the last completed page after the bounded catch-up limit', async () => {
     const f = fixture();
     const cursors: string[] = [];

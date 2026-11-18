@@ -245,12 +245,11 @@ export class OfflineSyncRuntime extends EventTarget {
       }
       this.sameEpoch(epoch);
       if (!page || !Array.isArray(page.items) || typeof page.next_cursor !== 'string' || !page.next_cursor
-        || typeof page.has_more !== 'boolean' || (page.has_more && page.next_cursor === cursor)
-        || !page.items.every(validChange)) {
+        || typeof page.has_more !== 'boolean' || (page.has_more && page.next_cursor === cursor)) {
         this.cache.lock();
         throw new SyncError('INCOMPATIBLE_CLIENT');
       }
-      const discovered = page.items.filter(change => change.object_type === 'deletion'
+      const discovered = page.items.filter(change => validChange(change) && change.object_type === 'deletion'
         && !reconciled.has(change.object_id)).map(change => change.object_id);
       if (discovered.length) {
         // Persist and announce the revocation barrier before querying its scope.
@@ -258,6 +257,11 @@ export class OfflineSyncRuntime extends EventTarget {
         epoch = this.epoch;
         await fencing;
         this.sameEpoch(epoch);
+      }
+      if (!page.items.every(validChange)) {
+        // A malformed neighbor cannot erase notice of a valid deletion.
+        this.cache.lock();
+        throw new SyncError('INCOMPATIBLE_CLIENT');
       }
       for (const change of page.items) {
         if (change.object_type === 'deletion') {

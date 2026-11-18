@@ -987,12 +987,13 @@ try {
     });
     assert.deepEqual(result, { genericBody: 'UNSTRUCTURED PR-08a DRAFT', pendingGenericCount: 1, unchanged: true });
   });
-  await test('ordinary-deletion-locks-peer-before-observer-cache-closes', async () => {
+  await test('ordinary-deletion-peer-fences-reopen-before-observer-commit-and-relocks-for-stricter-retention', async () => {
     const [observer, peer] = await Promise.all([context.newPage(), context.newPage()]);
+    const name = 'pr08b-notify-before-close';
     try {
       await Promise.all([install(observer), install(peer)]);
-      await peer.evaluate(async () => {
-        const cache = window.ordinaryPeer = new NativeTrustedCache({ enabled: true, databaseName: 'pr08b-notify-before-close',
+      await peer.evaluate(async name => {
+        const cache = window.ordinaryPeer = new NativeTrustedCache({ enabled: true, databaseName: name,
           limits: { draftBytes: 2000000, draftOperations: 2, recordingBytes: 2000000 } });
         cache.bind({ ownerId: ids.owner, deviceId: ids.device, sessionId: ids.session });
         await cache.unlockScope('drafts');
@@ -1003,27 +1004,69 @@ try {
         content.id = 'ordinary-deletion-content';
         content.textContent = new TextDecoder().decode(await cache.read(reference));
         document.body.append(content);
-        cache.addEventListener('locked', () => { content.textContent = ''; });
-      });
+        cache.addEventListener('locked', () => {
+          content.textContent = '';
+          // Try to reopen during the notification itself, before the observer can commit.
+          window.ordinaryReopening = cache.unlockScope('drafts').then(() =>
+            cache.read(reference).then(() => 'READABLE', error => error.code), error => error.code);
+        }, { once: true });
+      }, name);
       assert.equal(await peer.locator('#ordinary-deletion-content').textContent(), 'VISIBLE ORDINARY DRAFT');
-      await observer.evaluate(async () => {
-        const cache = new NativeTrustedCache({ enabled: true, databaseName: 'pr08b-notify-before-close' });
+      await observer.evaluate(name => {
+        const cache = new NativeTrustedCache({ enabled: true, databaseName: name });
         cache.bind({ ownerId: ids.owner, deviceId: ids.device, sessionId: ids.session });
-        // Close this adapter and its channel while the IDB transaction is still queued.
-        const committing = cache.applyDeletion({ object_type: 'class_session', object_id: ids.classroom,
+        // The observer's earlier work never finishes. Only the recipient can commit this tombstone.
+        cache.barrier = new Promise(() => {});
+        void cache.applyDeletion({ object_type: 'class_session', object_id: ids.classroom,
           deletion_id: ids.deletion, state: 'access_revoked' }, { retainDrafts: true });
         cache.close();
-        await committing;
-      });
+      }, name);
       await observer.close();
-      await peer.waitForFunction(() => document.querySelector('#ordinary-deletion-content')?.textContent === '');
+      await peer.waitForFunction(() => !!window.ordinaryReopening);
+      assert.equal(await peer.locator('#ordinary-deletion-content').textContent(), '');
+      assert.equal(await peer.evaluate(() => ordinaryReopening), 'GONE');
+      assert.equal((await page.evaluate(name => records(name), name)).length, 1);
+
+      // A Sync completion records this same server ID. A later ordinary notice with stricter
+      // retention must still clear keys after the peer unlocks for unrelated content.
+      await peer.evaluate(() => {
+        window.serverFenceSeen = false;
+        ordinaryPeer.addEventListener('locked', () => { serverFenceSeen = true; }, { once: true });
+      });
+      await page.evaluate(async name => {
+        await create(name, {}, {}, null);
+        await cache.lockForDeletion([ids.deletion]);
+      }, name);
+      await peer.waitForFunction(() => window.serverFenceSeen);
+      await page.evaluate(() => cache.applyDeletion({ object_type: 'class_session', object_id: ids.classroom,
+        deletion_id: ids.deletion, state: 'access_revoked' }, { retainDrafts: true, completeFence: true }));
       await peer.evaluate(async () => {
-        await expectCode(ordinaryPeer.read(ordinaryReference), 'LOCKED');
         await ordinaryPeer.unlockScope('drafts');
         await expectCode(ordinaryPeer.read(ordinaryReference), 'GONE');
-        ordinaryPeer.close();
+        window.unrelatedReference = { ...ordinaryReference, objectId: crypto.randomUUID(), operationId: crypto.randomUUID(),
+          ancestry: { ...ancestry, classSessionId: crypto.randomUUID() } };
+        await ordinaryPeer.put(unrelatedReference, new TextEncoder().encode('UNRELATED ORDINARY DRAFT'));
+        window.strictNoticeLocked = false;
+        ordinaryPeer.addEventListener('locked', () => { strictNoticeLocked = true; }, { once: true });
       });
+      await page.evaluate(async name => {
+        const ordinary = new NativeTrustedCache({ enabled: true, databaseName: name });
+        ordinary.bind({ ownerId: ids.owner, deviceId: ids.device, sessionId: ids.session });
+        try {
+          await ordinary.applyDeletion({ object_type: 'class_session', object_id: ids.classroom,
+            deletion_id: ids.deletion, state: 'access_revoked' });
+        } finally { ordinary.close(); }
+      }, name);
+      await peer.waitForFunction(() => window.strictNoticeLocked);
+      const reopened = await peer.evaluate(async () => {
+        await expectCode(ordinaryPeer.read(unrelatedReference), 'LOCKED');
+        await ordinaryPeer.unlockScope('drafts');
+        return { deleted: await ordinaryPeer.read(ordinaryReference),
+          unaffected: new TextDecoder().decode(await ordinaryPeer.read(unrelatedReference)) };
+      });
+      assert.deepEqual(reopened, { deleted: null, unaffected: 'UNRELATED ORDINARY DRAFT' });
     } finally {
+      await peer.evaluate(() => window.ordinaryPeer?.close()).catch(() => {});
       await Promise.all([observer, peer].filter(tab => !tab.isClosed()).map(tab => tab.close()));
     }
   });
