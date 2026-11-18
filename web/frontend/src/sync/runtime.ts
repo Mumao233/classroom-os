@@ -18,7 +18,7 @@ type SavedResolution = { reference: CacheWrite; envelope: ResolutionEnvelope };
 type ResolutionOutcome = { status: 'unknown' | 'rejected' | 'applied' };
 type ReceiptBinding = {
   operation: 'syncOperation' | 'resolveConflict'; operationId: string; requestHash: string;
-  objectId: string; allowsNewObject: boolean;
+  objectId: string; allowsNewObject: boolean; baseContentRevisionId?: string | null;
 };
 
 /** Storage remains behind PR-08a's encryption, namespace, deadline and tombstone checks. */
@@ -435,13 +435,18 @@ export class OfflineSyncRuntime extends EventTarget {
     if (operation.object_type !== 'personal_revision') return;
     const revisionId = operation.payload.base_content_revision_id;
     if (revisionId !== null) { await this.authorizeRevision(operation.object_id, revisionId, epoch); return; }
-    const key = JSON.stringify(['note', operation.object_id]);
+    await this.authorizeNote(operation.object_id, epoch);
+  }
+
+  private async authorizeNote(documentId: string, epoch: number) {
+    this.scoped(epoch);
+    const key = JSON.stringify(['note', documentId]);
     if (!this.exactAuthority.has(key)) {
       let document: S['ReviewDocument'];
-      try { document = await this.transport.document(operation.object_id); }
+      try { document = await this.transport.document(documentId); }
       catch (error) { this.scoped(epoch); this.authorizationFailure(error, key); }
       this.scoped(epoch);
-      if (document.id !== operation.object_id || document.kind !== 'note') throw new SyncError('AUTHORITY_UNAVAILABLE');
+      if (document.id !== documentId || document.kind !== 'note') throw new SyncError('AUTHORITY_UNAVAILABLE');
       this.exactAuthority.add(key);
     }
     this.scoped(epoch);
@@ -534,11 +539,16 @@ export class OfflineSyncRuntime extends EventTarget {
       || !row?.conflictId || !binding || typeof body !== 'string' || typeof note !== 'string'
       || body.length > 120000 || note.length > 12000
       || !this.exactAuthority.has(JSON.stringify(['conflict', original.objectId, row.conflictId]))) throw new SyncError('INVALID_RESOLUTION');
-    if (contentRevisionId && !this.exactAuthority.has(JSON.stringify(['revision', original.objectId, contentRevisionId]))) {
+    if (contentRevisionId !== undefined && contentRevisionId !== null && !uuid(contentRevisionId)) {
+      throw new SyncError('INVALID_RESOLUTION');
+    }
+    const parentOverride = contentRevisionId === binding.baseContentRevisionId ? undefined : contentRevisionId;
+    if ((parentOverride === null && !this.exactAuthority.has(JSON.stringify(['note', original.objectId])))
+      || (parentOverride && !this.exactAuthority.has(JSON.stringify(['revision', original.objectId, parentOverride])))) {
       throw new SyncError('AUTHORITY_UNAVAILABLE');
     }
     this.editorGenerations.set(editorId, generation);
-    const revisionAuthority = contentRevisionId === undefined ? {} : { contentRevisionId };
+    const revisionAuthority = parentOverride === undefined ? {} : { contentRevisionId: parentOverride };
     const reference: CacheWrite = { scope: 'drafts', objectType: 'sync_editor_recovery', objectId: editorId, revision: original.revision,
       generation, operationId: this.newId(), ancestry: structuredClone(original.ancestry), recoveryFor: original.operationId,
       recoveryConflictId: row.conflictId, recoverySourceObjectId: original.objectId, ...revisionAuthority };
@@ -636,6 +646,7 @@ export class OfflineSyncRuntime extends EventTarget {
     await this.authorizeOperation(conflict.local_operation, epoch);
     if (await syncFingerprint(conflict.local_operation) !== saved.sourceHash) throw new SyncError('CORRUPT_DRAFT');
     if (saved.contentRevisionId) await this.readReviewRevision(saved.source.objectId, saved.contentRevisionId);
+    else if (saved.contentRevisionId === null) await this.authorizeNote(saved.source.objectId, epoch);
     this.current(epoch);
     return { saved, baseContentRevisionId: effectiveRecoveryParent(conflict.local_operation, saved.contentRevisionId) };
   }
@@ -775,6 +786,7 @@ export class OfflineSyncRuntime extends EventTarget {
   private receiptBinding(envelope: Envelope): ReceiptBinding {
     return { operation: envelope.kind === 'write' ? 'syncOperation' : 'resolveConflict',
       operationId: envelope.operation.op_id, requestHash: envelope.requestHash, objectId: envelope.operation.object_id,
+      baseContentRevisionId: effectiveRecoveryParent(envelope.operation),
       allowsNewObject: envelope.kind === 'resolve' && envelope.resolution.resolution === 'copy_to_new_note' };
   }
 
@@ -1069,6 +1081,7 @@ export class OfflineSyncRuntime extends EventTarget {
       await this.authorizeOperation(frozenConflict.local_operation, epoch);
       if (await syncFingerprint(frozenConflict.local_operation) !== saved.sourceHash) throw new SyncError('CORRUPT_DRAFT');
       if (saved.contentRevisionId) await this.readReviewRevision(saved.source.objectId, saved.contentRevisionId);
+      else if (saved.contentRevisionId === null) await this.authorizeNote(saved.source.objectId, epoch);
       const merged = body.merged_operation!;
       const sourceParent = effectiveRecoveryParent(frozenConflict.local_operation, saved.contentRevisionId);
       const included = sourceParent === effectiveRecoveryParent(merged)

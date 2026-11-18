@@ -769,14 +769,15 @@ describe('PR-08b encrypted operation queue', () => {
   });
 
   it('acknowledges only the recovery whose effective parent was submitted', async () => {
-    const original = personalOperation(id(800));
+    const original = personalOperation(null);
     const f = await editableConflict(original);
     const body = 'Identical recovered body', note = 'Identical recovered note';
     await f.runtime.readReviewRevision(original.object_id, id(801));
     const inherited = await f.runtime.saveConflictDraft(f.reference, body, note, id(900), 1);
     const alternate = await f.runtime.saveConflictDraft(f.reference, body, note, id(901), 1, id(801));
     const sourceFree = await f.runtime.saveConflictDraft(f.reference, body, note, id(902), 1, null);
-    expect((await f.runtime.readConflictDrafts(f.reference)).map(draft => draft.baseContentRevisionId)).toEqual([id(800), id(801), null]);
+    expect(sourceFree.contentRevisionId).toBeUndefined();
+    expect((await f.runtime.readConflictDrafts(f.reference)).map(draft => draft.baseContentRevisionId)).toEqual([null, id(801), null]);
     if (original.object_type !== 'personal_revision') throw new Error('Expected personal operation');
     const merged = { ...original, op_id: id(903), base_revision: 2, payload: { ...original.payload,
       base_revision: 2, base_content_revision_id: id(801), body_markdown: body, personal_note: note } };
@@ -785,6 +786,17 @@ describe('PR-08b encrypted operation queue', () => {
     expect(f.cache.records.has(key(alternate))).toBe(false);
     expect(f.cache.records.has(key(inherited))).toBe(true);
     expect(f.cache.records.has(key(sourceFree))).toBe(true);
+  });
+
+  it('refuses unverified source-free overrides and malformed revisions before rewriting a draft', async () => {
+    const f = await editableConflict(personalOperation(id(800)));
+    const saved = await f.runtime.saveConflictDraft(f.reference, 'Saved source-bound input', '', id(900), 1);
+    expect(() => f.runtime.saveConflictDraft(f.reference, 'Missing note authority', '', id(900), 2, null))
+      .toThrow(expect.objectContaining({ code: 'AUTHORITY_UNAVAILABLE' }));
+    expect(() => f.runtime.saveConflictDraft(f.reference, 'Malformed revision', '', id(900), 2, ''))
+      .toThrow(expect.objectContaining({ code: 'INVALID_RESOLUTION' }));
+    expect(f.cache.records.has(key(saved))).toBe(true);
+    expect(await f.runtime.readConflictDrafts(f.reference)).toMatchObject([{ body: 'Saved source-bound input' }]);
   });
 
   it('reports failed editor persistence without acknowledging it as saved', async () => {

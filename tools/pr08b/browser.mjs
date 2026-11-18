@@ -677,6 +677,28 @@ try {
     assert.equal((await page.locator('body').innerText()).includes('UNSENT PRIVATE EDIT'), false);
     assert.equal(await page.evaluate(async () => (await records('pr08b-ui-lock')).length), 2);
   });
+  await test('conflict-panel-stale-submit-keeps-input-until-recheck-is-confirmed', async () => {
+    await page.evaluate(() => editable('pr08b-ui-stale-submit', {}, true));
+    await page.getByRole('heading', { name: '云端版本 2' }).waitFor();
+    const editor = page.getByRole('textbox', { name: '合并正文', exact: true });
+    await editor.fill('MERGE INPUT SURVIVES RECHECK');
+    await page.evaluate(() => { transport.serverRevision = 3; });
+    await page.getByRole('button', { name: '确认处理', exact: true }).click();
+    await page.getByRole('status').filter({ hasText: '操作结果仍待确认，草稿已保留。' }).waitFor();
+    assert.equal(await editor.inputValue(), 'MERGE INPUT SURVIVES RECHECK');
+    const stale = await page.evaluate(() => ({ base: transport.resolutions.at(-1).body.base_revision,
+      failed: runtime.snapshot().pending.some(row => row.error === 'REVISION_CONFLICT') }));
+    assert.deepEqual(stale, { base: 2, failed: true });
+    await page.getByRole('button', { name: '重新核对云端版本', exact: true }).click();
+    await page.getByRole('heading', { name: '云端版本 3' }).waitFor();
+    assert.equal(await editor.inputValue(), 'MERGE INPUT SURVIVES RECHECK');
+    await page.getByRole('button', { name: '确认处理', exact: true }).click();
+    await page.getByRole('status').filter({ hasText: '冲突处理已由服务器确认。' }).waitFor();
+    const result = await page.evaluate(() => ({ pending: runtime.snapshot().pending.length, last: transport.resolutions.at(-1).body }));
+    assert.equal(result.pending, 0);
+    assert.equal(result.last.base_revision, 3);
+    assert.equal(result.last.merged_operation.payload.body_markdown, 'MERGE INPUT SURVIVES RECHECK');
+  });
   await test('conflict-panel-rechecks-new-cloud-cas-and-preserves-merge-input', async () => {
     const history = await page.evaluate(async () => {
       await create('pr08b-ui-recheck'); transport.mode = 'conflict';
@@ -1645,7 +1667,7 @@ try {
   await context.close();
   await new Promise(resolve => server.close(resolve));
   await writeFile(join(output, 'sync-browser.json'), JSON.stringify({ chromium: browserVersion, synthetic_transport: true,
-    native_crypto_indexeddb: true, results, passed: results.length === 55 && results.every(result => result.passed) }, null, 2));
+    native_crypto_indexeddb: true, results, passed: results.length === 56 && results.every(result => result.passed) }, null, 2));
 }
 console.log(JSON.stringify({ tests: results.length, passed: results.filter(result => result.passed).length, results }));
-if (results.length !== 55 || results.some(result => !result.passed)) process.exitCode = 1;
+if (results.length !== 56 || results.some(result => !result.passed)) process.exitCode = 1;
