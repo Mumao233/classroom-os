@@ -107,6 +107,9 @@ class Peer(FakeTransport):
     def has_pending(self):
         return not self._inbound.empty()
 
+    def dispose(self):
+        self.abort()
+
     async def connect(self, *, before_handshake):
         async with before_handshake():
             await super().connect()
@@ -132,6 +135,9 @@ class Peer(FakeTransport):
             usage = {} if self.mode == "missing" else {"usage": {"input_tokens": 200000 if self.mode == "limit" else 5,
                                                                   "output_tokens": 1}}
             self.event("task-finished", **usage)
+            if self.mode == "terminal-invalid":
+                self.event("invalid-kind")
+                self.event("task-finished", usage={"input_tokens": 200000, "output_tokens": 1})
             if self.mode == "terminal-conflict":
                 for _ in range(2):
                     self.event("task-finished", usage={"input_tokens": 200000, "output_tokens": 1})
@@ -194,6 +200,7 @@ class Peer(FakeTransport):
                                                  ("regression", "usage_regression", 1),
                                                  ("mirrors", "usage_unresolved", 1),
                                                  ("terminal-conflict", "post_terminal_conflict", 1),
+                                                 ("terminal-invalid", "protocol_invalid", 1),
                                                  ("early-terminal", "terminal_before_finish", 1),
                                                  ("pre-run", "pre_run_message", 1),
                                                  ("partial", "incomplete_recognition", 1)])
@@ -231,11 +238,11 @@ def test_fenced_batch_against_postgres(poc, monkeypatch, mode, expected, count):
         exposure = db.scalar(sa.text("SELECT billing_api.lock_budget(:cycle)"), dict(cycle=batch["period_start"]))
         expected_exposure = {"limit": 1_200_005, "regression": 1_200_005,
                              "mirrors": 1_200_011, "terminal-conflict": 1_200_005,
-                             "early-terminal": 1_350_000}.get(mode, 1_000_000)
+                             "early-terminal": 1_350_000, "terminal-invalid": 1_200_005}.get(mode, 1_000_000)
         assert exposure["unknown"] == exposure["pool_risk"]["asr"] == expected_exposure
         assert batch["input_token_limit"] is None and batch["held_microyuan"] == 1_000_000
         if mode == "terminal-conflict":
-            assert db.scalar(sa.text("SELECT metering_revision FROM pr06a_control.attempts")) == 3
+            assert db.scalar(sa.text("SELECT metering_revision FROM pr06a_control.attempts")) == 5
         if mode == "foreign":
             assert db.scalar(sa.text("SELECT count(*) FROM pr06a_control.recognition")) == 1
             assert db.scalar(sa.text("SELECT code FROM pr06a_control.anomalies")) == "request_identity_conflict"
@@ -326,6 +333,19 @@ def test_concurrent_last_slot_and_unconfirmed_ranges(poc):
                 await ledger._change("SELECT pr06a_api.claim_attempt(%s,4,%s,%s,%s)",
                                      uuid4(), uuid4(), uuid4())
     _run(run())
+
+
+def test_revoke_before_arm_is_durable(poc):
+    pg, _, _ = poc
+    with pg.admin.begin() as db:
+        original = db.scalar(sa.text("SELECT to_jsonb(a) FROM pr06a_control.activation a"))
+        db.exec_driver_sql("DELETE FROM pr06a_control.activation")
+        db.exec_driver_sql("SELECT pr06a_api.revoke()")
+        assert db.scalar(sa.text("SELECT count(*) FROM pr06a_control.revocation")) == 1
+        with pytest.raises(sa.exc.DBAPIError, match="PR06A_AUTHORIZATION_REVOKED"), db.begin_nested():
+            db.execute(sa.text("""INSERT INTO pr06a_control.activation
+              SELECT * FROM jsonb_populate_record(NULL::pr06a_control.activation,cast(:row AS jsonb))"""),
+                       dict(row=json.dumps(original)))
 
 
 def test_control_revoke_serializes_with_dispatch(poc):

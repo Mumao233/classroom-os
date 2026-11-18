@@ -96,8 +96,9 @@ def _verify_receipts(args, head):
             or not all(gate.get("ok") is True for gate in review["gates"].values())):
         raise PocStopped("review_receipt_not_accepted")
     verdict = Path(args.review).with_name("review.md").read_bytes()
-    if (digest(verdict) != review.get("review_sha256")
-            or f"VERDICT: PASS {head}" not in verdict.decode("utf-8-sig").splitlines()):
+    verdict_lines = [line.strip() for line in verdict.decode("utf-8-sig").splitlines()
+                     if line.strip().upper().startswith("VERDICT:")]
+    if (digest(verdict) != review.get("review_sha256") or verdict_lines != [f"VERDICT: PASS {head}"]):
         raise PocStopped("explicit_review_verdict_required")
     vmware = _receipt(args.vmware_receipt, args.vmware_sha256, "vmware_receipt_digest_mismatch")
     if (vmware.get("commit") != head or vmware.get("mode") != "full"

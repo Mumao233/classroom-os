@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
 from ..asr_dashscope.transport import AuthenticationRejected, Disconnected
-from ..asr_dashscope.wire import finish_task, parse_event, run_task
+from ..asr_dashscope.wire import finish_task, metering_evidence, parse_event, run_task
 from ..asr_sim.simulator import ProtocolError
 from .ledger import Attempt, finish_on_cancel
 from .policy import FRAME_SAMPLES, MAX_BATCH_SECONDS, MAX_CONNECTION_SECONDS, EndOfStream, PocStopped, UnsafeInbound, digest
@@ -32,6 +32,7 @@ class _Session:
         self.dispatch_ready.set()
         self.run_control = self.finish_control = 0
         self.ready = self.recognition_ok = self.recognition_tainted = self.provider_failed = False
+        self.accounting_only = False
         self.stop = None
         self.ranges = [0]
         self.sentences = {}
@@ -73,24 +74,27 @@ class _Session:
             await self.ledger.observe(self.attempt, event.request_id, None, False)
             self.request = event.request_id
 
-    async def _risk(self, event):
-        if event.request_id and self.request and event.request_id != self.request:
+    async def _risk(self, evidence):
+        if evidence is None or evidence.task_id != str(self.attempt.task_id):
             return
-        await self._bind_request(event)
-        risk = event.usage or event.risk_usage
-        if risk is not None or event.risk_total is not None:
-            await self.ledger.observe_risk(self.attempt, risk, event.risk_total)
+        if evidence.request_id and self.request and evidence.request_id != self.request:
+            return
+        await self._bind_request(evidence)
+        await self.ledger.observe_risk(self.attempt, evidence.usage, evidence.total)
+
+    def _stop_for_accounting(self, reason):
+        self.stop = self.stop or reason
+        self.accounting_only = True
+        self.started.set()
+        self.terminal_signal.set()
 
     async def _usage(self, event, inbound, final):
         await self._bind_request(event)
         usage = event.usage
         if event.usage_issue or (final and (usage is None or self.request is None)):
-            if event.risk_usage is not None or event.risk_total is not None:
-                await self.ledger.observe_risk(self.attempt, event.risk_usage, event.risk_total)
             await self._anomaly("usage_unresolved", inbound)
         if (usage is not None and self.usage is not None
                 and (usage.input_tokens < self.usage.input_tokens or usage.output_tokens < self.usage.output_tokens)):
-            await self.ledger.observe_risk(self.attempt, usage)
             await self._anomaly("usage_regression", inbound)
             usage = None
         if usage is not None:
@@ -103,7 +107,7 @@ class _Session:
 
     async def _receive(self, inbound):
         try:
-            event = parse_event(inbound.text, str(self.attempt.task_id), capture_risk=True)
+            event = parse_event(inbound.text, str(self.attempt.task_id))
         except ProtocolError:
             await self._anomaly("protocol_invalid", inbound)
             raise
@@ -113,9 +117,11 @@ class _Session:
         if self.terminal_event is not None:
             if event != self.terminal_event and event not in self.terminal_conflicts:
                 self.terminal_conflicts.add(event)
-                if event.kind == "task-failed":
+                sentence = event.sentence
+                accepted = self.sentences.get(sentence.sentence_id) if sentence is not None else None
+                if event.kind == "task-failed" or (sentence is not None and sentence.final and accepted
+                                                  and sentence != accepted[0]):
                     self.recognition_ok = False
-                await self._risk(event)
                 await self._anomaly("post_terminal_conflict", inbound)
             return
         if event.kind == "task-failed":
@@ -135,12 +141,10 @@ class _Session:
         final = event.kind == "task-finished"
         if final:
             if not self.finish_control or inbound.control_sequence < self.finish_control:
-                await self._risk(event)
                 await self._anomaly("terminal_before_finish", inbound)
                 raise PocStopped(self.stop)
             await self.finish_done.wait()
             if not self.finish_confirmed:
-                await self._risk(event)
                 await self._anomaly("terminal_with_unconfirmed_finish", inbound)
                 raise PocStopped(self.stop)
             await self.ledger.protocol(self.attempt, "task-finished")
@@ -178,35 +182,38 @@ class _Session:
                 try:
                     inbound = await self.transport.receive_text()
                 except EndOfStream:
-                    if self.terminal_event is not None:
+                    if self.terminal_event is not None or self.accounting_only:
                         return
                     raise Disconnected("closed_before_terminal") from None
                 except UnsafeInbound as exc:
                     self.dispatch_ready.clear()
-                    self.stop = str(exc)
                     try:
-                        await self.ledger.anomaly(self.attempt, self.stop, exc.checksum)
+                        self._stop_for_accounting(str(exc))
+                        await self.ledger.anomaly(self.attempt, str(exc), exc.checksum)
+                        await self._risk(exc.metering)
                     finally:
                         self.dispatch_ready.set()
-                    if self.terminal_event is not None:
-                        continue
-                    raise
+                    continue
                 self.dispatch_ready.clear()
                 try:
                     received = inbound.text.encode("utf-8")
                     self.received_count += 1
                     self.received_bytes += len(received)
                     if self.received_count > 512 or self.received_bytes > 2 * 1024 * 1024:
-                        try:
-                            event = parse_event(inbound.text, str(self.attempt.task_id), capture_risk=True)
-                        except ProtocolError:
-                            pass
-                        else:
-                            await self._risk(event)
+                        await self._risk(metering_evidence(inbound.text))
                         await self._anomaly("inbound_evidence_limit", inbound)
                         raise PocStopped("inbound_evidence_limit")
                     await self.ledger.inbound(self.attempt, self.received_count, inbound)
-                    await self._receive(inbound)
+                    await self._risk(metering_evidence(inbound.text))
+                    if not self.accounting_only:
+                        try:
+                            await self._receive(inbound)
+                        except ProtocolError:
+                            self._stop_for_accounting("protocol_invalid")
+                        except PocStopped as exc:
+                            if str(exc) == "ledger_rejected_or_commit_unknown":
+                                raise
+                            self._stop_for_accounting(str(exc))
                 except Exception:
                     self.stop = self.stop or "reader_stopped"
                     raise
@@ -237,7 +244,7 @@ class _Session:
                         self.stop = self.stop or "accounting_cleanup_timeout"
                     await asyncio.gather(reader, return_exceptions=True)
             finally:
-                self.transport.abort()
+                self.transport.dispose()
                 watchdog.cancel()
 
     async def run(self, deadline):
@@ -250,19 +257,21 @@ class _Session:
 
         @asynccontextmanager
         async def authorize_handshake():
-            async with self.ledger.dispatch_lock():
-                requested = loop.time()
-                seconds = await self.ledger.check_connection(self.attempt, handshake=True)
-                expires = min(write_deadline, requested + seconds)
-                if loop.time() >= expires:
-                    raise PocStopped("handshake_deadline")
-                yield expires
+            requested = loop.time()
+            seconds = await self.ledger.check_connection(self.attempt, handshake=True)
+            expires = min(write_deadline, requested + seconds)
+            if loop.time() >= expires:
+                raise PocStopped("handshake_deadline")
+            yield expires
 
         try:
             async with asyncio.timeout_at(write_deadline):
-                if loop.time() >= write_deadline:
-                    raise TimeoutError
-                await transport.connect(before_handshake=authorize_handshake)
+                async with self.ledger.dispatch_lock():
+                    requested = loop.time()
+                    seconds = await self.ledger.check_connection(self.attempt)
+                    if loop.time() >= min(write_deadline, requested + seconds):
+                        raise PocStopped("dial_deadline")
+                    await transport.connect(before_handshake=authorize_handshake)
                 await self.ledger.protocol(self.attempt, "handshake")
                 async with self.ledger.dispatch_lock():
                     requested = loop.time()
@@ -279,7 +288,9 @@ class _Session:
                 await self.started.wait()
                 await self._send_audio(reader, write_deadline)
                 await self._wait_dispatch(reader)
-                if reader.done() or self.provider_failed:
+                if self.accounting_only or self.provider_failed:
+                    raise PocStopped(self.stop or "reader_stopped")
+                if reader.done():
                     await reader
                     raise PocStopped("premature_reader_exit")
                 try:

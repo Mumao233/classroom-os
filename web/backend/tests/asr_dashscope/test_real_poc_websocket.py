@@ -37,6 +37,19 @@ def test_escaped_credential_is_never_returned_as_evidence():
     assert FAKE_KEY not in str(exc.value)
 
 
+def test_credential_echo_retains_only_attributable_cost_evidence():
+    encoded = "\\u0073" + FAKE_KEY[1:]
+    task = "075d00fe-4cde-47dc-b05f-f24b31a94ab7"
+    text = ('{"header":{"task_id":"' + task + '"},"payload":{"usage":{"input_tokens":200000,'
+            '"output_tokens":5},"output":{"request_id":"approved-request","sentence":"' + encoded + '"}}}')
+    with pytest.raises(UnsafeInbound, match="credential_echo") as exc:
+        websocket._safe_evidence(InboundText(text, 1, 1), FAKE_KEY)
+    assert exc.value.metering.task_id == task
+    assert exc.value.metering.request_id == "approved-request"
+    assert exc.value.metering.usage.input_tokens == 200000
+    assert not hasattr(exc.value, "text")
+
+
 def _loopback_certificate(tmp_path):
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     now = datetime.now(timezone.utc)
@@ -106,7 +119,7 @@ def test_pinned_driver_protocol_and_logging(monkeypatch, caplog, tmp_path, abnor
                     await transport.close()
             else:
                 await transport.close()
-            transport.abort()
+            transport.dispose()
             assert transport._socket is None
             with pytest.raises(Disconnected):
                 await transport.connect(before_handshake=_allow)

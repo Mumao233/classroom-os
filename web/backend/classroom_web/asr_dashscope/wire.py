@@ -42,8 +42,6 @@ class WireEvent:
     sentence_issue: bool = False
     heartbeat: tuple[int, int | None] | None = None
     heartbeat_duration: int | None = None
-    risk_usage: TokenUsage | None = None
-    risk_total: int | None = None
 
 
 def run_task(provider_task_id: str) -> dict:
@@ -185,7 +183,35 @@ def _conflicting_token_evidence(*containers: dict) -> tuple[TokenUsage | None, i
     return split, high.get("total_tokens")
 
 
-def parse_event(raw: str, provider_task_id: str, *, capture_risk: bool = False) -> WireEvent:
+@dataclass(frozen=True)
+class MeteringEvidence:
+    task_id: str
+    request_id: str | None = field(repr=False)
+    usage: TokenUsage | None
+    total: int | None
+
+
+def metering_evidence(raw: str) -> MeteringEvidence | None:
+    """Extract only attributable counters. No event-order or finality decisions."""
+    if len(raw) > MAX_MESSAGE_CHARS:
+        return None
+    try:
+        obj = _object(json.loads(raw, object_pairs_hook=_unique_object,
+                                 parse_constant=_invalid_constant, parse_float=_finite_float))
+        task = uid(_object(obj.get("header")).get("task_id"))
+        payload = _object(obj.get("payload"))
+        output = payload.get("output")
+        output = output if isinstance(output, dict) else {}
+        mirror = output.get("output")
+        mirror = mirror if isinstance(mirror, dict) else {}
+        request = _request_id(output, mirror)
+        usage, total = _conflicting_token_evidence(payload, output, mirror)
+    except (ValueError, RecursionError):
+        return None
+    return MeteringEvidence(task, request, usage, total) if usage is not None or total is not None else None
+
+
+def parse_event(raw: str, provider_task_id: str) -> WireEvent:
     """Validate identity before separating transcript and metering evidence."""
     if not isinstance(raw, str) or len(raw) > MAX_MESSAGE_CHARS:
         raise ProtocolError("invalid DashScope JSON message size or type")
@@ -249,8 +275,6 @@ def parse_event(raw: str, provider_task_id: str, *, capture_risk: bool = False) 
 
     # Duration can distinguish otherwise identical heartbeat observations. It
     # supplies neither 3.1 token evidence nor a chargeable audio measurement.
-    risk, total = _conflicting_token_evidence(payload, output, mirror) if capture_risk and usage_issue else (None, None)
     return WireEvent(kind, request_id=request_id, sentence=sentence, usage=usage,
                      usage_issue=usage_issue, sentence_issue=sentence_issue, heartbeat=heartbeat,
-                     heartbeat_duration=duration if heartbeat is not None else None,
-                     risk_usage=risk, risk_total=total)
+                     heartbeat_duration=duration if heartbeat is not None else None)

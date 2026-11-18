@@ -12,7 +12,7 @@ from websockets.exceptions import ConnectionClosedOK, InvalidStatus
 from websockets.frames import Frame, Opcode
 
 from ..asr_dashscope.transport import AuthenticationRejected, Disconnected, InboundText
-from ..asr_dashscope.wire import MAX_MESSAGE_CHARS
+from ..asr_dashscope.wire import MAX_MESSAGE_CHARS, metering_evidence
 from .policy import ENDPOINT, LIB_VERSION, EndOfStream, PocStopped, UnsafeInbound, digest
 
 _wire_log = logging.Logger("pr06a.websocket")
@@ -21,10 +21,17 @@ _wire_log.propagate = False
 _wire_log.setLevel(logging.CRITICAL + 1)
 
 
+def _credential_echo(text, key):
+    meter = metering_evidence(text)
+    if meter is not None and any(key in s for s in (meter.task_id, meter.request_id or "")):
+        meter = None
+    return UnsafeInbound("credential_echo", digest(text.encode("utf-8")), meter)
+
+
 def _safe_evidence(frame, key):
     text = frame.text
     if key in text:
-        raise UnsafeInbound("credential_echo", digest(text.encode("utf-8")))
+        raise _credential_echo(text, key)
     try:
         # Keep duplicate keys intact in the original wire text for parse_event.
         # Inspect values AND keys as decoded strings before retaining that text.
@@ -34,7 +41,7 @@ def _safe_evidence(frame, key):
             if isinstance(value, (list, tuple)):
                 pending.extend(value)
             elif isinstance(value, str) and key in value:
-                raise UnsafeInbound("credential_echo", digest(text.encode("utf-8")))
+                raise _credential_echo(text, key)
     except (ValueError, RecursionError):
         raise UnsafeInbound("undecodable_provider_response", digest(text.encode("utf-8"))) from None
     return frame
@@ -117,7 +124,7 @@ class _WebSocket:
                 logger=_wire_log, user_agent_header=None,
             )
             if self._closed:
-                self.abort()
+                self.dispose()
                 raise Disconnected("handshake_after_close")
         except PocStopped:
             raise
@@ -180,7 +187,12 @@ class _WebSocket:
 
     def abort(self):
         self._closed = True
-        self._key = self._redaction_key = None
+        self._key = None
         if self._socket is not None:
-            socket, self._socket = self._socket, None
-            socket.transport.abort()
+            # The assembler can still yield complete frames buffered before
+            # connection_lost. Keep it and the redaction key until accounting joins.
+            self._socket.transport.abort()
+
+    def dispose(self):
+        self.abort()
+        self._socket = self._redaction_key = None

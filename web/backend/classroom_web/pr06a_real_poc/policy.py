@@ -32,9 +32,10 @@ class EndOfStream(ConnectionError):
 
 
 class UnsafeInbound(PocStopped):
-    def __init__(self, reason, checksum):
+    def __init__(self, reason, checksum, metering=None):
         super().__init__(reason)
         self.checksum = checksum
+        self.metering = metering
 
 
 @dataclass(frozen=True)

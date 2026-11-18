@@ -43,6 +43,23 @@ CREATE TABLE pr06a_control.activation (
   revoked boolean NOT NULL DEFAULT false
 );
 
+CREATE TABLE pr06a_control.revocation (
+  authorization_id text PRIMARY KEY CHECK (authorization_id='PR06A-REAL-POC-AUTH-20261118'),
+  revoked_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+
+CREATE FUNCTION pr06a_control.guard_activation_insert() RETURNS trigger
+LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $f$
+BEGIN
+  PERFORM pg_advisory_xact_lock(6206,1);
+  IF EXISTS (SELECT FROM pr06a_control.revocation WHERE authorization_id=NEW.authorization_id) THEN
+    RAISE EXCEPTION 'PR06A_AUTHORIZATION_REVOKED';
+  END IF;
+  RETURN NEW;
+END $f$;
+CREATE TRIGGER pr06a_activation_insert_guard BEFORE INSERT ON pr06a_control.activation
+  FOR EACH ROW EXECUTE FUNCTION pr06a_control.guard_activation_insert();
+
 CREATE FUNCTION pr06a_control.guard_activation() RETURNS trigger
 LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $f$
 BEGIN
@@ -62,6 +79,8 @@ CREATE FUNCTION pr06a_api.revoke() RETURNS void
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $f$
 BEGIN
   PERFORM pg_advisory_xact_lock(6206,1);
+  INSERT INTO pr06a_control.revocation(authorization_id) VALUES('PR06A-REAL-POC-AUTH-20261118')
+    ON CONFLICT DO NOTHING;
   UPDATE pr06a_control.activation SET revoked=true WHERE NOT revoked;
 END $f$;
 
@@ -192,6 +211,12 @@ CREATE TABLE pr06a_control.bill_evidence (
   CHECK (request_id IS NOT NULL OR (input_tokens=0 AND output_tokens=0 AND gross_microyuan=0 AND net_microyuan=0))
 );
 
+CREATE FUNCTION pr06a_control.risk_microyuan(p_input bigint, p_output bigint, p_total bigint) RETURNS numeric
+LANGUAGE sql IMMUTABLE SET search_path=pg_catalog,pg_temp AS $f$
+  SELECT 6::numeric*coalesce(p_input,0)+4.5::numeric*coalesce(p_output,0)
+         +4.5::numeric*greatest(0,coalesce(p_total,0)::numeric-coalesce(p_input,0)-coalesce(p_output,0))
+$f$;
+
 -- Existing ordinary admission sees the specialized hold and actuals in
 -- the same locked budget row. The production schema alone is unchanged.
 GRANT SELECT (authorization_id, observed_input, observed_output, observed_total, gross_microyuan,
@@ -206,9 +231,8 @@ SELECT b.period_start,'asr',CASE WHEN NOT b.closed THEN b.held_microyuan ELSE 0 
   b.confirmed_microyuan
 FROM pr06a_control.batch b
 LEFT JOIN LATERAL (
-  SELECT ceil(sum(greatest(0,
-             greatest(6::numeric*coalesce(a.observed_input,0)+4.5::numeric*coalesce(a.observed_output,0),
-                      4.5::numeric*coalesce(a.observed_total,0))-coalesce(a.gross_microyuan,0)))) AS unresolved,
+  SELECT ceil(sum(greatest(0,pr06a_control.risk_microyuan(a.observed_input,a.observed_output,a.observed_total)
+                                  -coalesce(a.gross_microyuan,0)))) AS unresolved,
          bool_or(NOT a.usage_final OR a.observed_input IS NULL OR a.observed_output IS NULL) AS unmetered
   FROM pr06a_control.attempts a WHERE a.authorization_id=b.authorization_id
     AND (a.gross_microyuan IS NULL OR a.reconciled_metering_revision IS DISTINCT FROM a.metering_revision)
@@ -236,6 +260,7 @@ BEGIN
   SELECT * INTO STRICT a FROM pr06a_control.activation FOR SHARE;
   switches:=billing_api.lock_switches()->'flags';
   IF NOT a.enabled OR a.revoked OR a.executor_login<>session_user
+     OR EXISTS (SELECT FROM pr06a_control.revocation WHERE authorization_id=a.authorization_id)
      OR clock_timestamp()<'2026-11-18 00:00:00+08' OR clock_timestamp()>='2027-01-01 00:00:00+08'
      OR switches->'billing' IS DISTINCT FROM 'false'::jsonb
      OR switches->'asr_streaming' IS DISTINCT FROM 'false'::jsonb THEN
@@ -263,8 +288,7 @@ CREATE FUNCTION pr06a_control.observed_cost(id text) RETURNS numeric
 LANGUAGE sql SET search_path=pg_catalog,pg_temp AS $f$
   SELECT coalesce(sum(CASE WHEN a.gross_microyuan IS NOT NULL AND a.reconciled_metering_revision=a.metering_revision
        THEN a.gross_microyuan ELSE greatest(a.gross_microyuan,
-          6::numeric*coalesce(a.observed_input,0)+4.5::numeric*coalesce(a.observed_output,0),
-          4.5::numeric*coalesce(a.observed_total,0)) END),0)
+          pr06a_control.risk_microyuan(a.observed_input,a.observed_output,a.observed_total)) END),0)
   FROM pr06a_control.attempts a WHERE a.authorization_id=id
 $f$;
 
@@ -431,7 +455,9 @@ BEGIN
      OR (p_final AND (p_in IS NULL OR coalesce(p_request,a.request_id) IS NULL)) THEN
     RAISE EXCEPTION 'PR06A_USAGE_CONFLICT';
   END IF;
-  UPDATE pr06a_control.attempts SET request_id=coalesce(p_request,a.request_id) WHERE attempt=a.attempt;
+  UPDATE pr06a_control.attempts SET request_id=coalesce(p_request,a.request_id),
+    metering_revision=metering_revision+CASE WHEN a.request_id IS NULL AND p_request IS NOT NULL THEN 1 ELSE 0 END
+    WHERE attempt=a.attempt;
   IF p_in IS NOT NULL AND (p_in IS DISTINCT FROM a.input_tokens OR p_out IS DISTINCT FROM a.output_tokens OR p_final) THEN
     rev:=a.usage_revision+1;
     INSERT INTO pr06a_control.usage(attempt,revision,request_id,input_tokens,output_tokens,final)
@@ -454,7 +480,12 @@ BEGIN
   UPDATE pr06a_control.attempts SET
     observed_input=greatest(observed_input,p_in),observed_output=greatest(observed_output,p_out),
     observed_total=greatest(observed_total,p_total),
-    metering_revision=metering_revision+1 WHERE attempt=p_attempt AND authorization_id=b.authorization_id;
+    metering_revision=metering_revision+CASE WHEN
+        greatest(observed_input,p_in) IS DISTINCT FROM observed_input
+        OR greatest(observed_output,p_out) IS DISTINCT FROM observed_output
+        OR greatest(observed_total,p_total) IS DISTINCT FROM observed_total THEN 1 ELSE 0 END
+    WHERE attempt=p_attempt AND authorization_id=b.authorization_id;
+  IF NOT FOUND THEN RAISE EXCEPTION 'PR06A_RISK_EVIDENCE_BLOCKED'; END IF;
   PERFORM pr06a_control.alert_budget(b.period_start);
 END $f$;
 
@@ -640,6 +671,7 @@ BEGIN
 END $f$;
 
 REVOKE ALL ON ALL FUNCTIONS IN SCHEMA pr06a_api,pr06a_control FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION pr06a_control.risk_microyuan(bigint,bigint,bigint) TO classroom_billing_control;
 GRANT EXECUTE ON FUNCTION pr06a_api.open_batch(uuid,jsonb,text,jsonb),
   pr06a_api.claim_attempt(uuid,integer,uuid,uuid,uuid), pr06a_api.frame_intent(uuid,uuid,integer,integer,text),
   pr06a_api.confirm_frame(uuid,uuid,integer), pr06a_api.observe(uuid,uuid,text,bigint,bigint,boolean),
