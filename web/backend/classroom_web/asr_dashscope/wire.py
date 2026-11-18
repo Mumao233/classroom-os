@@ -1,6 +1,7 @@
 """Wire codec for the DashScope Qwen-Audio-ASR-Streaming WebSocket API."""
 
 from dataclasses import dataclass, field
+from hashlib import sha256
 import json
 import math
 
@@ -195,7 +196,7 @@ def _unknown_number(_value):
 
 
 def _bounded_meter_int(value):
-    return int(value) if len(value) <= 17 else None
+    return int(value) if len(value) <= 17 else (2**53 if not value.startswith("-") else None)
 
 
 def _meter_totals(containers):
@@ -207,20 +208,26 @@ def _meter_totals(containers):
             values = _values(body, meter)
             if not values:
                 continue
-            try:
-                counts = {integer(value) for value in values}
-            except ProtocolError:
-                conflict = True
+            counts = {min(value, 2**53 - 1) for value in values if type(value) is int and value >= 0}
+            conflict |= (len(counts) != 1 or any(type(v) is not int or not 0 <= v <= 2**53 - 1 for v in values))
+            if not counts:
                 continue
-            if len(counts) != 1:
-                conflict = True
             count = min(counts)
             current[meter] = count
             if meter in high and high[meter] != count:
                 conflict = True
             high[meter] = max(high.get(meter, 0), count)
-        if all(meter in current for meter in ("input_tokens", "output_tokens", "total_tokens")):
-            conflict |= current["input_tokens"] + current["output_tokens"] != current["total_tokens"]
+        if "total_tokens" in current:
+            floor = current.get("input_tokens", 0) + current.get("output_tokens", 0)
+            conflict |= current["total_tokens"] < floor
+            if "input_tokens" in current and "output_tokens" in current:
+                conflict |= current["total_tokens"] != floor
+    floor = high.get("input_tokens", 0) + high.get("output_tokens", 0)
+    both = "input_tokens" in high and "output_tokens" in high
+    if "total_tokens" in high:
+        conflict |= high["total_tokens"] < floor or (both and high["total_tokens"] != floor)
+    elif both:
+        high["total_tokens"] = floor
     split = None
     if "input_tokens" in high or "output_tokens" in high:
         split = RiskTokens(high.get("input_tokens"), high.get("output_tokens"))
@@ -253,6 +260,15 @@ def metering_evidence(raw: str) -> MeteringEvidence | None:
         return MeteringEvidence(task, next(iter(ids), None), usage, total, metering_conflict=conflict)
     except (ValueError, RecursionError):
         return None
+
+
+def observation_fingerprint(raw: str) -> str:
+    try:
+        obj = json.loads(raw, object_pairs_hook=_unique_object, parse_constant=_invalid_constant, parse_float=_finite_float)
+        raw = json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    except (ValueError, RecursionError):
+        pass
+    return sha256(raw.encode("utf-8")).hexdigest()
 
 
 def parse_event(raw: str, provider_task_id: str) -> WireEvent:

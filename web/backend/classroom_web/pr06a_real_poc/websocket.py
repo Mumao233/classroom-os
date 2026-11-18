@@ -100,18 +100,22 @@ class _Connection(ClientConnection):
 
     def process_event(self, event):
         if isinstance(event, Frame) and event.opcode in (Opcode.TEXT, Opcode.BINARY):
-            self.stamps.append((self.control, self.audio))
+            self.stamps.append((self.control, self.audio, event.opcode == Opcode.TEXT))
         if isinstance(event, Frame) and event.fin and event.opcode in (Opcode.TEXT, Opcode.BINARY, Opcode.CONT):
             self.buffered_messages += 1
         super().process_event(event)
 
     async def stamped_text(self):
-        message = await self.recv()
-        control, audio = self.stamps.popleft()
+        message = await self.recv(decode=False)
+        control, audio, text_frame = self.stamps.popleft()
         self.buffered_messages -= 1
-        if not isinstance(message, str):
+        if not text_frame:
             raise UnsafeInbound("binary_provider_response", digest(message))
-        return InboundText(message, control, audio)
+        try:
+            text = message.decode("utf-8")
+        except UnicodeDecodeError:
+            raise UnsafeInbound("invalid_provider_utf8", digest(message)) from None
+        return InboundText(text, control, audio)
 
     async def send_control(self, message, on_dispatched):
         # In the pinned library send_context writes the queued data before its

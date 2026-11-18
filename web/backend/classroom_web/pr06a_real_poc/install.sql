@@ -151,6 +151,7 @@ CREATE TABLE pr06a_control.attempts (
   usage_final boolean NOT NULL DEFAULT false,
   gross_microyuan bigint CHECK (gross_microyuan>=0),
   metering_revision integer NOT NULL DEFAULT 0,
+  metering_issue_pending boolean NOT NULL DEFAULT false,
   redacted_request_fingerprint text CHECK (redacted_request_fingerprint ~ '^[a-f0-9]{64}$'),
   observed_input bigint CHECK (observed_input>=0),
   observed_output bigint CHECK (observed_output>=0),
@@ -180,6 +181,13 @@ CREATE TABLE pr06a_control.usage (
   final boolean NOT NULL,
   created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
   PRIMARY KEY (attempt,revision)
+);
+
+CREATE TABLE pr06a_control.metering_issues (
+  attempt uuid NOT NULL REFERENCES pr06a_control.attempts(attempt),
+  evidence_hash text NOT NULL CHECK (evidence_hash ~ '^[a-f0-9]{64}$'),
+  observed_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  PRIMARY KEY (attempt,evidence_hash)
 );
 
 CREATE TABLE pr06a_control.recognition (
@@ -556,7 +564,7 @@ CREATE FUNCTION pr06a_api.settle(p_attempt uuid,p_revision integer,p_request tex
     p_request_fingerprint text DEFAULT NULL) RETURNS void
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $f$
 DECLARE b pr06a_control.batch%ROWTYPE; a pr06a_control.attempts%ROWTYPE;
-  prior pr06a_control.bill_evidence%ROWTYPE; total numeric; matches_usage boolean;
+  prior pr06a_control.bill_evidence%ROWTYPE; total numeric; matches_usage boolean; new_fingerprint boolean;
 BEGIN
   SELECT b0.* INTO STRICT b FROM pr06a_control.batch b0 JOIN pr06a_control.attempts a0 USING(authorization_id)
     WHERE a0.attempt=p_attempt FOR UPDATE OF b0;
@@ -575,8 +583,11 @@ BEGIN
   IF (NOT b.closed AND clock_timestamp()<b.lease_until)
      OR p_revision IS DISTINCT FROM 1+(SELECT coalesce(max(revision),0) FROM pr06a_control.bill_evidence WHERE attempt=p_attempt)
      OR p_metering_revision IS NULL OR p_metering_revision>a.metering_revision
-     OR p_request_fingerprint IS DISTINCT FROM a.redacted_request_fingerprint
-     OR (p_request_fingerprint IS NOT NULL AND p_request IS NOT NULL)
+     OR (a.redacted_request_fingerprint IS NOT NULL AND
+         p_request_fingerprint IS DISTINCT FROM a.redacted_request_fingerprint)
+     OR (p_request_fingerprint IS NOT NULL AND
+         (p_request IS NOT NULL OR a.request_id IS NOT NULL
+          OR (a.redacted_request_fingerprint IS NULL AND p_resolved IS NOT TRUE)))
      OR (a.request_id IS NOT NULL AND p_request IS DISTINCT FROM a.request_id) THEN
     RAISE EXCEPTION 'PR06A_BILL_ATTRIBUTION_CONFLICT';
   END IF;
@@ -584,11 +595,17 @@ BEGIN
       gross_microyuan,net_microyuan,bill_month,evidence_hash,reviewed_metering_revision,discrepancy_resolved,request_fingerprint)
     VALUES(p_attempt,p_revision,p_request,p_in,p_out,p_gross,p_net,p_month,p_evidence,p_metering_revision,
            p_resolved,p_request_fingerprint);
-  matches_usage:= p_metering_revision=a.metering_revision AND (p_resolved OR a.metering_revision=0 OR
-    (p_in=a.input_tokens AND p_out=a.output_tokens AND p_in>=coalesce(a.observed_input,0)
-     AND p_out>=coalesce(a.observed_output,0) AND p_in+p_out>=coalesce(a.observed_total,0)));
+  new_fingerprint:=p_request_fingerprint IS NOT NULL AND a.redacted_request_fingerprint IS NULL;
+  matches_usage:= p_metering_revision=a.metering_revision AND (p_resolved OR
+    (NOT a.metering_issue_pending AND (a.metering_revision=0 OR
+      (p_in=a.input_tokens AND p_out=a.output_tokens AND p_in>=coalesce(a.observed_input,0)
+       AND p_out>=coalesce(a.observed_output,0) AND p_in+p_out>=coalesce(a.observed_total,0)))));
   UPDATE pr06a_control.attempts SET request_id=coalesce(p_request,a.request_id),gross_microyuan=p_gross,
-    reconciled_metering_revision=CASE WHEN matches_usage THEN p_metering_revision END WHERE attempt=p_attempt;
+    redacted_request_fingerprint=coalesce(a.redacted_request_fingerprint,p_request_fingerprint),
+    metering_issue_pending=a.metering_issue_pending AND NOT coalesce(matches_usage,false),
+    metering_revision=a.metering_revision+CASE WHEN new_fingerprint THEN 1 ELSE 0 END,
+    reconciled_metering_revision=CASE WHEN matches_usage THEN a.metering_revision+CASE WHEN new_fingerprint THEN 1 ELSE 0 END END
+    WHERE attempt=p_attempt;
   SELECT coalesce(sum(gross_microyuan),0) INTO total FROM pr06a_control.attempts WHERE authorization_id=b.authorization_id;
   UPDATE pr06a_control.batch SET confirmed_microyuan=total,
     held_microyuan=CASE WHEN b.released THEN 0 ELSE greatest(0,b.authorized_microyuan-total)::bigint END,
@@ -690,6 +707,14 @@ BEGIN
   IF p_packet->>'input' IS NOT NULL OR p_packet->>'output' IS NOT NULL OR p_packet->>'total' IS NOT NULL THEN
     PERFORM pr06a_api.observe_risk(f,p_attempt,(p_packet->>'input')::bigint,(p_packet->>'output')::bigint,
                                   (p_packet->>'total')::bigint);
+  END IF;
+  IF p_packet->>'metering_issue_hash' IS NOT NULL THEN
+    INSERT INTO pr06a_control.metering_issues(attempt,evidence_hash)
+      VALUES(p_attempt,p_packet->>'metering_issue_hash') ON CONFLICT DO NOTHING;
+    IF FOUND THEN
+      UPDATE pr06a_control.attempts SET metering_issue_pending=true,metering_revision=metering_revision+1
+        WHERE attempt=p_attempt;
+    END IF;
   END IF;
   RETURN true;
 END $f$;

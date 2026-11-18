@@ -255,7 +255,8 @@ def test_fenced_batch_against_postgres(poc, monkeypatch, mode, expected, count):
         assert exposure["unknown"] == exposure["pool_risk"]["asr"] == expected_exposure
         assert batch["input_token_limit"] is None and batch["held_microyuan"] == 1_000_000
         if mode == "terminal-conflict":
-            assert db.scalar(sa.text("SELECT metering_revision FROM pr06a_control.attempts")) == 5
+            assert db.scalar(sa.text("SELECT metering_revision FROM pr06a_control.attempts")) == 6
+            assert db.scalar(sa.text("SELECT metering_issue_pending FROM pr06a_control.attempts"))
         if mode == "foreign":
             assert db.scalar(sa.text("SELECT count(*) FROM pr06a_control.recognition")) == 1
             assert db.scalar(sa.text("SELECT code FROM pr06a_control.anomalies")) == "request_identity_conflict"

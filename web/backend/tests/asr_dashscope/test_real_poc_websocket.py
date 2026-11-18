@@ -16,7 +16,7 @@ import pytest
 from websockets.asyncio.server import serve
 
 from classroom_web.asr_dashscope.transport import AuthenticationRejected, Disconnected, InboundText
-from classroom_web.asr_dashscope.wire import metering_evidence
+from classroom_web.asr_dashscope.wire import metering_evidence, observation_fingerprint
 from classroom_web.pr06a_real_poc import websocket
 from classroom_web.pr06a_real_poc.policy import ENDPOINT, PocStopped, UnsafeInbound, digest
 
@@ -72,6 +72,13 @@ def test_unrelated_duplicate_keys_do_not_discard_meter_evidence():
     huge_integer = raw.replace('"x":1', '"x":' + "9" * 5000)
     assert websocket._safe_evidence(InboundText(huge_integer, 1, 1), FAKE_KEY).text == huge_integer
     assert metering_evidence(huge_integer).usage.input_tokens == 200000
+    out_of_range_duplicate = raw.replace('"input_tokens":200000',
+                                         '"input_tokens":200000,"input_tokens":9007199254740992')
+    assert metering_evidence(out_of_range_duplicate).usage.input_tokens == 200000
+    assert metering_evidence(out_of_range_duplicate).metering_conflict
+    parsed = {"header": {"task_id": task}, "payload": {"usage": {"input_tokens": 100, "total_tokens": 5}}}
+    assert metering_evidence(json.dumps(parsed)).metering_conflict
+    assert observation_fingerprint(json.dumps(parsed)) == observation_fingerprint(json.dumps(parsed, sort_keys=True, indent=2))
 
 
 def _loopback_certificate(tmp_path):

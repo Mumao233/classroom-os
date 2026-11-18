@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
 from ..asr_dashscope.transport import AuthenticationRejected, Disconnected
-from ..asr_dashscope.wire import finish_task, metering_evidence, parse_event, run_task
+from ..asr_dashscope.wire import finish_task, metering_evidence, observation_fingerprint, parse_event, run_task
 from ..asr_sim.simulator import ProtocolError
 from .ledger import Attempt, finish_on_cancel
 from .policy import FRAME_SAMPLES, MAX_BATCH_SECONDS, MAX_CONNECTION_SECONDS, EndOfStream, PocStopped, UnsafeInbound, digest, sentence_proof
@@ -32,6 +32,8 @@ class _Session:
         self.terminal_conflicts = set()
         self.terminal_signal = asyncio.Event()
         self.terminal_event = None
+        self.first_terminal = None
+        self.recognition_conflict = False
         self.dispatch_ready = asyncio.Event()
         self.dispatch_ready.set()
         self.run_control = self.finish_control = 0
@@ -82,59 +84,74 @@ class _Session:
             await self.ledger.observe(self.attempt, event.request_id, None, False)
             self.request = event.request_id
 
-    async def _retain(self, packet, evidence):
+    def _meter_decision(self, evidence, packet_hash):
+        usage = evidence.usage
+        values = (usage.input_tokens if usage else None, usage.output_tokens if usage else None, evidence.total)
+        issue = None
+        if packet_hash not in self.meter_packets:
+            if evidence.metering_conflict:
+                issue = "usage_unresolved"
+            elif any(value is not None and previous is not None and value < previous
+                     for value, previous in zip(values, self.meter_high)):
+                issue = "usage_regression"
+            elif self.first_terminal and any(value is not None and value != previous
+                                             for value, previous in zip(values, self.meter_high)):
+                issue = "post_terminal_conflict"
+        return values, issue
+
+    async def _retain(self, packet, evidence, observation_hash):
         attributable = evidence is not None and evidence.task_id == str(self.attempt.task_id)
         if attributable:
-            usage = evidence.usage
+            values, issue = self._meter_decision(evidence, observation_hash)
             packet.update(request_id=evidence.request_id, request_fingerprint=evidence.request_fingerprint,
                           attribution_conflict=evidence.attribution_conflict,
-                          input=usage.input_tokens if usage else None,
-                          output=usage.output_tokens if usage else None, total=evidence.total)
+                          input=values[0], output=values[1], total=values[2])
+            if issue:
+                packet["metering_issue_hash"] = observation_hash
         accepted = await self.ledger.retain(self.attempt, packet)
         if not accepted:
             self.recognition_tainted = self.terminal_event is None or self.recognition_tainted
             self._stop_for_accounting("request_identity_conflict")
         elif attributable:
             self.request = evidence.request_id or self.request
-            if evidence.metering_conflict:
-                self.stop = self.stop or "usage_unresolved"
-            self._meter_high_water(evidence, packet["raw_hash"])
+            self.stop = self.stop or issue
+            if issue == "usage_regression":
+                self.meter_regressed = True
+            if not self.retention_capped and any(value is not None for value in values):
+                self.meter_packets.add(observation_hash)
+            self.meter_high = tuple(max((v for v in pair if v is not None), default=None)
+                                    for pair in zip(values, self.meter_high))
         return accepted
 
-    def _meter_high_water(self, evidence, raw_hash):
-        usage = evidence.usage
-        values = (usage.input_tokens if usage else None, usage.output_tokens if usage else None, evidence.total)
-        if not any(value is not None for value in values):
-            return
-        if raw_hash not in self.meter_packets and any(
-                value is not None and previous is not None and value < previous
-                for value, previous in zip(values, self.meter_high)):
-            self.stop = self.stop or "usage_regression"
-            self.meter_regressed = True
-        if not self.retention_capped:
-            self.meter_packets.add(raw_hash)
-        self.meter_high = tuple(max((v for v in pair if v is not None), default=None)
-                                for pair in zip(values, self.meter_high))
-
     def recognition_state(self):
+        if self.recognition_conflict:
+            return "unknown"
         if self.recognition_ok:
             return "succeeded"
         return "failed" if self.provider_failed else "unknown"
 
-    async def _note_provider_failure(self):
-        if self.terminal_event is not None:
+    def _terminal_kind(self, kind):
+        if self.first_terminal is None:
+            self.first_terminal = kind
+        elif self.first_terminal != kind:
+            self.recognition_conflict = True
             self.recognition_ok = False
-        elif not self.provider_failed:
+
+    async def _note_provider_failure(self):
+        self._terminal_kind("task-failed")
+        if not self.provider_failed:
             self.provider_failed = True
             await self.ledger.protocol(self.attempt, "task-failed")
 
     def _check_terminal_contradiction(self, event):
         if event.request_id and self.request and event.request_id != self.request:
             return
+        if event.kind in ("task-finished", "task-failed"):
+            self._terminal_kind(event.kind)
         sentence = event.sentence
         accepted = self.sentences.get(sentence.sentence_id) if sentence is not None else None
-        if event.kind == "task-failed" or (sentence is not None and sentence.final and accepted
-                                          and sentence != accepted[0]):
+        if sentence is not None and sentence.final and accepted and sentence != accepted[0]:
+            self.recognition_conflict = True
             self.recognition_ok = False
 
     def _stop_for_accounting(self, reason):
@@ -225,6 +242,7 @@ class _Session:
         if final:
             if not self.recognition_ok:
                 self.stop = self.stop or "incomplete_recognition"
+            self._terminal_kind("task-finished")
             self.terminal_event = event
             self.terminal_signal.set()
 
@@ -241,7 +259,7 @@ class _Session:
         else:
             packet.update(sequence=self.received_count, control=inbound.control_sequence,
                           frame=inbound.audio_attempt, payload=inbound.text)
-        accepted = await self._retain(packet, metering_evidence(inbound.text))
+        accepted = await self._retain(packet, metering_evidence(inbound.text), observation_fingerprint(inbound.text))
         if accepted and self.run_control and inbound.control_sequence >= self.run_control:
             try:
                 event = parse_event(inbound.text, str(self.attempt.task_id))
@@ -250,18 +268,20 @@ class _Session:
             else:
                 if event.kind == "task-failed":
                     await self._note_provider_failure()
-                elif self.terminal_event is not None:
+                elif self.first_terminal is not None:
                     self._check_terminal_contradiction(event)
         return accepted
 
     async def _retain_unsafe(self, exc):
         self._stop_for_accounting(str(exc))
-        accepted = await self._retain({"raw_hash": exc.checksum, "anomaly": str(exc)}, exc.metering)
+        accepted = await self._retain({"raw_hash": exc.checksum, "anomaly": str(exc)}, exc.metering, exc.checksum)
         if (not accepted or exc.metering is None or exc.metering.task_id != str(self.attempt.task_id)
                 or not self.run_control or exc.control < self.run_control):
             return
         if exc.event == "task-failed":
             await self._note_provider_failure()
+        elif exc.event == "task-finished" and self.first_terminal is not None:
+            self._terminal_kind(exc.event)
         if self.terminal_event is not None and exc.final_sentence is not None:
             seen = self.sentences.get(exc.final_sentence[0])
             if seen is not None and sentence_proof(seen[0]) != exc.final_sentence:
