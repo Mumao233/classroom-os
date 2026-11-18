@@ -37,11 +37,41 @@ def _run(coro):
 
 
 @pytest.fixture
-def arm_receipts(tmp_path, monkeypatch):
+def poc_operator():
     script = Path(__file__).resolve().parents[4] / "tools/pr06a/real_poc.py"
     spec = spec_from_file_location("pr06a_operator", script)
     operator = module_from_spec(spec)
     spec.loader.exec_module(operator)
+    return operator
+
+
+@pytest.mark.parametrize("key", ["a" * 20, "sk-ws-H.synthetic.fixture_only-0123", "a" * 255 + "."],
+                         ids=["lower-bound", "dotted-workspace", "upper-bound"])
+def test_poc_credential_reads_and_clears_server_environment(poc_operator, monkeypatch, capsys, key):
+    monkeypatch.setenv("DASHSCOPE_API_KEY", key)
+    assert poc_operator._credential() == key
+    assert "DASHSCOPE_API_KEY" not in os.environ
+    assert capsys.readouterr() == ("", "")
+
+
+@pytest.mark.parametrize("key", [None, "a" * 19, "a" * 257, "a" * 20 + " ", "a" * 20 + "\n",
+                                  "a" * 20 + "全", "a" * 20 + "/"],
+                         ids=["missing", "too-short", "too-long", "space", "newline", "non-ascii", "slash"])
+def test_poc_credential_rejects_invalid_values_without_echo(poc_operator, monkeypatch, capsys, key):
+    monkeypatch.setenv("KEY", "synthetic_alternate_env_is_ignored")
+    if key is None:
+        monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
+    else:
+        monkeypatch.setenv("DASHSCOPE_API_KEY", key)
+    with pytest.raises(policy.PocStopped, match="^server_credential_missing_or_invalid$"):
+        poc_operator._credential()
+    assert "DASHSCOPE_API_KEY" not in os.environ
+    assert capsys.readouterr() == ("", "")
+
+
+@pytest.fixture
+def arm_receipts(tmp_path, monkeypatch, poc_operator):
+    operator = poc_operator
     raw = operator.RISK_REPORT.read_bytes()
     risk_file = tmp_path / "REPORT.md"
     risk_file.write_bytes(raw)

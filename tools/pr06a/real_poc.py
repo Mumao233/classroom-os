@@ -58,7 +58,7 @@ def _reviewed_head():
 
 def _credential():
     secret = os.environ.pop("DASHSCOPE_API_KEY", "")
-    if not re.fullmatch(r"[A-Za-z0-9_-]{20,256}", secret):
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{20,256}", secret):
         raise PocStopped("server_credential_missing_or_invalid")
     return secret
 
