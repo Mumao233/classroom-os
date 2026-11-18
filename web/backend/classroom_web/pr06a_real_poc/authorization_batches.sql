@@ -16,6 +16,12 @@ BEGIN
   IF EXISTS (SELECT FROM pr06a_control.batch WHERE NOT closed) THEN
     RAISE EXCEPTION 'PR06A_BATCH_MIGRATION_REQUIRES_CLOSED_BATCH';
   END IF;
+  IF EXISTS (
+    SELECT FROM pg_proc p CROSS JOIN LATERAL aclexplode(p.proacl) acl
+    WHERE p.oid='pr06a_api.revoke()'::regprocedure AND acl.grantor<>p.proowner
+  ) THEN
+    RAISE EXCEPTION 'PR06A_BATCH_MIGRATION_DELEGATED_REVOKE_ACL';
+  END IF;
 END $migration$;
 
 ALTER TABLE pr06a_control.activation
@@ -138,42 +144,44 @@ BEGIN
     closed=true,stop_code=coalesce(stop_code,'reconciled_closed') WHERE authorization_id=b.authorization_id;
 END $f$;
 
-DROP FUNCTION pr06a_control.check_budget(timestamptz,bigint);
-DROP FUNCTION pr06a_control.check_activation();
-DROP FUNCTION pr06a_api.release_reconciled();
-
-REVOKE ALL ON FUNCTION pr06a_control.check_activation(text),
-  pr06a_control.check_budget(text,timestamptz,bigint),
-  pr06a_api.revoke(text),pr06a_api.release_reconciled(text) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION pr06a_api.release_reconciled(text) TO classroom_pr06a_reconciler;
-
-DO $revoke_acl$
-DECLARE legacy_owner name; grantee record;
+DO $function_access$
+DECLARE replacement record; legacy_owner name; grantee record;
 BEGIN
-  SELECT pg_get_userbyid(proowner) INTO STRICT legacy_owner
-    FROM pg_proc WHERE oid='pr06a_api.revoke()'::regprocedure;
-
-  -- Clear any grants from current default privileges before carrying forward
-  -- the existing emergency-stop grants and SECURITY DEFINER owner.
-  FOR grantee IN
-    SELECT pg_get_userbyid(acl.grantee) AS role_name
-    FROM pg_proc p CROSS JOIN LATERAL aclexplode(p.proacl) acl
-    WHERE p.oid='pr06a_api.revoke(text)'::regprocedure AND acl.grantee NOT IN (0,p.proowner)
+  -- Clear default ACLs on every new signature and restore the original
+  -- function owners, which may differ from the migration DBA.
+  FOR replacement IN SELECT * FROM (VALUES
+    ('pr06a_control.check_activation()', 'pr06a_control.check_activation(text)'),
+    ('pr06a_control.check_budget(timestamptz,bigint)', 'pr06a_control.check_budget(text,timestamptz,bigint)'),
+    ('pr06a_api.revoke()', 'pr06a_api.revoke(text)'),
+    ('pr06a_api.release_reconciled()', 'pr06a_api.release_reconciled(text)')
+  ) signatures(old_signature,new_signature)
   LOOP
-    EXECUTE format('REVOKE ALL ON FUNCTION pr06a_api.revoke(text) FROM %I CASCADE',grantee.role_name);
+    EXECUTE format('REVOKE ALL ON FUNCTION %s FROM PUBLIC CASCADE',replacement.new_signature);
+    FOR grantee IN
+      SELECT pg_get_userbyid(acl.grantee) AS role_name
+      FROM pg_proc p CROSS JOIN LATERAL aclexplode(p.proacl) acl
+      WHERE p.oid=replacement.new_signature::regprocedure AND acl.grantee NOT IN (0,p.proowner)
+    LOOP
+      EXECUTE format('REVOKE ALL ON FUNCTION %s FROM %I CASCADE',replacement.new_signature,grantee.role_name);
+    END LOOP;
+    SELECT pg_get_userbyid(proowner) INTO STRICT legacy_owner
+      FROM pg_proc WHERE oid=replacement.old_signature::regprocedure;
+    EXECUTE format('ALTER FUNCTION %s OWNER TO %I',replacement.new_signature,legacy_owner);
   END LOOP;
 
-  EXECUTE format('ALTER FUNCTION pr06a_api.revoke(text) OWNER TO %I',legacy_owner);
   FOR grantee IN
-    SELECT pg_get_userbyid(acl.grantee) AS role_name, bool_or(acl.is_grantable) AS can_grant
+    SELECT pg_get_userbyid(acl.grantee) AS role_name, acl.is_grantable
     FROM pg_proc p CROSS JOIN LATERAL aclexplode(p.proacl) acl
     WHERE p.oid='pr06a_api.revoke()'::regprocedure AND acl.grantee NOT IN (0,p.proowner)
       AND acl.privilege_type='EXECUTE'
-    GROUP BY acl.grantee
   LOOP
     EXECUTE format('GRANT EXECUTE ON FUNCTION pr06a_api.revoke(text) TO %I%s',
-      grantee.role_name, CASE WHEN grantee.can_grant THEN ' WITH GRANT OPTION' ELSE '' END);
+      grantee.role_name, CASE WHEN grantee.is_grantable THEN ' WITH GRANT OPTION' ELSE '' END);
   END LOOP;
-END $revoke_acl$;
+END $function_access$;
 
+DROP FUNCTION pr06a_control.check_budget(timestamptz,bigint);
+DROP FUNCTION pr06a_control.check_activation();
 DROP FUNCTION pr06a_api.revoke();
+DROP FUNCTION pr06a_api.release_reconciled();
+GRANT EXECUTE ON FUNCTION pr06a_api.release_reconciled(text) TO classroom_pr06a_reconciler;

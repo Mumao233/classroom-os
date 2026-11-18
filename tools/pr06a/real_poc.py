@@ -177,16 +177,20 @@ async def _arm(args, head, fingerprint):
     async with await _db(True) as db, asyncio.timeout(5), db.transaction():
         await db.execute("SET LOCAL synchronous_commit = 'on'")
         access = await db.execute(
-            """SELECT has_schema_privilege(session_user,'pr06a_api','USAGE')
+            """WITH operational_roles AS (
+                 SELECT oid FROM pg_catalog.pg_roles WHERE rolname=%s
+                    OR (NOT rolsuper AND (pg_has_role(oid,'classroom_pr06a_executor','MEMBER')
+                                      OR pg_has_role(oid,'classroom_pr06a_reconciler','MEMBER')))
+               )
+               SELECT has_schema_privilege(session_user,'pr06a_api','USAGE')
                  AND has_function_privilege(session_user,'pr06a_api.revoke(text)','EXECUTE')
-                 AND NOT has_function_privilege(%s::name,'pr06a_api.revoke(text)','EXECUTE')
+                 AND EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname=%s)
                  AND NOT EXISTS (
-                   SELECT FROM pg_catalog.pg_roles r WHERE NOT r.rolsuper
-                     AND (pg_has_role(r.oid,'classroom_pr06a_executor','MEMBER')
-                          OR pg_has_role(r.oid,'classroom_pr06a_reconciler','MEMBER'))
-                     AND has_function_privilege(r.oid,'pr06a_api.revoke(text)','EXECUTE')
+                   SELECT FROM pg_catalog.pg_roles r
+                   WHERE has_function_privilege(r.oid,'pr06a_api.revoke(text)','EXECUTE')
+                     AND EXISTS (SELECT FROM operational_roles o WHERE pg_has_role(o.oid,r.oid,'SET'))
                  )""",
-            (args.executor_login,),
+            (args.executor_login, args.executor_login),
         )
         if await access.fetchone() != (True,):
             raise PocStopped("emergency_revoke_privileges_invalid")
