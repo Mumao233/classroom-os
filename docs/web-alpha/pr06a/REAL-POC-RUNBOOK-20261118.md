@@ -38,7 +38,7 @@ python -I -B tools/pr06a/real_poc.py --samples $pocSamples --authorization-id $a
 
 2. 在这个库撤销 PUBLIC 的 CONNECT。分别建立专用 `NOSUPERUSER` 执行和复核登录，授予本库 `CONNECT` 及对应的 `classroom_pr06a_executor` 或 `classroom_pr06a_reconciler` 角色。执行登录无底表权限，复核登录只有对账和确认释放两项函数权限。Web、worker、浏览器、本项目的其他数据库用户无权进入。
 
-   控制登录仅由 DBA 持有。首次安装使用独立控制登录时，仅为该登录授予本库 `CONNECT`、`pr06a_api` 和 `pr06a_control` 的 `USAGE`、`pr06a_control.activation` 的 `INSERT`、`pr06a_control.revocation` 的 `SELECT`（由激活触发器使用）及 `pr06a_api.revoke(text)` 的 `EXECUTE`。由实际控制登录确认这些权限生效，核对执行和复核登录及其可切换的角色均无撤销权限。
+   控制登录仅由 DBA 持有。首次安装使用独立控制登录时，仅为该登录授予本库 `CONNECT`、`pr06a_api` 和 `pr06a_control` 的 `USAGE`、`pr06a_control.activation` 的 `INSERT`、`pr06a_control.revocation` 的 `SELECT`（由激活触发器使用）及 `pr06a_api.revoke(text)` 的 `EXECUTE`。按控制连接的实际生效角色确认这些权限，紧急撤销使用同一控制角色。核对执行和复核登录及其可切换的角色均无撤销权限。
 
    以 DBA 为该库将 `log_parameter_max_length` 和 `log_parameter_max_length_on_error` 均设为 0，把 `log_error_verbosity` 设为 `terse`，在新连接中生效。保持转录和账户证明访问受控。
 3. DBA 查验北京时间当月的 `billing_control.platform_budgets`。已有预算行时复用该行，核对 ASR 池、安全余量、固定费用及累积敞口能容纳本批独立 ¥1。第二批与第一批同月时，预算核对包含第一批的原预留。仅当当月无预算行时，才用 `billing_api.open_period` 签开该月周期。检查 `billing`、`asr_streaming` 为 false，所选授权 ID 在 `pr06a_control.activation`、`pr06a_control.batch` 和 `pr06a_control.revocation` 中均无行。第二批还需核实第一批已关闭且原始预留仍在原账期。设置来宾安全连接参数。仅控制进程使用 `PR06A_CONTROL_DSN`，执行进程使用 `PR06A_EXECUTOR_DSN`，两者须使用 `host=127.0.0.1 dbname=classroom_pr06a_real_poc` 和已授权的专用登录。
@@ -57,7 +57,7 @@ BEGIN
 END $upgrade$;
 ```
 
-已有第一批的库在原专用库升级。以安装凭证确认旧覆盖层与 `adf9f79` 一致并含风险接受审计列，确认第一批已关闭，保留其原行和预留。DBA 在同一原库事务执行下列增量 SQL。迁移在锁有争用、发现开放批次或缺少透传审计函数时拒绝，旧版本或安装来源不明的库先核实。迁移后核对第一批激活、尝试、账单及预留未变化。各替换函数保留原有所有者。原所有者直接授予的 `revoke()` 执行权转给 `revoke(text)`。如原函数存在转授，迁移拒绝并回滚，由 DBA 单独核对和处理授予链。按第 2 步核对实际登录。单个授权 ID 只建一批，第二批另计 ¥1，合计本地预留最多 ¥2。
+已有第一批的库在原专用库升级。以安装凭证确认旧覆盖层与 `adf9f79` 一致并含风险接受审计列，确认第一批已关闭，保留其原行和预留。DBA 在同一原库事务执行下列增量 SQL。迁移在锁有争用、发现开放批次或缺少透传审计函数时拒绝，旧版本或安装来源不明的库先核实。迁移后核对第一批激活、尝试、账单及预留未变化。各替换函数保留原有所有者，撤销函数及两个内部校验函数也保留原所有者直接授予的执行权。如这些旧函数存在转授，迁移拒绝并回滚，由 DBA 单独核对和处理授予链。按第 2 步核对实际登录。单个授权 ID 只建一批，第二批另计 ¥1，合计本地预留最多 ¥2。
 
 ```powershell
 psql -X --dbname classroom_pr06a_real_poc --set ON_ERROR_STOP=1 --single-transaction `

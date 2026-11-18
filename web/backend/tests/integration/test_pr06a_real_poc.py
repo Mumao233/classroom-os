@@ -717,22 +717,30 @@ def test_control_login_can_arm_and_revoke(poc, arm_receipts, monkeypatch):
     args.account_ref = SECOND_ACCOUNT
     args.executor_login = connect.executor
     control = "pr06a_control_" + uuid4().hex[:16]
+    arm_only = "pr06a_arm_only_" + uuid4().hex[:16]
     legacy = connect.legacy_overlay
+    use_arm_only_role = False
 
     async def control_db(arm):
         assert arm
         url = pg.admin_url
-        return await AsyncConnection.connect(host=url.host, port=url.port, dbname=url.database,
-                                             user=control, password=SYNTHETIC_PASSWORD, autocommit=True)
+        return await AsyncConnection.connect(
+            host=url.host, port=url.port, dbname=url.database, user=control,
+            password=SYNTHETIC_PASSWORD, autocommit=True,
+            options=f"-c role={arm_only}" if use_arm_only_role else "",
+        )
 
     monkeypatch.setattr(operator, "_db", control_db)
     with pg.admin.begin() as db:
         db.exec_driver_sql(f'CREATE ROLE "{control}" LOGIN PASSWORD \'{SYNTHETIC_PASSWORD}\'')
+        db.exec_driver_sql(f'CREATE ROLE "{arm_only}"')
         db.exec_driver_sql(f'REVOKE CONNECT ON DATABASE "{pg.admin_url.database}" FROM PUBLIC')
         db.exec_driver_sql(f'GRANT CONNECT ON DATABASE "{pg.admin_url.database}" TO "{control}"')
-        db.exec_driver_sql(f'GRANT USAGE ON SCHEMA pr06a_api,pr06a_control TO "{control}"')
-        db.exec_driver_sql(f'GRANT INSERT ON pr06a_control.activation TO "{control}"')
-        db.exec_driver_sql(f'GRANT SELECT ON pr06a_control.revocation TO "{control}"')
+        db.exec_driver_sql(f'GRANT USAGE ON SCHEMA pr06a_api,pr06a_control TO "{control}", "{arm_only}"')
+        db.exec_driver_sql(f'GRANT INSERT ON pr06a_control.activation TO "{control}", "{arm_only}"')
+        db.exec_driver_sql(f'GRANT SELECT ON pr06a_control.revocation TO "{control}", "{arm_only}"')
+        db.exec_driver_sql(f'GRANT "{arm_only}" TO "{control}"')
+        db.exec_driver_sql(f'GRANT classroom_pr06a_executor TO "{control}" WITH ADMIN TRUE, INHERIT FALSE, SET FALSE')
         signature = "" if legacy else "text"
         db.exec_driver_sql(f'GRANT EXECUTE ON FUNCTION pr06a_api.revoke({signature}) TO "{control}"')
     try:
@@ -759,7 +767,17 @@ def test_control_login_can_arm_and_revoke(poc, arm_receipts, monkeypatch):
         with pg.admin.begin() as db:
             db.exec_driver_sql(f'REVOKE "{control}" FROM "{connect.executor}"')
             assert db.scalar(sa.text("SELECT count(*) FROM pr06a_control.activation")) == 1
+            assert db.execute(sa.text("""SELECT
+                pg_has_role(cast(:login AS name),'classroom_pr06a_executor','MEMBER'),
+                pg_has_role(cast(:login AS name),'classroom_pr06a_executor','USAGE'),
+                pg_has_role(cast(:login AS name),'classroom_pr06a_executor','SET')"""),
+                              {"login": control}).one() == (True, False, False)
 
+        use_arm_only_role = True
+        with pytest.raises(policy.PocStopped, match="^emergency_revoke_privileges_invalid$"):
+            _run(operator._arm(args, REVIEWED, FINGERPRINT))
+
+        use_arm_only_role = False
         _run(operator._arm(args, REVIEWED, FINGERPRINT))
 
         async def revoke_as_control():
@@ -775,8 +793,8 @@ def test_control_login_can_arm_and_revoke(poc, arm_receipts, monkeypatch):
     finally:
         with pg.admin.begin() as db:
             db.exec_driver_sql(f'GRANT CONNECT ON DATABASE "{pg.admin_url.database}" TO PUBLIC')
-            db.exec_driver_sql(f'DROP OWNED BY "{control}"')
-            db.exec_driver_sql(f'DROP ROLE "{control}"')
+            db.exec_driver_sql(f'DROP OWNED BY "{control}", "{arm_only}"')
+            db.exec_driver_sql(f'DROP ROLE "{control}", "{arm_only}"')
 
 
 @pytest.mark.parametrize("poc", ["legacy"], indirect=True)
@@ -793,7 +811,7 @@ def test_batch_migration_refuses_delegated_emergency_grants(poc):
         db.exec_driver_sql(f'SET LOCAL ROLE "{administrator}"')
         db.exec_driver_sql(f'GRANT EXECUTE ON FUNCTION pr06a_api.revoke() TO "{control}"')
         db.exec_driver_sql("RESET ROLE")
-        with pytest.raises(sa.exc.DBAPIError, match="PR06A_BATCH_MIGRATION_DELEGATED_REVOKE_ACL"), db.begin_nested():
+        with pytest.raises(sa.exc.DBAPIError, match="PR06A_BATCH_MIGRATION_DELEGATED_FUNCTION_ACL"), db.begin_nested():
             db.exec_driver_sql(batch_migration(), execution_options={"no_parameters": True})
         assert db.scalar(sa.text("SELECT to_regprocedure('pr06a_api.revoke(text)') IS NULL"))
         assert db.scalar(sa.text("SELECT has_function_privilege(:role,'pr06a_api.revoke()','EXECUTE')"),
@@ -810,6 +828,7 @@ def test_batch_migration_refuses_delegated_emergency_grants(poc):
 def test_batch_migration_preserves_installation_owner_and_restricts_release(poc):
     pg, samples, connect = poc
     owner = "pr06a_installer_" + uuid4().hex[:16]
+    helper_owner = "pr06a_helper_owner_" + uuid4().hex[:16]
     functions = (
         "pr06a_api.open_batch(uuid,jsonb,text,jsonb)",
         "pr06a_control.check_activation()",
@@ -820,15 +839,19 @@ def test_batch_migration_preserves_installation_owner_and_restricts_release(poc)
         # The legacy SECURITY DEFINER reads an executor session's backend_start
         # to fence the batch. A non-superuser installer needs stats visibility.
         db.exec_driver_sql(f'GRANT pg_read_all_stats TO "{owner}"')
+        db.exec_driver_sql(f'CREATE ROLE "{helper_owner}"')
         db.exec_driver_sql(f'GRANT USAGE,CREATE ON SCHEMA pr06a_api,pr06a_control TO "{owner}"')
+        db.exec_driver_sql(f'GRANT USAGE,CREATE ON SCHEMA pr06a_control TO "{helper_owner}"')
         db.exec_driver_sql(f'GRANT ALL ON ALL TABLES IN SCHEMA pr06a_control TO "{owner}"')
         db.exec_driver_sql(f'GRANT EXECUTE ON FUNCTION pr06a_control.alert_budget(timestamptz) TO "{owner}"')
         db.exec_driver_sql(f'GRANT USAGE ON SCHEMA billing_api,billing_control TO "{owner}"')
         db.exec_driver_sql(f'GRANT INSERT ON billing_control.alerts TO "{owner}"')
         db.exec_driver_sql(f'GRANT EXECUTE ON FUNCTION billing_api.lock_budget(timestamptz),'
                            f'billing_api.lock_switches() TO "{owner}"')
-        for signature in functions:
-            db.exec_driver_sql(f'ALTER FUNCTION {signature} OWNER TO "{owner}"')
+        db.exec_driver_sql(f'ALTER FUNCTION {functions[0]} OWNER TO "{owner}"')
+        for signature in functions[1:]:
+            db.exec_driver_sql(f'ALTER FUNCTION {signature} OWNER TO "{helper_owner}"')
+            db.exec_driver_sql(f'GRANT EXECUTE ON FUNCTION {signature} TO "{owner}"')
         db.exec_driver_sql("ALTER DEFAULT PRIVILEGES IN SCHEMA pr06a_api "
                            "GRANT EXECUTE ON FUNCTIONS TO classroom_pr06a_executor")
         db.exec_driver_sql(batch_migration(), execution_options={"no_parameters": True})
@@ -854,8 +877,8 @@ def test_batch_migration_preserves_installation_owner_and_restricts_release(poc)
                 "pr06a_control.check_budget(text,timestamptz,bigint)",
             ):
                 db.exec_driver_sql(f'ALTER FUNCTION {signature} OWNER TO CURRENT_USER')
-            db.exec_driver_sql(f'DROP OWNED BY "{owner}"')
-            db.exec_driver_sql(f'DROP ROLE "{owner}"')
+            db.exec_driver_sql(f'DROP OWNED BY "{owner}", "{helper_owner}"')
+            db.exec_driver_sql(f'DROP ROLE "{owner}", "{helper_owner}"')
 
 
 @pytest.mark.parametrize("held_advisory", [False, True], ids=["batch-read", "dispatch-advisory"])

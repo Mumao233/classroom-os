@@ -177,18 +177,25 @@ async def _arm(args, head, fingerprint):
     async with await _db(True) as db, asyncio.timeout(5), db.transaction():
         await db.execute("SET LOCAL synchronous_commit = 'on'")
         access = await db.execute(
-            """WITH operational_roles AS (
-                 SELECT oid FROM pg_catalog.pg_roles WHERE rolname=%s
-                    OR (NOT rolsuper AND (pg_has_role(oid,'classroom_pr06a_executor','MEMBER')
-                                      OR pg_has_role(oid,'classroom_pr06a_reconciler','MEMBER')))
+            """WITH roles AS (
+                 SELECT oid,rolname,rolsuper,
+                   pg_has_role(oid,'classroom_pr06a_executor','USAGE')
+                     OR pg_has_role(oid,'classroom_pr06a_reconciler','USAGE') AS can_operate,
+                   has_function_privilege(oid,'pr06a_api.revoke(text)','EXECUTE') AS can_revoke
+                 FROM pg_catalog.pg_roles
+               ), operational_roles AS (
+                 SELECT p.oid FROM roles p WHERE p.rolname=%s
+                   OR (NOT p.rolsuper AND EXISTS (
+                     SELECT FROM roles r WHERE r.can_operate AND pg_has_role(p.oid,r.oid,'SET')
+                   ))
                )
-               SELECT has_schema_privilege(session_user,'pr06a_api','USAGE')
-                 AND has_function_privilege(session_user,'pr06a_api.revoke(text)','EXECUTE')
-                 AND EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname=%s)
+               SELECT has_schema_privilege(current_user,'pr06a_api','USAGE')
+                 AND has_function_privilege(current_user,'pr06a_api.revoke(text)','EXECUTE')
+                 AND EXISTS (SELECT FROM roles WHERE rolname=%s)
                  AND NOT EXISTS (
-                   SELECT FROM pg_catalog.pg_roles r
-                   WHERE has_function_privilege(r.oid,'pr06a_api.revoke(text)','EXECUTE')
-                     AND EXISTS (SELECT FROM operational_roles o WHERE pg_has_role(o.oid,r.oid,'SET'))
+                   SELECT FROM roles r WHERE r.can_revoke AND EXISTS (
+                     SELECT FROM operational_roles o WHERE pg_has_role(o.oid,r.oid,'SET')
+                   )
                  )""",
             (args.executor_login, args.executor_login),
         )
