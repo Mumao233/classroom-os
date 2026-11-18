@@ -2,12 +2,16 @@
 import asyncio
 from contextlib import asynccontextmanager
 from dataclasses import asdict
+from importlib.util import module_from_spec, spec_from_file_location
+from io import BytesIO
 import json
 import os
 from pathlib import Path
 import subprocess
 import sys
+from types import SimpleNamespace
 from uuid import uuid4
+from zipfile import ZipFile
 
 from psycopg import AsyncConnection
 import pytest
@@ -30,6 +34,140 @@ PACKAGE = Path(policy.__file__).parent
 def _run(coro):
     with asyncio.Runner(loop_factory=asyncio.SelectorEventLoop) as runner:
         return runner.run(coro)
+
+
+@pytest.fixture
+def arm_receipts(tmp_path, monkeypatch):
+    script = Path(__file__).resolve().parents[4] / "tools/pr06a/real_poc.py"
+    spec = spec_from_file_location("pr06a_operator", script)
+    operator = module_from_spec(spec)
+    spec.loader.exec_module(operator)
+    raw = operator.RISK_REPORT.read_bytes()
+    risk_file = tmp_path / "REPORT.md"
+    risk_file.write_bytes(raw)
+    monkeypatch.setattr(operator, "RISK_REPORT", risk_file)
+    findings_block = (raw.decode().split("<!-- BEGIN ASTRA FINDINGS -->\n")[1]
+                      .split("\n<!-- END ASTRA FINDINGS -->")[0])
+    args = SimpleNamespace(review=str(tmp_path / "status.json"), review_sha256=None,
+                           risk_acceptance_sha256=operator.RISK_REPORT_SHA256,
+                           vmware_receipt=str(tmp_path / "digest.json"), vmware_sha256=None,
+                           approval_ref="synthetic approval", account_ref=ACCOUNT, executor_login="synthetic_executor")
+    markdown = (f"VERDICT: PASS {REVIEWED}\n\nRISK-ACCEPTANCE: {args.risk_acceptance_sha256}\n\n"
+                f"Full review comments:\n\n{findings_block}\n")
+    findings = [
+        (1, "Carry the inferred output floor across cumulative receipts", "pr06a_real_poc/runner.py", 104),
+        (1, "Preserve a usage body's inferred floor when a mirror disagrees", "asr_dashscope/wire.py", 264),
+        (2, "Normalize redundant totals in the metering replay key", "asr_dashscope/wire.py", 344),
+        (2, "Preserve heartbeat timing when duplicate identity fields agree", "asr_dashscope/wire.py", 290),
+    ]
+    status = dict(head=REVIEWED, state="review_completed", scope="base", scope_value=operator.RISK_REVIEW_BASE,
+                  untracked_files_excluded_from_scope=False, gates={str(i): {"ok": True} for i in range(10)},
+                  findings_total=4, findings_by_priority=[0, 2, 2, 0], findings=[
+                      dict(priority=p, title=t, file=f"web/backend/classroom_web/{f}", line=n, missing_fields=[])
+                      for p, t, f, n in findings])
+
+    def write_review(text):
+        data = text.encode()
+        (tmp_path / "review.md").write_bytes(data)
+        status["review_sha256"] = policy.digest(data)
+        data = json.dumps(status).encode()
+        Path(args.review).write_bytes(data)
+        args.review_sha256 = policy.digest(data)
+
+    archive = BytesIO()
+    runner_path = "tools/pr06a/run_vmware_validation.py"
+    with ZipFile(archive, "w") as snapshot:
+        snapshot.writestr(runner_path, b"synthetic frozen runner")
+    runner_hash = policy.digest(b"synthetic frozen runner")
+    source_hash = policy.digest(archive.getvalue())
+    manifest = dict(base_sha=REVIEWED, full=True, files_sha256={runner_path: runner_hash},
+                    runner_sha256=runner_hash, source_zip_sha256=source_hash)
+    manifest_file = tmp_path / "host-SOURCE.json"
+    manifest_file.write_bytes(json.dumps(manifest).encode())
+    digest = dict(commit=REVIEWED, mode="full", result="passed", guest_exit_code=0, transport_succeeded=True,
+                  same_source_manifest=True, source_reread_matches=True, evidence_sha256_matches_guest=True,
+                  manifest_sha256=policy.digest(manifest_file.read_bytes()), source_archive_sha256=source_hash,
+                  executed_runner_sha256=runner_hash)
+    Path(args.vmware_receipt).write_bytes(json.dumps(digest).encode())
+    args.vmware_sha256 = policy.digest(Path(args.vmware_receipt).read_bytes())
+
+    def git(*arguments):
+        if arguments == ("archive", "--format=zip", REVIEWED):
+            return archive.getvalue()
+        assert arguments == ("merge-base", "--is-ancestor", operator.RISK_REVIEW_BASE, REVIEWED)
+        return b""
+
+    monkeypatch.setattr(operator, "_git", git)
+    write_review(markdown)
+    return operator, args, status, markdown, write_review
+
+
+@pytest.mark.parametrize("mutation,reason", [
+    ("extra-markdown-finding", "risk_acceptance_findings_mismatch"),
+    ("extra-status-finding", "risk_acceptance_findings_mismatch"),
+    ("changed-finding-body", "risk_acceptance_findings_mismatch"),
+    ("wrong-head", "review_receipt_not_accepted"),
+    ("changed-report", "risk_acceptance_digest_mismatch"),
+    ("forged-report-digest", "risk_acceptance_digest_mismatch"),
+    ("no-attestation", "explicit_risk_acceptance_attestation_required"),
+    ("blocked-gate", "explicit_review_verdict_required"),
+])
+def test_risk_acceptance_rejects_before_db(arm_receipts, monkeypatch, mutation, reason):
+    operator, args, status, markdown, write_review = arm_receipts
+    if mutation == "extra-markdown-finding":
+        markdown += "\n- [P2] Synthetic new finding — tools/pr06a/real_poc.py:1\n"
+    elif mutation == "extra-status-finding":
+        status["findings"].append(dict(priority=2, title="Synthetic unregistered finding"))
+    elif mutation == "changed-finding-body":
+        markdown = markdown.replace("¥1.05", "¥1.04")
+    elif mutation == "wrong-head":
+        status["head"] = operator.RISK_REVIEW_BASE
+    elif mutation in ("changed-report", "forged-report-digest"):
+        operator.RISK_REPORT.write_bytes(operator.RISK_REPORT.read_bytes() + b"unexpected revision\n")
+        if mutation == "forged-report-digest":
+            new_digest = policy.digest(operator.RISK_REPORT.read_bytes())
+            markdown = markdown.replace(args.risk_acceptance_sha256, new_digest)
+            args.risk_acceptance_sha256 = new_digest
+    elif mutation == "no-attestation":
+        markdown = markdown.replace("RISK-ACCEPTANCE:", "OTHER:")
+    elif mutation == "blocked-gate":
+        markdown = markdown.replace("VERDICT: PASS", "VERDICT: BLOCK")
+    write_review(markdown)
+
+    async def no_database(_arm):
+        pytest.fail("rejected evidence reached the activation database")
+
+    monkeypatch.setattr(operator, "_db", no_database)
+    with pytest.raises(policy.PocStopped, match=f"^{reason}$"):
+        _run(operator._arm(args, REVIEWED, FINGERPRINT))
+
+
+@pytest.mark.parametrize("use_exception", [False, True], ids=["ordinary-pass", "accepted-risks"])
+def test_arm_audit_records_only_the_validated_risk_digest(poc, arm_receipts, monkeypatch, capsys, use_exception):
+    pg, _, connect = poc
+    operator, args, status, _, write_review = arm_receipts
+    if not use_exception:
+        args.risk_acceptance_sha256 = None
+        status.update(scope_value=operator.BASELINE, findings_by_priority=[0, 0, 1, 0])
+        write_review(f"VERDICT: PASS {REVIEWED}\n")
+    args.executor_login = connect.executor
+    with pg.admin.begin() as db:
+        db.exec_driver_sql("DELETE FROM pr06a_control.activation")
+
+    async def control_db(arm):
+        assert arm
+        url = pg.admin_url
+        return await AsyncConnection.connect(host=url.host, port=url.port, dbname=url.database,
+                                             user=url.username, password=url.password, autocommit=True)
+
+    monkeypatch.setattr(operator, "_db", control_db)
+    _run(operator._arm(args, REVIEWED, FINGERPRINT))
+    with pg.admin.connect() as db:
+        row = db.execute(sa.text("SELECT reviewed_sha, review_receipt, vmware_receipt, risk_acceptance_sha256 "
+                                 "FROM pr06a_control.activation")).one()
+        assert row == (REVIEWED, args.review_sha256, args.vmware_sha256, args.risk_acceptance_sha256)
+        assert db.scalar(sa.text("SELECT count(*) FROM pr06a_control.attempts")) == 0
+    assert json.loads(capsys.readouterr().out).get("risk_acceptance_sha256") == args.risk_acceptance_sha256
 
 
 @pytest.fixture

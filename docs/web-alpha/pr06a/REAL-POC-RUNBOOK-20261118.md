@@ -37,9 +37,17 @@ python -I -B tools/pr06a/real_poc.py --samples $pocSamples
 2. 在这个库撤销 PUBLIC 的 CONNECT，分别建立专用 `NOSUPERUSER` 登录并授予 `classroom_pr06a_executor`、`classroom_pr06a_reconciler`。Web、worker、浏览器、本项目的其他数据库用户无权进入。控制角色仅由 DBA 持有。执行登录无底表权限，复核登录只有对账和确认释放两项函数权限。以 DBA 为该库将 `log_parameter_max_length` 和 `log_parameter_max_length_on_error` 均设为 0，把 `log_error_verbosity` 设为 `terse`，在新连接中生效。保持转录和账户证明访问受控。
 3. DBA 按既有 `billing_api.open_period` 签开北京时间当月的隔离 ASR 预算周期，保留预算池、安全余量及固定费用。检查 `billing`、`asr_streaming` 为 false，`pr06a_control.activation` 和 `pr06a_control.batch` 均为空。设置来宾安全连接参数。仅控制进程使用 `PR06A_CONTROL_DSN`，执行进程使用 `PR06A_EXECUTOR_DSN`，两者须使用 `host=127.0.0.1 dbname=classroom_pr06a_real_poc` 和已授权的专用登录。
 
+若专用库已安装旧版覆盖层，DBA 先在原库事务执行以下增列，再确认字段类型和约束。原激活行的风险摘要为空。保留既有授权、激活、撤销和批次记录。
+
+```sql
+ALTER TABLE pr06a_control.activation
+  ADD COLUMN IF NOT EXISTS risk_acceptance_sha256 text
+  CHECK (risk_acceptance_sha256 ~ '^[a-f0-9]{64}$');
+```
+
 ## 明确启动授权后
 
-1. 操作员在控制会话核对用户本次「开始真实调用」记录、Astra `status.json` 和 VMware `digest.json` 的 SHA-256。独审 `review.md` 须与 `status.json` 同目录并包含经审核的候选 SHA 通过回执、与 VMware 回执放在同一目录的 `host-SOURCE.json`、干净候选 HEAD、账号证明和费用基线。以安全输入在来宾当前进程设置 `DASHSCOPE_API_KEY`。例如 `[System.Net.NetworkCredential]::new('', (Read-Host -AsSecureString)).Password` 的结果直接赋给环境变量，勿打印。运行一次预授权登记，按提示输入用户已给出的启动词。此步骤写入 PG 并绑定候选、账号证明、Key 指纹和专用执行登录。
+1. 操作员在控制会话核对用户本次「开始真实调用」记录、受信 Astra `status.json` 和 VMware `digest.json` 的 SHA-256。独审 `review.md` 须与 `status.json` 同目录。VMware 回执与 `host-SOURCE.json` 同目录。两份回执均绑定干净候选 HEAD。核对账号证明和费用基线。以安全输入在来宾当前进程设置 `DASHSCOPE_API_KEY`。例如 `[System.Net.NetworkCredential]::new('', (Read-Host -AsSecureString)).Password` 的结果直接赋给环境变量，勿打印。运行一次预授权登记，按提示输入用户已给出的启动词。此步骤写入 PG 并绑定候选、账号证明、Key 指纹和专用执行登录。
 
    ```powershell
    python -I -B tools/pr06a/real_poc.py --samples $pocSamples --arm `
@@ -47,6 +55,8 @@ python -I -B tools/pr06a/real_poc.py --samples $pocSamples
      --review $astraStatusPath --review-sha256 $astraStatusSha256 `
      --vmware-receipt $vmwareDigestPath --vmware-sha256 $vmwareDigestSha256 --executor-login $pocExecutorLogin
    ```
+
+   上述命令适用于整包 Astra `PASS` 且零 P0/P1。使用已登记风险接受路径时，向同一命令增加 `--risk-acceptance-sha256 $riskAcceptanceSha256`。取 [风险接受记录](risk-acceptance/REPORT.md) 的固定 SHA-256 `c8f6eb43c3ec7d041bb8a63a847d70f7175e45e446528b89fc68ec607078451c`。Astra 必须对当前候选基于 `05559351` 的门禁改动给出 `PASS`，并提交同摘要的 `RISK-ACCEPTANCE` 确认行和原样列出的四项已接受发现。旧的整包 `BLOCK` 回执作为历史证据。新发现、候选 SHA 不符、报告摘要或发现内容不符立即拒绝。通过时在 `pr06a_control.activation.risk_acceptance_sha256` 与脱敏启动回执中保留风险记录摘要。
 
 2. 关闭控制会话，在专用执行账户的来宾会话向当前进程安全注入同一个 Key。使用本次已核对的账号证明引用。运行一次，按提示输入启动词。执行后清除该会话中的环境变量和执行 DSN。任何失败都按下节停止。保留原数据库与审批记录，即使进程在 COMMIT 回执之前退出。
 

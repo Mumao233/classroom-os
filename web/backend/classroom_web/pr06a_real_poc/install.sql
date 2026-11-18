@@ -29,6 +29,7 @@ CREATE TABLE pr06a_control.activation (
   baseline text NOT NULL CHECK (baseline='6ecd364d20bbd06a25fa4654570e454a04807e07'),
   reviewed_sha text NOT NULL CHECK (reviewed_sha ~ '^[a-f0-9]{40}$' AND reviewed_sha<>baseline),
   review_receipt text NOT NULL CHECK (review_receipt ~ '^[a-f0-9]{64}$'),
+  risk_acceptance_sha256 text CHECK (risk_acceptance_sha256 ~ '^[a-f0-9]{64}$'),
   vmware_receipt text NOT NULL CHECK (vmware_receipt ~ '^[a-f0-9]{64}$'),
   approval_ref text NOT NULL CHECK (length(approval_ref) BETWEEN 1 AND 200),
   account_ref text NOT NULL CHECK (length(account_ref) BETWEEN 1 AND 200),

@@ -18,6 +18,9 @@ from classroom_web.pr06a_real_poc.policy import (AUTHORIZATION, AUTH_SHA256, BAS
                                                     PocStopped, digest, load_samples)
 
 AUTH_FILE = ROOT / "docs" / "web-alpha" / "pr06a" / f"{AUTHORIZATION}.md"
+RISK_REPORT = AUTH_FILE.parent / "risk-acceptance" / "REPORT.md"
+RISK_REPORT_SHA256 = "c8f6eb43c3ec7d041bb8a63a847d70f7175e45e446528b89fc68ec607078451c"
+RISK_REVIEW_BASE = "05559351bd709a07f7eee88fb357b749a6f49288"
 DATABASE = "classroom_pr06a_real_poc"
 
 
@@ -86,20 +89,53 @@ def _receipt(path, expected, failure):
     return json.loads(data)
 
 
-def _verify_receipts(args, head):
+def _verify_risk_acceptance(review, lines, expected_sha):
+    report = RISK_REPORT.read_bytes()
+    if expected_sha != RISK_REPORT_SHA256 or digest(report) != RISK_REPORT_SHA256:
+        raise PocStopped("risk_acceptance_digest_mismatch")
+    declarations = [line.strip() for line in lines if line.strip().upper().startswith("RISK-ACCEPTANCE:")]
+    if declarations != [f"RISK-ACCEPTANCE: {expected_sha}"]:
+        raise PocStopped("explicit_risk_acceptance_attestation_required")
+
+    accepted = report.decode("utf-8").split("<!-- BEGIN ASTRA FINDINGS -->\n", 1)[1]
+    accepted = accepted.split("\n<!-- END ASTRA FINDINGS -->", 1)[0]
+    sections = "\n".join(lines).split("\nFull review comments:\n")
+    if len(sections) != 2 or sections[1].strip() != accepted or re.search(r"\[P[0-3]\]", sections[0]):
+        raise PocStopped("risk_acceptance_findings_mismatch")
+    findings = [dict(priority=int(priority), title=title, file=file, line=int(line), missing_fields=[])
+                for priority, title, file, line in re.findall(
+                    r"^- \[P([0-3])\] (.+?) — ([^:\n]+):(\d+)(?:-\d+)?$", accepted, re.MULTILINE)]
+    if (review.get("findings_total") != len(findings) or review.get("findings") != findings
+            or review.get("findings_by_priority") != [0, 2, 2, 0]):
+        raise PocStopped("risk_acceptance_findings_mismatch")
+    return expected_sha
+
+
+def _verify_review(args, head):
+    risk_sha = args.risk_acceptance_sha256
+    scope_base = BASELINE if risk_sha is None else RISK_REVIEW_BASE
     review = _receipt(args.review, args.review_sha256, "review_receipt_digest_mismatch")
     if (review.get("head") != head or review.get("state") != "review_completed"
-            or review.get("scope") != "base" or review.get("scope_value") != BASELINE
+            or review.get("scope") != "base" or review.get("scope_value") != scope_base
             or review.get("untracked_files_excluded_from_scope") is not False
-            or review.get("findings_by_priority", [1])[:2] != [0, 0]
             or len(review.get("gates", {})) != 10
             or not all(gate.get("ok") is True for gate in review["gates"].values())):
         raise PocStopped("review_receipt_not_accepted")
     verdict = Path(args.review).with_name("review.md").read_bytes()
-    verdict_lines = [line.strip() for line in verdict.decode("utf-8-sig").splitlines()
-                     if line.strip().upper().startswith("VERDICT:")]
+    lines = verdict.decode("utf-8-sig").splitlines()
+    verdict_lines = [line.strip() for line in lines if line.strip().upper().startswith("VERDICT:")]
     if (digest(verdict) != review.get("review_sha256") or verdict_lines != [f"VERDICT: PASS {head}"]):
         raise PocStopped("explicit_review_verdict_required")
+    if risk_sha is not None:
+        _git("merge-base", "--is-ancestor", RISK_REVIEW_BASE, head)
+        return _verify_risk_acceptance(review, lines, risk_sha)
+    if review.get("findings_by_priority", [1])[:2] != [0, 0]:
+        raise PocStopped("review_receipt_not_accepted")
+    return None
+
+
+def _verify_receipts(args, head):
+    risk_sha = _verify_review(args, head)
     vmware = _receipt(args.vmware_receipt, args.vmware_sha256, "vmware_receipt_digest_mismatch")
     if (vmware.get("commit") != head or vmware.get("mode") != "full"
             or vmware.get("result") not in ("passed", "passed_with_skips")
@@ -116,22 +152,26 @@ def _verify_receipts(args, head):
             or vmware.get("executed_runner_sha256") != manifest["runner_sha256"]
             or vmware.get("source_archive_sha256") != manifest.get("source_zip_sha256")):
         raise PocStopped("vmware_git_tree_mismatch")
+    return risk_sha
 
 
 async def _arm(args, head, fingerprint):
-    _verify_receipts(args, head)
+    risk_sha = _verify_receipts(args, head)
     async with await _db(True) as db, asyncio.timeout(5), db.transaction():
         await db.execute("SET LOCAL synchronous_commit = 'on'")
         await db.execute(
             """INSERT INTO pr06a_control.activation(authorization_id,source_sha256,baseline,reviewed_sha,
                review_receipt,vmware_receipt,approval_ref,account_ref,workspace,key_id,region,model,endpoint,
-               credential_sha256,executor_login,enabled)
-               VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,true)""",
+               credential_sha256,executor_login,risk_acceptance_sha256,enabled)
+               VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,true)""",
             (AUTHORIZATION, AUTH_SHA256, BASELINE, head, args.review_sha256, args.vmware_sha256,
              args.approval_ref, args.account_ref,
-             WORKSPACE, KEY_ID, REGION, MODEL, ENDPOINT, fingerprint, args.executor_login),
+             WORKSPACE, KEY_ID, REGION, MODEL, ENDPOINT, fingerprint, args.executor_login, risk_sha),
         )
-    _emit({"authorization": AUTHORIZATION, "candidate": head, "status": "armed"})
+    receipt = {"authorization": AUTHORIZATION, "candidate": head, "status": "armed"}
+    if risk_sha is not None:
+        receipt["risk_acceptance_sha256"] = risk_sha
+    _emit(receipt)
 
 
 async def _execute(args, head, key, fingerprint, samples):
@@ -160,6 +200,7 @@ def main():
     parser.add_argument("--executor-login")
     parser.add_argument("--review")
     parser.add_argument("--review-sha256")
+    parser.add_argument("--risk-acceptance-sha256")
     parser.add_argument("--vmware-receipt")
     parser.add_argument("--vmware-sha256")
     try:
