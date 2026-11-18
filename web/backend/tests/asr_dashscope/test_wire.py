@@ -85,7 +85,9 @@ def test_known_mirrors_agree_even_with_extra_fields_and_usage_is_counted_once():
 def test_heartbeat_only_duration_is_not_zero_tokens_or_a_transcript():
     body = sentence(sentence_id=0, text="", heartbeat=True)
     payload = {**result(body, request_id=REQUEST), "usage": {"duration": 2}}
-    assert parse("result-generated", payload) == WireEvent("result-generated", REQUEST, heartbeat=(0, None))
+    assert parse("result-generated", payload) == WireEvent(
+        "result-generated", REQUEST, heartbeat=(0, None), heartbeat_duration=2,
+    )
 
 
 def test_moving_heartbeat_is_distinct_from_a_replay_with_same_cumulative_usage():
@@ -98,6 +100,33 @@ def test_moving_heartbeat_is_distinct_from_a_replay_with_same_cumulative_usage()
     assert first.sentence is later.sentence is None
     assert first.usage == later.usage == TokenUsage(5, 0)
     assert later.heartbeat == (25, None)
+
+
+def test_static_heartbeat_timing_distinguishes_advanced_duration_from_exact_replay():
+    body = sentence(sentence_id=0, text="", heartbeat=True)
+    counts = {"input_tokens": 5, "output_tokens": 0}
+    first = parse("result-generated", {**result(body), "usage": {**counts, "duration": 1}})
+    repeat = parse("result-generated", {**result(body), "usage": {**counts, "duration": 1}})
+    later = parse("result-generated", {**result(body), "usage": {**counts, "duration": 3}})
+    assert first == repeat and first != later
+    assert first.sentence is later.sentence is None
+    assert first.heartbeat == later.heartbeat == (0, None)
+    assert first.usage == later.usage == TokenUsage(5, 0)
+    assert (first.heartbeat_duration, later.heartbeat_duration) == (1, 3)
+
+
+@pytest.mark.parametrize("mirror_duration", [2, -1, True])
+def test_heartbeat_duration_requires_valid_consistent_mirrors(mirror_duration):
+    body = sentence(sentence_id=0, text="", heartbeat=True)
+    canonical = {"duration": 1, "input_tokens": 5, "output_tokens": 2}
+    result_output = result(body, usage={**canonical, "duration": mirror_duration})
+    assert parse("result-generated", {**result_output, "usage": canonical}) == WireEvent(
+        "result-generated", heartbeat=(0, None), usage_issue=True,
+    )
+    result_output["output"]["usage"]["duration"] = 1
+    assert parse("result-generated", {**result_output, "usage": canonical}) == WireEvent(
+        "result-generated", usage=TokenUsage(5, 2), heartbeat=(0, None), heartbeat_duration=1,
+    )
 
 
 @pytest.mark.parametrize("usage,expected", [

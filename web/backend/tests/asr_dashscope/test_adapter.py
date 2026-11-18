@@ -88,7 +88,7 @@ class ScriptedPeer(FakeTransport):
 
 async def open_adapter(cfg, peer, **kwargs):
     adapter = DashScopeAdapter(peer, permit=permit_for(cfg), **kwargs)
-    peer.feed_json(wire(cfg, 'task-started'))
+    peer.feed_json(wire(cfg, 'task-started'), after_control='run-task')
     assert await adapter.start(cfg) == {'stream_id': cfg['stream_id'], 'state': 'streaming'}
     return adapter
 
@@ -156,7 +156,7 @@ async def test_real_mode_rejected_before_connect_even_with_permit(monkeypatch):
     monkeypatch.setenv('DASHSCOPE_API_KEY', 'fixture-bearer')
     cfg = config()
     peer = ScriptedPeer()
-    peer.feed_json(wire(cfg, 'task-started'))
+    peer.feed_json(wire(cfg, 'task-started'), after_control='run-task')
     adapter = DashScopeAdapter(peer, permit=permit_for(cfg))
     async with adapter:
         with pytest.raises(ProtocolError, match='real ASR is disabled'):
@@ -210,7 +210,7 @@ async def test_permit_cannot_create_two_requests_and_unused_close_is_final():
     cfg = config()
     permit = permit_for(cfg)
     first, second = ScriptedPeer(), ScriptedPeer()
-    first.feed_json(wire(cfg, 'task-started'))
+    first.feed_json(wire(cfg, 'task-started'), after_control='run-task')
     async with DashScopeAdapter(first, permit=permit) as first_adapter:
         await first_adapter.start(cfg)
         second_adapter = DashScopeAdapter(second, permit=permit)
@@ -246,7 +246,7 @@ async def test_bad_pcm_metadata_never_reaches_transport(mutation):
 async def test_samples_are_contiguous_and_the_permit_caps_aggregate_duration():
     cfg = config()
     peer = ScriptedPeer()
-    peer.feed_json(wire(cfg, 'task-started'))
+    peer.feed_json(wire(cfg, 'task-started'), after_control='run-task')
     async with DashScopeAdapter(peer, permit=permit_for(cfg, duration=10)) as adapter:
         await adapter.start(cfg)
         await adapter.send(pcm(500, 80))
@@ -267,6 +267,7 @@ async def test_samples_are_contiguous_and_the_permit_caps_aggregate_duration():
     ('ack_timeout', 'initialize_timeout', 'unknown'),
     ('bad_json', 'provider_protocol_error', 'unknown'),
     ('foreign', 'provider_protocol_error', 'unknown'),
+    ('prequeued_ack', 'provider_protocol_error', 'unknown'),
     ('early_result', 'provider_protocol_error', 'unknown'),
     ('early_failure', 'task_failed', 'failed'),
     ('run-write', 'initialize_failed', 'unknown'),
@@ -293,13 +294,15 @@ async def test_start_failures_are_bounded_and_errors_are_redacted(failure, reaso
     adapter = DashScopeAdapter(peer, permit=permit_for(cfg),
                                deadlines=Deadlines(connect=.04, initialize=.04))
     if failure == 'bad_json':
-        peer.feed_text('{"sensitive":"Bearer fixture-secret"')
+        peer.feed_text('{"sensitive":"Bearer fixture-secret"', after_control='run-task')
     elif failure == 'foreign':
-        peer.feed_json(wire(config(), 'task-started'))
+        peer.feed_json(wire(config(), 'task-started'), after_control='run-task')
+    elif failure == 'prequeued_ack':
+        peer.feed_json(wire(cfg, 'task-started'))
     elif failure == 'early_result':
-        peer.feed_json(result(cfg))
+        peer.feed_json(result(cfg), after_control='run-task')
     elif failure == 'early_failure':
-        peer.feed_json(wire(cfg, 'task-failed'))
+        peer.feed_json(wire(cfg, 'task-failed'), after_control='run-task')
     with pytest.raises(ProtocolError) as caught:
         await adapter.start(cfg)
     terminal, = just(adapter.events(), 'asr.terminal')
@@ -698,7 +701,7 @@ async def test_terminal_waits_for_confirmed_finish_dispatch(dispatch):
 
         async def receive_text(self):
             raw = await super().receive_text()
-            if '"task-finished"' in raw:
+            if '"task-finished"' in raw.text:
                 self.read_terminal.set()
             return raw
 
@@ -799,8 +802,9 @@ async def test_finish_deadline_is_checked_before_a_ready_terminal_can_succeed():
     assert_clean(peer)
 
 
+@pytest.mark.parametrize('wake_writer_first', [False, True])
 @offline
-async def test_finish_ack_before_handoff_cannot_be_confirmed_by_a_later_write():
+async def test_finish_ack_before_handoff_cannot_be_confirmed_by_a_later_write(wake_writer_first):
     class PreHandoffPeer(ScriptedPeer):
         entered = asyncio.Event()
         may_dispatch = asyncio.Event()
@@ -818,11 +822,16 @@ async def test_finish_ack_before_handoff_cannot_be_confirmed_by_a_later_write():
     peer.feed_json(result(cfg, end=5, final=True, usage=usage(5, 1)))
     finish = asyncio.create_task(adapter.finish())
     await peer.entered.wait()
+    if wake_writer_first:
+        # The frame enters the inbound queue here, before the now runnable
+        # writer can hand off finish-task, although the writer will run first.
+        peer.may_dispatch.set()
     peer.feed_json(wire(cfg, 'task-finished', usage=usage(7, 1)))
-    await wait_state(adapter, 'unknown')
-    peer.may_dispatch.set()
-    assert (await finish)['state'] == 'unknown'
-    assert len(peer.sent_json) == 1
+    if not wake_writer_first:
+        await wait_state(adapter, 'unknown')
+        peer.may_dispatch.set()
+    assert (await finish)['state'] == 'unknown', 'pre-handoff reply settled stream'
+    assert len(peer.sent_json) == (2 if wake_writer_first else 1)
     events = adapter.events()
     terminal, = just(events, 'asr.terminal')
     assert terminal['reason'] == 'finish_ack_before_dispatch' and terminal['billing_pending']
@@ -849,7 +858,7 @@ async def test_results_from_inflight_audio_are_tentative_until_confirmed(write_c
 
         async def receive_text(self):
             raw = await super().receive_text()
-            if '"result-generated"' in raw:
+            if '"result-generated"' in raw.text:
                 self.received_result.set()
             return raw
 
@@ -927,15 +936,19 @@ async def test_result_preserves_independent_transcript_and_meter_evidence(fault,
     assert_clean(peer)
 
 
+@pytest.mark.parametrize('metadata', ['time', 'duration'])
 @offline
-async def test_heartbeat_replay_uses_timing_and_later_rollback_stops_stream():
+async def test_heartbeat_replay_uses_timing_and_later_rollback_stops_stream(metadata):
     cfg = config()
     peer = ScriptedPeer()
     adapter = await open_adapter(cfg, peer)
 
     def heartbeat(ms, tokens):
-        observation = result(cfg, number=0, begin=ms, text='', usage=usage(tokens, 1))
+        observation = result(cfg, number=0, begin=ms if metadata == 'time' else 0,
+                             text='', usage=usage(tokens, 1))
         observation['payload']['output']['sentence']['heartbeat'] = True
+        if metadata == 'duration':
+            observation['payload']['usage']['duration'] = ms
         return observation
 
     first = heartbeat(10, 5)
@@ -980,4 +993,95 @@ async def test_conflicting_terminal_usage_mirror_keeps_recognition_and_billing_p
     evidence = adapter.events()
     assert just(evidence, 'asr.usage_anomaly')[0]['reason'] == 'invalid_terminal_usage'
     assert not any(row['final'] for row in just(evidence, 'asr.usage'))
+    assert_clean(peer)
+
+
+@offline
+async def test_disconnect_settles_the_runnable_audio_writer_before_classifying_final():
+    class DisconnectPeer(ScriptedPeer):
+        sending = asyncio.Event()
+        release = asyncio.Event()
+        received_result = asyncio.Event()
+
+        async def send_binary(self, frame):
+            self.sending.set()
+            await self.release.wait()
+            await super().send_binary(frame)
+
+        async def receive_text(self):
+            raw = await super().receive_text()
+            if '"result-generated"' in raw.text:
+                self.received_result.set()
+            return raw
+
+    cfg = config()
+    peer = DisconnectPeer()
+    adapter = await open_adapter(cfg, peer)
+    writer = asyncio.create_task(adapter.send(pcm()))
+    await peer.sending.wait()
+    peer.feed_json(result(cfg, end=5, final=True))
+    await peer.received_result.wait()
+    assert not just(adapter.events(), 'asr.final_candidate')
+    peer.feed_disconnect()
+    peer.release.set()
+    assert (await writer)['state'] == 'unknown'
+    assert (await adapter.finish())['state'] == 'unknown'
+    assert adapter.sent_ranges == ((0, 160),)
+    remaining = adapter.events()
+    assert not just(remaining, 'asr.transcript_unconfirmed')
+    assert [event['type'] for event in remaining] == ['asr.final_candidate', 'asr.terminal']
+    assert_clean(peer)
+
+
+@pytest.mark.parametrize('mode', ['independent_final', 'open_partial'])
+@offline
+async def test_each_transcript_uses_its_confirmed_audio_coverage(mode):
+    class SecondFramePeer(ScriptedPeer):
+        sending_second = asyncio.Event()
+        release_second = asyncio.Event()
+        read_initial = asyncio.Event()
+        read_later = asyncio.Event()
+
+        async def send_binary(self, frame):
+            if self.sent_binary:
+                self.sending_second.set()
+                await self.release_second.wait()
+                raise RuntimeError('second write failed')
+            await super().send_binary(frame)
+
+        async def receive_text(self):
+            raw = await super().receive_text()
+            if '"initial"' in raw.text:
+                self.read_initial.set()
+            if '"later"' in raw.text:
+                self.read_later.set()
+            return raw
+
+    cfg = config()
+    peer = SecondFramePeer()
+    adapter = await open_adapter(cfg, peer)
+    await adapter.send(pcm())
+    peer.feed_json(result(cfg, end=3, text='initial'))
+    await peer.read_initial.wait()
+    initial, = just(adapter.events(), 'asr.partial')
+    writer = asyncio.create_task(adapter.send(pcm(160)))
+    await peer.sending_second.wait()
+    if mode == 'independent_final':
+        peer.feed_json(result(cfg, number=2, begin=10, text='unconfirmed-other-segment'))
+        peer.feed_json(result(cfg, end=10, final=True, text='later'))
+    else:
+        peer.feed_json(result(cfg, text='later'))
+    await peer.read_later.wait()
+    visible = adapter.events()
+    if mode == 'independent_final':
+        final, = just(visible, 'asr.final_candidate')
+        assert final['segment_id'] == initial['segment_id'] and final['revision'] == 2
+    else:
+        assert not just(visible, 'asr.partial')
+    peer.release_second.set()
+    with pytest.raises(ProtocolError, match='send_failed'):
+        await writer
+    tentative, = just(adapter.events(), 'asr.transcript_unconfirmed')
+    assert tentative['text'] == ('unconfirmed-other-segment' if mode == 'independent_final' else 'later')
+    assert adapter.sent_ranges == ((0, 160),)
     assert_clean(peer)

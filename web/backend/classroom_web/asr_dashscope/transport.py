@@ -2,6 +2,7 @@
 import asyncio
 from collections.abc import Callable
 from copy import deepcopy
+from dataclasses import dataclass, field
 import json
 from threading import Lock
 from typing import Protocol
@@ -15,13 +16,20 @@ class Disconnected(ConnectionError):
     """No more frames can be read from the connection."""
 
 
+@dataclass(frozen=True)
+class InboundText:
+    text: str = field(repr=False)
+    control_sequence: int
+
+
 class Transport(Protocol):
     """One owner, one reader and at most one writer on the same event loop.
 
     The caller supplies a configured transport. Its I/O must cooperate with
     cancellation. For a control write with on_dispatched, invoke the callback
-    synchronously when the frame has been handed to the underlying connection,
-    before yielding to a reader that could observe its acknowledgement.
+    synchronously with its increasing control sequence when that frame has been
+    handed to the underlying connection. Every inbound text frame carries the
+    latest such sequence at ingress, before enqueueing or handing to the reader.
     A successful return confirms completion of the local write. After a partial
     connect or a failed close, abort must immediately release the connection.
     """
@@ -30,9 +38,9 @@ class Transport(Protocol):
 
     def claim(self) -> None: ...
     async def connect(self) -> None: ...
-    async def send_json(self, message: dict, *, on_dispatched: Callable[[], None] | None = None) -> None: ...
+    async def send_json(self, message: dict, *, on_dispatched: Callable[[int], None] | None = None) -> None: ...
     async def send_binary(self, frame: bytes) -> None: ...
-    async def receive_text(self) -> str: ...
+    async def receive_text(self) -> InboundText: ...
     async def close(self) -> None: ...
     def abort(self) -> None: ...
 
@@ -52,6 +60,8 @@ class FakeTransport:
         self.closed = False
         self.sent = []
         self._inbound = asyncio.Queue()
+        self._control_sequence = 0
+        self._scheduled_text = {}
 
     @property
     def sent_json(self):
@@ -61,11 +71,14 @@ class FakeTransport:
     def sent_binary(self):
         return [value for kind, value in self.sent if kind == 'binary']
 
-    def feed_json(self, value):
-        self.feed_text(json.dumps(value, ensure_ascii=False))
+    def feed_json(self, value, *, after_control=None):
+        self.feed_text(json.dumps(value, ensure_ascii=False), after_control=after_control)
 
-    def feed_text(self, value):
-        self._inbound.put_nowait(value)
+    def feed_text(self, value, *, after_control=None):
+        if after_control is not None:
+            self._scheduled_text.setdefault(after_control, []).append(value)
+            return
+        self._inbound.put_nowait(InboundText(value, self._control_sequence))
 
     def feed_disconnect(self):
         self._inbound.put_nowait(Disconnected('connection closed'))
@@ -92,8 +105,11 @@ class FakeTransport:
     async def send_json(self, message, *, on_dispatched=None):
         self._require_connection()
         self.sent.append(('json', deepcopy(message)))
+        self._control_sequence += 1
         if on_dispatched is not None:
-            on_dispatched()
+            on_dispatched(self._control_sequence)
+        for text in self._scheduled_text.pop(message['header']['action'], ()):
+            self.feed_text(text)
 
     async def send_binary(self, frame):
         self._require_connection()
@@ -110,6 +126,7 @@ class FakeTransport:
     def _release(self):
         self.connected = False
         self.closed = True
+        self._scheduled_text.clear()
         while not self._inbound.empty():
             self._inbound.get_nowait()
         self.feed_disconnect()

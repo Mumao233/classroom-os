@@ -224,6 +224,12 @@ def main():
         'test_adapter.py::test_ready_reader_cannot_change_a_closed_stream_or_append_after_terminal'
         '[result-generated]', expected_terminal_failure)
 
+    negative_control('dashscope-mutant-ingress-order', 'adapter.py',
+        'if self._finish_handoff_sequence is None or ingress_sequence != self._finish_handoff_sequence:',
+        'if self._finish_handoff_sequence is None:',
+        'test_adapter.py::test_finish_ack_before_handoff_cannot_be_confirmed_by_a_later_write[True]',
+        'AssertionError: pre-handoff reply settled stream')
+
     binding = dict(head_sha=manifest['base_sha'], patch_sha256=manifest['source_zip_sha256'])
     for stage in ('candidate', 'trusted'):
         nonce = uuid.uuid4().hex

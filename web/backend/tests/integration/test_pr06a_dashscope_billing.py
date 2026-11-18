@@ -67,9 +67,9 @@ class _UsageTransport(FakeTransport):
         self.request_id = f'fixture-{uuid4()}'
         self.terminal_usage = TOKENS if complete else {'duration': 400}
 
-    def event(self, kind, **payload):
+    def event(self, kind, *, after_control=None, **payload):
         self.feed_json({'header': {'event': kind, 'task_id': self.identity.provider_task_id},
-                        'payload': payload})
+                        'payload': payload}, after_control=after_control)
 
     async def send_json(self, message, *, on_dispatched=None):
         await super().send_json(message, on_dispatched=on_dispatched)
@@ -91,7 +91,7 @@ async def _usage_session(row, permit_row, transport):
               'sentence': {'sentence_id': 1, 'begin_time': 0, 'end_time': 500,
                            'sentence_end': True, 'text': 'synthetic ASR'}}
     async with DashScopeAdapter(transport, permit=permit) as adapter:
-        transport.event('task-started')
+        transport.event('task-started', after_control='run-task')
         await adapter.start(config)
         await adapter.send(frame)
         transport.event('result-generated', output=output, usage=TOKENS)

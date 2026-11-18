@@ -1,11 +1,10 @@
 """One locally bounded DashScope request, with no production composition."""
 import asyncio
-from collections import deque
 from dataclasses import dataclass, fields
 
-from ..asr_sim.simulator import ProtocolError, identity, uid, validate_frame
+from ..asr_sim.simulator import ProtocolError, identity, integer, uid, validate_frame
 from .billing import StreamIdentity, SyntheticRequestPermit
-from .transport import AuthenticationRejected, Transport
+from .transport import AuthenticationRejected, InboundText, Transport
 from .wire import TokenUsage, UsageError, WireEvent, finish_task, parse_event, run_task
 
 
@@ -58,7 +57,8 @@ class DashScopeAdapter:
         self._terminal_event = asyncio.Event()
         self._reader = self._writer = self._finisher = self._closer = None
         self._run_attempted = self._finish_attempted = False
-        self._finish_handed_off = self._finish_write_complete = False
+        self._run_handoff_sequence = self._finish_handoff_sequence = None
+        self._finish_write_complete = False
         self._pending_terminal: WireEvent | None = None
         self._attempted_ranges = []
         self._sent_ranges = []
@@ -67,7 +67,7 @@ class DashScopeAdapter:
         self._latest_id = 0
         self._sentences = {}
         self._seen_partials = {}
-        self._deferred_transcripts = deque()
+        self._deferred_transcripts = []
         self._seen_results: set[WireEvent] = set()
         self._usage = None
         self._usage_final = False
@@ -270,7 +270,15 @@ class DashScopeAdapter:
     async def _send_run(self):
         message = run_task(self._identity.provider_task_id)
         self._run_attempted = True
-        await self._transport.send_json(message)
+        await self._transport.send_json(message, on_dispatched=self._mark_run_handoff)
+        if self._run_handoff_sequence is None:
+            raise ProtocolError('transport omitted run handoff')
+
+    def _mark_run_handoff(self, control_sequence):
+        if self._state == 'starting':
+            if self._run_handoff_sequence is not None:
+                raise ProtocolError('duplicate run handoff')
+            self._run_handoff_sequence = integer(control_sequence, 1)
 
     async def _send_frame(self, pcm, start, end):
         # A transport exception cannot prove that the bytes did not leave.
@@ -284,12 +292,14 @@ class DashScopeAdapter:
         message = finish_task(self._identity.provider_task_id)
         self._finish_attempted = True
         await self._transport.send_json(message, on_dispatched=self._mark_finish_handoff)
-        if not self._finish_handed_off:
+        if self._finish_handoff_sequence is None:
             raise ProtocolError('transport omitted finish handoff')
 
-    def _mark_finish_handoff(self):
+    def _mark_finish_handoff(self, control_sequence):
         if self._state == 'draining':
-            self._finish_handed_off = True
+            if self._finish_handoff_sequence is not None:
+                raise ProtocolError('duplicate finish handoff')
+            self._finish_handoff_sequence = integer(control_sequence, self._run_handoff_sequence + 1)
 
     async def _write(self, method, *args, seconds=None, expires_at=None):
         limit = self._timeout(self._deadlines.write if seconds is None else seconds,
@@ -320,7 +330,10 @@ class DashScopeAdapter:
         self._wire_count += 1
         if self._wire_count > self.MAX_WIRE_EVENTS:
             raise ProtocolError('wire event limit reached')
-        return parse_event(raw, self._identity.provider_task_id)
+        if type(raw) is not InboundText:
+            raise ProtocolError('inbound transport sequencing is required')
+        control_sequence = integer(raw.control_sequence)
+        return (parse_event(raw.text, self._identity.provider_task_id), control_sequence)
 
     async def _read_events(self):
         try:
@@ -341,8 +354,12 @@ class DashScopeAdapter:
     def _accept(self, event):
         if self._state in _TERMINAL:
             return
-        if self._state == 'starting' and event.kind not in ('task-started', 'task-failed'):
-            raise ProtocolError('provider event before task-started')
+        event, ingress_sequence = event
+        if self._state == 'starting':
+            if ingress_sequence != self._run_handoff_sequence:
+                raise ProtocolError('startup response preceded run-task handoff')
+            if event.kind not in ('task-started', 'task-failed'):
+                raise ProtocolError('provider event before task-started')
         if event.kind == 'result-generated' and event in self._seen_results:
             return
         if event.request_id is not None:
@@ -363,7 +380,7 @@ class DashScopeAdapter:
                 raise ProtocolError('provider finished before finish-task')
             self._provider_terminal = event.kind
             self._pending_terminal = event
-            if not self._finish_handed_off:
+            if self._finish_handoff_sequence is None or ingress_sequence != self._finish_handoff_sequence:
                 self._stop_unconfirmed('finish_ack_before_dispatch')
                 return
             self._confirm_pending_terminal()
@@ -464,14 +481,28 @@ class DashScopeAdapter:
                                                      self._identity.provider_task_id, number),
                                 sequence=number - 1, revision=revision + 1, text=sentence.text,
                                 start_sample=start, end_sample=end, timestamp_source='provider_segment')
-        self._deferred_transcripts.append((max(start + 1, end or 0), candidate))
+        # A growing partial can reflect the newest attempted frame even
+        # when the provider gives no end time for it.
+        required_sample = max(start + 1, end) if end is not None else self._attempted_ranges[-1][1]
+        self._deferred_transcripts.append((required_sample, candidate))
         if self._sent_ranges:
             self._publish_confirmed_transcripts(self._sent_ranges[-1][1])
 
-    def _publish_confirmed_transcripts(self, end_sample):
-        while self._deferred_transcripts and self._deferred_transcripts[0][0] <= end_sample:
-            _, event = self._deferred_transcripts.popleft()
-            self._event_batch.append(event)
+    def _publish_confirmed_transcripts(self, end_sample, *, finalizing=False):
+        remaining = []
+        blocked_segments = set()
+        for required_sample, event in self._deferred_transcripts:
+            segment = event['data']['segment_id']
+            if required_sample <= end_sample and segment not in blocked_segments:
+                self._event_batch.append(event)
+            elif finalizing:
+                self._event_batch.append({'type': 'asr.transcript_unconfirmed', 'data': {
+                    **event['data'], 'candidate_type': event['type'],
+                }})
+            else:
+                remaining.append((required_sample, event))
+                blocked_segments.add(segment)
+        self._deferred_transcripts = remaining
 
     def _event(self, kind, **data):
         return {'type': kind, 'data': {
@@ -494,22 +525,15 @@ class DashScopeAdapter:
         if self._pending_terminal is not None:
             self._usage_anomaly('unconfirmed_finish_dispatch', self._pending_terminal.usage, final=True)
             self._pending_terminal = None
-        for _, event in self._deferred_transcripts:
-            self._event_batch.append({'type': 'asr.transcript_unconfirmed', 'data': {
-                **event['data'], 'candidate_type': event['type'],
-            }})
-        self._deferred_transcripts.clear()
         self._state = state
-        self._emit('asr.terminal', state=state, reason=reason,
-                   provider_terminal=self._provider_terminal, billing_pending=self.billing_pending)
         self._terminal_event.set()
-        self._closer = asyncio.create_task(self._close_transport())
+        self._closer = asyncio.create_task(self._close_transport(reason))
 
     async def _wait_closed(self):
         if self._closer is not None:
             await asyncio.shield(self._closer)
 
-    async def _close_transport(self):
+    async def _close_transport(self, reason):
         pending = [task for task in (self._reader, self._writer) if task is not None and not task.done()]
         for task in pending:
             task.cancel()
@@ -529,3 +553,9 @@ class DashScopeAdapter:
                     self._transport.abort()
                 except Exception:
                     self._close_error = 'abort_failed'
+            # A runnable write may still have completed between _stop and
+            # cancellation. Release evidence using the settled local frontier.
+            confirmed_end = self._sent_ranges[-1][1] if self._sent_ranges else 0
+            self._publish_confirmed_transcripts(confirmed_end, finalizing=True)
+            self._emit('asr.terminal', state=self._state, reason=reason,
+                       provider_terminal=self._provider_terminal, billing_pending=self.billing_pending)

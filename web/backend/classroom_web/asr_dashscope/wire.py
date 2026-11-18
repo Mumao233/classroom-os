@@ -41,6 +41,7 @@ class WireEvent:
     usage_issue: bool = False
     sentence_issue: bool = False
     heartbeat: tuple[int, int | None] | None = None
+    heartbeat_duration: int | None = None
 
 
 def run_task(provider_task_id: str) -> dict:
@@ -132,7 +133,7 @@ def _request_id(*outputs: dict) -> str | None:
     return request_id
 
 
-def _usage(*containers: dict) -> TokenUsage | None:
+def _usage(*containers: dict) -> tuple[TokenUsage | None, int | None]:
     # Each advertised token observation must be complete. A duration-only
     # heartbeat has no 3.1 token evidence and cannot reset the high water mark.
     observed = {}
@@ -158,9 +159,10 @@ def _usage(*containers: dict) -> TokenUsage | None:
         raise
     except ProtocolError:
         raise UsageError("invalid DashScope usage") from None
+    tokens = None
     if "input_tokens" in observed:
-        return TokenUsage(observed["input_tokens"], observed["output_tokens"])
-    return None
+        tokens = TokenUsage(observed["input_tokens"], observed["output_tokens"])
+    return tokens, observed.get("duration")
 
 
 def parse_event(raw: str, provider_task_id: str) -> WireEvent:
@@ -200,7 +202,7 @@ def parse_event(raw: str, provider_task_id: str) -> WireEvent:
 
     usage_issue = False
     try:
-        usage = _usage(payload, output, mirror)
+        usage, duration = _usage(payload, output, mirror)
         if kind == "task-finished":
             if ("output" in payload and not isinstance(output_value, dict)
                     or not isinstance(mirror_value, dict)):
@@ -208,7 +210,7 @@ def parse_event(raw: str, provider_task_id: str) -> WireEvent:
             if usage is not None and "input_tokens" not in payload.get("usage", {}):
                 raise UsageError("missing canonical DashScope terminal usage")
     except UsageError:
-        usage, usage_issue = None, True
+        usage, duration, usage_issue = None, None, True
 
     sentence, heartbeat, sentence_issue = None, None, False
     if kind == "result-generated":
@@ -225,5 +227,8 @@ def parse_event(raw: str, provider_task_id: str) -> WireEvent:
             else:
                 sentence = candidate
 
+    # Duration can distinguish otherwise identical heartbeat observations. It
+    # supplies neither 3.1 token evidence nor a chargeable audio measurement.
     return WireEvent(kind, request_id=request_id, sentence=sentence, usage=usage,
-                     usage_issue=usage_issue, sentence_issue=sentence_issue, heartbeat=heartbeat)
+                     usage_issue=usage_issue, sentence_issue=sentence_issue, heartbeat=heartbeat,
+                     heartbeat_duration=duration if heartbeat is not None else None)
