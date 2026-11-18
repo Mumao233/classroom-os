@@ -47,6 +47,7 @@ class _Session:
         self.request = None
         self.usage = None
         self.meter_high = (None, None, None)
+        self.meter_total_floor = 0
         self.meter_packets = set()
         self.meter_regressed = False
         self.received_count = self.received_bytes = 0
@@ -100,6 +101,13 @@ class _Session:
             elif self.first_terminal and any(value is not None and value != previous
                                              for value, previous in zip(values, self.meter_high)):
                 issue = "post_terminal_conflict"
+            # A fresh cumulative output reading bounds output at the earlier total observation.
+            output_ceiling = evidence.output_ceiling
+            if output_ceiling is not None and (self.meter_high[1] or 0) <= output_ceiling < self.meter_total_floor:
+                inferred_input = self.meter_total_floor - output_ceiling
+                if values[0] is not None and values[0] < inferred_input:
+                    issue = issue or "usage_regression"
+                values = (max(values[0] or 0, inferred_input), values[1], values[2])
         return values, issue
 
     async def _retain(self, packet, evidence, observation_hash):
@@ -124,6 +132,7 @@ class _Session:
                 self.meter_packets.add(observation_hash)
             self.meter_high = tuple(max((v for v in pair if v is not None), default=None)
                                     for pair in zip(values, self.meter_high))
+            self.meter_total_floor = max(self.meter_total_floor, evidence.total_floor or 0)
         return accepted
 
     def recognition_state(self):

@@ -184,6 +184,9 @@ class MeteringEvidence:
     metering_conflict: bool = False
     event_class: str | None = None
     conflict_facts: tuple = ()
+    total_floor: int | None = None
+    output_ceiling: int | None = None
+    heartbeat: tuple[int, int | None, int | None] | None = None
 
 
 class _ObjectPairs(list):
@@ -221,20 +224,22 @@ def _meter_totals(containers):
     alternatives = {}
     facts = set()
     conflict = False
-    for body in containers:
+    overflow = set()
+    for path, body in containers:
         if not isinstance(body, _ObjectPairs):
-            facts.add((("usage", (), True),))
+            facts.add((path, (("usage", (), True),)))
             conflict = True
             continue
         current = {}
         body_facts = []
-        unambiguous = set()
         for meter in ("input_tokens", "output_tokens", "total_tokens"):
             values = _values(body, meter)
             if not values:
                 continue
-            counts = {min(int(value), 2**53 - 1) for value in values
-                      if type(value) in (int, _NoncanonicalMeter) and value >= 0}
+            numeric = {int(value) for value in values if type(value) in (int, _NoncanonicalMeter) and value >= 0}
+            if any(value >= 2**53 for value in numeric):
+                overflow.add(meter)
+            counts = {min(value, 2**53 - 1) for value in numeric}
             invalid = any(type(v) is not int or not 0 <= v <= 2**53 - 1 for v in values)
             body_facts.append((meter, tuple(sorted(counts)), invalid))
             alternatives.setdefault(meter, set()).update(counts)
@@ -243,31 +248,24 @@ def _meter_totals(containers):
                 continue
             count = min(counts)
             current[meter] = count
-            if len(counts) == 1 and all(type(v) in (int, _NoncanonicalMeter) and 0 <= v < 2**53 for v in values):
-                unambiguous.add(meter)
             if meter in high and high[meter] != count:
                 conflict = True
             high[meter] = max(high.get(meter, 0), count)
         if body_facts:
-            facts.add(tuple(body_facts))
+            facts.add((path, tuple(body_facts)))
         if "total_tokens" in current:
             floor = current.get("input_tokens", 0) + current.get("output_tokens", 0)
             conflict |= current["total_tokens"] < floor
             if "input_tokens" in current and "output_tokens" in current:
                 conflict |= current["total_tokens"] != floor
-            elif "total_tokens" in unambiguous and floor <= current["total_tokens"]:
-                known = "input_tokens" if "input_tokens" in unambiguous else "output_tokens"
-                missing = "output_tokens" if known == "input_tokens" else "input_tokens"
-                if known in unambiguous and missing not in current and not _values(body, missing):
-                    inferred = current["total_tokens"] - current[known]
-                    if missing in high and high[missing] != inferred:
-                        conflict = True
-                    high[missing] = max(high.get(missing, 0), inferred)
-    if len(alternatives.get("total_tokens", ())) == 1:
+    total_floor = min(alternatives.get("total_tokens", ()), default=None)
+    ceilings = {meter: max(alternatives[meter]) for meter in ("input_tokens", "output_tokens")
+                if alternatives.get(meter) and meter not in overflow}
+    if total_floor is not None:
         for known, missing in (("input_tokens", "output_tokens"), ("output_tokens", "input_tokens")):
-            if (missing not in high and len(alternatives.get(known, ())) == 1
-                    and high[known] <= high["total_tokens"]):
-                high[missing] = high["total_tokens"] - high[known]
+            if missing not in high and known in ceilings and ceilings[known] <= total_floor:
+                # The missing meter must account for at least this much under every numeric alternative.
+                high[missing] = total_floor - ceilings[known]
     floor = high.get("input_tokens", 0) + high.get("output_tokens", 0)
     both = "input_tokens" in high and "output_tokens" in high
     if "total_tokens" in high:
@@ -277,7 +275,32 @@ def _meter_totals(containers):
     split = None
     if "input_tokens" in high or "output_tokens" in high:
         split = RiskTokens(high.get("input_tokens"), high.get("output_tokens"))
-    return split, high.get("total_tokens"), conflict, tuple(sorted(facts)) if conflict else ()
+    return (split, high.get("total_tokens"), conflict, tuple(sorted(facts)) if conflict else (),
+            total_floor, ceilings.get("output_tokens"))
+
+
+def _metering_heartbeat(outputs, mirrors, usage_bodies):
+    # Only take identity and timing from otherwise attributable heartbeat evidence.
+    sentences = [sentence for out in outputs for sentence in _values(out, "sentence")]
+    if not sentences:
+        return None
+    sentences.extend(sentence for mirror in mirrors for sentence in _values(mirror, "sentence"))
+    timings = set()
+    for sentence in sentences:
+        fields = [_values(sentence, field) for field in
+                  ("sentence_id", "heartbeat", "sentence_end", "begin_time", "end_time")]
+        if any(len(values) != 1 for values in fields):
+            return None
+        identity, heartbeat, final, begin, end = (values[0] for values in fields)
+        if integer(identity) != 0 or heartbeat is not True or final is not False:
+            return None
+        begin = integer(begin)
+        timings.add((begin, integer(end, minimum=begin) if end is not None else None))
+    if len(timings) != 1:
+        return None
+    duration = {value for _, body in usage_bodies for value in _values(body, "duration")
+                if type(value) is int and 0 <= value < 2**53}
+    return (*timings.pop(), next(iter(duration)) if len(duration) == 1 else None)
 
 
 def metering_evidence(raw: str) -> MeteringEvidence | None:
@@ -289,7 +312,8 @@ def metering_evidence(raw: str) -> MeteringEvidence | None:
                          parse_float=_bounded_meter_decimal, parse_int=_bounded_meter_int)
         headers = _values(obj, "header")
         tasks = {uid(task) for header in headers for task in _values(header, "task_id")}
-        kinds = {value for header in headers for value in _values(header, "event") if isinstance(value, str)}
+        events = [value for header in headers for value in _values(header, "event")]
+        kinds = {value for value in events if isinstance(value, str)}
         event_class = None
         if kinds:
             event_class = sha256(json.dumps(sorted(kinds), ensure_ascii=True).encode("ascii")).hexdigest()
@@ -306,10 +330,20 @@ def metering_evidence(raw: str) -> MeteringEvidence | None:
             return MeteringEvidence(task, None, None, None, attribution_conflict=True)
         if len(ids) > 1:
             return MeteringEvidence(task, None, None, None, attribution_conflict=True)
-        usage, total, conflict, facts = _meter_totals(
-            body for container in (*payloads, *outputs, *mirrors) for body in _values(container, "usage"))
+        sources = (("payload.usage", payloads), ("payload.output.usage", outputs),
+                   ("payload.output.output.usage", mirrors))
+        usage_bodies = [(path, body) for path, containers in sources
+                        for container in containers for body in _values(container, "usage")]
+        usage, total, conflict, facts, total_floor, output_ceiling = _meter_totals(usage_bodies)
+        heartbeat = None
+        if events and all(event == "result-generated" for event in events):
+            try:
+                heartbeat = _metering_heartbeat(outputs, mirrors, usage_bodies)
+            except ProtocolError:
+                pass
         return MeteringEvidence(task, next(iter(ids), None), usage, total, metering_conflict=conflict,
-                                event_class=event_class, conflict_facts=facts)
+                                event_class=event_class, conflict_facts=facts, total_floor=total_floor,
+                                output_ceiling=output_ceiling, heartbeat=heartbeat)
     except (ValueError, RecursionError):
         return None
 
@@ -317,10 +351,12 @@ def metering_evidence(raw: str) -> MeteringEvidence | None:
 def observation_fingerprint(raw: str, evidence: MeteringEvidence | None = None) -> str:
     evidence = evidence or metering_evidence(raw)
     if evidence is not None:
-        try:
-            event = asdict(parse_event(raw, evidence.task_id))
-        except ProtocolError:
-            event = None
+        event = None
+        if evidence.heartbeat is None:
+            try:
+                event = asdict(parse_event(raw, evidence.task_id))
+            except ProtocolError:
+                pass
         raw = json.dumps({"event": event, "metering": asdict(evidence)},
                          sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     return sha256(raw.encode("utf-8")).hexdigest()

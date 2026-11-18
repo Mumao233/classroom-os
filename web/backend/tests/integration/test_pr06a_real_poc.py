@@ -137,11 +137,32 @@ class Peer(FakeTransport):
                 self.event("task-started", usage={"total_tokens": 5})
             elif self.mode == "start-regression":
                 self.event("task-started", usage={"input_tokens": 100, "output_tokens": 1})
+            elif self.mode == "start-cumulative":
+                self.event("task-started", usage={"total_tokens": 180000})
+                self.event("task-started", usage={"output_tokens": 0})
+            elif self.mode == "start-disputed":
+                self.event("task-started", usage={"total_tokens": 180000}, output={
+                    "usage": {"output_tokens": 0}, "output": {"usage": {"output_tokens": 1}}})
             elif self.mode != "silent":
                 self.event("task-started")
         else:
-            usage = {} if self.mode == "missing" else {"usage": {"input_tokens": 200000 if self.mode == "limit" else 5,
-                                                                  "output_tokens": 1}}
+            if self.mode == "terminal-meter-source":
+                for canonical, mirror in ((100, 80), (80, 100), (100, 80)):
+                    self.event("task-finished", usage={"input_tokens": canonical, "output_tokens": 0},
+                               output={"usage": {"input_tokens": mirror, "output_tokens": 0}})
+                return
+            if self.mode == "malformed-heartbeat-meter":
+                for timestamp, tokens in ((100, 5), (200, 10), (300, 5), (300, 5)):
+                    payload = {"header": {"event": "result-generated", "task_id": self.task},
+                               "payload": {"usage": {"input_tokens": tokens, "output_tokens": 1},
+                                           "output": {"sentence": {"sentence_id": 0, "heartbeat": True,
+                                                                   "begin_time": timestamp, "end_time": None,
+                                                                   "sentence_end": False, "text": ""}}}}
+                    self.feed_text('{"ignored":0,"ignored":1,' + json.dumps(payload)[1:])
+                self.event("task-finished", usage={"input_tokens": 10, "output_tokens": 1})
+                return
+            usage = ({} if self.mode in ("missing", "start-cumulative", "start-disputed") else
+                     {"usage": {"input_tokens": 200000 if self.mode == "limit" else 5, "output_tokens": 1}})
             self.event("task-finished", **usage)
             if self.mode == "terminal-cap":
                 self.event("task-finished", **usage)
@@ -211,8 +232,12 @@ class Peer(FakeTransport):
                                                  ("regression", "usage_regression", 1),
                                                  ("start-regression", "usage_regression", 1),
                                                  ("partial-regression", "usage_regression", 1),
+                                                 ("start-cumulative", "ledger_rejected_or_commit_unknown", 1),
+                                                 ("start-disputed", "usage_unresolved", 1),
                                                  ("mirrors", "usage_unresolved", 1),
                                                  ("terminal-conflict", "post_terminal_conflict", 1),
+                                                 ("terminal-meter-source", "usage_unresolved", 1),
+                                                 ("malformed-heartbeat-meter", "protocol_invalid", 1),
                                                  ("terminal-invalid", "protocol_invalid", 1),
                                                  ("terminal-cap", "inbound_evidence_limit", 1),
                                                  ("early-terminal", "terminal_before_finish", 1),
@@ -249,19 +274,27 @@ def test_fenced_batch_against_postgres(poc, monkeypatch, mode, expected, count):
         assert receipts[0].state == "unknown"
     if mode == "pre-run":
         assert not peers[0].sent
-    if mode == "partial-regression":
+    if mode in ("partial-regression", "start-cumulative", "start-disputed"):
         assert not peers[0].sent_binary
     with pg.admin.connect() as db:
         batch = db.execute(sa.text("SELECT * FROM pr06a_control.batch")).mappings().one()
         exposure = db.scalar(sa.text("SELECT billing_api.lock_budget(:cycle)"), dict(cycle=batch["period_start"]))
         expected_exposure = {"limit": 1_200_005, "regression": 1_200_005,
                              "mirrors": 1_200_011, "terminal-conflict": 1_200_005,
+                             "start-cumulative": 1_080_000, "start-disputed": 1_079_999,
                              "early-terminal": 1_350_000, "terminal-invalid": 1_200_005,
                              "terminal-cap": 1_200_005}.get(mode, 1_000_000)
         assert exposure["unknown"] == exposure["pool_risk"]["asr"] == expected_exposure
         assert batch["input_token_limit"] is None and batch["held_microyuan"] == 1_000_000
         if mode == "terminal-conflict":
             assert db.scalar(sa.text("SELECT metering_revision FROM pr06a_control.attempts")) == 6
+            assert db.scalar(sa.text("SELECT metering_issue_pending FROM pr06a_control.attempts"))
+        if mode in ("start-cumulative", "start-disputed"):
+            assert db.scalar(sa.text("SELECT count(*) FROM pr06a_control.usage")) == 0
+            assert db.scalar(sa.text("SELECT count(*) FROM pr06a_control.frames")) == 0
+        if mode in ("terminal-meter-source", "malformed-heartbeat-meter"):
+            expected_issues = 2 if mode == "terminal-meter-source" else 1
+            assert db.scalar(sa.text("SELECT count(*) FROM pr06a_control.metering_issues")) == expected_issues
             assert db.scalar(sa.text("SELECT metering_issue_pending FROM pr06a_control.attempts"))
         if mode == "foreign":
             assert db.scalar(sa.text("SELECT count(*) FROM pr06a_control.recognition")) == 1
