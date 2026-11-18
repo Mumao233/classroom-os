@@ -1,10 +1,12 @@
 -- Apply in one transaction after install.sql or to the verified adf9f79
 -- overlay in the same isolated POC database. Operational rows stay in place.
-SELECT pg_advisory_xact_lock(6206,1);
-LOCK TABLE pr06a_control.activation,pr06a_control.revocation,pr06a_control.batch IN ACCESS EXCLUSIVE MODE;
-
 DO $migration$
 BEGIN
+  IF NOT pg_try_advisory_xact_lock(6206,1) THEN
+    RAISE EXCEPTION 'PR06A_BATCH_MIGRATION_BUSY' USING ERRCODE='lock_not_available';
+  END IF;
+  LOCK TABLE pr06a_control.activation,pr06a_control.revocation,pr06a_control.batch
+    IN ACCESS EXCLUSIVE MODE NOWAIT;
   IF pg_catalog.to_regprocedure('pr06a_api.retain_packet(uuid,uuid,jsonb)') IS NULL
     OR pg_catalog.to_regprocedure('pr06a_api.check_connection(uuid,uuid,boolean)') IS NULL
     OR NOT EXISTS (SELECT FROM pg_catalog.pg_attribute
@@ -138,10 +140,40 @@ END $f$;
 
 DROP FUNCTION pr06a_control.check_budget(timestamptz,bigint);
 DROP FUNCTION pr06a_control.check_activation();
-DROP FUNCTION pr06a_api.revoke();
 DROP FUNCTION pr06a_api.release_reconciled();
 
 REVOKE ALL ON FUNCTION pr06a_control.check_activation(text),
   pr06a_control.check_budget(text,timestamptz,bigint),
   pr06a_api.revoke(text),pr06a_api.release_reconciled(text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION pr06a_api.release_reconciled(text) TO classroom_pr06a_reconciler;
+
+DO $revoke_acl$
+DECLARE legacy_owner name; grantee record;
+BEGIN
+  SELECT pg_get_userbyid(proowner) INTO STRICT legacy_owner
+    FROM pg_proc WHERE oid='pr06a_api.revoke()'::regprocedure;
+
+  -- Clear any grants from current default privileges before carrying forward
+  -- the existing emergency-stop grants and SECURITY DEFINER owner.
+  FOR grantee IN
+    SELECT pg_get_userbyid(acl.grantee) AS role_name
+    FROM pg_proc p CROSS JOIN LATERAL aclexplode(p.proacl) acl
+    WHERE p.oid='pr06a_api.revoke(text)'::regprocedure AND acl.grantee NOT IN (0,p.proowner)
+  LOOP
+    EXECUTE format('REVOKE ALL ON FUNCTION pr06a_api.revoke(text) FROM %I CASCADE',grantee.role_name);
+  END LOOP;
+
+  EXECUTE format('ALTER FUNCTION pr06a_api.revoke(text) OWNER TO %I',legacy_owner);
+  FOR grantee IN
+    SELECT pg_get_userbyid(acl.grantee) AS role_name, bool_or(acl.is_grantable) AS can_grant
+    FROM pg_proc p CROSS JOIN LATERAL aclexplode(p.proacl) acl
+    WHERE p.oid='pr06a_api.revoke()'::regprocedure AND acl.grantee NOT IN (0,p.proowner)
+      AND acl.privilege_type='EXECUTE'
+    GROUP BY acl.grantee
+  LOOP
+    EXECUTE format('GRANT EXECUTE ON FUNCTION pr06a_api.revoke(text) TO %I%s',
+      grantee.role_name, CASE WHEN grantee.can_grant THEN ' WITH GRANT OPTION' ELSE '' END);
+  END LOOP;
+END $revoke_acl$;
+
+DROP FUNCTION pr06a_api.revoke();

@@ -708,6 +708,96 @@ def test_batch_migration_refuses_an_open_first_batch(poc):
         assert not db.scalar(sa.text("SELECT to_regprocedure('pr06a_api.revoke(text)') IS NOT NULL"))
 
 
+@pytest.mark.parametrize("poc", ["legacy"], indirect=True)
+def test_migration_preserves_control_login_emergency_revoke(poc, arm_receipts, monkeypatch):
+    pg, _, connect = poc
+    operator, args, _, _, _ = arm_receipts
+    args.authorization_id = policy.SECOND_AUTHORIZATION
+    args.account_ref = SECOND_ACCOUNT
+    args.executor_login = connect.executor
+    control = "pr06a_control_" + uuid4().hex[:16]
+
+    async def control_db(arm):
+        assert arm
+        url = pg.admin_url
+        return await AsyncConnection.connect(host=url.host, port=url.port, dbname=url.database,
+                                             user=control, password=SYNTHETIC_PASSWORD, autocommit=True)
+
+    monkeypatch.setattr(operator, "_db", control_db)
+    with pg.admin.begin() as db:
+        db.exec_driver_sql(f'CREATE ROLE "{control}" LOGIN PASSWORD \'{SYNTHETIC_PASSWORD}\'')
+        db.exec_driver_sql(f'GRANT USAGE ON SCHEMA pr06a_api,pr06a_control TO "{control}"')
+        db.exec_driver_sql(f'GRANT INSERT ON pr06a_control.activation TO "{control}"')
+        db.exec_driver_sql(f'GRANT SELECT ON pr06a_control.revocation TO "{control}"')
+        db.exec_driver_sql(f'GRANT EXECUTE ON FUNCTION pr06a_api.revoke() TO "{control}"')
+    try:
+        with pg.admin.begin() as db:
+            owner = db.scalar(sa.text(
+                "SELECT proowner FROM pg_proc WHERE oid='pr06a_api.revoke()'::regprocedure"))
+            db.exec_driver_sql(batch_migration(), execution_options={"no_parameters": True})
+            assert db.scalar(sa.text(
+                "SELECT proowner FROM pg_proc WHERE oid='pr06a_api.revoke(text)'::regprocedure")) == owner
+            db.exec_driver_sql("GRANT EXECUTE ON FUNCTION pr06a_api.revoke(text) TO classroom_pr06a_reconciler")
+        with pytest.raises(policy.PocStopped, match="^emergency_revoke_privileges_invalid$"):
+            _run(operator._arm(args, REVIEWED, FINGERPRINT))
+        with pg.admin.begin() as db:
+            db.exec_driver_sql("REVOKE EXECUTE ON FUNCTION pr06a_api.revoke(text) FROM classroom_pr06a_reconciler")
+            assert db.scalar(sa.text("SELECT count(*) FROM pr06a_control.activation")) == 1
+
+        _run(operator._arm(args, REVIEWED, FINGERPRINT))
+
+        async def revoke_as_control():
+            async with await control_db(True) as db:
+                await db.execute("SELECT pr06a_api.revoke(%s)", (policy.SECOND_AUTHORIZATION,))
+
+        _run(revoke_as_control())
+        with pg.admin.connect() as db:
+            assert dict(db.execute(sa.text(
+                "SELECT authorization_id,revoked FROM pr06a_control.activation")).all()) == {
+                    policy.AUTHORIZATION: False, policy.SECOND_AUTHORIZATION: True,
+                }
+    finally:
+        with pg.admin.begin() as db:
+            db.exec_driver_sql(f'DROP OWNED BY "{control}"')
+            db.exec_driver_sql(f'DROP ROLE "{control}"')
+
+
+@pytest.mark.parametrize("held_advisory", [False, True], ids=["batch-read", "dispatch-advisory"])
+@pytest.mark.parametrize("poc", ["legacy"], indirect=True)
+def test_batch_migration_backs_out_of_dispatch_contention(poc, held_advisory):
+    pg, samples, connect = poc
+    lock_dispatch = "SELECT pr06a_api.lock_dispatch(%s,%s)"
+
+    async def run():
+        async with connect() as ledger:
+            await ledger.open(REVIEWED, ACCOUNT, FINGERPRINT, samples)
+            async with ledger.db.transaction():
+                await ledger.db.execute("SET LOCAL lock_timeout = '600ms'")
+                # Keep the dispatch transaction's batch lock. Optionally
+                # keep its shared advisory lock as well.
+                await ledger.db.execute(lock_dispatch, (ledger.fence, True))
+                if not held_advisory:
+                    await ledger.db.execute(lock_dispatch, (ledger.fence, False))
+                with pg.admin.begin() as db:
+                    # A blocked DDL waits for this timeout. Both lock paths
+                    # must instead fail with lock_not_available (55P03).
+                    db.exec_driver_sql("SET LOCAL statement_timeout = '600ms'")
+                    with pytest.raises(sa.exc.DBAPIError) as denied, db.begin_nested():
+                        db.exec_driver_sql(batch_migration(), execution_options={"no_parameters": True})
+                    assert denied.value.orig.sqlstate == "55P03"
+                    assert db.scalar(sa.text("SELECT NOT EXISTS (SELECT FROM pg_locks WHERE pid=pg_backend_pid() "
+                                              "AND locktype='advisory' AND classid=6206 AND objid=1)"))
+                if not held_advisory:
+                    await ledger.db.execute(lock_dispatch, (ledger.fence, True))
+                await ledger.db.execute(lock_dispatch, (ledger.fence, False))
+            attempt = Attempt.create()
+            await ledger.claim(samples[0], attempt)
+            async with ledger.dispatch_lock():
+                assert await ledger.check_connection(attempt, handshake=True) > 0
+
+    _run(run())
+
+
 def test_concurrent_last_slot_and_unconfirmed_ranges(poc):
     _, samples, connect = poc
 

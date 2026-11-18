@@ -36,8 +36,8 @@ python -I -B tools/pr06a/real_poc.py --samples $pocSamples --authorization-id $a
      --file web/backend/classroom_web/pr06a_real_poc/authorization_batches.sql
    ```
 
-2. 在这个库撤销 PUBLIC 的 CONNECT，分别建立专用 `NOSUPERUSER` 登录并授予 `classroom_pr06a_executor`、`classroom_pr06a_reconciler`。Web、worker、浏览器、本项目的其他数据库用户无权进入。控制角色仅由 DBA 持有。执行登录无底表权限，复核登录只有对账和确认释放两项函数权限。以 DBA 为该库将 `log_parameter_max_length` 和 `log_parameter_max_length_on_error` 均设为 0，把 `log_error_verbosity` 设为 `terse`，在新连接中生效。保持转录和账户证明访问受控。
-3. DBA 按既有 `billing_api.open_period` 签开北京时间当月的隔离 ASR 预算周期，保留预算池、安全余量及固定费用。检查 `billing`、`asr_streaming` 为 false，所选授权 ID 在 `pr06a_control.activation`、`pr06a_control.batch` 和 `pr06a_control.revocation` 中均无行。第二批还需核实第一批已关闭且原始预留仍在原账期。设置来宾安全连接参数。仅控制进程使用 `PR06A_CONTROL_DSN`，执行进程使用 `PR06A_EXECUTOR_DSN`，两者须使用 `host=127.0.0.1 dbname=classroom_pr06a_real_poc` 和已授权的专用登录。
+2. 在这个库撤销 PUBLIC 的 CONNECT，分别建立专用 `NOSUPERUSER` 登录并授予 `classroom_pr06a_executor`、`classroom_pr06a_reconciler`。Web、worker、浏览器、本项目的其他数据库用户无权进入。控制角色仅由 DBA 持有。首次安装如使用独立控制登录，为该登录授予 `pr06a_api` 的 `USAGE` 和 `pr06a_api.revoke(text)` 的 `EXECUTE`。由实际控制登录确认两项权限均有效，并核对实际执行登录和复核登录均无撤销权限。执行登录无底表权限，复核登录只有对账和确认释放两项函数权限。以 DBA 为该库将 `log_parameter_max_length` 和 `log_parameter_max_length_on_error` 均设为 0，把 `log_error_verbosity` 设为 `terse`，在新连接中生效。保持转录和账户证明访问受控。
+3. DBA 查验北京时间当月的 `billing_control.platform_budgets`。已有预算行时复用该行，核对 ASR 池、安全余量、固定费用及累积敞口能容纳本批独立 ¥1。第二批与第一批同月时，预算核对包含第一批的原预留。仅当当月无预算行时，才用 `billing_api.open_period` 签开该月周期。检查 `billing`、`asr_streaming` 为 false，所选授权 ID 在 `pr06a_control.activation`、`pr06a_control.batch` 和 `pr06a_control.revocation` 中均无行。第二批还需核实第一批已关闭且原始预留仍在原账期。设置来宾安全连接参数。仅控制进程使用 `PR06A_CONTROL_DSN`，执行进程使用 `PR06A_EXECUTOR_DSN`，两者须使用 `host=127.0.0.1 dbname=classroom_pr06a_real_poc` 和已授权的专用登录。
 
 若专用库已经安装覆盖层，以下增列仅适用于安装证据可证明与 `05559351` 覆盖层一致的数据库。核对实际安装源。该提交 Git 源树中 `install.sql` 的 SHA-256 为 `e9487b357965e30d4264ffcaa322d2b0ecaed1fc15c6d0cf9d35e3e451d9e3f0`。安装版本更早、无法确认或数据库有未核实变更时，停在此步，先完成经验证且保留既有数据的迁移。对确认无误的原库由 DBA 事务执行以下增列。原激活行的风险摘要为空，保留既有授权、激活、撤销和批次记录。
 
@@ -53,7 +53,7 @@ BEGIN
 END $upgrade$;
 ```
 
-已有第一批的库在原专用库升级。以安装凭证确认旧覆盖层与 `adf9f79` 一致并含风险接受审计列，确认第一批已关闭，保留其原行和预留。DBA 在同一原库事务执行下列增量 SQL。迁移在发现开放批次或缺少透传审计函数时拒绝，旧版本或安装来源不明的库先核实。迁移后核对第一批激活、尝试、账单及预留未变化。单个授权 ID 只建一批，第二批另计 ¥1，合计本地预留最多 ¥2。
+已有第一批的库在原专用库升级。以安装凭证确认旧覆盖层与 `adf9f79` 一致并含风险接受审计列，确认第一批已关闭，保留其原行和预留。DBA 在同一原库事务执行下列增量 SQL。迁移在锁有争用、发现开放批次或缺少透传审计函数时拒绝，旧版本或安装来源不明的库先核实。迁移后核对第一批激活、尝试、账单及预留未变化。原 `revoke()` 的所有者和显式执行授权转给 `revoke(text)`，按第 2 步核对实际登录。单个授权 ID 只建一批，第二批另计 ¥1，合计本地预留最多 ¥2。
 
 ```powershell
 psql -X --dbname classroom_pr06a_real_poc --set ON_ERROR_STOP=1 --single-transaction `
