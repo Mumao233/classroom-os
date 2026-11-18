@@ -12,9 +12,9 @@ type Props = {
   destinations?: Array<{ id: string; name: string }>;
 };
 
-type EditorInput = { body: string; note: string; contentRevisionId?: string };
+type EditorInput = { body: string; note: string; baseContentRevisionId?: string | null };
 const restoredInput = (draft: ConflictDraft): EditorInput => ({
-  body: draft.body, note: draft.note, contentRevisionId: draft.reference.contentRevisionId,
+  body: draft.body, note: draft.note, baseContentRevisionId: draft.baseContentRevisionId,
 });
 
 const explanation = (error: unknown) => {
@@ -71,8 +71,13 @@ function ConflictEditor({ runtime, reference, generation, destinations = [] }: P
       const value = inspection.value;
       if (!value && !recovered.length) throw inspection.error;
       setConflict(value);
-      const payload = value?.local_operation.payload;
-      const initial = { body: payload ? ('body_markdown' in payload ? payload.body_markdown : JSON.stringify(payload, null, 2)) : '', note: payload && 'personal_note' in payload ? payload.personal_note : '' };
+      const operation = value?.local_operation;
+      const payload = operation?.payload;
+      const initial: EditorInput = {
+        body: payload ? ('body_markdown' in payload ? payload.body_markdown : JSON.stringify(payload, null, 2)) : '',
+        note: payload && 'personal_note' in payload ? payload.personal_note : '',
+        baseContentRevisionId: operation?.object_type === 'personal_revision' ? operation.payload.base_content_revision_id : undefined,
+      };
       const selected = recovered.length === 1 ? recovered[0] : null;
       input.current = selected ? restoredInput(selected) : initial;
       setBody(input.current.body); setNote(input.current.note); setDrafts(recovered);
@@ -87,10 +92,10 @@ function ConflictEditor({ runtime, reference, generation, destinations = [] }: P
   function saveInput(source = activeReference) {
     const epoch = viewEpoch.current;
     const sequence = ++editGeneration.current;
-    const { body, note, contentRevisionId } = input.current;
+    const { body, note, baseContentRevisionId } = input.current;
     setSaveStatus('合并输入正在保存…');
     let saving: Promise<CacheWrite>;
-    try { saving = runtime.saveConflictDraft(source, body, note, editorId.current, sequence, contentRevisionId); }
+    try { saving = runtime.saveConflictDraft(source, body, note, editorId.current, sequence, baseContentRevisionId); }
     catch { saveFailed.current = true; setSaveStatus('合并输入尚未保存，请保留当前输入并重试。'); return; }
     void saving.then(saved => {
       if (!mounted.current || editGeneration.current !== sequence) return;
@@ -138,7 +143,8 @@ function ConflictEditor({ runtime, reference, generation, destinations = [] }: P
         const local = conflict.local_operation;
         const payload = local.object_type === 'personal_revision'
           ? { ...local.payload, base_revision: conflict.server_revision, body_markdown: submitted.body, personal_note: submitted.note,
-            base_content_revision_id: submitted.contentRevisionId ?? local.payload.base_content_revision_id }
+            base_content_revision_id: submitted.baseContentRevisionId !== undefined
+              ? submitted.baseContentRevisionId : local.payload.base_content_revision_id }
           : { ...JSON.parse(submitted.body), base_revision: conflict.server_revision };
         request.merged_operation = { ...local, op_id: crypto.randomUUID(), base_revision: conflict.server_revision, payload } as SyncOperation;
       }

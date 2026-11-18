@@ -394,15 +394,17 @@ try {
   await test('reuses-compact-course-recovery-when-the-operation-quota-is-full', async () => {
     const result = await page.evaluate(async () => {
       const name = 'pr08b-equivalent-course-recovery';
-      await create(name, { draftOperations: 2 });
+      await create(name, { draftOperations: 3 });
       transport.mode = 'conflict';
       const draft = { ...operation(), object_type: 'course', object_id: ids.course,
         payload: { base_revision: 1, name: 'Original course edit' } };
       const reference = await runtime.enqueue(draft, ancestry, 1);
       await runtime.flush();
       await runtime.inspectConflict(reference);
+      const nonMatching = await runtime.saveConflictDraft(reference, '{"base_revision":1,"credit":1e309}', '',
+        '10000000-0000-4000-8000-000000000002', 1);
       const raw = '{"base_revision":1,"name":"   "}';
-      const editor = await runtime.saveConflictDraft(reference, raw, '', crypto.randomUUID(), 1);
+      const editor = await runtime.saveConflictDraft(reference, raw, '', '20000000-0000-4000-8000-000000000002', 1);
       const merged = { ...draft, op_id: crypto.randomUUID(), base_revision: 2, payload: { base_revision: 2, name: '   ' } };
       const resolve = transport.resolve.bind(transport);
       transport.resolve = (id, body, key) => {
@@ -411,11 +413,14 @@ try {
       };
       await runtime.resolve(reference, { resolution: 'edited_merge', base_revision: 2, merged_operation: merged }, 2);
       await runtime.resolve(reference, { resolution: 'use_server', base_revision: 2 }, 3);
-      const [retained] = await runtime.readConflictDrafts(reference);
+      const recovered = await runtime.readConflictDrafts(reference);
+      const retained = recovered.find(value => value.reference.operationId === editor.operationId);
       return { pending: runtime.snapshot().pending.length, records: (await records(name)).length,
-        body: retained.body, sameOperation: editor.operationId === retained.reference.operationId };
+        body: retained.body, sameOperation: editor.operationId === retained.reference.operationId,
+        unrelatedRetained: recovered.some(value => value.reference.operationId === nonMatching.operationId) };
     });
-    assert.deepEqual(result, { pending: 0, records: 1, body: '{"base_revision":1,"name":"   "}', sameOperation: true });
+    assert.deepEqual(result, { pending: 0, records: 2, body: '{"base_revision":1,"name":"   "}',
+      sameOperation: true, unrelatedRetained: true });
   });
   await test('rejected-personal-merge-retains-its-exact-revision-authority', async () => {
     const name = 'pr08b-rejected-merge-exact-authority';
@@ -673,29 +678,56 @@ try {
     assert.equal(await page.evaluate(async () => (await records('pr08b-ui-lock')).length), 2);
   });
   await test('conflict-panel-rechecks-new-cloud-cas-and-preserves-merge-input', async () => {
-    await page.evaluate(async () => {
+    const history = await page.evaluate(async () => {
       await create('pr08b-ui-recheck'); transport.mode = 'conflict';
-      const reference = await runtime.enqueue(operation('ORIGINAL UI DRAFT'), ancestry, 1);
+      const original = operation('ORIGINAL UI DRAFT ON A', 1, ids.revisionA);
+      const reference = await runtime.enqueue(original, ancestry, 1);
       await runtime.flush();
+      await runtime.inspectConflict(reference);
+      const legacy = await runtime.saveConflictDraft(reference, 'LEGACY A INPUT SURVIVES RECHECK', 'Legacy A note', crypto.randomUUID(), 1);
+      if (legacy.contentRevisionId !== undefined) throw new Error('Expected an old recovery without an explicit revision binding');
+      const sibling = await runtime.saveConflictDraft(reference, 'INDEPENDENT LEGACY INPUT', '', crypto.randomUUID(), 1);
+      const drafts = await runtime.readConflictDrafts(reference);
+
+      await runtime.readReviewRevision(ids.document, ids.revisionB);
+      transport.serverRevision = 3;
+      const merged = { ...original, op_id: crypto.randomUUID(), base_revision: 2,
+        payload: { ...original.payload, base_revision: 2, base_content_revision_id: ids.revisionB, body_markdown: 'STALE MERGE ON B' } };
+      await runtime.resolve(reference, { resolution: 'edited_merge', base_revision: 2, merged_operation: merged }, 2);
+      if (!runtime.snapshot().pending.some(row => row.error === 'REVISION_CONFLICT')) throw new Error('Expected the stale B merge');
+
       const mount = document.createElement('div'); document.body.append(mount);
       window.uiRoot = lib.createRoot(mount);
-      uiRoot.render(lib.React.createElement(lib.ConflictPanel, { runtime, reference, generation: 2 }));
+      uiRoot.render(lib.React.createElement(lib.ConflictPanel, { runtime, reference, generation: 3 }));
+      return { legacyIndex: drafts.findIndex(value => value.reference.operationId === legacy.operationId),
+        siblingIndex: drafts.findIndex(value => value.reference.operationId === sibling.operationId), parentA: ids.revisionA, parentB: ids.revisionB };
     });
     await page.getByRole('heading', { name: '云端版本 2' }).waitFor();
-    await page.getByRole('textbox', { name: '合并正文', exact: true }).fill('MERGE INPUT SURVIVES RECHECK');
-    await page.evaluate(() => { transport.serverRevision = 3; });
-    await page.getByRole('button', { name: '确认处理', exact: true }).click();
-    await page.getByRole('status').filter({ hasText: '操作结果仍待确认，草稿已保留。' }).waitFor();
+    const selector = page.getByRole('combobox', { name: '本机合并草稿', exact: true });
+    const editor = page.getByRole('textbox', { name: '合并正文', exact: true });
+    await selector.selectOption(String(history.legacyIndex));
     await page.getByRole('button', { name: '重新核对云端版本', exact: true }).click();
     await page.getByRole('heading', { name: '云端版本 3' }).waitFor();
-    assert.equal(await page.getByRole('textbox', { name: '合并正文', exact: true }).inputValue(), 'MERGE INPUT SURVIVES RECHECK');
+    assert.equal(await editor.inputValue(), 'LEGACY A INPUT SURVIVES RECHECK');
+    const rechecked = await page.evaluate(async () => {
+      await runtime.awaitEditorDraftSaves();
+      const next = runtime.snapshot().pending.find(row => row.reference.generation === 3 && row.state === 'conflict');
+      const recovered = await runtime.readConflictDrafts(next.reference);
+      return { newParent: transport.pushes.at(-1).operation.payload.base_content_revision_id, savedParent: recovered[0].baseContentRevisionId };
+    });
+    assert.deepEqual(rechecked, { newParent: history.parentB, savedParent: history.parentA });
+
+    await selector.selectOption(String(history.siblingIndex));
+    await selector.selectOption(String(history.legacyIndex));
+    await editor.fill('EDITED LEGACY A INPUT AFTER RECHECK');
     await page.getByRole('button', { name: '确认处理', exact: true }).click();
     await page.getByRole('status').filter({ hasText: '冲突处理已由服务器确认。' }).waitFor();
     const result = await page.evaluate(() => ({ pending: runtime.snapshot().pending.length,
-      last: transport.resolutions.at(-1).body, count: (transport.resolutions).length }));
+      last: transport.resolutions.at(-1).body }));
     assert.equal(result.pending, 0);
     assert.equal(result.last.base_revision, 3);
-    assert.equal(result.last.merged_operation.payload.body_markdown, 'MERGE INPUT SURVIVES RECHECK');
+    assert.equal(result.last.merged_operation.payload.body_markdown, 'EDITED LEGACY A INPUT AFTER RECHECK');
+    assert.equal(result.last.merged_operation.payload.base_content_revision_id, history.parentA);
   });
   await test('background-deletion-poll-locks-private-conflict-view', async () => {
     await page.evaluate(async () => {

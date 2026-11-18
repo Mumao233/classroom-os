@@ -12,7 +12,7 @@ export type CacheReference = {
   /** PR-08b binds a learning object's domain type into its authenticated header. */
   objectType?: string;
   /** Exact review body authority; separate from the document projection's CAS revision. */
-  contentRevisionId?: string;
+  contentRevisionId?: string | null;
   recoveryFor?: string;
   recoveryConflictId?: string;
   recoverySourceObjectId?: string;

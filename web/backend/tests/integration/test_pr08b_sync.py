@@ -966,12 +966,13 @@ def test_legacy_replay_never_substitutes_later_visible_revision(sync_api, revoca
         assert batch(a, [op]).json()['receipts'][0]['status'] == 'deleted'
 
 
-def test_hidden_legacy_submitted_revision_keeps_exact_conflict_receipt_retryable(sync_api):
+@pytest.mark.parametrize('hidden_source', ['submitted', 'origin'])
+def test_hidden_legacy_submitted_revision_keeps_exact_conflict_receipt_retryable(sync_api, hidden_source):
     from classroom_web.infrastructure.qa_repository import PgQaRepository
     from test_pr07b_versions import generate, output, prepare_review, REQUEST
 
     a = sync_api
-    _, _, _, initial = generate(a.auth.pg, SimpleNamespace(a=a.owner), a)
+    first_source, _, _, initial = generate(a.auth.pg, SimpleNamespace(a=a.owner), a)
     document_id = UUID(initial['summary_document_id'])
     first_candidate = initial['revision_ids'][0]
     with a.auth.pg.db.transaction(a.owner) as tx:
@@ -1003,11 +1004,13 @@ def test_hidden_legacy_submitted_revision_keeps_exact_conflict_receipt_retryable
         connection.exec_driver_sql('ALTER TABLE sync_conflicts DISABLE TRIGGER sync_conflicts_immutable')
         assert connection.execute(sa.text('DELETE FROM sync_conflicts WHERE id=:id'), dict(id=conflict_id)).rowcount == 1
         connection.exec_driver_sql('ALTER TABLE sync_conflicts ENABLE TRIGGER sync_conflicts_immutable')
+    revoked_source_id = first_source.source_id if hidden_source == 'origin' else second_source.source_id
     with a.auth.pg.db.transaction(a.owner) as tx:
-        PgQaRepository(tx).revoke_source(second_source.source_id)
+        PgQaRepository(tx).revoke_source(revoked_source_id)
         assert PgReviewRepository(tx)._conflict_row(conflict_id) is None
-    assert a.client.get(BASE + '/review-documents/' + str(document_id)).status_code == 200
-    assert a.client.get(BASE + '/review-revisions/' + cloud['id']).status_code == 200
+    visible_status = 404 if hidden_source == 'origin' else 200
+    assert a.client.get(BASE + '/review-documents/' + str(document_id)).status_code == visible_status
+    assert a.client.get(BASE + '/review-revisions/' + cloud['id']).status_code == visible_status
     assert a.client.get(BASE + '/review-revisions/' + submitted_id).status_code == 404
 
     result = batch(a, [op])
@@ -1022,15 +1025,16 @@ def test_hidden_legacy_submitted_revision_keeps_exact_conflict_receipt_retryable
     changed = dict(op, payload=dict(op['payload'], body_markdown='Replacement text with an old key.'))
     assert batch(a, [changed]).status_code == 409
     with a.auth.pg.admin.begin() as connection:
-        durable = connection.execute(sa.text('''SELECT id,status,conflict_id,result_revision,request_hash FROM sync_operations
+        durable = connection.execute(sa.text('''SELECT id,status,conflict_id,result_revision,request_hash,class_session_id FROM sync_operations
             WHERE op_id=:op AND operation='syncOperation' '''), dict(op=UUID(op['op_id']))).mappings().one()
         assert (durable['status'], durable['conflict_id'], durable['result_revision'], durable['request_hash']) == (
             'conflict', conflict_id, None, _hash(op))
+        assert durable['class_session_id'] == (None if hidden_source == 'origin' else a.classroom.id)
         assert connection.scalar(sa.text('SELECT count(*) FROM sync_conflicts WHERE id=:id'), dict(id=conflict_id)) == 0
         # Restore only the synthetic permission fixture. Runtime revocations remain monotonic.
         connection.exec_driver_sql('SET CONSTRAINTS ALL IMMEDIATE')
         connection.exec_driver_sql('ALTER TABLE qa_sources DISABLE TRIGGER qa_source_guard')
-        connection.execute(sa.text('UPDATE qa_sources SET revoked_at=NULL WHERE id=:id'), dict(id=second_source.source_id))
+        connection.execute(sa.text('UPDATE qa_sources SET revoked_at=NULL WHERE id=:id'), dict(id=revoked_source_id))
         connection.exec_driver_sql('ALTER TABLE qa_sources ENABLE TRIGGER qa_source_guard')
 
     restored = receipt(a, op)
@@ -1045,7 +1049,7 @@ def test_hidden_legacy_submitted_revision_keeps_exact_conflict_receipt_retryable
     assert detail.json()['server_revision'] == conflict['current_revision']
     assert detail.json()['local_operation'] == op
     with a.auth.pg.admin.connect() as connection:
-        confirmed = connection.execute(sa.text('''SELECT id,status,conflict_id,result_revision,request_hash FROM sync_operations
+        confirmed = connection.execute(sa.text('''SELECT id,status,conflict_id,result_revision,request_hash,class_session_id FROM sync_operations
             WHERE op_id=:op AND operation='syncOperation' '''), dict(op=UUID(op['op_id']))).mappings().one()
         assert confirmed == durable
         assert connection.scalar(sa.text('SELECT count(*) FROM review_conflicts WHERE document_id=:id'), dict(id=document_id)) == 1

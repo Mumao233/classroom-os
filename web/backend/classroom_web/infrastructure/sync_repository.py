@@ -327,14 +327,16 @@ class PgSyncRepository:
                 classroom = self.review._document(identity, lock=True)['class_session_id']
             else:
                 revision, content, classroom = self.current(kind, identity, lock=True)
-        except Gone:
-            return self.remember(operation_name, key, digest, kind, identity, None, 'deleted')
-        except (NotFound, QaRejected) as error:
+        except (Gone, NotFound, QaRejected) as error:
             if isinstance(error,QaRejected) and error.status != 404:
                 raise
-            owned = self.rows('SELECT classroom_web_sync_owned_object(:kind,:id) AS owned',kind=kind,id=identity).one()['owned']
-            if not owned:
-                raise
+            if historical_conflict:
+                return self.remember(operation_name, key, digest, kind, identity, None, 'conflict',
+                                     conflict=original['resource_id'])
+            if not isinstance(error, Gone):
+                owned = self.rows('SELECT classroom_web_sync_owned_object(:kind,:id) AS owned',kind=kind,id=identity).one()['owned']
+                if not owned:
+                    raise
             return self.remember(operation_name, key, digest, kind, identity, None, 'deleted')
         if kind == 'personal_revision':
             value = self._replay_personal_conflict(identity, payload, key) if historical_conflict else self.review.write_personal(identity, payload, key)

@@ -768,6 +768,25 @@ describe('PR-08b encrypted operation queue', () => {
     expect(await next.readConflictDrafts(available!)).toMatchObject([{ body: 'AVAILABLE BRANCH' }]);
   });
 
+  it('acknowledges only the recovery whose effective parent was submitted', async () => {
+    const original = personalOperation(id(800));
+    const f = await editableConflict(original);
+    const body = 'Identical recovered body', note = 'Identical recovered note';
+    await f.runtime.readReviewRevision(original.object_id, id(801));
+    const inherited = await f.runtime.saveConflictDraft(f.reference, body, note, id(900), 1);
+    const alternate = await f.runtime.saveConflictDraft(f.reference, body, note, id(901), 1, id(801));
+    const sourceFree = await f.runtime.saveConflictDraft(f.reference, body, note, id(902), 1, null);
+    expect((await f.runtime.readConflictDrafts(f.reference)).map(draft => draft.baseContentRevisionId)).toEqual([id(800), id(801), null]);
+    if (original.object_type !== 'personal_revision') throw new Error('Expected personal operation');
+    const merged = { ...original, op_id: id(903), base_revision: 2, payload: { ...original.payload,
+      base_revision: 2, base_content_revision_id: id(801), body_markdown: body, personal_note: note } };
+    await f.runtime.resolve(f.reference, { resolution: 'edited_merge', base_revision: 2, merged_operation: merged },
+      2, [inherited, alternate, sourceFree]);
+    expect(f.cache.records.has(key(alternate))).toBe(false);
+    expect(f.cache.records.has(key(inherited))).toBe(true);
+    expect(f.cache.records.has(key(sourceFree))).toBe(true);
+  });
+
   it('reports failed editor persistence without acknowledging it as saved', async () => {
     const f = await editableConflict();
     await f.runtime.saveConflictDraft(f.reference, 'saved earlier', 'saved note', id(900), 1); f.cache.denied = true;
