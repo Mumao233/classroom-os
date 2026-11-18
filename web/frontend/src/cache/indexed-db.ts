@@ -3,6 +3,7 @@ import type { CacheMetadata, CipherRecord } from './types';
 
 export const DATABASE_NAME = 'classroom-os-trusted-cache';
 export const STORES = ['records', 'metadata', 'nonces', 'namespaces', 'tombstones'] as const;
+const DATABASE_VERSION = 4;
 
 export function metadataOf(record: CipherRecord): CacheMetadata {
   return { id: record.id, namespace: record.namespace, header: record.header,
@@ -19,10 +20,10 @@ export function deleteCacheRecord(tx: IDBTransaction, id: IDBValidKey) {
   tx.objectStore('metadata').delete(id);
 }
 
-/** v3 adds transactionally maintained metadata without changing v1/v2 ciphertext or AAD. */
+/** v4 fences older readers that ignore pending deletions. Only the v3 metadata backfill writes records. */
 export function openCacheDatabase(name = DATABASE_NAME): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open(name, 3);
+    const request = indexedDB.open(name, DATABASE_VERSION);
     let abandoned = false;
     request.onupgradeneeded = event => {
       const db = request.result;

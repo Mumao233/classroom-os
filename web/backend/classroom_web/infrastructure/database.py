@@ -70,7 +70,8 @@ class Database:
                       'review_batches','review_documents','review_revisions','review_document_history','review_conflicts',
                       'deletion_assets','deletion_executions','retention_policies','restore_task_quarantine',
                       'capture_policy','consent_records','capture_epochs','capture_leases','capture_gaps',
-                      'audio_chunks','capture_epoch_state','capture_recovery_grants','audio_chunk_state')
+                      'audio_chunks','capture_epoch_state','capture_recovery_grants','audio_chunk_state',
+                      'sync_operations','sync_conflicts','sync_resolutions','sync_preferences','sync_marks')
                     AND pg_has_role(current_user, c.relowner, 'USAGE')
                 ) FROM pg_roles r WHERE r.rolname=current_user
             """))

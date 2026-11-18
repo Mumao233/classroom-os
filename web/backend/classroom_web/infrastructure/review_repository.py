@@ -20,6 +20,9 @@ from ..domain.qa import QaRejected
 from .qa_repository import PgQaRepository, _hash, _json, _stamp
 
 
+_SYNC_SERVER_UNREAD = object()
+
+
 class PgReviewRepository:
     def __init__(self, tx):
         self.tx = tx
@@ -329,21 +332,74 @@ class PgReviewRepository:
         self._remember('updateReviewDocument', op_id, digest, 'review_document', document_id, 200)
         return self._document_dto(updated)
 
+    def _conflict_row(self, identity):
+        return self._rows('SELECT * FROM review_conflicts WHERE owner_id=:owner AND id=:id', id=identity).one_or_none()
+
     def _conflict_dto(self, identity):
-        conflict = self._rows('SELECT * FROM review_conflicts WHERE owner_id=:owner AND id=:id', id=identity).one_or_none()
+        conflict = self._conflict_row(identity)
         if conflict is None:
             raise QaRejected('NOT_FOUND', 404)
         self._document(conflict['document_id'])
         return dict(conflict_id=str(conflict['id']), current_revision=conflict['current_document_revision'],
                     submitted_revision=self.revision(conflict['submitted_revision_id']))
 
+    def _sync_server_content(self, document_id, current, document_revision):
+        if current is None:
+            history = self._rows('''SELECT projection FROM review_document_history WHERE owner_id=:owner
+                AND document_id=:document AND revision=:revision''',document=document_id,
+                revision=document_revision).one_or_none()
+            if history:
+                candidates=history['projection']['candidate_revision_ids']
+                current=self._uuid(candidates[-1]) if candidates else None
+        if current is None:
+            return
+        try:
+            return self._revision_dto(self._revision(current, document_id))
+        except QaRejected as error:
+            if error.status!=404:
+                raise
+            # Keep the original 07b branch. A hidden historical cloud version
+            # cannot be replaced with another visible candidate in sync metadata.
+            return
+
+    def _conflict_cloud(self, conflict):
+        # The submitted branch advanced the CAS but did not change the cloud branch.
+        return self._sync_server_content(conflict['document_id'], conflict['current_revision_id'],
+                                         conflict['current_document_revision'] - 1)
+
+    def _sync_conflict(self, identity, document_id, body, op_id, *, server_content=_SYNC_SERVER_UNREAD):
+        # 07b can still be deployed at its own migration boundary. Once 08b is
+        # present, an exact original request makes legacy conflict recovery safe.
+        if self.connection.scalar(sql("SELECT to_regclass('public.sync_conflicts')")) is None:
+            return
+        from .sync_repository import PgSyncRepository
+        conflict = self._conflict_row(identity)
+        if conflict is None or conflict['document_id'] != document_id:
+            raise QaRejected('NOT_FOUND', 404)
+        if server_content is _SYNC_SERVER_UNREAD:
+            server_content = self._conflict_cloud(conflict)
+        if server_content is None:
+            return
+        document = self._document(document_id)
+        operation = dict(op_id=str(op_id), object_type='personal_revision', object_id=str(document_id),
+                         draft_id=body['draft_id'], base_revision=body['base_revision'], payload=body)
+        PgSyncRepository(self.tx).record_conflict(operation, conflict['current_document_revision'],
+            server_content, document['class_session_id'], identity=identity)
+
+    def _personal_receipt(self, document_id, body, op_id):
+        digest = _hash(dict(document_id=str(document_id), body=body))
+        return digest, self.tx.receipts.lock_and_get('writePersonalRevision', op_id, digest)
+
     def write_personal(self, document_id, body, op_id):
         self._serialize()
         document = self._document(document_id, lock=True)
-        digest = _hash(dict(document_id=str(document_id), body=body))
-        old = self.tx.receipts.lock_and_get('writePersonalRevision', op_id, digest)
+        digest, old = self._personal_receipt(document_id, body, op_id)
         if old:
-            return self._conflict_dto(old['resource_id']) if old['resource_type']=='review_conflict' else self.revision(old['resource_id'])
+            if old['resource_type'] == 'review_conflict':
+                value = self._conflict_dto(old['resource_id'])
+                self._sync_conflict(old['resource_id'], document_id, body, op_id)
+                return value
+            return self.revision(old['resource_id'])
         base = self._base(body)
         draft = self._uuid(body.get('draft_id'))
         content = self._text(body.get('body_markdown'), 120000)
@@ -352,6 +408,13 @@ class PgReviewRepository:
         parent = self._revision(parent_id, document_id) if parent_id else None
         if parent is None and document['kind'] != 'note':
             raise QaRejected('VALIDATION_FAILED', 422)
+        sync_server = None
+        if (base != document['revision']
+                and self.connection.scalar(sql("SELECT to_regclass('public.sync_conflicts')")) is not None):
+            # Lock the exact cloud lineage before _advance acquires the owner
+            # event counter. Source revocation acquires its source row first.
+            sync_server=self._sync_server_content(document_id,
+                document['latest_personal_revision_id'] or document['adopted_revision_id'],document['revision'])
         revision = self._append(document, kind='personal', body=content, note=note, draft=draft,
                                 snapshot=parent['source_snapshot_id'] if parent else None, parent=parent_id)
         if base != document['revision']:
@@ -362,6 +425,7 @@ class PgReviewRepository:
                 current_revision_id,current_document_revision) VALUES(:id,:owner,:document,:submitted,:current,:revision)''',
                 id=identity, document=document_id, submitted=revision['id'], current=current_id, revision=document['revision'])
             self._remember('writePersonalRevision', op_id, digest, 'review_conflict', identity, 409)
+            self._sync_conflict(identity, document_id, body, op_id, server_content=sync_server)
             return self._conflict_dto(identity)
         self._advance(document, latest_personal_revision_id=revision['id'])
         self._remember('writePersonalRevision', op_id, digest, 'review_revision', revision['id'], 201)
