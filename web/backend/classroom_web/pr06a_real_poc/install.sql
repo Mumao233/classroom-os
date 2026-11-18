@@ -46,6 +46,9 @@ CREATE TABLE pr06a_control.activation (
 CREATE FUNCTION pr06a_control.guard_activation() RETURNS trigger
 LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $f$
 BEGIN
+  IF NOT pg_try_advisory_xact_lock(6206,1) THEN
+    RAISE EXCEPTION 'PR06A_UPDATE_DURING_DISPATCH';
+  END IF;
   IF (to_jsonb(NEW)-ARRAY['enabled','revoked']) IS DISTINCT FROM (to_jsonb(OLD)-ARRAY['enabled','revoked'])
       OR (OLD.revoked AND NOT NEW.revoked) THEN
     RAISE EXCEPTION 'PR06A_ACTIVATION_IMMUTABLE';
@@ -54,6 +57,26 @@ BEGIN
 END $f$;
 CREATE TRIGGER pr06a_activation_guard BEFORE UPDATE ON pr06a_control.activation
   FOR EACH ROW EXECUTE FUNCTION pr06a_control.guard_activation();
+
+CREATE FUNCTION pr06a_api.revoke() RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $f$
+BEGIN
+  PERFORM pg_advisory_xact_lock(6206,1);
+  UPDATE pr06a_control.activation SET revoked=true WHERE NOT revoked;
+END $f$;
+
+CREATE FUNCTION pr06a_control.guard_budget_update() RETURNS trigger
+LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $f$
+BEGIN
+  IF NOT pg_try_advisory_xact_lock(6206,1) THEN
+    RAISE EXCEPTION 'PR06A_UPDATE_DURING_DISPATCH';
+  END IF;
+  RETURN NULL;
+END $f$;
+CREATE TRIGGER pr06a_switch_dispatch_guard BEFORE UPDATE ON billing_control.switches
+  FOR EACH STATEMENT EXECUTE FUNCTION pr06a_control.guard_budget_update();
+CREATE TRIGGER pr06a_budget_dispatch_guard BEFORE UPDATE ON billing_control.platform_budgets
+  FOR EACH STATEMENT EXECUTE FUNCTION pr06a_control.guard_budget_update();
 
 CREATE TABLE pr06a_control.samples (
   slot smallint PRIMARY KEY CHECK (slot BETWEEN 1 AND 3),
@@ -111,6 +134,7 @@ CREATE TABLE pr06a_control.attempts (
   metering_revision integer NOT NULL DEFAULT 0,
   observed_input bigint CHECK (observed_input>=0),
   observed_output bigint CHECK (observed_output>=0),
+  observed_total bigint CHECK (observed_total>=0),
   reconciled_metering_revision integer,
   PRIMARY KEY (authorization_id,slot)
 );
@@ -170,7 +194,7 @@ CREATE TABLE pr06a_control.bill_evidence (
 
 -- Existing ordinary admission sees the specialized hold and actuals in
 -- the same locked budget row. The production schema alone is unchanged.
-GRANT SELECT (authorization_id, observed_input, observed_output, gross_microyuan,
+GRANT SELECT (authorization_id, observed_input, observed_output, observed_total, gross_microyuan,
               reconciled_metering_revision, metering_revision,usage_final) ON pr06a_control.attempts TO classroom_billing_control;
 CREATE VIEW billing_control.pr06a_combined_exposures AS
 SELECT period_start,pool,held,unknown,settled FROM billing_control.exposures
@@ -182,8 +206,9 @@ SELECT b.period_start,'asr',CASE WHEN NOT b.closed THEN b.held_microyuan ELSE 0 
   b.confirmed_microyuan
 FROM pr06a_control.batch b
 LEFT JOIN LATERAL (
-  SELECT ceil(sum(greatest(0,6::numeric*a.observed_input+4.5::numeric*a.observed_output
-                                  -coalesce(a.gross_microyuan,0)))) AS unresolved,
+  SELECT ceil(sum(greatest(0,
+             greatest(6::numeric*coalesce(a.observed_input,0)+4.5::numeric*coalesce(a.observed_output,0),
+                      4.5::numeric*coalesce(a.observed_total,0))-coalesce(a.gross_microyuan,0)))) AS unresolved,
          bool_or(NOT a.usage_final OR a.observed_input IS NULL OR a.observed_output IS NULL) AS unmetered
   FROM pr06a_control.attempts a WHERE a.authorization_id=b.authorization_id
     AND (a.gross_microyuan IS NULL OR a.reconciled_metering_revision IS DISTINCT FROM a.metering_revision)
@@ -237,7 +262,9 @@ END $f$;
 CREATE FUNCTION pr06a_control.observed_cost(id text) RETURNS numeric
 LANGUAGE sql SET search_path=pg_catalog,pg_temp AS $f$
   SELECT coalesce(sum(CASE WHEN a.gross_microyuan IS NOT NULL AND a.reconciled_metering_revision=a.metering_revision
-       THEN a.gross_microyuan ELSE greatest(a.gross_microyuan,6::numeric*a.observed_input+4.5::numeric*a.observed_output) END),0)
+       THEN a.gross_microyuan ELSE greatest(a.gross_microyuan,
+          6::numeric*coalesce(a.observed_input,0)+4.5::numeric*coalesce(a.observed_output,0),
+          4.5::numeric*coalesce(a.observed_total,0)) END),0)
   FROM pr06a_control.attempts a WHERE a.authorization_id=id
 $f$;
 
@@ -330,12 +357,28 @@ BEGIN
   UPDATE pr06a_control.attempts SET reserved_samples=p_end WHERE attempt=a.attempt;
 END $f$;
 
+CREATE FUNCTION pr06a_api.lock_dispatch(f uuid, p_lock boolean) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $f$
+BEGIN
+  IF p_lock THEN
+    IF NOT EXISTS (SELECT FROM pr06a_control.batch b WHERE pr06a_control.owns_batch(b,f)) THEN
+      RAISE EXCEPTION 'PR06A_DISPATCH_FENCE_BLOCKED';
+    END IF;
+    PERFORM pg_advisory_lock_shared(6206,1);
+  ELSIF EXISTS (SELECT FROM pg_catalog.pg_locks WHERE locktype='advisory' AND pid=pg_backend_pid()
+      AND classid=6206 AND objid=1 AND objsubid=2 AND mode='ShareLock' AND granted) THEN
+    PERFORM pg_advisory_unlock_shared(6206,1);
+  END IF;
+END $f$;
+
 CREATE FUNCTION pr06a_control.dispatch_seconds(b pr06a_control.batch, p_attempt uuid) RETURNS double precision
 LANGUAGE sql SET search_path=pg_catalog,pg_temp AS $f$
   SELECT extract(epoch FROM least(a.lease_until,b.lease_until,budget.period_end,
       '2027-01-01 00:00:00+08'::timestamptz) - clock_timestamp())::double precision
   FROM pr06a_control.attempts a JOIN billing_control.platform_budgets budget ON budget.period_start=b.period_start
   WHERE a.attempt=p_attempt AND a.authorization_id=b.authorization_id
+    AND EXISTS (SELECT FROM pg_catalog.pg_locks WHERE locktype='advisory' AND pid=pg_backend_pid()
+      AND classid=6206 AND objid=1 AND objsubid=2 AND mode='ShareLock' AND granted)
 $f$;
 
 CREATE FUNCTION pr06a_api.check_frame(f uuid, p_attempt uuid, p_start integer) RETURNS double precision
@@ -401,7 +444,7 @@ BEGIN
   RETURN pr06a_control.observed_cost(b.authorization_id)>=b.authorized_microyuan;
 END $f$;
 
-CREATE FUNCTION pr06a_api.observe_risk(f uuid, p_attempt uuid, p_in bigint, p_out bigint) RETURNS void
+CREATE FUNCTION pr06a_api.observe_risk(f uuid, p_attempt uuid, p_in bigint, p_out bigint, p_total bigint) RETURNS void
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $f$
 DECLARE b pr06a_control.batch%ROWTYPE;
 BEGIN
@@ -410,8 +453,8 @@ BEGIN
   PERFORM billing_api.lock_budget(b.period_start);
   UPDATE pr06a_control.attempts SET
     observed_input=greatest(observed_input,p_in),observed_output=greatest(observed_output,p_out),
+    observed_total=greatest(observed_total,p_total),
     metering_revision=metering_revision+1 WHERE attempt=p_attempt AND authorization_id=b.authorization_id;
-  IF NOT FOUND THEN RAISE EXCEPTION 'PR06A_RISK_EVIDENCE_BLOCKED'; END IF;
   PERFORM pr06a_control.alert_budget(b.period_start);
 END $f$;
 
@@ -497,7 +540,8 @@ BEGIN
       gross_microyuan,net_microyuan,bill_month,evidence_hash,reviewed_metering_revision,discrepancy_resolved)
     VALUES(p_attempt,p_revision,p_request,p_in,p_out,p_gross,p_net,p_month,p_evidence,p_metering_revision,p_resolved);
   matches_usage:= p_metering_revision=a.metering_revision AND (p_resolved OR a.metering_revision=0 OR
-    (p_in=a.input_tokens AND p_out=a.output_tokens AND p_in>=a.observed_input AND p_out>=a.observed_output));
+    (p_in=a.input_tokens AND p_out=a.output_tokens AND p_in>=coalesce(a.observed_input,0)
+     AND p_out>=coalesce(a.observed_output,0) AND p_in+p_out>=coalesce(a.observed_total,0)));
   UPDATE pr06a_control.attempts SET request_id=coalesce(p_request,a.request_id),gross_microyuan=p_gross,
     reconciled_metering_revision=CASE WHEN matches_usage THEN p_metering_revision END WHERE attempt=p_attempt;
   SELECT coalesce(sum(gross_microyuan),0) INTO total FROM pr06a_control.attempts WHERE authorization_id=b.authorization_id;
@@ -603,7 +647,8 @@ GRANT EXECUTE ON FUNCTION pr06a_api.open_batch(uuid,jsonb,text,jsonb),
   pr06a_api.protocol(uuid,uuid,text),pr06a_api.check_connection(uuid,uuid,boolean),
   pr06a_api.discard_frame(uuid,uuid,integer),pr06a_api.anomaly(uuid,uuid,text,text),
   pr06a_api.record_inbound(uuid,uuid,integer,integer,integer,text),
-  pr06a_api.check_frame(uuid,uuid,integer),pr06a_api.observe_risk(uuid,uuid,bigint,bigint),
+  pr06a_api.check_frame(uuid,uuid,integer),pr06a_api.observe_risk(uuid,uuid,bigint,bigint,bigint),
+  pr06a_api.lock_dispatch(uuid,boolean),
   pr06a_api.interrupt(uuid,uuid,text)
   TO classroom_pr06a_executor;
 GRANT EXECUTE ON FUNCTION pr06a_api.settle(uuid,integer,text,bigint,bigint,bigint,bigint,text,text,integer,boolean),

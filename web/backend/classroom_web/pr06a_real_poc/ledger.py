@@ -1,5 +1,6 @@
 """Narrow transaction client for the isolated PG execution role."""
 import asyncio
+from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass
 import logging
 from uuid import UUID, uuid4
@@ -20,6 +21,21 @@ class Attempt:
     @classmethod
     def create(cls):
         return cls(uuid4(), uuid4(), uuid4())
+
+
+async def finish_on_cancel(work):
+    operation = asyncio.create_task(work)
+    try:
+        return await asyncio.shield(operation)
+    except asyncio.CancelledError:
+        while not operation.done():
+            try:
+                await asyncio.wait((operation,))
+            except asyncio.CancelledError:
+                continue
+        if not operation.cancelled():
+            operation.exception()
+        raise
 
 
 class PgLedger:
@@ -49,22 +65,9 @@ class PgLedger:
     async def _change(self, statement, *args):
         try:
             async with self._lock:
-                operation = asyncio.create_task(self._transaction(statement, args))
-                try:
-                    # No permission leaves this method before COMMIT completes.
-                    return await asyncio.shield(operation)
-                except asyncio.CancelledError:
-                    # psycopg can be cancelled inside BEGIN or COMMIT. Let the
-                    # bounded transaction finish so the same connection cannot
-                    # advance while its transaction state is unresolved.
-                    while not operation.done():
-                        try:
-                            await asyncio.wait((operation,))
-                        except asyncio.CancelledError:
-                            continue
-                    if not operation.cancelled():
-                        operation.exception()
-                    raise
+                # No permit leaves this method before COMMIT. Cancelling its
+                # caller cannot interrupt BEGIN or COMMIT on the shared socket.
+                return await finish_on_cancel(self._transaction(statement, args))
         except Exception:
             raise PocStopped("ledger_rejected_or_commit_unknown") from None
 
@@ -84,6 +87,18 @@ class PgLedger:
 
     async def protocol(self, attempt, event):
         await self._change("SELECT pr06a_api.protocol(%s,%s,%s)", attempt.id, event)
+
+    @asynccontextmanager
+    async def dispatch_lock(self):
+        try:
+            await self._change("SELECT pr06a_api.lock_dispatch(%s,true)")
+            yield
+        finally:
+            try:
+                await self._change("SELECT pr06a_api.lock_dispatch(%s,false)")
+            except (PocStopped, asyncio.CancelledError):
+                await self.db.close()
+                raise
 
     async def check_connection(self, attempt, *, handshake=False):
         return await self._change("SELECT pr06a_api.check_connection(%s,%s,%s)", attempt.id, handshake)
@@ -112,9 +127,9 @@ class PgLedger:
                                   attempt.id, request, usage.input_tokens if usage else None,
                                   usage.output_tokens if usage else None, final)
 
-    async def observe_risk(self, attempt, usage):
-        await self._change("SELECT pr06a_api.observe_risk(%s,%s,%s,%s)", attempt.id,
-                           usage.input_tokens, usage.output_tokens)
+    async def observe_risk(self, attempt, usage, total=None):
+        await self._change("SELECT pr06a_api.observe_risk(%s,%s,%s,%s,%s)", attempt.id,
+                           usage.input_tokens if usage else None, usage.output_tokens if usage else None, total)
 
     async def sentence(self, attempt, sentence, revision, required_sample):
         await self._change("SELECT pr06a_api.record_sentence(%s,%s,%s,%s,%s,%s,%s,%s,%s)",

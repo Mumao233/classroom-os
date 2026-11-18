@@ -27,6 +27,10 @@ class PocStopped(Exception):
     """Fixed error code safe for ordinary operational output."""
 
 
+class EndOfStream(ConnectionError):
+    """The peer closed the WebSocket normally."""
+
+
 class UnsafeInbound(PocStopped):
     def __init__(self, reason, checksum):
         super().__init__(reason)

@@ -1,5 +1,6 @@
 """Exercise the pinned WSS driver against a loopback-only protocol peer."""
 import asyncio
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from ipaddress import ip_address
 import json
@@ -21,8 +22,9 @@ from classroom_web.pr06a_real_poc.policy import ENDPOINT, PocStopped, UnsafeInbo
 FAKE_KEY = "synthetic-pr06a-test-key"
 
 
+@asynccontextmanager
 async def _allow():
-    pass
+    yield None
 
 
 def test_escaped_credential_is_never_returned_as_evidence():
@@ -111,7 +113,7 @@ def test_pinned_driver_protocol_and_logging(monkeypatch, caplog, tmp_path, abnor
             refused = websocket._WebSocket(FAKE_KEY)
             refused.claim()
 
-            async def stop_before_bearer():
+            def stop_before_bearer():
                 raise PocStopped("synthetic_revocation_before_bearer")
 
             with pytest.raises(PocStopped, match="synthetic_revocation_before_bearer"):
@@ -121,8 +123,9 @@ def test_pinned_driver_protocol_and_logging(monkeypatch, caplog, tmp_path, abnor
             expired = websocket._WebSocket(FAKE_KEY)
             expired.claim()
 
+            @asynccontextmanager
             async def stale_commit():
-                return asyncio.get_running_loop().time() - 0.01
+                yield asyncio.get_running_loop().time() - 0.01
 
             with pytest.raises(PocStopped, match="handshake_deadline"):
                 await expired.connect(before_handshake=stale_commit)

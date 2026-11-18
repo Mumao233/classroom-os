@@ -43,6 +43,7 @@ class WireEvent:
     heartbeat: tuple[int, int | None] | None = None
     heartbeat_duration: int | None = None
     risk_usage: TokenUsage | None = None
+    risk_total: int | None = None
 
 
 def run_task(provider_task_id: str) -> dict:
@@ -166,19 +167,22 @@ def _usage(*containers: dict) -> tuple[TokenUsage | None, int | None]:
     return tokens, observed.get("duration")
 
 
-def _conflicting_token_evidence(*containers: dict) -> TokenUsage | None:
+def _conflicting_token_evidence(*containers: dict) -> tuple[TokenUsage | None, int | None]:
     high = {}
     for container in containers:
         usage = container.get("usage")
         if not isinstance(usage, dict):
             continue
-        for meter in ("input_tokens", "output_tokens"):
+        for meter in ("input_tokens", "output_tokens", "total_tokens"):
             try:
                 count = integer(usage.get(meter))
             except ProtocolError:
                 continue
             high[meter] = max(high.get(meter, 0), count)
-    return TokenUsage(high.get("input_tokens", 0), high.get("output_tokens", 0)) if high else None
+    split = None
+    if "input_tokens" in high or "output_tokens" in high:
+        split = TokenUsage(high.get("input_tokens", 0), high.get("output_tokens", 0))
+    return split, high.get("total_tokens")
 
 
 def parse_event(raw: str, provider_task_id: str, *, capture_risk: bool = False) -> WireEvent:
@@ -245,8 +249,8 @@ def parse_event(raw: str, provider_task_id: str, *, capture_risk: bool = False) 
 
     # Duration can distinguish otherwise identical heartbeat observations. It
     # supplies neither 3.1 token evidence nor a chargeable audio measurement.
+    risk, total = _conflicting_token_evidence(payload, output, mirror) if capture_risk and usage_issue else (None, None)
     return WireEvent(kind, request_id=request_id, sentence=sentence, usage=usage,
                      usage_issue=usage_issue, sentence_issue=sentence_issue, heartbeat=heartbeat,
                      heartbeat_duration=duration if heartbeat is not None else None,
-                     risk_usage=_conflicting_token_evidence(payload, output, mirror)
-                     if capture_risk and usage_issue else None)
+                     risk_usage=risk, risk_total=total)

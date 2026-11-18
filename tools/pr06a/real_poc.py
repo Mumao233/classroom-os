@@ -68,9 +68,10 @@ async def _db(arm):
     async with asyncio.timeout(5):
         db = await AsyncConnection.connect(dsn, autocommit=True, connect_timeout=3, hostaddr="127.0.0.1")
         try:
-            for setting in ("log_parameter_max_length", "log_parameter_max_length_on_error"):
+            for setting, value in (("log_parameter_max_length", "0"),
+                                   ("log_parameter_max_length_on_error", "0"), ("log_error_verbosity", "terse")):
                 result = await db.execute(f"SHOW {setting}")
-                if await result.fetchone() != ("0",):
+                if await result.fetchone() != (value,):
                     raise PocStopped("database_parameter_logging_enabled")
         except BaseException:
             await db.close()
@@ -94,6 +95,10 @@ def _verify_receipts(args, head):
             or len(review.get("gates", {})) != 10
             or not all(gate.get("ok") is True for gate in review["gates"].values())):
         raise PocStopped("review_receipt_not_accepted")
+    verdict = Path(args.review).with_name("review.md").read_bytes()
+    if (digest(verdict) != review.get("review_sha256")
+            or f"VERDICT: PASS {head}" not in verdict.decode("utf-8-sig").splitlines()):
+        raise PocStopped("explicit_review_verdict_required")
     vmware = _receipt(args.vmware_receipt, args.vmware_sha256, "vmware_receipt_digest_mismatch")
     if (vmware.get("commit") != head or vmware.get("mode") != "full"
             or vmware.get("result") not in ("passed", "passed_with_skips")
@@ -105,7 +110,7 @@ def _verify_receipts(args, head):
                         vmware.get("manifest_sha256"), "vmware_manifest_digest_mismatch")
     with ZipFile(BytesIO(_git("archive", "--format=zip", head))) as snapshot:
         files = {entry.filename: digest(snapshot.read(entry)) for entry in snapshot.infolist() if not entry.is_dir()}
-    if (manifest.get("base_sha") != head or manifest.get("files_sha256") != files
+    if (manifest.get("base_sha") != head or manifest.get("full") is not True or manifest.get("files_sha256") != files
             or manifest.get("runner_sha256") != files.get("tools/pr06a/run_vmware_validation.py")
             or vmware.get("executed_runner_sha256") != manifest["runner_sha256"]
             or vmware.get("source_archive_sha256") != manifest.get("source_zip_sha256")):

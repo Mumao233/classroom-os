@@ -1,13 +1,14 @@
 """One fenced batch. PG owns the hold, connection slots and frame intents."""
 import asyncio
 from bisect import bisect_left
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
 from ..asr_dashscope.transport import AuthenticationRejected, Disconnected
 from ..asr_dashscope.wire import finish_task, parse_event, run_task
 from ..asr_sim.simulator import ProtocolError
-from .ledger import Attempt
-from .policy import FRAME_SAMPLES, MAX_BATCH_SECONDS, MAX_CONNECTION_SECONDS, PocStopped, UnsafeInbound, digest
+from .ledger import Attempt, finish_on_cancel
+from .policy import FRAME_SAMPLES, MAX_BATCH_SECONDS, MAX_CONNECTION_SECONDS, EndOfStream, PocStopped, UnsafeInbound, digest
 
 
 @dataclass(frozen=True)
@@ -22,7 +23,9 @@ class _Session:
         self.transport, self.ledger, self.attempt, self.sample = transport, ledger, attempt, sample
         self.started = asyncio.Event()
         self.run_recorded = asyncio.Event()
-        self.finish_recorded = asyncio.Event()
+        self.finish_done = asyncio.Event()
+        self.finish_confirmed = False
+        self.terminal_conflicts = set()
         self.terminal_signal = asyncio.Event()
         self.terminal_event = None
         self.dispatch_ready = asyncio.Event()
@@ -65,12 +68,25 @@ class _Session:
         self.sentences[sentence.sentence_id] = (sentence, revision)
         self.seen_sentences.add(sentence)
 
+    async def _bind_request(self, event):
+        if event.request_id and self.request is None:
+            await self.ledger.observe(self.attempt, event.request_id, None, False)
+            self.request = event.request_id
+
+    async def _risk(self, event):
+        if event.request_id and self.request and event.request_id != self.request:
+            return
+        await self._bind_request(event)
+        risk = event.usage or event.risk_usage
+        if risk is not None or event.risk_total is not None:
+            await self.ledger.observe_risk(self.attempt, risk, event.risk_total)
+
     async def _usage(self, event, inbound, final):
-        self.request = event.request_id or self.request
+        await self._bind_request(event)
         usage = event.usage
         if event.usage_issue or (final and (usage is None or self.request is None)):
-            if event.risk_usage is not None:
-                await self.ledger.observe_risk(self.attempt, event.risk_usage)
+            if event.risk_usage is not None or event.risk_total is not None:
+                await self.ledger.observe_risk(self.attempt, event.risk_usage, event.risk_total)
             await self._anomaly("usage_unresolved", inbound)
         if (usage is not None and self.usage is not None
                 and (usage.input_tokens < self.usage.input_tokens or usage.output_tokens < self.usage.output_tokens)):
@@ -95,10 +111,11 @@ class _Session:
             raise PocStopped("response_before_run")
         await self.run_recorded.wait()
         if self.terminal_event is not None:
-            if event != self.terminal_event:
-                risk = event.usage or event.risk_usage
-                if risk is not None and (event.request_id is None or event.request_id == self.request):
-                    await self.ledger.observe_risk(self.attempt, risk)
+            if event != self.terminal_event and event not in self.terminal_conflicts:
+                self.terminal_conflicts.add(event)
+                if event.kind == "task-failed":
+                    self.recognition_ok = False
+                await self._risk(event)
                 await self._anomaly("post_terminal_conflict", inbound)
             return
         if event.kind == "task-failed":
@@ -111,18 +128,24 @@ class _Session:
                 await self.ledger.protocol(self.attempt, "task-started")
                 self.ready = True
                 self.started.set()
-            return False
+            return
         if not self.ready:
             raise PocStopped("event_order")
 
         final = event.kind == "task-finished"
         if final:
             if not self.finish_control or inbound.control_sequence < self.finish_control:
-                raise PocStopped("terminal_before_finish")
-            await self.finish_recorded.wait()
+                await self._risk(event)
+                await self._anomaly("terminal_before_finish", inbound)
+                raise PocStopped(self.stop)
+            await self.finish_done.wait()
+            if not self.finish_confirmed:
+                await self._risk(event)
+                await self._anomaly("terminal_with_unconfirmed_finish", inbound)
+                raise PocStopped(self.stop)
             await self.ledger.protocol(self.attempt, "task-finished")
         elif event in self.seen_results:
-            return False
+            return
         else:
             self.seen_results.add(event)
 
@@ -139,8 +162,7 @@ class _Session:
                 await self._sentence(event.sentence, inbound)
             # Recognition and billing have independent validity boundaries.
             if final:
-                if event.request_id and self.request is None:
-                    await self.ledger.observe(self.attempt, event.request_id, None, False)
+                await self._bind_request(event)
                 self.recognition_ok = (not self.recognition_tainted and bool(self.sentences)
                                        and all(item.final for item, _ in self.sentences.values()))
                 await self._usage(event, inbound, True)
@@ -155,10 +177,10 @@ class _Session:
             while True:
                 try:
                     inbound = await self.transport.receive_text()
-                except Disconnected:
+                except EndOfStream:
                     if self.terminal_event is not None:
                         return
-                    raise
+                    raise Disconnected("closed_before_terminal") from None
                 except UnsafeInbound as exc:
                     self.dispatch_ready.clear()
                     self.stop = str(exc)
@@ -166,6 +188,8 @@ class _Session:
                         await self.ledger.anomaly(self.attempt, self.stop, exc.checksum)
                     finally:
                         self.dispatch_ready.set()
+                    if self.terminal_event is not None:
+                        continue
                     raise
                 self.dispatch_ready.clear()
                 try:
@@ -173,6 +197,12 @@ class _Session:
                     self.received_count += 1
                     self.received_bytes += len(received)
                     if self.received_count > 512 or self.received_bytes > 2 * 1024 * 1024:
+                        try:
+                            event = parse_event(inbound.text, str(self.attempt.task_id), capture_risk=True)
+                        except ProtocolError:
+                            pass
+                        else:
+                            await self._risk(event)
                         await self._anomaly("inbound_evidence_limit", inbound)
                         raise PocStopped("inbound_evidence_limit")
                     await self.ledger.inbound(self.attempt, self.received_count, inbound)
@@ -186,6 +216,30 @@ class _Session:
             self.started.set()
             self.terminal_signal.set()
 
+    async def _cleanup(self, reader, deadline, watchdog):
+        self.run_recorded.set()
+        self.finish_done.set()
+        closed = False
+        try:
+            async with asyncio.timeout_at(deadline):
+                if asyncio.get_running_loop().time() < deadline:
+                    await self.transport.close()
+                    closed = True
+        finally:
+            if not closed:
+                self.transport.abort()
+            try:
+                if reader is not None:
+                    _, pending = await asyncio.wait((reader,), timeout=2)
+                    if pending:
+                        self.transport.abort()
+                        reader.cancel()
+                        self.stop = self.stop or "accounting_cleanup_timeout"
+                    await asyncio.gather(reader, return_exceptions=True)
+            finally:
+                self.transport.abort()
+                watchdog.cancel()
+
     async def run(self, deadline):
         reader = None
         transport = self.transport
@@ -194,13 +248,15 @@ class _Session:
         watchdog = loop.call_at(deadline, transport.abort)
         write_deadline = deadline - 0.25
 
+        @asynccontextmanager
         async def authorize_handshake():
-            requested = loop.time()
-            seconds = await self.ledger.check_connection(self.attempt, handshake=True)
-            expires = min(write_deadline, requested + seconds)
-            if loop.time() >= expires:
-                raise PocStopped("handshake_deadline")
-            return expires
+            async with self.ledger.dispatch_lock():
+                requested = loop.time()
+                seconds = await self.ledger.check_connection(self.attempt, handshake=True)
+                expires = min(write_deadline, requested + seconds)
+                if loop.time() >= expires:
+                    raise PocStopped("handshake_deadline")
+                yield expires
 
         try:
             async with asyncio.timeout_at(write_deadline):
@@ -208,13 +264,16 @@ class _Session:
                     raise TimeoutError
                 await transport.connect(before_handshake=authorize_handshake)
                 await self.ledger.protocol(self.attempt, "handshake")
-                requested = loop.time()
-                seconds = await self.ledger.check_connection(self.attempt)
-                if loop.time() >= min(write_deadline, requested + seconds):
-                    raise PocStopped("run_deadline")
-                reader = asyncio.create_task(self._read())
-                await transport.send_json(run_task(str(self.attempt.task_id)),
-                                          on_dispatched=lambda n: setattr(self, "run_control", n))
+                async with self.ledger.dispatch_lock():
+                    requested = loop.time()
+                    seconds = await self.ledger.check_connection(self.attempt)
+                    if loop.time() >= min(write_deadline, requested + seconds):
+                        raise PocStopped("run_deadline")
+                    if transport.has_pending():
+                        raise PocStopped("pre_run_message")
+                    reader = asyncio.create_task(self._read())
+                    await transport.send_json(run_task(str(self.attempt.task_id)),
+                                              on_dispatched=lambda n: setattr(self, "run_control", n))
                 await self.ledger.protocol(self.attempt, "run-task")
                 self.run_recorded.set()
                 await self.started.wait()
@@ -223,35 +282,19 @@ class _Session:
                 if reader.done() or self.provider_failed:
                     await reader
                     raise PocStopped("premature_reader_exit")
-                await transport.send_json(finish_task(str(self.attempt.task_id)),
-                                          on_dispatched=lambda n: setattr(self, "finish_control", n))
-                await self.ledger.protocol(self.attempt, "finish-task")
-                self.finish_recorded.set()
+                try:
+                    await transport.send_json(finish_task(str(self.attempt.task_id)),
+                                              on_dispatched=lambda n: setattr(self, "finish_control", n))
+                    await self.ledger.protocol(self.attempt, "finish-task")
+                    self.finish_confirmed = True
+                finally:
+                    self.finish_done.set()
                 await self.terminal_signal.wait()
                 await self._wait_dispatch(reader)
                 if reader.done():
                     await reader
         finally:
-            closed = False
-            try:
-                async with asyncio.timeout_at(deadline):
-                    if loop.time() < deadline:
-                        await transport.close()
-                        closed = True
-            finally:
-                if not closed:
-                    transport.abort()
-                try:
-                    if reader is not None:
-                        _, pending = await asyncio.wait((reader,), timeout=2)
-                        if pending:
-                            transport.abort()
-                            reader.cancel()
-                            self.stop = self.stop or "accounting_cleanup_timeout"
-                        await asyncio.gather(reader, return_exceptions=True)
-                finally:
-                    transport.abort()
-                    watchdog.cancel()
+            await finish_on_cancel(self._cleanup(reader, deadline, watchdog))
         if reader is not None and not reader.cancelled():
             await reader
 
@@ -263,6 +306,40 @@ class _Session:
                 await asyncio.sleep(0.001)
             else:
                 return
+
+    async def _dispatch_frame(self, reader, start, end, frame, deadline):
+        loop = asyncio.get_running_loop()
+        write_attempted = False
+        try:
+            while not self.stop and not reader.done():
+                await self._wait_dispatch(reader)
+                if self.stop or reader.done():
+                    return False
+                async with self.ledger.dispatch_lock():
+                    requested = loop.time()
+                    seconds = await self.ledger.check_frame(self.attempt, start)
+                    if self.stop or reader.done():
+                        return False
+                    if not self.dispatch_ready.is_set() or self.transport.has_pending():
+                        continue
+                    if loop.time() >= min(deadline, requested + seconds):
+                        raise PocStopped("audio_deadline")
+                    try:
+                        self.transport.note_audio_attempt(len(self.ranges))
+                    except Exception:
+                        raise PocStopped("audio_stamp_failed") from None
+                    self.ranges.append(end)
+                    write_attempted = True
+                    await self.transport.send_binary(frame)
+                    return True
+        except PocStopped as exc:
+            if write_attempted:
+                raise
+            self.stop = self.stop or str(exc)
+        finally:
+            if not write_attempted:
+                await self.ledger.discard_frame(self.attempt, start)
+        return False
 
     async def _send_audio(self, reader, deadline):
         size = self.sample.spec.send_samples
@@ -280,34 +357,10 @@ class _Session:
             except PocStopped as exc:
                 self.stop = self.stop or str(exc)
                 return
-            await asyncio.sleep(0)
-            while True:
-                await self._wait_dispatch(reader)
-                if self.stop or reader.done():
-                    break
-                try:
-                    requested = loop.time()
-                    seconds = await self.ledger.check_frame(self.attempt, start)
-                except PocStopped as exc:
-                    self.stop = self.stop or str(exc)
-                    break
-                if self.dispatch_ready.is_set() and not self.transport.has_pending():
-                    if loop.time() >= min(deadline, requested + seconds):
-                        self.stop = "audio_deadline"
-                    break
-            if self.stop or reader.done():
-                await self.ledger.discard_frame(self.attempt, start)
+            if not await self._dispatch_frame(reader, start, end, frame, deadline):
                 return
-            try:
-                self.transport.note_audio_attempt(len(self.ranges))
-            except Exception:
-                await self.ledger.discard_frame(self.attempt, start)
-                raise Disconnected("audio_stamp_failed") from None
-            self.ranges.append(end)
             next_frame = loop.time() + (end - start) / 16000
-            await self.transport.send_binary(frame)
             await self.ledger.confirm_frame(self.attempt, start)
-
 
 async def execute_batch(ledger, samples, reviewed_sha, account_ref, credential_fingerprint, transport_for):
     if any(len(sample.pcm) != sample.spec.send_samples * 2

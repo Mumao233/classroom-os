@@ -8,12 +8,12 @@ import ssl
 
 import websockets
 from websockets.asyncio.client import ClientConnection, connect
-from websockets.exceptions import InvalidStatus
+from websockets.exceptions import ConnectionClosedOK, InvalidStatus
 from websockets.frames import Frame, Opcode
 
 from ..asr_dashscope.transport import AuthenticationRejected, Disconnected, InboundText
 from ..asr_dashscope.wire import MAX_MESSAGE_CHARS
-from .policy import ENDPOINT, LIB_VERSION, PocStopped, UnsafeInbound, digest
+from .policy import ENDPOINT, LIB_VERSION, EndOfStream, PocStopped, UnsafeInbound, digest
 
 _wire_log = logging.Logger("pr06a.websocket")
 _wire_log.addHandler(logging.NullHandler())
@@ -55,10 +55,10 @@ class _Connection(ClientConnection):
     async def handshake(self, additional_headers=None, user_agent_header=None):
         # websockets calls this after TCP/TLS setup. No HTTP headers have gone
         # out yet. Its connect() aborts this transport if the gate rejects.
-        deadline = await self._before_handshake()
-        if deadline is not None and asyncio.get_running_loop().time() >= deadline:
-            raise PocStopped("handshake_deadline")
-        await super().handshake(additional_headers, user_agent_header)
+        async with self._before_handshake() as deadline:
+            if deadline is not None and asyncio.get_running_loop().time() >= deadline:
+                raise PocStopped("handshake_deadline")
+            await super().handshake(additional_headers, user_agent_header)
 
     def process_event(self, event):
         if isinstance(event, Frame) and event.opcode in (Opcode.TEXT, Opcode.BINARY):
@@ -69,7 +69,7 @@ class _Connection(ClientConnection):
         message = await self.recv()
         control, audio = self.stamps.popleft()
         if not isinstance(message, str):
-            raise Disconnected("expected_text_frame")
+            raise UnsafeInbound("binary_provider_response", digest(message))
         return InboundText(message, control, audio)
 
     async def send_control(self, message, on_dispatched):
@@ -155,6 +155,8 @@ class _WebSocket:
         try:
             frame = await self._connected().stamped_text()
             return _safe_evidence(frame, self._redaction_key)
+        except ConnectionClosedOK:
+            raise EndOfStream("peer_closed") from None
         except UnsafeInbound:
             raise
         except Exception:

@@ -108,10 +108,20 @@ class Peer(FakeTransport):
         return not self._inbound.empty()
 
     async def connect(self, *, before_handshake):
-        await before_handshake()
-        await super().connect()
-        if self.mode == "auth":
-            raise AuthenticationRejected("synthetic handshake rejection")
+        async with before_handshake():
+            await super().connect()
+            if self.mode == "auth":
+                raise AuthenticationRejected("synthetic handshake rejection")
+            if self.mode == "pre-run":
+                self.event("task-started")
+
+    async def receive_text(self):
+        try:
+            return await super().receive_text()
+        except Disconnected:
+            if self.closed:
+                raise policy.EndOfStream("synthetic clean close") from None
+            raise
 
     async def send_json(self, message, *, on_dispatched=None):
         await super().send_json(message, on_dispatched=on_dispatched)
@@ -123,10 +133,14 @@ class Peer(FakeTransport):
                                                                   "output_tokens": 1}}
             self.event("task-finished", **usage)
             if self.mode == "terminal-conflict":
-                self.event("task-finished", usage={"input_tokens": 200000, "output_tokens": 1})
+                for _ in range(2):
+                    self.event("task-finished", usage={"input_tokens": 200000, "output_tokens": 1})
 
     async def send_binary(self, frame):
         await super().send_binary(frame)
+        if self.mode == "early-terminal":
+            self.event("task-finished", usage={"total_tokens": 300000})
+            return
         if self.mode == "pending-meter":
             self.event("result-generated", output={"request_id": self.task, "sentence": {
                 "sentence_id": 1, "begin_time": 0, "end_time": 100,
@@ -180,6 +194,8 @@ class Peer(FakeTransport):
                                                  ("regression", "usage_regression", 1),
                                                  ("mirrors", "usage_unresolved", 1),
                                                  ("terminal-conflict", "post_terminal_conflict", 1),
+                                                 ("early-terminal", "terminal_before_finish", 1),
+                                                 ("pre-run", "pre_run_message", 1),
                                                  ("partial", "incomplete_recognition", 1)])
 def test_fenced_batch_against_postgres(poc, monkeypatch, mode, expected, count):
     pg, samples, connect = poc
@@ -206,15 +222,20 @@ def test_fenced_batch_against_postgres(poc, monkeypatch, mode, expected, count):
         assert all([kind for kind, _ in peer.sent] == ["json", "binary", "binary", "json"] for peer in peers)
     if mode in ("limit", "foreign", "regression", "mirrors"):
         assert len(peers[0].sent_binary) == 1
-    if mode in ("partial", "foreign"):
+    if mode in ("partial", "foreign", "early-terminal"):
         assert receipts[0].state == "unknown"
+    if mode == "pre-run":
+        assert not peers[0].sent
     with pg.admin.connect() as db:
         batch = db.execute(sa.text("SELECT * FROM pr06a_control.batch")).mappings().one()
         exposure = db.scalar(sa.text("SELECT billing_api.lock_budget(:cycle)"), dict(cycle=batch["period_start"]))
         expected_exposure = {"limit": 1_200_005, "regression": 1_200_005,
-                             "mirrors": 1_200_011, "terminal-conflict": 1_200_005}.get(mode, 1_000_000)
+                             "mirrors": 1_200_011, "terminal-conflict": 1_200_005,
+                             "early-terminal": 1_350_000}.get(mode, 1_000_000)
         assert exposure["unknown"] == exposure["pool_risk"]["asr"] == expected_exposure
         assert batch["input_token_limit"] is None and batch["held_microyuan"] == 1_000_000
+        if mode == "terminal-conflict":
+            assert db.scalar(sa.text("SELECT metering_revision FROM pr06a_control.attempts")) == 3
         if mode == "foreign":
             assert db.scalar(sa.text("SELECT count(*) FROM pr06a_control.recognition")) == 1
             assert db.scalar(sa.text("SELECT code FROM pr06a_control.anomalies")) == "request_identity_conflict"
@@ -304,6 +325,37 @@ def test_concurrent_last_slot_and_unconfirmed_ranges(poc):
             with pytest.raises(policy.PocStopped):
                 await ledger._change("SELECT pr06a_api.claim_attempt(%s,4,%s,%s,%s)",
                                      uuid4(), uuid4(), uuid4())
+    _run(run())
+
+
+def test_control_revoke_serializes_with_dispatch(poc):
+    pg, samples, connect = poc
+
+    def revoke():
+        with pg.admin.begin() as db:
+            db.exec_driver_sql("SELECT pr06a_api.revoke()")
+
+    async def run():
+        async with connect() as ledger, asyncio.timeout(5):
+            await ledger.open(REVIEWED, ACCOUNT, FINGERPRINT, samples)
+            attempt = Attempt.create()
+            await ledger.claim(samples[0], attempt)
+            async with ledger.dispatch_lock():
+                task = asyncio.create_task(asyncio.to_thread(revoke))
+                while True:
+                    with pg.admin.connect() as db:
+                        waiting = db.scalar(sa.text("""SELECT count(*) FROM pg_locks
+                          WHERE locktype='advisory' AND classid=6206 AND objid=1
+                            AND objsubid=2 AND NOT granted AND mode='ExclusiveLock'"""))
+                        assert not db.scalar(sa.text("SELECT revoked FROM pr06a_control.activation"))
+                    if waiting:
+                        break
+                    await asyncio.sleep(0.01)
+                assert not task.done()
+            await task
+            with pytest.raises(policy.PocStopped):
+                await ledger.frame(attempt, 0, 1600, "a" * 64)
+
     _run(run())
 
 
