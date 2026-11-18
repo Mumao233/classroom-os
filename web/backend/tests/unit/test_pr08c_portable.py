@@ -110,8 +110,13 @@ def test_real_legacy_writer_produces_compatible_preview(tmp_path, monkeypatch):
     # Classroom, a provider, an ASR engine, or any configuration reader.
     monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[4]))
     from portable_package import PortableStore
+    from review_sources import freeze_review, plan_batches
 
     session, files, media = golden()
+    evidence = freeze_review(session, {}, {})
+    batches = plan_batches(evidence, {}, 48_000)
+    session['review']['runs'] = [dict(id='run-01', status='prepared', evidence=evidence,
+                                    batches=batches, coverage={}, options={}, destination={})]
     for row in media:
         image = tmp_path / SESSION / row['original_path']
         image.parent.mkdir(parents=True, exist_ok=True)
@@ -125,7 +130,12 @@ def test_real_legacy_writer_produces_compatible_preview(tmp_path, monkeypatch):
     result = inspect_zip(exported)
     assert result.session['created_at'] == session['created_at']
     assert result.session['review']['cards'][0]['evidence'] == session['review']['cards'][0]['evidence']
+    assert result.session['review']['runs'][0]['batches'][0]['evidence'] == batches[0]['evidence']
     assert result.media_bytes == sum(row['size'] for row in media)
+    # A field appended after the original hash still has to cite actual sources.
+    batches[0]['evidence']['primary_source_ids'] = ['S0099']
+    with pytest.raises(InvalidPackage):
+        inspect_package(raw(session), 'application/json', PackageLimits())
 
 
 @pytest.mark.parametrize('path', ['../outside.txt', '/tmp/file', 'C:/file', 'reader\\file',
@@ -165,6 +175,20 @@ def test_unsupported_schema_extensions_rejected(field, value):
 def test_bad_json_rejected(raw_data):
     with pytest.raises(InvalidPackage):
         inspect_package(raw_data, 'application/json', PackageLimits())
+
+
+def test_invalid_selected_note_and_unreadable_zip_filename_fail_validation():
+    session, files, media = golden()
+    session['review']['selected_note_id'] = []
+    with pytest.raises(InvalidPackage, match='VALIDATION_FAILED'):
+        inspect_package(raw(session), 'application/json', PackageLimits())
+
+    valid_session, _, _ = golden()
+    name = 'reader/caf\u00e9.txt'
+    data = archive(valid_session, files, media, extra=(name, b'inert'))
+    damaged = data.replace(name.encode('utf8'), b'reader/caf\xff\xfe.txt')
+    with pytest.raises(InvalidPackage, match='VALIDATION_FAILED'):
+        inspect_zip(damaged)
 
 
 def test_missing_hash_reference_or_inconsistent_version_are_rejected():

@@ -25,6 +25,7 @@ ASSET = re.compile(r'assets/[a-f0-9]{64}\.(png|jpg|wav)')
 WINDOWS_RESERVED = re.compile(r'(?:CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³])(?:\.|$)', re.I)
 IMAGE_MIMES = {'.png': 'image/png', '.jpg': 'image/jpeg'}
 UNAVAILABLE = {'missing', 'not_included', 'deleted', 'invalid', 'corrupt'}
+BATCH_CONTEXT_FIELDS = {'primary_source_ids', 'context_source_ids', 'context_warnings'}
 
 
 class InvalidPackage(ValueError):
@@ -201,7 +202,7 @@ def session_references(session):
             if not previous.dimensions and ref.dimensions:
                 media[ref.path] = ref
 
-    def evidence(value):
+    def evidence(value, *, batch=False):
         schema(value, required=('segments', 'slides', 'source_ids'), version_optional=True)
         if 'source_session_id' in value:
             require(match(LEGACY_ID, value['source_session_id']))
@@ -215,8 +216,24 @@ def session_references(session):
         cited = value['source_ids']
         require(type(cited) is list and all(isinstance(key, str) and key in identities for key in cited)
                 and len(cited) == len(identities) == len(set(cited)))
+        omitted_from_hash = {'snapshot_hash'}
+        if batch and BATCH_CONTEXT_FIELDS & value.keys():
+            # The desktop planner hashes the subset before adding these fields.
+            # Validate their relationships separately. Card and run-level hashes
+            # still cover the full payload as written by the desktop exporter.
+            require(BATCH_CONTEXT_FIELDS <= value.keys())
+            primary, context = value['primary_source_ids'], value['context_source_ids']
+            require(type(primary) is list and bool(primary) and type(context) is list)
+            assigned = primary + context
+            require(all(isinstance(key, str) and key in identities for key in assigned)
+                    and len(assigned) == len(identities) == len(set(assigned)))
+            warnings = value['context_warnings']
+            require(type(warnings) is list and all(isinstance(warning, str) for warning in warnings))
+            omitted_from_hash |= BATCH_CONTEXT_FIELDS
         if 'snapshot_hash' in value:
-            require(value['snapshot_hash'] == canonical_hash({k: v for k, v in value.items() if k != 'snapshot_hash'}))
+            require(value['snapshot_hash'] == canonical_hash({
+                k: v for k, v in value.items() if k not in omitted_from_hash
+            }))
         return identities
 
     segments = rows(session.get('segments', []), r'S[0-9]{4,}')
@@ -230,10 +247,15 @@ def session_references(session):
         for part in rows(item.get('segments', []), r'[SR][0-9]{4,}'):
             segment(part)
     for item in rows(session.get('slides', []), r'P[0-9]{4,}'):
-        register(slide(item))
+        current = slide(item)
+        register(current)
+        versions = set()
         for historical in records(item.get('versions', [])):
-            require(historical.get('id') == item['id'])
-            register(slide(historical))
+            previous = slide(historical)
+            require(previous.identity == current.identity
+                    and previous.version < current.version and previous.version not in versions)
+            versions.add(previous.version)
+            register(previous)
     for item in records(session.get('audio', [])):
         seq = item.get('seq')
         path = item.get('path')
@@ -256,9 +278,15 @@ def session_references(session):
                     and match(RECORD_ID, item.get('target_id')))
             require(item['target_id'] in evidence(item.get('evidence')))
         for item in rows(review.get('runs', [])):
-            evidence(item.get('evidence'))
+            parent = item.get('evidence')
+            evidence(parent)
+            sources = {source['id']: source for source in parent['segments'] + parent['slides']}
             for batch in rows(item.get('batches')):
-                evidence(batch.get('evidence'))
+                subset = batch.get('evidence')
+                evidence(subset, batch=True)
+                require(subset.get('source_session_id') == parent.get('source_session_id')
+                        and all(sources.get(source['id']) == source
+                                for source in subset['segments'] + subset['slides']))
         for collection in ('cards', 'notes'):
             for item in rows(review.get(collection, [])):
                 allowed = evidence(item.get('evidence'))
@@ -272,8 +300,10 @@ def session_references(session):
                     require(all(isinstance(part.get(field), str) for field in fields))
                     cited = part.get('source_ids', [])
                     require(type(cited) is list and all(isinstance(key, str) and key in allowed for key in cited))
-        if review.get('selected_note_id') is not None:
-            require(review['selected_note_id'] in {item['id'] for item in review.get('notes', [])})
+        selected = review.get('selected_note_id')
+        if selected is not None:
+            require(match(RECORD_ID, selected)
+                    and selected in {item['id'] for item in review.get('notes', [])})
     return media
 
 
@@ -437,7 +467,7 @@ def inspect_package(raw: bytes, mime: str, limits: PackageLimits) -> PackageInsp
             audio_excluded = any(ref.kind == 'audio' for ref in refs.values())
         else:
             raise InvalidPackage()
-    except (zipfile.BadZipFile, EOFError, RuntimeError, struct.error, zlib.error) as error:
+    except (zipfile.BadZipFile, EOFError, RuntimeError, UnicodeError, struct.error, zlib.error) as error:
         raise InvalidPackage() from error
     if omitted:
         warnings.append('The package declares unavailable media or supplies only JSON metadata.')
