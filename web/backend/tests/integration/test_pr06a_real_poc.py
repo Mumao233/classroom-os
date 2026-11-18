@@ -817,6 +817,9 @@ def test_batch_migration_preserves_installation_owner_and_restricts_release(poc)
     )
     with pg.admin.begin() as db:
         db.exec_driver_sql(f'CREATE ROLE "{owner}"')
+        # The legacy SECURITY DEFINER reads an executor session's backend_start
+        # to fence the batch. A non-superuser installer needs stats visibility.
+        db.exec_driver_sql(f'GRANT pg_read_all_stats TO "{owner}"')
         db.exec_driver_sql(f'GRANT USAGE,CREATE ON SCHEMA pr06a_api,pr06a_control TO "{owner}"')
         db.exec_driver_sql(f'GRANT ALL ON ALL TABLES IN SCHEMA pr06a_control TO "{owner}"')
         db.exec_driver_sql(f'GRANT EXECUTE ON FUNCTION pr06a_control.alert_budget(timestamptz) TO "{owner}"')
