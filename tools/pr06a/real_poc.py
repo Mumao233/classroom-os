@@ -183,9 +183,12 @@ async def _arm(args, head, fingerprint):
                      OR pg_has_role(oid,'classroom_pr06a_reconciler','USAGE') AS can_operate,
                    has_function_privilege(oid,'pr06a_api.revoke(text)','EXECUTE') AS can_revoke
                  FROM pg_catalog.pg_roles
+               ), connected_roles AS (
+                 SELECT usesysid FROM pg_catalog.pg_stat_activity WHERE datname=current_database()
                ), operational_roles AS (
                  SELECT p.oid FROM roles p WHERE p.rolname=%s
-                   OR (NOT p.rolsuper AND (p.rolcanlogin OR p.rolname IN (
+                   OR (NOT p.rolsuper AND (p.rolcanlogin OR p.oid IN (SELECT usesysid FROM connected_roles)
+                       OR p.rolname IN (
                      'classroom_pr06a_executor','classroom_pr06a_reconciler'
                    )) AND EXISTS (
                      SELECT FROM roles r WHERE r.can_operate AND pg_has_role(p.oid,r.oid,'SET')

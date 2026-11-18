@@ -719,6 +719,7 @@ def test_control_login_can_arm_and_revoke(poc, arm_receipts, monkeypatch):
     control = "pr06a_control_" + uuid4().hex[:16]
     arm_only = "pr06a_arm_only_" + uuid4().hex[:16]
     revoke_owner = "pr06a_revoke_owner_" + uuid4().hex[:16]
+    retired = "pr06a_retired_" + uuid4().hex[:16]
     legacy = connect.legacy_overlay
     use_arm_only_role = False
 
@@ -734,9 +735,12 @@ def test_control_login_can_arm_and_revoke(poc, arm_receipts, monkeypatch):
     monkeypatch.setattr(operator, "_db", control_db)
     with pg.admin.begin() as db:
         db.exec_driver_sql(f'CREATE ROLE "{control}" LOGIN PASSWORD \'{SYNTHETIC_PASSWORD}\'')
+        db.exec_driver_sql(f'CREATE ROLE "{retired}" LOGIN PASSWORD \'{SYNTHETIC_PASSWORD}\'')
         db.exec_driver_sql(f'CREATE ROLE "{arm_only}"')
         db.exec_driver_sql(f'REVOKE CONNECT ON DATABASE "{pg.admin_url.database}" FROM PUBLIC')
         db.exec_driver_sql(f'GRANT CONNECT ON DATABASE "{pg.admin_url.database}" TO "{control}"')
+        db.exec_driver_sql(f'GRANT CONNECT ON DATABASE "{pg.admin_url.database}" TO "{retired}"')
+        db.exec_driver_sql(f'GRANT classroom_pr06a_reconciler TO "{retired}"')
         db.exec_driver_sql(f'GRANT USAGE ON SCHEMA pr06a_api,pr06a_control TO "{control}", "{arm_only}"')
         db.exec_driver_sql(f'GRANT INSERT ON pr06a_control.activation TO "{control}", "{arm_only}"')
         db.exec_driver_sql(f'GRANT SELECT ON pr06a_control.revocation TO "{control}", "{arm_only}"')
@@ -793,6 +797,21 @@ def test_control_login_can_arm_and_revoke(poc, arm_receipts, monkeypatch):
             _run(operator._arm(args, REVIEWED, FINGERPRINT))
 
         use_arm_only_role = False
+
+        async def refuse_still_connected_reconciler():
+            url = pg.admin_url
+            async with await AsyncConnection.connect(
+                host=url.host, port=url.port, dbname=url.database, user=retired,
+                password=SYNTHETIC_PASSWORD, autocommit=True,
+            ) as session:
+                with pg.admin.begin() as db:
+                    db.exec_driver_sql(f'GRANT EXECUTE ON FUNCTION pr06a_api.revoke(text) TO "{retired}"')
+                    db.exec_driver_sql(f'ALTER ROLE "{retired}" NOLOGIN')
+                await session.execute("SELECT 1")
+                with pytest.raises(policy.PocStopped, match="^emergency_revoke_privileges_invalid$"):
+                    await operator._arm(args, REVIEWED, FINGERPRINT)
+
+        _run(refuse_still_connected_reconciler())
         _run(operator._arm(args, REVIEWED, FINGERPRINT))
 
         async def revoke_as_control():
@@ -808,8 +827,8 @@ def test_control_login_can_arm_and_revoke(poc, arm_receipts, monkeypatch):
     finally:
         with pg.admin.begin() as db:
             db.exec_driver_sql(f'GRANT CONNECT ON DATABASE "{pg.admin_url.database}" TO PUBLIC')
-            db.exec_driver_sql(f'DROP OWNED BY "{control}", "{arm_only}"')
-            db.exec_driver_sql(f'DROP ROLE "{control}", "{arm_only}"')
+            db.exec_driver_sql(f'DROP OWNED BY "{control}", "{arm_only}", "{retired}"')
+            db.exec_driver_sql(f'DROP ROLE "{control}", "{arm_only}", "{retired}"')
             if legacy:
                 signature = "text" if migrated else ""
                 db.exec_driver_sql(f"ALTER FUNCTION pr06a_api.revoke({signature}) OWNER TO CURRENT_USER")
