@@ -81,18 +81,23 @@ class _Session:
 
     async def _risk(self, evidence, raw_hash):
         if evidence is None or evidence.task_id != str(self.attempt.task_id):
-            return
+            return True
         try:
-            if evidence.request_id and self.request and evidence.request_id != self.request:
+            if (evidence.attribution_conflict or
+                    (self.request and (evidence.request_redacted or
+                                       (evidence.request_id and evidence.request_id != self.request)))):
                 raise RequestConflict("request_identity_conflict")
             await self._bind_request(evidence)
         except RequestConflict as exc:
             self.recognition_tainted = self.terminal_event is None or self.recognition_tainted
             self._stop_for_accounting(str(exc))
             await self.ledger.anomaly(self.attempt, str(exc), raw_hash)
-            return
+            return False
         if evidence.usage is not None or evidence.total is not None:
             await self.ledger.observe_risk(self.attempt, evidence.usage, evidence.total)
+        if self.terminal_event is not None and evidence.provider_failed:
+            self.recognition_ok = False
+        return True
 
     def _check_terminal_contradiction(self, event):
         if event.request_id and self.request and event.request_id != self.request:
@@ -193,6 +198,25 @@ class _Session:
             self.terminal_event = event
             self.terminal_signal.set()
 
+    async def _retain_packet(self, inbound):
+        received = inbound.text.encode("utf-8")
+        self.received_count += 1
+        self.received_bytes += len(received)
+        packet_hash = digest(received)
+        if self.received_count > MAX_INBOUND_PACKETS or self.received_bytes > MAX_INBOUND_BYTES:
+            if not self.retention_capped:
+                self.retention_capped = True
+                self._stop_for_accounting("inbound_evidence_limit")
+                await self.ledger.anomaly(self.attempt, "inbound_evidence_limit", packet_hash)
+        else:
+            await self.ledger.inbound(self.attempt, self.received_count, inbound)
+        return await self._risk(metering_evidence(inbound.text), packet_hash)
+
+    async def _retain_unsafe(self, exc):
+        self._stop_for_accounting(str(exc))
+        await self.ledger.anomaly(self.attempt, str(exc), exc.checksum)
+        await self._risk(exc.metering, exc.checksum)
+
     async def _read(self):
         try:
             while True:
@@ -205,26 +229,14 @@ class _Session:
                 except UnsafeInbound as exc:
                     self.dispatch_ready.clear()
                     try:
-                        self._stop_for_accounting(str(exc))
-                        await self.ledger.anomaly(self.attempt, str(exc), exc.checksum)
-                        await self._risk(exc.metering, exc.checksum)
+                        await finish_on_cancel(self._retain_unsafe(exc))
                     finally:
                         self.dispatch_ready.set()
                     continue
                 self.dispatch_ready.clear()
                 try:
-                    received = inbound.text.encode("utf-8")
-                    self.received_count += 1
-                    self.received_bytes += len(received)
-                    packet_hash = digest(received)
-                    if self.received_count > MAX_INBOUND_PACKETS or self.received_bytes > MAX_INBOUND_BYTES:
-                        if not self.retention_capped:
-                            self.retention_capped = True
-                            self._stop_for_accounting("inbound_evidence_limit")
-                            await self.ledger.anomaly(self.attempt, "inbound_evidence_limit", packet_hash)
-                    else:
-                        await self.ledger.inbound(self.attempt, self.received_count, inbound)
-                    await self._risk(metering_evidence(inbound.text), packet_hash)
+                    if not await finish_on_cancel(self._retain_packet(inbound)):
+                        continue
                     if self.accounting_only:
                         if self.terminal_event is not None:
                             try:

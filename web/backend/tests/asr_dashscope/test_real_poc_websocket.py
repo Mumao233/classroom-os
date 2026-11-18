@@ -49,6 +49,11 @@ def test_credential_echo_retains_only_attributable_cost_evidence():
     assert exc.value.metering.request_id == "approved-request"
     assert exc.value.metering.usage.input_tokens == 200000
     assert not hasattr(exc.value, "text")
+    secret_request = text.replace("approved-request", encoded)
+    with pytest.raises(UnsafeInbound) as exc:
+        websocket._safe_evidence(InboundText(secret_request, 1, 1), FAKE_KEY)
+    assert exc.value.metering.request_id is None and exc.value.metering.request_redacted
+    assert exc.value.metering.usage.input_tokens == 200000
 
 
 def test_unrelated_duplicate_keys_do_not_discard_meter_evidence():
@@ -56,7 +61,9 @@ def test_unrelated_duplicate_keys_do_not_discard_meter_evidence():
     raw = ('{"header":{"task_id":"' + task + '"},"payload":{"usage":{"input_tokens":200000,'
            '"output_tokens":1},"output":{"sentence":{"x":0,"x":1},"request_id":"r"}}}')
     assert metering_evidence(raw).usage.input_tokens == 200000
-    assert metering_evidence(raw.replace('"request_id":"r"', '"request_id":"r","request_id":"s"')) is None
+    assert metering_evidence(raw.replace('"request_id":"r"', '"request_id":"r","request_id":"s"')).attribution_conflict
+    split = metering_evidence(raw.replace('"output_tokens":1', '"output_tokens":1,"output_tokens":2')).usage
+    assert split.input_tokens == 200000 and split.output_tokens is None
 
 
 def _loopback_certificate(tmp_path):

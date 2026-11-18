@@ -5,6 +5,7 @@ from dataclasses import replace
 from functools import partial
 import json
 import logging
+import socket
 import ssl
 
 import websockets
@@ -28,7 +29,7 @@ def _credential_echo(text, key):
         if key in meter.task_id:
             meter = None
         elif meter.request_id and key in meter.request_id:
-            meter = replace(meter, request_id=None)
+            meter = replace(meter, request_id=None, request_redacted=True)
     return UnsafeInbound("credential_echo", digest(text.encode("utf-8")), meter)
 
 
@@ -52,6 +53,15 @@ def _safe_evidence(frame, key):
 
 
 class _SingleDial(connect):
+    async def open_tcp_connection(self):
+        # Resolve once and select one numeric address. The pinned client
+        # preserves ws_uri.host for TLS SNI, certificate checks and HTTP Host.
+        answers = await asyncio.get_running_loop().getaddrinfo(
+            self.ws_uri.host, self.ws_uri.port, type=socket.SOCK_STREAM, proto=socket.IPPROTO_TCP)
+        family, _, _, _, address = answers[0]
+        self.create_connection_kwargs.update(host=address[0], family=family, flags=socket.AI_NUMERICHOST)
+        return await super().open_tcp_connection()
+
     def process_redirect(self, exc):
         return exc
 

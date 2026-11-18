@@ -92,7 +92,7 @@ def _finite_float(value: str) -> float:
 
 
 def _text(value: object, max_chars: int) -> str:
-    if not isinstance(value, str) or len(value) > max_chars:
+    if not isinstance(value, str) or len(value) > max_chars or "\x00" in value:
         raise ProtocolError("invalid DashScope text field")
     try:
         value.encode("utf-8")
@@ -165,7 +165,13 @@ def _usage(*containers: dict) -> tuple[TokenUsage | None, int | None]:
     return tokens, observed.get("duration")
 
 
-def _conflicting_token_evidence(*containers: dict) -> tuple[TokenUsage | None, int | None]:
+@dataclass(frozen=True)
+class RiskTokens:
+    input_tokens: int | None
+    output_tokens: int | None
+
+
+def _conflicting_token_evidence(*containers: dict) -> tuple[RiskTokens | None, int | None]:
     high = {}
     for container in containers:
         usage = container.get("usage")
@@ -179,7 +185,7 @@ def _conflicting_token_evidence(*containers: dict) -> tuple[TokenUsage | None, i
             high[meter] = max(high.get(meter, 0), count)
     split = None
     if "input_tokens" in high or "output_tokens" in high:
-        split = TokenUsage(high.get("input_tokens", 0), high.get("output_tokens", 0))
+        split = RiskTokens(high.get("input_tokens"), high.get("output_tokens"))
     return split, high.get("total_tokens")
 
 
@@ -187,12 +193,18 @@ def _conflicting_token_evidence(*containers: dict) -> tuple[TokenUsage | None, i
 class MeteringEvidence:
     task_id: str
     request_id: str | None = field(repr=False)
-    usage: TokenUsage | None
+    usage: RiskTokens | None
     total: int | None
+    attribution_conflict: bool = False
+    request_redacted: bool = False
+    provider_failed: bool = False
 
 
 class _ObjectPairs(list):
     pass
+
+
+_AMBIGUOUS = object()
 
 
 def _metering_fields(pairs, fields):
@@ -201,9 +213,7 @@ def _metering_fields(pairs, fields):
         return result
     for key, value in pairs:
         if key in fields:
-            if key in result:
-                raise UsageError("ambiguous DashScope metering field")
-            result[key] = value
+            result[key] = _AMBIGUOUS if key in result else value
     return result
 
 
@@ -215,18 +225,28 @@ def metering_evidence(raw: str) -> MeteringEvidence | None:
         obj = _metering_fields(json.loads(raw, object_pairs_hook=_ObjectPairs,
                                           parse_constant=_invalid_constant, parse_float=_finite_float),
                                {"header", "payload"})
-        task = uid(_metering_fields(obj.get("header"), {"task_id"}).get("task_id"))
+        header = _metering_fields(obj.get("header"), {"task_id", "event", "error_code", "error_message"})
+        task = uid(header.get("task_id"))
         payload = _metering_fields(obj.get("payload"), {"usage", "output"})
         output = _metering_fields(payload.get("output"), {"usage", "output", "request_id"})
         mirror = _metering_fields(output.get("output"), {"usage", "request_id"})
-        request = _request_id(output, mirror)
+        if any(value is _AMBIGUOUS for value in (obj.get("payload"), payload.get("output"), output.get("output"))):
+            return MeteringEvidence(task, None, None, None, attribution_conflict=True)
+        try:
+            request = _request_id(output, mirror)
+        except ProtocolError:
+            return MeteringEvidence(task, None, None, None, attribution_conflict=True)
         for part in (payload, output, mirror):
             if "usage" in part:
                 part["usage"] = _metering_fields(part["usage"], {"input_tokens", "output_tokens", "total_tokens"})
         usage, total = _conflicting_token_evidence(payload, output, mirror)
+        failed = (header.get("event") == "task-failed" and isinstance(header.get("error_code"), str)
+                  and bool(header["error_code"]) and isinstance(header.get("error_message"), str))
     except (ValueError, RecursionError):
         return None
-    return MeteringEvidence(task, request, usage, total) if request or usage is not None or total is not None else None
+    if request or usage is not None or total is not None or failed:
+        return MeteringEvidence(task, request, usage, total, provider_failed=failed)
+    return None
 
 
 def parse_event(raw: str, provider_task_id: str) -> WireEvent:
