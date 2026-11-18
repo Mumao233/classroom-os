@@ -205,8 +205,6 @@ class _NoncanonicalMeter(int):
 
 
 def _bounded_meter_decimal(value):
-    if len(value) > 64:
-        return None
     try:
         number = Decimal(value)
         if number.is_finite() and number >= 0 and number == number.to_integral_value():
@@ -224,6 +222,7 @@ def _meter_totals(containers):
             conflict = True
             continue
         current = {}
+        unambiguous = set()
         for meter in ("input_tokens", "output_tokens", "total_tokens"):
             values = _values(body, meter)
             if not values:
@@ -235,6 +234,8 @@ def _meter_totals(containers):
                 continue
             count = min(counts)
             current[meter] = count
+            if len(counts) == 1 and all(type(v) in (int, _NoncanonicalMeter) and 0 <= v < 2**53 for v in values):
+                unambiguous.add(meter)
             if meter in high and high[meter] != count:
                 conflict = True
             high[meter] = max(high.get(meter, 0), count)
@@ -243,6 +244,14 @@ def _meter_totals(containers):
             conflict |= current["total_tokens"] < floor
             if "input_tokens" in current and "output_tokens" in current:
                 conflict |= current["total_tokens"] != floor
+            elif "total_tokens" in unambiguous and floor <= current["total_tokens"]:
+                known = "input_tokens" if "input_tokens" in unambiguous else "output_tokens"
+                missing = "output_tokens" if known == "input_tokens" else "input_tokens"
+                if known in unambiguous and missing not in current and not _values(body, missing):
+                    inferred = current["total_tokens"] - current[known]
+                    if missing in high and high[missing] != inferred:
+                        conflict = True
+                    high[missing] = max(high.get(missing, 0), inferred)
     floor = high.get("input_tokens", 0) + high.get("output_tokens", 0)
     both = "input_tokens" in high and "output_tokens" in high
     if "total_tokens" in high:
@@ -283,9 +292,25 @@ def metering_evidence(raw: str) -> MeteringEvidence | None:
         return None
 
 
+def _canonical_pairs(pairs):
+    return {"pairs": sorted(pairs, key=lambda item: (
+        item[0], json.dumps(item[1], sort_keys=True, separators=(",", ":"), ensure_ascii=True)))}
+
+
+def _literal_number(value):
+    return {"number": value}
+
+
 def observation_fingerprint(raw: str, evidence: MeteringEvidence | None = None) -> str:
     evidence = evidence or metering_evidence(raw)
-    if evidence is not None:
+    if evidence is not None and evidence.metering_conflict:
+        try:
+            obj = json.loads(raw, object_pairs_hook=_canonical_pairs, parse_int=_literal_number,
+                             parse_float=_literal_number, parse_constant=_literal_number)
+            raw = json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        except (ValueError, RecursionError):
+            pass
+    elif evidence is not None:
         try:
             event = parse_event(raw, evidence.task_id)
         except ProtocolError:

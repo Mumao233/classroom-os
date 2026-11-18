@@ -149,7 +149,7 @@ class _Session:
     def _check_terminal_contradiction(self, event):
         if event.request_id and self.request and event.request_id != self.request:
             return
-        if event.kind in ("task-finished", "task-failed"):
+        if event.kind == "task-failed":
             self._terminal_kind(event.kind)
         sentence = event.sentence
         accepted = self.sentences.get(sentence.sentence_id) if sentence is not None else None
@@ -272,16 +272,16 @@ class _Session:
             else:
                 if event.kind == "task-failed":
                     await self._note_provider_failure()
-                elif (event.kind == "task-finished" and self.finish_control and
-                      inbound.control_sequence >= self.finish_control):
-                    self._terminal_kind("task-finished")
+                elif event.kind == "task-finished":
+                    if self.finish_control and inbound.control_sequence >= self.finish_control:
+                        self._terminal_kind("task-finished")
                 elif self.first_terminal is not None:
                     self._check_terminal_contradiction(event)
         return accepted
 
     async def _retain_unsafe(self, exc):
         self._stop_for_accounting(str(exc))
-        accepted = await self._retain({"raw_hash": exc.checksum, "anomaly": str(exc)}, exc.metering, exc.checksum)
+        accepted = await self._retain({"raw_hash": exc.checksum, "anomaly": str(exc)}, exc.metering, exc.observation)
         if (not accepted or exc.metering is None or exc.metering.task_id != str(self.attempt.task_id)
                 or not self.run_control or exc.control < self.run_control):
             return

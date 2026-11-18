@@ -79,6 +79,11 @@ def test_unrelated_duplicate_keys_do_not_discard_meter_evidence():
     exponent_meter = raw.replace('"input_tokens":200000', '"input_tokens":2e5')
     assert metering_evidence(exponent_meter).usage.input_tokens == 200000
     assert metering_evidence(exponent_meter).metering_conflict
+    long_decimal = raw.replace('"input_tokens":200000', '"input_tokens":200000.' + "0" * 70)
+    assert metering_evidence(long_decimal).usage.input_tokens == 200000
+    implied_input = raw.replace('"input_tokens":200000,"output_tokens":1',
+                                '"total_tokens":180000,"output_tokens":0')
+    assert metering_evidence(implied_input).usage.input_tokens == 180000
     non_object = raw.replace('{"input_tokens":200000,"output_tokens":1}', '[]')
     assert metering_evidence(non_object).metering_conflict
     parsed = {"header": {"task_id": task, "event": "task-started"},

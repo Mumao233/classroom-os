@@ -596,7 +596,8 @@ BEGIN
            p_resolved,p_request_fingerprint);
   new_fingerprint:=p_request_fingerprint IS NOT NULL AND a.redacted_request_fingerprint IS NULL;
   matches_usage:= p_metering_revision=a.metering_revision AND (p_resolved OR
-    (NOT a.metering_issue_pending AND (a.metering_revision=0 OR
+    (NOT a.metering_issue_pending AND ((a.observed_input IS NULL AND a.observed_output IS NULL
+         AND a.observed_total IS NULL) OR
       (p_in=a.input_tokens AND p_out=a.output_tokens AND p_in>=coalesce(a.observed_input,0)
        AND p_out>=coalesce(a.observed_output,0) AND p_in+p_out>=coalesce(a.observed_total,0)))));
   UPDATE pr06a_control.attempts SET request_id=coalesce(p_request,a.request_id),gross_microyuan=p_gross,

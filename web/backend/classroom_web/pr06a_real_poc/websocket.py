@@ -14,7 +14,7 @@ from websockets.exceptions import ConnectionClosedOK, InvalidStatus
 from websockets.frames import Frame, Opcode
 
 from ..asr_dashscope.transport import AuthenticationRejected, Disconnected, InboundText
-from ..asr_dashscope.wire import MAX_MESSAGE_CHARS, metering_evidence, parse_event
+from ..asr_dashscope.wire import MAX_MESSAGE_CHARS, metering_evidence, observation_fingerprint, parse_event
 from ..asr_sim.simulator import ProtocolError
 from .policy import ENDPOINT, LIB_VERSION, EndOfStream, PocStopped, UnsafeInbound, digest, sentence_proof
 
@@ -42,7 +42,8 @@ def _credential_echo(text, key, control):
             if observed.sentence is not None and observed.sentence.final:
                 final = sentence_proof(observed.sentence)
     return UnsafeInbound("credential_echo", digest(text.encode("utf-8")), meter,
-                         control=control, event=event, final_sentence=final)
+                         observation=observation_fingerprint(text), control=control,
+                         event=event, final_sentence=final)
 
 
 def _ignore_number(_value):
@@ -208,7 +209,8 @@ class _WebSocket:
                 meter = exc.metering
             else:
                 meter = metering_evidence(frame.text)
-            raise UnsafeInbound("binary_provider_response", digest(frame.text.encode("utf-8")), meter)
+            raise UnsafeInbound("binary_provider_response", digest(frame.text.encode("utf-8")), meter,
+                                observation=observation_fingerprint(frame.text))
         except ConnectionClosedOK:
             raise EndOfStream("peer_closed") from None
         except UnsafeInbound:

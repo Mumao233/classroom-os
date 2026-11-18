@@ -41,10 +41,11 @@ def sentence_proof(sentence):
 
 
 class UnsafeInbound(PocStopped):
-    def __init__(self, reason, checksum, metering=None, *, control=0, event=None, final_sentence=None):
+    def __init__(self, reason, checksum, metering=None, *, observation=None, control=0, event=None, final_sentence=None):
         super().__init__(reason)
         self.checksum = checksum
         self.metering = metering
+        self.observation = observation or checksum
         self.control = control
         self.event = event
         self.final_sentence = final_sentence
