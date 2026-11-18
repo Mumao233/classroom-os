@@ -55,10 +55,17 @@ def stored(asset):
 
 
 class MediaService:
-    def __init__(self, *, auth, database, store, policy=None):
+    # Experimental staging admission. Production media options stay independent.
+    IMPORT_PACKAGE_MAX_BYTES = 8_000_000
+    IMPORT_PACKAGE_MAX_ASSETS = 4
+
+    def __init__(self, *, auth, database, store, policy=None, expire_import_packages=False):
         store.validate_private()
+        if expire_import_packages and not getattr(store, 'synthetic_loopback', False):
+            raise ValueError('experimental package expiry requires synthetic loopback storage')
         self.auth, self.database, self.store = auth, database, store
         self.policy = policy or MediaPolicy()
+        self.expire_import_packages = expire_import_packages
 
     @contextmanager
     def transaction(self, ctx, *, write=False):
@@ -80,6 +87,9 @@ class MediaService:
             raise AuthRejected('STORAGE_UNAVAILABLE', 503) from None
 
     def create(self, ctx, key, body):
+        import_package = self.expire_import_packages and body['purpose'] == 'import_package'
+        if import_package and body['byte_length'] > self.IMPORT_PACKAGE_MAX_BYTES:
+            raise AuthRejected('CAPACITY_EXCEEDED', 413)
         if body['byte_length'] > self.policy.max_bytes:
             raise AuthRejected('VALIDATION_FAILED', 422)
         if ((body['purpose'] == 'slide') != body['mime_type'].startswith('image/')
@@ -88,7 +98,8 @@ class MediaService:
         value = dict(body)
         value['class_session_id'] = identifier(body['class_session_id']) if body['class_session_id'] else None
         with self.transaction(ctx, write=True) as (repo, _):
-            upload, asset = repo.create(value, identifier(key), fingerprint(body), self.policy)
+            upload, asset = repo.create(value, identifier(key), fingerprint(body), self.policy,
+                                        max_import_assets=self.IMPORT_PACKAGE_MAX_ASSETS if import_package else None)
             return upload_dto(upload, asset)
 
     def descriptor(self, ctx, upload_id):
@@ -117,7 +128,7 @@ class MediaService:
             def reject_constant(_):
                 raise ValueError('nonfinite JSON')
             try:
-                json.loads(file.read().decode('utf8'), parse_constant=reject_constant)
+                json.loads(file.read().decode('utf-8-sig'), parse_constant=reject_constant)
             except (ValueError, UnicodeError, RecursionError):
                 raise AuthRejected('VALIDATION_FAILED', 422) from None
         elif not signatures.get(mime, False):

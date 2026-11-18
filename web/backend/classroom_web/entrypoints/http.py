@@ -68,7 +68,7 @@ def failure(error,request_id):
         headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'})
 
 
-def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admission=None,cache=None,media=None,media_spool_directory=None,billing=None,billing_admin=None,qa=None,review=None,deletion=None,capture=None,sync=None):
+def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admission=None,cache=None,media=None,media_spool_directory=None,billing=None,billing_admin=None,qa=None,review=None,deletion=None,capture=None,sync=None,portable=None):
     parsed=urlsplit(origin)
     if parsed.scheme!='https' or not parsed.netloc or parsed.path or parsed.query or parsed.fragment or parsed.username:raise ValueError('one exact HTTPS origin is required')
     if contract.get('info',{}).get('version') not in ('0.2.0','0.2.1'):raise ValueError('approved contract 0.2.0 or 0.2.1 required')
@@ -82,6 +82,8 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
         raise ValueError('Sync requires the existing PR-07b contract candidate for exact Review conflicts')
     if sync is not None and sync.enabled and (review is None or not review.config.get('enabled', False)):
         raise ValueError('Enabled Sync requires an enabled ReviewBrowser for exact source authorization')
+    if portable is not None and (media is None or portable.media is not media or deletion is None):
+        raise ValueError('portable preview requires shared media and deletion services')
     qa_paths = {
         '/class-sessions/{class_session_id}/generation-plans',
         '/generation-plans/{plan_id}', '/generation-plans/{plan_id}/execute',
@@ -152,6 +154,8 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
         from ..application.deletion import ROUTES as deletion_routes
 
     def dispatch(path,ctx,body,key,params,method,operation_id):
+        if path == '/imports/preview' and portable is not None:
+            return portable.preview(ctx, key, body)
         if path in sync_paths:return sync.dispatch(operation_id,ctx,body,key,params)
         if path in deletion_routes:return deletion.handle(path,method,ctx,body,key,params)
         if path in review_paths:
@@ -215,6 +219,7 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
     selected.update(qa_paths)
     selected.update(review_paths)
     selected.update(sync_paths)
+    if portable is not None:selected.add('/imports/preview')
     if billing is not None:selected.update(('/me/quota','/tasks/{task_id}/cancel'))
     if billing_admin is not None:selected.update(('/admin/switches','/admin/usage','/admin/quota-adjustments','/admin/users/{user_id}/quota'))
     selected.update(deletion_routes)

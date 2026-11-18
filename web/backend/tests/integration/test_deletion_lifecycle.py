@@ -1114,3 +1114,119 @@ def test_reconcile_accepts_a_local_revocation_covered_by_a_later_account_erasure
     assert m.deletion.reconcile()['accepted'] == []
     m.worker.drain()
     assert settled(m, local['id']) and settled(m, account)
+
+
+# PR-08c reuses the real PostgreSQL, private media and independent deletion ledger fixture.
+@pytest.fixture
+def portable_app(d):
+    from classroom_web.application.media import MediaService
+    from classroom_web.application.portable import PortablePreview
+    from classroom_web.entrypoints.http import create_app
+
+    service = MediaService(auth=d.a.service, database=d.pg.db, store=d.store, expire_import_packages=True)
+
+    def app():
+        return create_app(auth=d.a.service, contract=contract(), origin='https://testserver',
+                          media=service, media_spool_directory=d.spool, deletion=d.deletion,
+                          portable=PortablePreview(service))
+
+    def client_for():
+        return TestClient(app(), base_url='https://testserver',
+                          cookies={'__Host-classroom_session': d.ctx.session})
+
+    with client_for() as client:
+        d.client = d.a.client = client
+        yield d, client_for
+
+
+def test_portable_preview_replays_after_restart_and_reauthorizes_destination(portable_app):
+    m, client_for = portable_app
+    blob = b'\xef\xbb\xbf' + json.dumps(dict(id='1' * 32, title='Synthetic class',
+                           created_at='2024-01-01T02:00:00+08:00')).encode()
+    upload, body = create(m, blob, purpose='import_package', class_session_id=None,
+                          mime_type='application/json', filename='synthetic.json')
+    request = dict(upload_id=upload['id'], destination_course_id=str(m.course.id))
+
+    def preview_request(client, key, value=request):
+        return client.post(BASE + '/imports/preview', json=value, headers=headers(m, key))
+
+    key = str(uuid4())
+    with client_for() as preview_client:
+        assert preview_request(preview_client, key).status_code == 409
+    assert put(m, upload, blob).status_code == 200
+    completed = m.client.post(BASE + f'/media/uploads/{upload["id"]}/complete',
+                              json={field: body[field] for field in ('sha256', 'byte_length')}, headers=headers(m))
+    assert completed.status_code == 200
+    assert completed.json()['expires_at'] == upload['expires_at']
+    with client_for() as preview_client, ThreadPoolExecutor(max_workers=2) as pool:
+        replies = list(pool.map(lambda _: preview_request(preview_client, key), range(2)))
+        assert all(reply.status_code == 201 for reply in replies), [reply.text for reply in replies]
+        assert replies[0].json() == replies[1].json()
+        result = replies[0].json()
+        assert result['archive_sha256'] == body['sha256']
+        assert result['class_session_count'] == 1
+        assert replies[0].headers['cache-control'] == 'no-store'
+
+    with client_for() as restarted:
+        assert preview_request(restarted, key).json() == result
+        assert preview_request(restarted, key, dict(request, upload_id=str(uuid4()))).status_code == 409
+    assert rows(m, "SELECT operation FROM operation_receipts WHERE owner_id=:owner AND operation='previewImport'",
+                owner=m.uid) == [{'operation': 'previewImport'}]
+    assert len(rows(m, 'SELECT id FROM class_sessions WHERE owner_id=:owner', owner=m.uid)) == 1
+    assert rows(m, 'SELECT id FROM tasks WHERE owner_id=:owner', owner=m.uid) == []
+    assert rows(m, 'SELECT id FROM media_tickets WHERE owner_id=:owner', owner=m.uid) == []
+
+    other = new_user(m)
+    as_user(m, other.email)
+    with m.pg.db.transaction(OwnerContext(other.uid)) as tx:
+        semester = tx.catalog.create_semester('Synthetic independent tenant')
+        course = tx.catalog.create_course(semester.id, 'Synthetic other course')
+        assert tx.connection.scalar(sa.text("SELECT count(*) FROM operation_receipts WHERE operation='previewImport'")) == 0
+    with client_for() as outsider:
+        assert preview_request(outsider, key, dict(request, destination_course_id=str(course.id))).status_code == 404
+
+    original_email = rows(m, 'SELECT normalized_email FROM users WHERE id=:owner', owner=m.uid)[0]['normalized_email']
+    as_user(m, original_email)
+    delete(m, 'course', m.course.id)
+    with client_for() as restarted:
+        assert preview_request(restarted, key).status_code == 410
+
+
+def test_portable_verified_upload_expires_and_is_physically_cleaned(portable_app):
+    m, _ = portable_app
+    data = b'{"title":"synthetic source"}'
+    upload, body = create(m, data, purpose='import_package', class_session_id=None,
+                          mime_type='application/json', filename='synthetic.json')
+    assert put(m, upload, data).status_code == 200
+    completed = m.client.post(BASE + f'/media/uploads/{upload["id"]}/complete',
+                              json={field: body[field] for field in ('sha256', 'byte_length')}, headers=headers(m))
+    assert completed.status_code == 200
+    asset = completed.json()
+    path = access(m, asset)
+    assert m.client.get(path).content == data
+    key = object_key(m, asset['id'])
+    assert versions(m, key)
+
+    with m.pg.admin.begin() as connection:
+        connection.execute(sa.text("UPDATE media_assets SET expires_at=clock_timestamp()-interval '1 second' WHERE id=:id"),
+                           dict(id=asset['id']))
+    assert m.client.get(path).status_code == 410
+    assert m.deletion.expire_due() >= 1
+    m.worker.drain()
+    assert not versions(m, key)
+
+def test_portable_upload_owner_reservation_is_bounded(portable_app):
+    m, _ = portable_app
+    raw = b'{"id":"synthetic"}'
+    body = dict(purpose='import_package', class_session_id=None, mime_type='application/json',
+                byte_length=len(raw), sha256=hashlib.sha256(raw).hexdigest(), filename='synthetic.json')
+    url = BASE + '/media/uploads'
+    first = str(uuid4())
+    opened = m.client.post(url, json=body, headers=headers(m, first))
+    assert opened.status_code == 201
+    for _ in range(3):
+        assert m.client.post(url, json=body, headers=headers(m)).status_code == 201
+    assert m.client.post(url, json=body, headers=headers(m)).status_code == 413
+    assert m.client.post(url, json=body, headers=headers(m, first)).json() == opened.json()
+    oversized = dict(body, byte_length=8_000_001)
+    assert m.client.post(url, json=oversized, headers=headers(m)).status_code == 413

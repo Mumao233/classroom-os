@@ -23,6 +23,7 @@ class S3ObjectStore:
                 or not region or not access_key or not secret_key):
             raise ValueError('explicit private object store configuration required')
         self.bucket = bucket
+        self.synthetic_loopback = bool(local)
         # Explicit credentials prevent SDK fallback to ambient profiles or metadata services.
         self.client = boto3.client('s3', endpoint_url=endpoint, region_name=region,
             aws_access_key_id=access_key, aws_secret_access_key=secret_key,

@@ -59,12 +59,17 @@ class PgMediaRepository:
             id=uuid4(), operation=operation, key=key, hash=fingerprint, type=resource_type,
             resource=resource_id, status=status, body=json.dumps(body))
 
-    def create(self, body, key, fingerprint, policy):
+    def create(self, body, key, fingerprint, policy, *, max_import_assets=None):
         # Serialize capacity checks for concurrent uploads from the same owner.
         self.execute("SELECT pg_advisory_xact_lock(hashtextextended(CAST(:owner AS text)||'media',0))")
         receipt = self.receipt('createMediaUpload', key, fingerprint)
         if receipt:
             return self.upload(receipt['resource_id'])
+        if max_import_assets is not None:
+            reserved = self.execute("""SELECT count(*) FROM media_assets
+                WHERE owner_id=:owner AND kind='import_package' AND status<>'deleted'""").scalar_one()
+            if reserved >= max_import_assets:
+                raise AuthRejected('CAPACITY_EXCEEDED', 413)
         pending = self.execute("SELECT count(*) FROM media_uploads WHERE owner_id=:owner AND state IN ('staging','uploaded') AND expires_at>clock_timestamp()").scalar_one()
         if pending >= policy.max_pending:
             raise AuthRejected('RATE_LIMITED', 429)
@@ -72,12 +77,14 @@ class PgMediaRepository:
         resource = dict(class_session_id=body['class_session_id'])
         self.ancestors(resource)
         object_key = f'media/{self.owner_id.hex}/{upload_id.hex}/{body["sha256"]}'
-        self.execute('''INSERT INTO media_assets(id,owner_id,class_session_id,kind,sha256,size_bytes,mime_type,object_key)
-            VALUES(:id,:owner,:classroom,:kind,:sha,:length,:mime,:object_key)''',
+        expires = self.now() + policy.upload_lifetime
+        self.execute('''INSERT INTO media_assets(id,owner_id,class_session_id,kind,sha256,size_bytes,mime_type,object_key,expires_at)
+            VALUES(:id,:owner,:classroom,:kind,:sha,:length,:mime,:object_key,:expires)''',
             id=asset_id, classroom=body['class_session_id'], kind=body['purpose'], sha=body['sha256'],
-            length=body['byte_length'], mime=body['mime_type'], object_key=object_key)
+            length=body['byte_length'], mime=body['mime_type'], object_key=object_key,
+            expires=expires if max_import_assets is not None else None)
         self.execute('''INSERT INTO media_uploads(id,owner_id,asset_id,expires_at)
-            VALUES(:id,:owner,:asset,:expires)''', id=upload_id, asset=asset_id, expires=self.now()+policy.upload_lifetime)
+            VALUES(:id,:owner,:asset,:expires)''', id=upload_id, asset=asset_id, expires=expires)
         self.remember('createMediaUpload', key, fingerprint, 'media_upload', upload_id, {'upload_id': str(upload_id)}, 201)
         return self.upload(upload_id)
 
