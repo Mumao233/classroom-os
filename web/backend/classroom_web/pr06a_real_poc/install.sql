@@ -22,13 +22,14 @@ GRANT USAGE ON SCHEMA pr06a_api TO classroom_pr06a_executor,classroom_pr06a_reco
 GRANT USAGE ON SCHEMA pr06a_control TO classroom_billing_control;
 
 CREATE TABLE pr06a_control.activation (
-  authorization text PRIMARY KEY CHECK (authorization='PR06A-REAL-POC-AUTH-20261118'),
+  authorization_id text PRIMARY KEY CHECK (authorization_id='PR06A-REAL-POC-AUTH-20261118'),
   policy_version text NOT NULL DEFAULT 'v1' CHECK (policy_version='v1'),
   signer text NOT NULL DEFAULT '林珈诚' CHECK (signer='林珈诚'),
   source_sha256 text NOT NULL CHECK (source_sha256='233859c7a90ea2ddb0b3b7069edb39b20a82a88cc889c363297d31e96809b777'),
   baseline text NOT NULL CHECK (baseline='6ecd364d20bbd06a25fa4654570e454a04807e07'),
   reviewed_sha text NOT NULL CHECK (reviewed_sha ~ '^[a-f0-9]{40}$' AND reviewed_sha<>baseline),
   review_receipt text NOT NULL CHECK (review_receipt ~ '^[a-f0-9]{64}$'),
+  vmware_receipt text NOT NULL CHECK (vmware_receipt ~ '^[a-f0-9]{64}$'),
   approval_ref text NOT NULL CHECK (length(approval_ref) BETWEEN 1 AND 200),
   account_ref text NOT NULL CHECK (length(account_ref) BETWEEN 1 AND 200),
   workspace text NOT NULL CHECK (workspace='ws-bm2ftvz01aej1eof'),
@@ -67,8 +68,10 @@ INSERT INTO pr06a_control.samples VALUES
   (3,'3_long.wav','4f4e93eee0e6d036cd57b60f66ee87d7d4c14d74b627b19a054fa8f3e421a326','a27033e0bec1c74ff49d3e81259234733301404d3737008cc1983858713a1a37',137472,32000,'e8e7098ccede40dfd05964a6e3ee6b3b54bfddb66bfa531a0e13c2f8c6684c27');
 
 CREATE TABLE pr06a_control.batch (
-  authorization text PRIMARY KEY REFERENCES pr06a_control.activation(authorization),
+  authorization_id text PRIMARY KEY REFERENCES pr06a_control.activation(authorization_id),
   fence uuid NOT NULL UNIQUE,
+  owner_pid integer NOT NULL,
+  owner_since timestamptz NOT NULL,
   reviewed_sha text NOT NULL,
   period_start timestamptz NOT NULL REFERENCES billing_control.platform_budgets(period_start),
   opened_at timestamptz NOT NULL,
@@ -79,7 +82,7 @@ CREATE TABLE pr06a_control.batch (
   confirmed_microyuan numeric NOT NULL DEFAULT 0 CHECK (confirmed_microyuan>=0),
   closed boolean NOT NULL DEFAULT false,
   stop_code text,
-  -- The monetary authorization has no synthetic meter ceilings or price rules.
+  -- The monetary authorization_id has no synthetic meter ceilings or price rules.
   input_token_limit bigint CHECK (input_token_limit IS NULL),
   output_token_limit bigint CHECK (output_token_limit IS NULL),
   minimum_microyuan bigint CHECK (minimum_microyuan IS NULL),
@@ -90,7 +93,7 @@ CREATE TABLE pr06a_control.batch (
 GRANT SELECT ON pr06a_control.batch TO classroom_billing_control;
 
 CREATE TABLE pr06a_control.attempts (
-  authorization text NOT NULL REFERENCES pr06a_control.batch(authorization),
+  authorization_id text NOT NULL REFERENCES pr06a_control.batch(authorization_id),
   slot smallint NOT NULL REFERENCES pr06a_control.samples(slot),
   attempt uuid NOT NULL UNIQUE, submission_key uuid NOT NULL UNIQUE,
   task_id uuid NOT NULL UNIQUE, request_id text UNIQUE CHECK (length(request_id) BETWEEN 1 AND 200),
@@ -98,13 +101,14 @@ CREATE TABLE pr06a_control.attempts (
   quota_samples integer NOT NULL CHECK (quota_samples BETWEEN 1 AND 160000),
   allowed_samples integer NOT NULL CHECK (allowed_samples BETWEEN 1 AND quota_samples),
   wav_hash text NOT NULL, pcm_hash text NOT NULL, send_hash text NOT NULL,
-  attempted_samples integer NOT NULL DEFAULT 0 CHECK (attempted_samples BETWEEN 0 AND allowed_samples),
+  reserved_samples integer NOT NULL DEFAULT 0 CHECK (reserved_samples BETWEEN 0 AND allowed_samples),
   state text NOT NULL DEFAULT 'submitting' CHECK (state IN ('submitting','succeeded','failed','unknown')),
   usage_revision integer NOT NULL DEFAULT 0,
   input_tokens bigint CHECK (input_tokens>=0), output_tokens bigint CHECK (output_tokens>=0),
   usage_final boolean NOT NULL DEFAULT false,
   gross_microyuan bigint CHECK (gross_microyuan>=0),
-  PRIMARY KEY (authorization,slot)
+  reconciled_usage_revision integer,
+  PRIMARY KEY (authorization_id,slot)
 );
 
 CREATE TABLE pr06a_control.frames (
@@ -113,8 +117,10 @@ CREATE TABLE pr06a_control.frames (
   end_sample integer NOT NULL CHECK (end_sample>start_sample AND end_sample-start_sample<=1600),
   frame_hash text NOT NULL CHECK (frame_hash ~ '^[a-f0-9]{64}$'),
   intended_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  disposition text NOT NULL DEFAULT 'intent' CHECK (disposition IN ('intent','confirmed','not_sent')),
   confirmed_at timestamptz,
-  PRIMARY KEY (attempt,start_sample)
+  PRIMARY KEY (attempt,start_sample),
+  UNIQUE (attempt,end_sample)
 );
 
 CREATE TABLE pr06a_control.usage (
@@ -136,7 +142,9 @@ CREATE TABLE pr06a_control.recognition (
   end_ms bigint,
   final boolean NOT NULL,
   transcript text NOT NULL,
-  PRIMARY KEY (attempt,sentence_id,revision)
+  required_sample integer NOT NULL,
+  PRIMARY KEY (attempt,sentence_id,revision),
+  FOREIGN KEY (attempt,required_sample) REFERENCES pr06a_control.frames(attempt,end_sample)
 );
 
 CREATE TABLE pr06a_control.bill_evidence (
@@ -149,6 +157,7 @@ CREATE TABLE pr06a_control.bill_evidence (
   net_microyuan bigint NOT NULL CHECK (net_microyuan>=0),
   bill_month text NOT NULL CHECK (bill_month ~ '^[0-9]{4}-(0[1-9]|1[0-2])$'),
   evidence_hash text NOT NULL CHECK (evidence_hash ~ '^[a-f0-9]{64}$'),
+  usage_revision integer NOT NULL,
   created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
   PRIMARY KEY (attempt,revision),
   CHECK (request_id IS NOT NULL OR (input_tokens=0 AND output_tokens=0 AND gross_microyuan=0 AND net_microyuan=0))
@@ -156,12 +165,22 @@ CREATE TABLE pr06a_control.bill_evidence (
 
 -- Existing ordinary admission sees the specialized hold and actuals in
 -- the same locked budget row. The production schema alone is unchanged.
+GRANT SELECT (authorization_id, input_tokens, output_tokens, gross_microyuan, reconciled_usage_revision, usage_revision)
+  ON pr06a_control.attempts TO classroom_billing_control;
 CREATE VIEW billing_control.pr06a_combined_exposures AS
 SELECT period_start,pool,held,unknown,settled FROM billing_control.exposures
 UNION ALL
-SELECT period_start,'asr',CASE WHEN NOT closed THEN held_microyuan ELSE 0 END,
-  CASE WHEN closed THEN held_microyuan ELSE 0 END,confirmed_microyuan
-FROM pr06a_control.batch;
+SELECT b.period_start,'asr',CASE WHEN NOT b.closed THEN b.held_microyuan ELSE 0 END,
+  greatest(coalesce(u.unresolved,0),b.held_microyuan) -
+    CASE WHEN NOT b.closed THEN b.held_microyuan ELSE 0 END,
+  b.confirmed_microyuan
+FROM pr06a_control.batch b
+LEFT JOIN LATERAL (
+  SELECT ceil(sum(greatest(0,6::numeric*a.input_tokens+4.5::numeric*a.output_tokens
+                                  -coalesce(a.gross_microyuan,0)))) AS unresolved
+  FROM pr06a_control.attempts a WHERE a.authorization_id=b.authorization_id
+    AND (a.gross_microyuan IS NULL OR a.reconciled_usage_revision IS DISTINCT FROM a.usage_revision)
+) u ON true;
 ALTER VIEW billing_control.pr06a_combined_exposures OWNER TO classroom_billing_control;
 
 CREATE OR REPLACE FUNCTION billing_api.lock_budget(p_start timestamptz) RETURNS jsonb
@@ -210,20 +229,37 @@ END $f$;
 
 CREATE FUNCTION pr06a_control.observed_cost(id text) RETURNS numeric
 LANGUAGE sql SET search_path=pg_catalog AS $f$
-  SELECT coalesce(sum(greatest(a.gross_microyuan,
-      6::numeric*a.input_tokens+4.5::numeric*a.output_tokens)),0)
-  FROM pr06a_control.attempts a WHERE a.authorization=id
+  SELECT coalesce(sum(CASE WHEN a.gross_microyuan IS NOT NULL AND a.reconciled_usage_revision=a.usage_revision
+       THEN a.gross_microyuan ELSE greatest(a.gross_microyuan,6::numeric*a.input_tokens+4.5::numeric*a.output_tokens) END),0)
+  FROM pr06a_control.attempts a WHERE a.authorization_id=id
 $f$;
+
+CREATE FUNCTION pr06a_control.owns_batch(b pr06a_control.batch, f uuid) RETURNS boolean
+LANGUAGE sql STABLE SET search_path=pg_catalog AS $f$
+  SELECT b.fence=f AND b.owner_pid=pg_backend_pid()
+    AND b.owner_since=(SELECT backend_start FROM pg_stat_activity WHERE pid=pg_backend_pid())
+$f$;
+
+CREATE FUNCTION pr06a_control.alert_budget(cycle timestamptz) RETURNS void
+LANGUAGE plpgsql SET search_path=pg_catalog AS $f$
+DECLARE b jsonb;
+BEGIN
+  b:=billing_api.lock_budget(cycle);
+  INSERT INTO billing_control.alerts(period_start,threshold)
+    SELECT cycle,t FROM unnest(ARRAY[60,80,100]) t
+    WHERE (b->>'risk')::numeric*100 >= (b->>'budget_microyuan')::numeric*t
+    ON CONFLICT DO NOTHING;
+END $f$;
 
 CREATE FUNCTION pr06a_control.check_batch(f uuid) RETURNS pr06a_control.batch
 LANGUAGE plpgsql SET search_path=pg_catalog AS $f$
 DECLARE a pr06a_control.activation%ROWTYPE; b pr06a_control.batch%ROWTYPE;
 BEGIN
   a:=pr06a_control.check_activation();
-  SELECT * INTO STRICT b FROM pr06a_control.batch WHERE fence=f FOR UPDATE;
+  SELECT b0.* INTO STRICT b FROM pr06a_control.batch b0 WHERE pr06a_control.owns_batch(b0,f) FOR UPDATE;
   PERFORM pr06a_control.check_budget(b.period_start,0);
   IF b.closed OR b.reviewed_sha<>a.reviewed_sha OR clock_timestamp()>=b.lease_until
-     OR pr06a_control.observed_cost(b.authorization)>=b.authorized_microyuan THEN
+     OR pr06a_control.observed_cost(b.authorization_id)>=b.authorized_microyuan THEN
     RAISE EXCEPTION 'PR06A_BATCH_BLOCKED';
   END IF;
   RETURN b;
@@ -235,7 +271,7 @@ DECLARE a pr06a_control.activation%ROWTYPE; cycle timestamptz; t timestamptz; in
 BEGIN
   a:=pr06a_control.check_activation();
   SELECT jsonb_agg(to_jsonb(s) ORDER BY slot) INTO inventory FROM pr06a_control.samples s;
-  IF p_identity IS DISTINCT FROM jsonb_build_object('authorization',a.authorization,'source_sha256',a.source_sha256,
+  IF p_identity IS DISTINCT FROM jsonb_build_object('authorization',a.authorization_id,'source_sha256',a.source_sha256,
       'baseline',a.baseline,'reviewed_sha',a.reviewed_sha,'workspace',a.workspace,'key_id',a.key_id,
       'region',a.region,'model',a.model,'endpoint',a.endpoint,'account_ref',a.account_ref)
      OR p_credential IS DISTINCT FROM a.credential_sha256 OR p_samples IS DISTINCT FROM inventory THEN
@@ -245,8 +281,11 @@ BEGIN
   cycle:=date_trunc('month',t AT TIME ZONE 'Asia/Shanghai') AT TIME ZONE 'Asia/Shanghai';
   PERFORM pr06a_control.check_budget(cycle,1000000);
   t:=clock_timestamp();
-  INSERT INTO pr06a_control.batch(authorization,fence,reviewed_sha,period_start,opened_at,lease_until)
-    VALUES(a.authorization,f,a.reviewed_sha,cycle,t,t+interval '30 seconds');
+  INSERT INTO pr06a_control.batch(authorization_id,fence,owner_pid,owner_since,reviewed_sha,period_start,opened_at,lease_until)
+    VALUES(a.authorization_id,f,pg_backend_pid(),
+      (SELECT backend_start FROM pg_stat_activity WHERE pid=pg_backend_pid()),
+      a.reviewed_sha,cycle,t,t+interval '30 seconds');
+  PERFORM pr06a_control.alert_budget(cycle);
 END $f$;
 
 CREATE FUNCTION pr06a_api.claim_attempt(f uuid, s integer, p_attempt uuid, p_submission uuid, p_task uuid)
@@ -255,15 +294,15 @@ DECLARE b pr06a_control.batch%ROWTYPE; sample pr06a_control.samples%ROWTYPE; t t
 BEGIN
   b:=pr06a_control.check_batch(f);
   SELECT * INTO STRICT sample FROM pr06a_control.samples WHERE slot=s;
-  IF s<>1+(SELECT count(*) FROM pr06a_control.attempts WHERE authorization=b.authorization)
-     OR EXISTS(SELECT FROM pr06a_control.attempts WHERE authorization=b.authorization AND
-       (state<>'succeeded' OR NOT usage_final OR attempted_samples<>allowed_samples)) THEN
+  IF s<>1+(SELECT count(*) FROM pr06a_control.attempts WHERE authorization_id=b.authorization_id)
+     OR EXISTS(SELECT FROM pr06a_control.attempts WHERE authorization_id=b.authorization_id AND
+       (state<>'succeeded' OR NOT usage_final OR reserved_samples<>allowed_samples)) THEN
     RAISE EXCEPTION 'PR06A_ATTEMPT_BLOCKED';
   END IF;
   t:=clock_timestamp();
-  INSERT INTO pr06a_control.attempts(authorization,slot,attempt,submission_key,task_id,opened_at,lease_until,
+  INSERT INTO pr06a_control.attempts(authorization_id,slot,attempt,submission_key,task_id,opened_at,lease_until,
       quota_samples,allowed_samples,wav_hash,pcm_hash,send_hash)
-    VALUES(b.authorization,s,p_attempt,p_submission,p_task,t,least(t+interval '10 seconds',b.lease_until),
+    VALUES(b.authorization_id,s,p_attempt,p_submission,p_task,t,least(t+interval '10 seconds',b.lease_until),
       sample.samples,sample.send_samples,sample.wav_hash,sample.pcm_hash,sample.send_hash);
 END $f$;
 
@@ -272,36 +311,48 @@ RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog AS $f$
 DECLARE b pr06a_control.batch%ROWTYPE; a pr06a_control.attempts%ROWTYPE;
 BEGIN
   b:=pr06a_control.check_batch(f);
-  SELECT * INTO STRICT a FROM pr06a_control.attempts WHERE attempt=p_attempt AND authorization=b.authorization;
+  SELECT * INTO STRICT a FROM pr06a_control.attempts WHERE attempt=p_attempt AND authorization_id=b.authorization_id;
   IF a.state<>'submitting' OR clock_timestamp()>=a.lease_until
-     OR p_start IS DISTINCT FROM a.attempted_samples OR p_end>a.allowed_samples
-     OR EXISTS(SELECT FROM pr06a_control.frames WHERE attempt=a.attempt AND confirmed_at IS NULL)
-     OR p_end-p_start+(SELECT sum(attempted_samples) FROM pr06a_control.attempts WHERE authorization=b.authorization)>480000 THEN
+     OR p_start IS DISTINCT FROM a.reserved_samples OR p_end>a.allowed_samples
+     OR EXISTS(SELECT FROM pr06a_control.frames WHERE attempt=a.attempt AND disposition<>'confirmed')
+     OR p_end-p_start+(SELECT sum(reserved_samples) FROM pr06a_control.attempts WHERE authorization_id=b.authorization_id)>480000 THEN
     RAISE EXCEPTION 'PR06A_FRAME_BLOCKED';
   END IF;
   INSERT INTO pr06a_control.frames(attempt,start_sample,end_sample,frame_hash)
     VALUES(a.attempt,p_start,p_end,p_hash);
-  UPDATE pr06a_control.attempts SET attempted_samples=p_end WHERE attempt=a.attempt;
+  UPDATE pr06a_control.attempts SET reserved_samples=p_end WHERE attempt=a.attempt;
 END $f$;
 
 CREATE FUNCTION pr06a_api.confirm_frame(f uuid, p_attempt uuid, p_start integer) RETURNS void
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog AS $f$
 BEGIN
-  UPDATE pr06a_control.frames fr SET confirmed_at=clock_timestamp()
-    FROM pr06a_control.attempts a JOIN pr06a_control.batch b USING(authorization)
-    JOIN pr06a_control.activation c USING(authorization)
-    WHERE b.fence=f AND c.executor_login=session_user AND a.attempt=p_attempt AND fr.attempt=a.attempt
-      AND fr.start_sample=p_start AND fr.confirmed_at IS NULL;
+  UPDATE pr06a_control.frames fr SET disposition='confirmed',confirmed_at=clock_timestamp()
+    FROM pr06a_control.attempts a JOIN pr06a_control.batch b USING(authorization_id)
+    JOIN pr06a_control.activation c USING(authorization_id)
+    WHERE pr06a_control.owns_batch(b,f) AND c.executor_login=session_user AND a.attempt=p_attempt AND fr.attempt=a.attempt
+      AND fr.start_sample=p_start AND fr.disposition='intent';
   IF NOT FOUND THEN RAISE EXCEPTION 'PR06A_FRAME_UNCONFIRMED'; END IF;
+END $f$;
+
+CREATE FUNCTION pr06a_api.discard_frame(f uuid, p_attempt uuid, p_start integer) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog AS $f$
+BEGIN
+  UPDATE pr06a_control.frames fr SET disposition='not_sent'
+    FROM pr06a_control.attempts a JOIN pr06a_control.batch b USING(authorization_id)
+    JOIN pr06a_control.activation c USING(authorization_id)
+    WHERE pr06a_control.owns_batch(b,f) AND c.executor_login=session_user AND a.attempt=p_attempt AND fr.attempt=a.attempt
+      AND fr.start_sample=p_start AND fr.disposition='intent';
+  IF NOT FOUND THEN RAISE EXCEPTION 'PR06A_FRAME_DISCARD_BLOCKED'; END IF;
 END $f$;
 
 CREATE FUNCTION pr06a_api.observe(f uuid, p_attempt uuid, p_request text, p_in bigint, p_out bigint, p_final boolean)
 RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog AS $f$
 DECLARE b pr06a_control.batch%ROWTYPE; a pr06a_control.attempts%ROWTYPE; rev integer;
 BEGIN
-  SELECT b0.* INTO STRICT b FROM pr06a_control.batch b0 JOIN pr06a_control.activation c USING(authorization)
-    WHERE b0.fence=f AND c.executor_login=session_user FOR UPDATE OF b0;
-  SELECT * INTO STRICT a FROM pr06a_control.attempts WHERE attempt=p_attempt AND authorization=b.authorization FOR UPDATE;
+  SELECT b0.* INTO STRICT b FROM pr06a_control.batch b0 JOIN pr06a_control.activation c USING(authorization_id)
+    WHERE pr06a_control.owns_batch(b0,f) AND c.executor_login=session_user FOR UPDATE OF b0;
+  SELECT * INTO STRICT a FROM pr06a_control.attempts WHERE attempt=p_attempt AND authorization_id=b.authorization_id FOR UPDATE;
+  PERFORM billing_api.lock_budget(b.period_start);
   IF (p_request IS NOT NULL AND a.request_id IS NOT NULL AND p_request<>a.request_id)
      OR ((p_in IS NULL)<>(p_out IS NULL))
      OR (p_in IS NOT NULL AND (p_in<coalesce(a.input_tokens,0) OR p_out<coalesce(a.output_tokens,0)
@@ -317,18 +368,19 @@ BEGIN
     UPDATE pr06a_control.attempts SET input_tokens=p_in,output_tokens=p_out,usage_final=p_final,usage_revision=rev
       WHERE attempt=a.attempt;
   END IF;
-  RETURN pr06a_control.observed_cost(b.authorization)>=b.authorized_microyuan;
+  PERFORM pr06a_control.alert_budget(b.period_start);
+  RETURN pr06a_control.observed_cost(b.authorization_id)>=b.authorized_microyuan;
 END $f$;
 
 CREATE FUNCTION pr06a_api.record_sentence(f uuid, p_attempt uuid, p_id bigint, p_revision integer,
-    p_begin bigint, p_end bigint, p_final boolean, p_text text) RETURNS void
+    p_begin bigint, p_end bigint, p_final boolean, p_text text, p_required integer) RETURNS void
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog AS $f$
 BEGIN
   INSERT INTO pr06a_control.recognition
-    SELECT a.attempt,p_id,p_revision,p_begin,p_end,p_final,p_text
-    FROM pr06a_control.attempts a JOIN pr06a_control.batch b USING(authorization)
-    JOIN pr06a_control.activation c USING(authorization)
-    WHERE a.attempt=p_attempt AND b.fence=f AND c.executor_login=session_user;
+    SELECT a.attempt,p_id,p_revision,p_begin,p_end,p_final,p_text,p_required
+    FROM pr06a_control.attempts a JOIN pr06a_control.batch b USING(authorization_id)
+    JOIN pr06a_control.activation c USING(authorization_id)
+    WHERE a.attempt=p_attempt AND pr06a_control.owns_batch(b,f) AND c.executor_login=session_user;
   IF NOT FOUND THEN RAISE EXCEPTION 'PR06A_SENTENCE_BLOCKED'; END IF;
 END $f$;
 
@@ -336,20 +388,26 @@ CREATE FUNCTION pr06a_api.complete(f uuid, p_attempt uuid, p_state text, p_stop 
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog AS $f$
 DECLARE b pr06a_control.batch%ROWTYPE;
 BEGIN
-  SELECT b0.* INTO STRICT b FROM pr06a_control.batch b0 JOIN pr06a_control.activation c USING(authorization)
-    WHERE b0.fence=f AND c.executor_login=session_user FOR UPDATE OF b0;
+  SELECT b0.* INTO STRICT b FROM pr06a_control.batch b0 JOIN pr06a_control.activation c USING(authorization_id)
+    WHERE pr06a_control.owns_batch(b0,f) AND c.executor_login=session_user FOR UPDATE OF b0;
   IF p_attempt IS NOT NULL THEN
     UPDATE pr06a_control.attempts SET state=p_state
-      WHERE attempt=p_attempt AND authorization=b.authorization AND state='submitting'
+      WHERE attempt=p_attempt AND authorization_id=b.authorization_id AND state='submitting'
         AND (p_state IN ('failed','unknown') OR (p_state='succeeded'
           AND EXISTS(SELECT FROM pr06a_control.protocol WHERE attempt=p_attempt AND event='task-finished')
-          AND (p_stop IS NOT NULL OR (attempted_samples=allowed_samples AND usage_final
-          AND NOT EXISTS(SELECT FROM pr06a_control.frames WHERE attempt=p_attempt AND confirmed_at IS NULL)))));
+          AND EXISTS(SELECT FROM pr06a_control.recognition WHERE attempt=p_attempt)
+          AND NOT EXISTS(
+            SELECT FROM (SELECT DISTINCT ON (sentence_id) sentence_id,final,required_sample
+              FROM pr06a_control.recognition WHERE attempt=p_attempt ORDER BY sentence_id,revision DESC) r
+            JOIN pr06a_control.frames fr ON fr.attempt=p_attempt AND fr.end_sample=r.required_sample
+            WHERE NOT r.final OR fr.disposition<>'confirmed')
+          AND (p_stop IS NOT NULL OR (reserved_samples=allowed_samples AND usage_final
+          AND NOT EXISTS(SELECT FROM pr06a_control.frames WHERE attempt=p_attempt AND disposition<>'confirmed')))));
     IF NOT FOUND THEN RAISE EXCEPTION 'PR06A_COMPLETION_BLOCKED'; END IF;
   END IF;
   IF p_stop IS NOT NULL THEN
     UPDATE pr06a_control.batch SET closed=true,stop_code=coalesce(stop_code,p_stop)
-      WHERE authorization=b.authorization;
+      WHERE authorization_id=b.authorization_id;
   END IF;
 END $f$;
 
@@ -359,7 +417,7 @@ LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog AS $f$
 DECLARE b pr06a_control.batch%ROWTYPE; a pr06a_control.attempts%ROWTYPE;
   prior pr06a_control.bill_evidence%ROWTYPE; total numeric;
 BEGIN
-  SELECT b0.* INTO STRICT b FROM pr06a_control.batch b0 JOIN pr06a_control.attempts a0 USING(authorization)
+  SELECT b0.* INTO STRICT b FROM pr06a_control.batch b0 JOIN pr06a_control.attempts a0 USING(authorization_id)
     WHERE a0.attempt=p_attempt FOR UPDATE OF b0;
   SELECT * INTO STRICT a FROM pr06a_control.attempts WHERE attempt=p_attempt FOR UPDATE;
   PERFORM billing_api.lock_budget(b.period_start);
@@ -372,21 +430,23 @@ BEGIN
     END IF;
     RETURN;
   END IF;
-  IF p_revision IS DISTINCT FROM 1+(SELECT coalesce(max(revision),0) FROM pr06a_control.bill_evidence WHERE attempt=p_attempt)
-     OR (a.request_id IS NOT NULL AND p_request IS DISTINCT FROM a.request_id)
-     OR p_in<coalesce(a.input_tokens,0) OR p_out<coalesce(a.output_tokens,0) THEN
+  IF (NOT b.closed AND clock_timestamp()<b.lease_until)
+     OR p_revision IS DISTINCT FROM 1+(SELECT coalesce(max(revision),0) FROM pr06a_control.bill_evidence WHERE attempt=p_attempt)
+     OR (a.request_id IS NOT NULL AND p_request IS DISTINCT FROM a.request_id) THEN
     RAISE EXCEPTION 'PR06A_BILL_ATTRIBUTION_CONFLICT';
   END IF;
   INSERT INTO pr06a_control.bill_evidence(attempt,revision,request_id,input_tokens,output_tokens,
-      gross_microyuan,net_microyuan,bill_month,evidence_hash)
-    VALUES(p_attempt,p_revision,p_request,p_in,p_out,p_gross,p_net,p_month,p_evidence);
-  UPDATE pr06a_control.attempts SET request_id=coalesce(p_request,a.request_id),gross_microyuan=p_gross WHERE attempt=p_attempt;
-  SELECT coalesce(sum(gross_microyuan),0) INTO total FROM pr06a_control.attempts WHERE authorization=b.authorization;
+      gross_microyuan,net_microyuan,bill_month,evidence_hash,usage_revision)
+    VALUES(p_attempt,p_revision,p_request,p_in,p_out,p_gross,p_net,p_month,p_evidence,a.usage_revision);
+  UPDATE pr06a_control.attempts SET request_id=coalesce(p_request,a.request_id),gross_microyuan=p_gross,
+    reconciled_usage_revision=a.usage_revision WHERE attempt=p_attempt;
+  SELECT coalesce(sum(gross_microyuan),0) INTO total FROM pr06a_control.attempts WHERE authorization_id=b.authorization_id;
   UPDATE pr06a_control.batch SET confirmed_microyuan=total,
     held_microyuan=CASE WHEN b.released THEN 0 ELSE greatest(0,b.authorized_microyuan-total)::bigint END,
     closed=b.closed OR total>=b.authorized_microyuan,
     stop_code=CASE WHEN total>=b.authorized_microyuan THEN coalesce(b.stop_code,'bill_limit') ELSE b.stop_code END
-    WHERE authorization=b.authorization;
+    WHERE authorization_id=b.authorization_id;
+  PERFORM pr06a_control.alert_budget(b.period_start);
 END $f$;
 
 CREATE FUNCTION pr06a_api.release_reconciled() RETURNS void
@@ -395,16 +455,57 @@ DECLARE b pr06a_control.batch%ROWTYPE;
 BEGIN
   SELECT * INTO STRICT b FROM pr06a_control.batch FOR UPDATE;
   PERFORM billing_api.lock_budget(b.period_start);
-  IF NOT b.closed OR EXISTS(SELECT FROM pr06a_control.attempts
-      WHERE authorization=b.authorization AND gross_microyuan IS NULL) THEN
+  IF (NOT b.closed AND clock_timestamp()<b.lease_until)
+      OR EXISTS(SELECT FROM pr06a_control.attempts WHERE authorization_id=b.authorization_id
+        AND (gross_microyuan IS NULL OR reconciled_usage_revision IS DISTINCT FROM usage_revision)) THEN
     RAISE EXCEPTION 'PR06A_EXPOSURE_UNRESOLVED';
   END IF;
-  UPDATE pr06a_control.batch SET held_microyuan=0,released=true WHERE authorization=b.authorization;
+  UPDATE pr06a_control.batch SET held_microyuan=0,released=true,
+    closed=true,stop_code=coalesce(stop_code,'reconciled_closed') WHERE authorization_id=b.authorization_id;
+END $f$;
+
+CREATE TABLE pr06a_control.inbound (
+  attempt uuid NOT NULL REFERENCES pr06a_control.attempts(attempt),
+  sequence integer NOT NULL CHECK (sequence BETWEEN 1 AND 512),
+  control_seen integer NOT NULL CHECK (control_seen BETWEEN 0 AND 2),
+  frame_seen integer NOT NULL CHECK (frame_seen BETWEEN 0 AND 100),
+  payload text NOT NULL CHECK (octet_length(payload)<=1048576),
+  received_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  PRIMARY KEY (attempt,sequence)
+);
+
+CREATE FUNCTION pr06a_api.record_inbound(f uuid, p_attempt uuid, p_sequence integer, p_control integer,
+    p_frame integer, p_payload text) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog AS $f$
+BEGIN
+  INSERT INTO pr06a_control.inbound(attempt,sequence,control_seen,frame_seen,payload)
+    SELECT a.attempt,p_sequence,p_control,p_frame,p_payload FROM pr06a_control.attempts a
+    JOIN pr06a_control.batch b USING(authorization_id) JOIN pr06a_control.activation c USING(authorization_id)
+    WHERE pr06a_control.owns_batch(b,f) AND c.executor_login=session_user AND a.attempt=p_attempt;
+  IF NOT FOUND THEN RAISE EXCEPTION 'PR06A_INBOUND_BLOCKED'; END IF;
+END $f$;
+
+CREATE TABLE pr06a_control.anomalies (
+  id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  attempt uuid NOT NULL REFERENCES pr06a_control.attempts(attempt),
+  code text NOT NULL,
+  observed_hash text NOT NULL CHECK (observed_hash ~ '^[a-f0-9]{64}$'),
+  observed_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+
+CREATE FUNCTION pr06a_api.anomaly(f uuid, p_attempt uuid, p_code text,p_hash text) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog AS $f$
+BEGIN
+  INSERT INTO pr06a_control.anomalies(attempt,code,observed_hash)
+    SELECT a.attempt,p_code,p_hash FROM pr06a_control.attempts a JOIN pr06a_control.batch b USING(authorization_id)
+    JOIN pr06a_control.activation c USING(authorization_id)
+    WHERE pr06a_control.owns_batch(b,f) AND c.executor_login=session_user AND a.attempt=p_attempt;
+  IF NOT FOUND THEN RAISE EXCEPTION 'PR06A_ANOMALY_BLOCKED'; END IF;
 END $f$;
 
 CREATE TABLE pr06a_control.protocol (
   attempt uuid NOT NULL REFERENCES pr06a_control.attempts(attempt),
-  event text NOT NULL CHECK (event IN ('handshake','run-task','task-started','finish-task','task-finished','task-failed')),
+  event text NOT NULL CHECK (event IN ('handshake-intent','handshake','run-task','task-started','finish-task','task-finished','task-failed')),
   observed_at timestamptz NOT NULL DEFAULT clock_timestamp(),
   PRIMARY KEY (attempt,event)
 );
@@ -413,20 +514,23 @@ CREATE FUNCTION pr06a_api.protocol(f uuid, p_attempt uuid, p_event text) RETURNS
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog AS $f$
 BEGIN
   INSERT INTO pr06a_control.protocol(attempt,event)
-    SELECT a.attempt,p_event FROM pr06a_control.attempts a JOIN pr06a_control.batch b USING(authorization)
-    JOIN pr06a_control.activation c USING(authorization)
-    WHERE b.fence=f AND c.executor_login=session_user AND a.attempt=p_attempt;
+    SELECT a.attempt,p_event FROM pr06a_control.attempts a JOIN pr06a_control.batch b USING(authorization_id)
+    JOIN pr06a_control.activation c USING(authorization_id)
+    WHERE pr06a_control.owns_batch(b,f) AND c.executor_login=session_user AND a.attempt=p_attempt;
   IF NOT FOUND THEN RAISE EXCEPTION 'PR06A_PROTOCOL_BLOCKED'; END IF;
 END $f$;
 
-CREATE FUNCTION pr06a_api.check_connection(f uuid, p_attempt uuid) RETURNS void
+CREATE FUNCTION pr06a_api.check_connection(f uuid, p_attempt uuid, p_handshake boolean) RETURNS void
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog AS $f$
 DECLARE b pr06a_control.batch%ROWTYPE;
 BEGIN
   b:=pr06a_control.check_batch(f);
-  IF NOT EXISTS (SELECT FROM pr06a_control.attempts WHERE authorization=b.authorization
+  IF NOT EXISTS (SELECT FROM pr06a_control.attempts WHERE authorization_id=b.authorization_id
       AND attempt=p_attempt AND state='submitting' AND clock_timestamp()<lease_until) THEN
     RAISE EXCEPTION 'PR06A_CONNECTION_BLOCKED';
+  END IF;
+  IF p_handshake THEN
+    INSERT INTO pr06a_control.protocol(attempt,event) VALUES(p_attempt,'handshake-intent');
   END IF;
 END $f$;
 
@@ -434,8 +538,10 @@ REVOKE ALL ON ALL FUNCTIONS IN SCHEMA pr06a_api,pr06a_control FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION pr06a_api.open_batch(uuid,jsonb,text,jsonb),
   pr06a_api.claim_attempt(uuid,integer,uuid,uuid,uuid), pr06a_api.frame_intent(uuid,uuid,integer,integer,text),
   pr06a_api.confirm_frame(uuid,uuid,integer), pr06a_api.observe(uuid,uuid,text,bigint,bigint,boolean),
-  pr06a_api.record_sentence(uuid,uuid,bigint,integer,bigint,bigint,boolean,text), pr06a_api.complete(uuid,uuid,text,text),
-  pr06a_api.protocol(uuid,uuid,text),pr06a_api.check_connection(uuid,uuid)
+  pr06a_api.record_sentence(uuid,uuid,bigint,integer,bigint,bigint,boolean,text,integer), pr06a_api.complete(uuid,uuid,text,text),
+  pr06a_api.protocol(uuid,uuid,text),pr06a_api.check_connection(uuid,uuid,boolean),
+  pr06a_api.discard_frame(uuid,uuid,integer),pr06a_api.anomaly(uuid,uuid,text,text),
+  pr06a_api.record_inbound(uuid,uuid,integer,integer,integer,text)
   TO classroom_pr06a_executor;
 GRANT EXECUTE ON FUNCTION pr06a_api.settle(uuid,integer,text,bigint,bigint,bigint,bigint,text,text),
   pr06a_api.release_reconciled() TO classroom_pr06a_reconciler;

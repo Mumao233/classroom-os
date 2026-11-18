@@ -1,6 +1,7 @@
 """Single-use WSS client, private to the isolated PR-06a executor."""
 import asyncio
 from collections import deque
+from functools import partial
 import json
 import logging
 import ssl
@@ -12,7 +13,7 @@ from websockets.frames import Frame, Opcode
 
 from ..asr_dashscope.transport import AuthenticationRejected, Disconnected, InboundText
 from ..asr_dashscope.wire import MAX_MESSAGE_CHARS
-from .policy import ENDPOINT, LIB_VERSION
+from .policy import ENDPOINT, LIB_VERSION, PocStopped
 
 _wire_log = logging.Logger("pr06a.websocket")
 _wire_log.addHandler(logging.NullHandler())
@@ -26,10 +27,17 @@ class _SingleDial(connect):
 
 
 class _Connection(ClientConnection):
-    def __init__(self, protocol, **kwargs):
+    def __init__(self, protocol, *, before_handshake, **kwargs):
         super().__init__(protocol, **kwargs)
+        self._before_handshake = before_handshake
         self.control = self.audio = 0
         self.stamps = deque()
+
+    async def handshake(self, additional_headers=None, user_agent_header=None):
+        # websockets calls this after TCP/TLS setup. No HTTP headers have gone
+        # out yet. Its connect() aborts this transport if the gate rejects.
+        await self._before_handshake()
+        await super().handshake(additional_headers, user_agent_header)
 
     def process_event(self, event):
         if isinstance(event, Frame) and event.opcode in (Opcode.TEXT, Opcode.BINARY):
@@ -58,6 +66,7 @@ class _WebSocket:
 
     def __init__(self, api_key):
         self._key = api_key
+        self._redaction_key = api_key
         self._socket = None
         self._claimed = False
         self._started = False
@@ -68,7 +77,7 @@ class _WebSocket:
             raise Disconnected("transport_owned")
         self._claimed = True
 
-    async def connect(self):
+    async def connect(self, *, before_handshake):
         if not self._claimed or self._started or self._closed:
             raise Disconnected("transport_used")
         self._started = True
@@ -83,11 +92,14 @@ class _WebSocket:
                 ENDPOINT, additional_headers=headers, ssl=tls, proxy=None,
                 open_timeout=3, close_timeout=0.25, ping_interval=None,
                 max_size=MAX_MESSAGE_CHARS, max_queue=8, compression=None,
-                create_connection=_Connection, logger=_wire_log, user_agent_header=None,
+                create_connection=partial(_Connection, before_handshake=before_handshake),
+                logger=_wire_log, user_agent_header=None,
             )
             if self._closed:
                 self.abort()
                 raise Disconnected("handshake_after_close")
+        except PocStopped:
+            raise
         except InvalidStatus as exc:
             if exc.response.status_code in (401, 403):
                 raise AuthenticationRejected("authentication_rejected") from None
@@ -117,7 +129,9 @@ class _WebSocket:
 
     async def receive_text(self):
         try:
-            return await self._connected().stamped_text()
+            frame = await self._connected().stamped_text()
+            text = frame.text.replace(self._redaction_key, "[redacted]")
+            return InboundText(text, frame.control_sequence, frame.audio_attempt)
         except Exception:
             raise Disconnected("read_failed") from None
 
@@ -126,6 +140,8 @@ class _WebSocket:
             try:
                 async with asyncio.timeout(0.25):
                     await self._socket.close()
+                    if self._socket.close_code != 1000:
+                        raise Disconnected("abnormal_close")
             except Exception:
                 raise Disconnected("close_failed") from None
             finally:
@@ -135,7 +151,7 @@ class _WebSocket:
 
     def abort(self):
         self._closed = True
-        self._key = None
+        self._key = self._redaction_key = None
         if self._socket is not None:
             socket, self._socket = self._socket, None
             socket.transport.abort()

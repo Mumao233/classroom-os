@@ -19,6 +19,11 @@ AUTH_FILE = ROOT / "docs" / "web-alpha" / "pr06a" / f"{AUTHORIZATION}.md"
 DATABASE = "classroom_pr06a_real_poc"
 
 
+class _Parser(argparse.ArgumentParser):
+    def error(self, _message):
+        raise PocStopped("invalid_arguments")
+
+
 def _emit(record):
     print(json.dumps(record, ensure_ascii=True, separators=(",", ":")), flush=True)
 
@@ -32,7 +37,9 @@ def _reviewed_head():
                                        env=environment, stderr=subprocess.DEVNULL, timeout=4).decode().strip()
 
     head = git("rev-parse", "HEAD")
-    if not re.fullmatch("[0-9a-f]{40}", head) or head == BASELINE or git("status", "--porcelain"):
+    files = git("ls-files", "-v").splitlines()
+    if (not re.fullmatch("[0-9a-f]{40}", head) or head == BASELINE or git("status", "--porcelain")
+            or any(not line.startswith("H ") for line in files)):
         raise PocStopped("reviewed_clean_checkout_required")
     git("merge-base", "--is-ancestor", BASELINE, head)
     return head
@@ -52,25 +59,58 @@ async def _db(arm):
 
     quiet_database_logger()
     dsn = os.environ.pop("PR06A_CONTROL_DSN" if arm else "PR06A_EXECUTOR_DSN", "")
-    if conninfo_to_dict(dsn).get("dbname") != DATABASE:
+    options = conninfo_to_dict(dsn)
+    if options.get("dbname") != DATABASE or options.get("host") != "127.0.0.1" or "service" in options:
         raise PocStopped("isolated_poc_database_required")
     async with asyncio.timeout(5):
-        return await AsyncConnection.connect(dsn, autocommit=True, connect_timeout=3)
+        db = await AsyncConnection.connect(dsn, autocommit=True, connect_timeout=3, hostaddr="127.0.0.1")
+        try:
+            for setting in ("log_parameter_max_length", "log_parameter_max_length_on_error"):
+                result = await db.execute(f"SHOW {setting}")
+                if await result.fetchone() != ("0",):
+                    raise PocStopped("database_parameter_logging_enabled")
+        except BaseException:
+            await db.close()
+            raise
+        return db
+
+
+def _receipt(path, expected, failure):
+    data = Path(path).read_bytes()
+    if digest(data) != expected:
+        raise PocStopped(failure)
+    return json.loads(data)
+
+
+def _verify_receipts(args, head):
+    review = _receipt(args.review, args.review_sha256, "review_receipt_digest_mismatch")
+    if (review.get("head") != head or review.get("state") != "review_completed"
+            or review.get("scope") != "base" or review.get("scope_value") != BASELINE
+            or review.get("untracked_files_excluded_from_scope") is not False
+            or review.get("findings_by_priority", [1])[:2] != [0, 0]
+            or len(review.get("gates", {})) != 10
+            or not all(gate.get("ok") is True for gate in review["gates"].values())):
+        raise PocStopped("review_receipt_not_accepted")
+    vmware = _receipt(args.vmware_receipt, args.vmware_sha256, "vmware_receipt_digest_mismatch")
+    if (vmware.get("commit") != head or vmware.get("mode") != "full"
+            or vmware.get("result") not in ("passed", "passed_with_skips")
+            or vmware.get("guest_exit_code") != 0
+            or any(vmware.get(check) is not True for check in ("same_source_manifest", "source_reread_matches",
+                    "evidence_sha256_matches_guest", "transport_succeeded"))):
+        raise PocStopped("vmware_receipt_not_accepted")
 
 
 async def _arm(args, head, fingerprint):
-    review_path = Path(args.review)
-    review_hash = digest(review_path.read_bytes())
-    if review_hash != args.review_sha256:
-        raise PocStopped("review_receipt_digest_mismatch")
+    _verify_receipts(args, head)
     async with await _db(True) as db, asyncio.timeout(5), db.transaction():
         await db.execute("SET LOCAL synchronous_commit = 'on'")
         await db.execute(
-            """INSERT INTO pr06a_control.activation(authorization,source_sha256,baseline,reviewed_sha,
-               review_receipt,approval_ref,account_ref,workspace,key_id,region,model,endpoint,
+            """INSERT INTO pr06a_control.activation(authorization_id,source_sha256,baseline,reviewed_sha,
+               review_receipt,vmware_receipt,approval_ref,account_ref,workspace,key_id,region,model,endpoint,
                credential_sha256,executor_login,enabled)
-               VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,true)""",
-            (AUTHORIZATION, AUTH_SHA256, BASELINE, head, review_hash, args.approval_ref, args.account_ref,
+               VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,true)""",
+            (AUTHORIZATION, AUTH_SHA256, BASELINE, head, args.review_sha256, args.vmware_sha256,
+             args.approval_ref, args.account_ref,
              WORKSPACE, KEY_ID, REGION, MODEL, ENDPOINT, fingerprint, args.executor_login),
         )
     _emit({"authorization": AUTHORIZATION, "candidate": head, "status": "armed"})
@@ -90,7 +130,7 @@ async def _execute(args, head, key, fingerprint, samples):
 
 
 def main():
-    parser = argparse.ArgumentParser()
+    parser = _Parser()
     action = parser.add_mutually_exclusive_group()
     action.add_argument("--arm", action="store_true")
     action.add_argument("--execute", action="store_true")
@@ -100,8 +140,10 @@ def main():
     parser.add_argument("--executor-login")
     parser.add_argument("--review")
     parser.add_argument("--review-sha256")
-    args = parser.parse_args()
+    parser.add_argument("--vmware-receipt")
+    parser.add_argument("--vmware-sha256")
     try:
+        args = parser.parse_args()
         samples = load_samples(args.samples, AUTH_FILE)
         if not args.arm and not args.execute:
             for sample in samples:
@@ -109,7 +151,8 @@ def main():
             return 0
 
         if not args.account_ref or (args.arm and not all((args.approval_ref, args.executor_login,
-                                                         args.review, args.review_sha256))):
+                                                         args.review, args.review_sha256,
+                                                         args.vmware_receipt, args.vmware_sha256))):
             raise PocStopped("operator_records_required")
         head = _reviewed_head()
         if not sys.stdin.isatty() or input("授权后输入「开始真实调用」：") != "开始真实调用":

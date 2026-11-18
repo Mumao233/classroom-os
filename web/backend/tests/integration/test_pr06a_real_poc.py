@@ -1,11 +1,12 @@
 """PostgreSQL-backed PR-06a gates with synthetic PCM and zero paid I/O."""
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from dataclasses import asdict
 import json
+import os
 from pathlib import Path
-from threading import Barrier
+import subprocess
+import sys
 from uuid import uuid4
 
 from psycopg import AsyncConnection
@@ -13,9 +14,10 @@ import pytest
 import sqlalchemy as sa
 from test_billing import billing_pg
 
-from classroom_web.asr_dashscope.transport import AuthenticationRejected, FakeTransport
+from classroom_web.asr_dashscope.transport import AuthenticationRejected, Disconnected, FakeTransport
 from classroom_web.pr06a_real_poc import policy
 from classroom_web.pr06a_real_poc.ledger import Attempt, PgLedger
+from classroom_web.pr06a_real_poc import runner
 from classroom_web.pr06a_real_poc.runner import execute_batch
 from classroom_web.test_support import SYNTHETIC_PASSWORD
 
@@ -52,9 +54,9 @@ def poc(billing_pg):
             db.execute(sa.text("UPDATE pr06a_control.samples SET samples=:samples,send_samples=:send_samples,"
                                "pcm_hash=:pcm_hash,send_hash=:send_hash WHERE slot=:slot"), asdict(spec))
         db.execute(sa.text("""INSERT INTO pr06a_control.activation(
-          authorization,source_sha256,baseline,reviewed_sha,review_receipt,approval_ref,account_ref,
+          authorization_id,source_sha256,baseline,reviewed_sha,review_receipt,vmware_receipt,approval_ref,account_ref,
           workspace,key_id,region,model,endpoint,credential_sha256,executor_login,enabled)
-          VALUES(:auth,:source,:base,:sha,:receipt,'synthetic approval',:account,:workspace,:key_id,
+          VALUES(:auth,:source,:base,:sha,:receipt,:receipt,'synthetic approval',:account,:workspace,:key_id,
                  :region,:model,:endpoint,:fingerprint,:login,true)"""),
                    dict(auth=policy.AUTHORIZATION, source=policy.AUTH_SHA256, base=policy.BASELINE, sha=REVIEWED,
                         receipt="a" * 64, account=ACCOUNT, workspace=policy.WORKSPACE, key_id=policy.KEY_ID,
@@ -74,6 +76,7 @@ def poc(billing_pg):
             yield PgLedger(db)
 
     try:
+        connect.executor = executor
         yield pg, tuple(fixtures), connect
     finally:
         with pg.admin.begin() as db:
@@ -100,7 +103,8 @@ class Peer(FakeTransport):
     def event(self, event, **payload):
         self.feed_json({"header": {"event": event, "task_id": self.task}, "payload": payload})
 
-    async def connect(self):
+    async def connect(self, *, before_handshake):
+        await before_handshake()
         await super().connect()
         if self.mode == "auth":
             raise AuthenticationRejected("synthetic handshake rejection")
@@ -108,7 +112,8 @@ class Peer(FakeTransport):
     async def send_json(self, message, *, on_dispatched=None):
         await super().send_json(message, on_dispatched=on_dispatched)
         if message["header"]["action"] == "run-task":
-            self.event("task-started")
+            if self.mode != "silent":
+                self.event("task-started")
         else:
             usage = {} if self.mode == "missing" else {"usage": {"input_tokens": 200000 if self.mode == "limit" else 5,
                                                                   "output_tokens": 1}}
@@ -116,17 +121,36 @@ class Peer(FakeTransport):
 
     async def send_binary(self, frame):
         await super().send_binary(frame)
+        if self.mode == "unconfirmed":
+            self.event("result-generated", output={"request_id": self.task, "sentence": {
+                "sentence_id": 1, "begin_time": 0, "end_time": 100,
+                "sentence_end": True, "text": "synthetic unconfirmed"}})
+            await self.sentence_recorded.wait()
+            raise Disconnected("synthetic uncertain write")
         if len(self.sent_binary) == 1:
             self.event("result-generated", output={"request_id": self.task, "sentence": {
                 "sentence_id": 1, "begin_time": 0, "end_time": 100,
                 "sentence_end": True, "text": "synthetic transcript"}},
                 usage={"input_tokens": 200000 if self.mode == "limit" else 5, "output_tokens": 1})
+            if self.mode == "foreign":
+                self.event("result-generated", output={"request_id": "wrong-request", "sentence": {
+                    "sentence_id": 2, "begin_time": 0, "end_time": 100,
+                    "sentence_end": True, "text": "synthetic foreign"}})
+        if len(self.sent_binary) == 2 and self.mode == "partial":
+            self.event("result-generated", output={"request_id": self.task, "sentence": {
+                "sentence_id": 2, "begin_time": 100, "end_time": None,
+                "sentence_end": False, "text": "synthetic partial"}})
 
 
 @pytest.mark.parametrize("mode,expected,count", [("normal", None, 3), ("auth", "authentication_rejected", 1),
-                                                 ("missing", "usage_unresolved", 1), ("limit", "cost_limit", 1)])
-def test_fenced_batch_against_postgres(poc, mode, expected, count):
+                                                 ("silent", "timeout", 1),
+                                                 ("missing", "usage_unresolved", 1), ("limit", "cost_limit", 1),
+                                                 ("foreign", "request_identity_conflict", 1),
+                                                 ("partial", "incomplete_recognition", 1)])
+def test_fenced_batch_against_postgres(poc, monkeypatch, mode, expected, count):
     pg, samples, connect = poc
+    if mode == "silent":
+        monkeypatch.setattr(runner, "MAX_CONNECTION_SECONDS", 0.8)
     peers = []
 
     def create(attempt):
@@ -146,13 +170,19 @@ def test_fenced_batch_against_postgres(poc, mode, expected, count):
     assert all(peer.connect_count == 1 and peer.closed for peer in peers)
     if mode == "normal":
         assert all([kind for kind, _ in peer.sent] == ["json", "binary", "binary", "json"] for peer in peers)
-    if mode == "limit":
+    if mode in ("limit", "foreign"):
         assert len(peers[0].sent_binary) == 1
+    if mode in ("partial", "foreign"):
+        assert receipts[0].state == "unknown"
     with pg.admin.connect() as db:
         batch = db.execute(sa.text("SELECT * FROM pr06a_control.batch")).mappings().one()
         exposure = db.scalar(sa.text("SELECT billing_api.lock_budget(:cycle)"), dict(cycle=batch["period_start"]))
-        assert exposure["unknown"] == exposure["pool_risk"]["asr"] == 1_000_000
+        expected_exposure = 1_200_005 if mode == "limit" else 1_000_000
+        assert exposure["unknown"] == exposure["pool_risk"]["asr"] == expected_exposure
         assert batch["input_token_limit"] is None and batch["held_microyuan"] == 1_000_000
+        if mode == "foreign":
+            assert db.scalar(sa.text("SELECT count(*) FROM pr06a_control.recognition")) == 1
+            assert db.scalar(sa.text("SELECT code FROM pr06a_control.anomalies")) == "request_identity_conflict"
     with pytest.raises(policy.PocStopped):
         _run(run())
 
@@ -205,48 +235,145 @@ def test_rejected_before_transport_exists(poc, monkeypatch, invalid):
                                "WHERE period_start<=now() AND period_end>now()")
 
 
-def test_concurrent_claim_and_unconfirmed_ranges(poc):
-    pg, samples, connect = poc
-    barrier = Barrier(2)
+def test_concurrent_last_slot_and_unconfirmed_ranges(poc):
+    _, samples, connect = poc
 
-    async def open_batch():
-        async with connect() as ledger:
+    async def race(ledger, other, sample):
+        other.fence = ledger.fence
+        attempt = Attempt.create()
+        accepted, rejected = await asyncio.gather(ledger.claim(sample, attempt), other.claim(sample, Attempt.create()),
+                                                 return_exceptions=True)
+        assert accepted is None and isinstance(rejected, policy.PocStopped)
+        return attempt
+
+    async def run():
+        async with connect() as ledger, connect() as other:
             await ledger.open(REVIEWED, ACCOUNT, FINGERPRINT, samples)
-            return ledger.fence
-
-    fence = _run(open_batch())
-
-    def claim():
-        async def run():
-            async with connect() as ledger:
-                ledger.fence = fence
+            for sample in samples[:2]:
                 attempt = Attempt.create()
-                barrier.wait(timeout=5)
-                try:
-                    await ledger.claim(samples[0], attempt)
-                except policy.PocStopped:
-                    return None
-                return attempt
-        return _run(run())
-
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        claims = [f.result(timeout=8) for f in [pool.submit(claim), pool.submit(claim)]]
-    attempt, = [a for a in claims if a is not None]
-
-    async def frames():
-        async with connect() as ledger:
-            ledger.fence = fence
-            await ledger.frame(attempt, 0, 1600, policy.digest(samples[0].pcm[:3200]))
+                await ledger.claim(sample, attempt)
+                await runner._Session(Peer(attempt), ledger, attempt, sample).run(asyncio.get_running_loop().time() + 5)
+                await ledger.complete(attempt, "succeeded", None)
+            sample = samples[2]
+            attempt = await race(ledger, other, sample)
+            await ledger.frame(attempt, 0, 1600, policy.digest(sample.pcm[:3200]))
             with pytest.raises(policy.PocStopped):
                 await ledger.frame(attempt, 1600, 3200, "a" * 64)
             await ledger.confirm_frame(attempt, 0)
             with pytest.raises(policy.PocStopped):
                 await ledger.frame(attempt, 1600, 3201, "a" * 64)
             with pytest.raises(policy.PocStopped):
-                await ledger.claim(samples[0], Attempt.create())
+                await ledger.claim(sample, Attempt.create())
             with pytest.raises(policy.PocStopped):
-                await ledger.claim(samples[1], Attempt.create())
-    _run(frames())
+                await ledger._change("SELECT pr06a_api.claim_attempt(%s,4,%s,%s,%s)",
+                                     uuid4(), uuid4(), uuid4())
+    _run(run())
+
+
+@pytest.mark.parametrize("checkpoint", ["before", "after"])
+def test_executor_crash_does_not_open_again(poc, tmp_path, checkpoint):
+    pg, samples, connect = poc
+    script = tmp_path / "synthetic_poc_crash.py"
+    script.write_text("""
+import json
+import os
+from uuid import uuid4
+from psycopg import connect
+from psycopg.types.json import Jsonb
+
+request = json.loads(os.environ["PR06A_SYNTHETIC_TEST_REQUEST"])
+with connect(**request["database"], autocommit=True) as db:
+    fence = uuid4()
+    db.execute("SELECT pr06a_api.open_batch(%s,%s,%s,%s)",
+        (fence,Jsonb(request["identity"]),request["fingerprint"],Jsonb(request["samples"])))
+    with db.transaction():
+        db.execute("SELECT pr06a_api.claim_attempt(%s,1,%s,%s,%s)", (fence,uuid4(),uuid4(),uuid4()))
+        if request["checkpoint"] == "before":
+            os._exit(73)
+    os._exit(73)
+""", encoding="utf-8")
+    url = pg.admin_url
+    request = {"database": {"host": url.host, "port": url.port, "dbname": url.database,
+                           "user": connect.executor, "password": SYNTHETIC_PASSWORD},
+               "identity": {"authorization": policy.AUTHORIZATION, "source_sha256": policy.AUTH_SHA256,
+                            "baseline": policy.BASELINE, "reviewed_sha": REVIEWED, "workspace": policy.WORKSPACE,
+                            "key_id": policy.KEY_ID, "region": policy.REGION, "model": policy.MODEL,
+                            "endpoint": policy.ENDPOINT, "account_ref": ACCOUNT},
+               "fingerprint": FINGERPRINT, "samples": [asdict(s.spec) for s in samples], "checkpoint": checkpoint}
+    child = subprocess.run([sys.executable, "-B", str(script)], timeout=20, capture_output=True,
+                           env=dict(os.environ, PR06A_SYNTHETIC_TEST_REQUEST=json.dumps(request)))
+    assert child.returncode == 73, child.stderr.decode("utf-8", errors="replace")
+    with pg.admin.begin() as db:
+        assert db.scalar(sa.text("SELECT count(*) FROM pr06a_control.attempts")) == int(checkpoint == "after")
+        assert db.scalar(sa.text("SELECT held_microyuan FROM pr06a_control.batch")) == 1000000
+        # Model a new Beijing month with the original batch and exposure intact.
+        cycle = "(date_trunc('month',clock_timestamp() AT TIME ZONE 'Asia/Shanghai') + interval '1 month')"
+        db.exec_driver_sql(f"""SELECT billing_api.open_period(
+          {cycle} AT TIME ZONE 'Asia/Shanghai',10,gen_random_uuid(),gen_random_uuid(),'synthetic later cycle')
+          """)
+        definition = db.scalar(sa.text(
+            "SELECT pg_get_functiondef('pr06a_api.open_batch(uuid,jsonb,text,jsonb)'::regprocedure)"))
+        db.exec_driver_sql(definition.replace("date_trunc('month',t AT TIME ZONE 'Asia/Shanghai')", cycle))
+
+    async def restart():
+        async with connect() as ledger:
+            await ledger.open(REVIEWED, ACCOUNT, FINGERPRINT, samples)
+
+    try:
+        with pytest.raises(policy.PocStopped):
+            _run(restart())
+    finally:
+        with pg.admin.begin() as db:
+            db.exec_driver_sql("DELETE FROM billing_control.platform_budgets WHERE period_start>clock_timestamp()")
+
+
+@pytest.mark.parametrize("mode", ["stamp", "unconfirmed", "pending-failure"])
+def test_frame_and_sentence_evidence_preserves_dispatch_boundary(poc, monkeypatch, mode):
+    pg, samples, connect = poc
+    peers = []
+    original_frame = PgLedger.frame
+    original_sentence = PgLedger.sentence
+
+    async def reserve_frame(self, attempt, start, end, checksum):
+        await original_frame(self, attempt, start, end, checksum)
+        if mode == "pending-failure" and start > 0:
+            peers[0].feed_json({"header": {"event": "task-failed", "task_id": str(attempt.task_id),
+                                           "error_code": "synthetic", "error_message": "synthetic failure"},
+                               "payload": {}})
+            await asyncio.sleep(0)
+
+    async def record_sentence(self, attempt, sentence, revision, required_sample):
+        await original_sentence(self, attempt, sentence, revision, required_sample)
+        peers[0].sentence_recorded.set()
+
+    monkeypatch.setattr(PgLedger, "frame", reserve_frame)
+    monkeypatch.setattr(PgLedger, "sentence", record_sentence)
+
+    def create(attempt):
+        peer = Peer(attempt, mode=mode)
+        peer.sentence_recorded = asyncio.Event()
+        peers.append(peer)
+        if mode == "stamp":
+            def fail(_):
+                raise RuntimeError("synthetic stamp failure")
+            peer.note_audio_attempt = fail
+        return peer
+
+    async def run():
+        async with connect() as ledger:
+            return await execute_batch(ledger, samples, REVIEWED, ACCOUNT, FINGERPRINT, create)
+
+    receipt, = _run(run())
+    assert receipt.state == ("failed" if mode == "pending-failure" else "unknown")
+    assert len(peers[0].sent_binary) == (0 if mode == "stamp" else 1)
+    with pg.admin.connect() as db:
+        frames = db.execute(sa.text("SELECT disposition FROM pr06a_control.frames ORDER BY start_sample")).scalars().all()
+        assert frames == (["confirmed", "not_sent"] if mode == "pending-failure"
+                          else ["not_sent"] if mode == "stamp" else ["intent"])
+        if mode == "unconfirmed":
+            assert db.execute(sa.text("""SELECT r.required_sample,f.disposition FROM pr06a_control.recognition r
+                JOIN pr06a_control.frames f ON f.attempt=r.attempt AND f.end_sample=r.required_sample""")).one() == (
+                1600,"intent")
 
 
 def test_reconcile_keeps_unresolved_hold_and_books_late_overspend(poc):

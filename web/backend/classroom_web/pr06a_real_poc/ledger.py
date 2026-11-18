@@ -64,8 +64,8 @@ class PgLedger:
     async def protocol(self, attempt, event):
         await self._change("SELECT pr06a_api.protocol(%s,%s,%s)", attempt.id, event)
 
-    async def check_connection(self, attempt):
-        await self._change("SELECT pr06a_api.check_connection(%s,%s)", attempt.id)
+    async def check_connection(self, attempt, *, handshake=False):
+        await self._change("SELECT pr06a_api.check_connection(%s,%s,%s)", attempt.id, handshake)
 
     async def frame(self, attempt, start, end, frame_hash):
         await self._change("SELECT pr06a_api.frame_intent(%s,%s,%s,%s,%s)", attempt.id, start, end, frame_hash)
@@ -73,15 +73,25 @@ class PgLedger:
     async def confirm_frame(self, attempt, start):
         await self._change("SELECT pr06a_api.confirm_frame(%s,%s,%s)", attempt.id, start)
 
+    async def discard_frame(self, attempt, start):
+        await self._change("SELECT pr06a_api.discard_frame(%s,%s,%s)", attempt.id, start)
+
+    async def inbound(self, attempt, sequence, frame):
+        await self._change("SELECT pr06a_api.record_inbound(%s,%s,%s,%s,%s,%s)",
+                           attempt.id, sequence, frame.control_sequence, frame.audio_attempt, frame.text)
+
+    async def anomaly(self, attempt, code, raw_hash):
+        await self._change("SELECT pr06a_api.anomaly(%s,%s,%s,%s)", attempt.id, code, raw_hash)
+
     async def observe(self, attempt, request, usage, final):
         return await self._change("SELECT pr06a_api.observe(%s,%s,%s,%s,%s,%s)",
                                   attempt.id, request, usage.input_tokens if usage else None,
                                   usage.output_tokens if usage else None, final)
 
-    async def sentence(self, attempt, sentence, revision):
-        await self._change("SELECT pr06a_api.record_sentence(%s,%s,%s,%s,%s,%s,%s,%s)",
+    async def sentence(self, attempt, sentence, revision, required_sample):
+        await self._change("SELECT pr06a_api.record_sentence(%s,%s,%s,%s,%s,%s,%s,%s,%s)",
                            attempt.id, sentence.sentence_id, revision, sentence.begin_ms,
-                           sentence.end_ms, sentence.final, sentence.text)
+                           sentence.end_ms, sentence.final, sentence.text, required_sample)
 
     async def complete(self, attempt, state, reason):
         await self._change("SELECT pr06a_api.complete(%s,%s,%s,%s)", attempt.id if attempt else None, state, reason)

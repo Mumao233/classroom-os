@@ -22,85 +22,127 @@ class _Session:
         self.started = asyncio.Event()
         self.run_recorded = asyncio.Event()
         self.finish_recorded = asyncio.Event()
+        self.dispatch_ready = asyncio.Event()
+        self.dispatch_ready.set()
         self.run_control = self.finish_control = 0
-        self.ready = self.terminal = self.provider_failed = False
+        self.ready = self.recognition_ok = self.recognition_tainted = self.provider_failed = False
         self.stop = None
         self.ranges = [0]
         self.sentences = {}
+        self.seen_sentences = set()
+        self.seen_results = set()
         self.request = None
         self.usage = None
+        self.received_count = self.received_bytes = 0
 
-    async def _sentence(self, event, inbound):
-        sentence = event.sentence
-        if sentence is None:
+    async def _anomaly(self, code, inbound):
+        self.stop = self.stop or code
+        await self.ledger.anomaly(self.attempt, code, digest(inbound.text.encode("utf-8")))
+
+    async def _sentence(self, sentence, inbound):
+        if sentence is None or sentence in self.seen_sentences:
             return
         last = self.sentences.get(sentence.sentence_id)
-        if last is not None and last[0] == sentence:
-            return
+        frontier = self.ranges[inbound.audio_attempt] if 0 < inbound.audio_attempt < len(self.ranges) else 0
         if ((last is None and sentence.sentence_id != 1 + len(self.sentences))
                 or (last is not None and last[0].final)
-                or not 0 < inbound.audio_attempt < len(self.ranges)
-                or 16 * max(sentence.begin_ms, sentence.end_ms or 0) > self.ranges[inbound.audio_attempt]):
-            self.stop = self.stop or "sentence_identity_or_range"
+                or 16 * sentence.begin_ms >= frontier
+                or (sentence.end_ms is not None and 16 * sentence.end_ms > frontier)):
+            self.recognition_tainted = True
+            await self._anomaly("sentence_identity_or_range", inbound)
             return
         revision = last[1] + 1 if last else 1
-        await self.ledger.sentence(self.attempt, sentence, revision)
+        await self.ledger.sentence(self.attempt, sentence, revision, frontier)
         self.sentences[sentence.sentence_id] = (sentence, revision)
+        self.seen_sentences.add(sentence)
+
+    async def _usage(self, event, inbound, final):
+        self.request = event.request_id or self.request
+        usage = event.usage
+        if event.usage_issue or (final and (usage is None or self.request is None)):
+            await self._anomaly("usage_unresolved", inbound)
+        if (usage is not None and self.usage is not None
+                and (usage.input_tokens < self.usage.input_tokens or usage.output_tokens < self.usage.output_tokens)):
+            await self._anomaly("usage_regression", inbound)
+            usage = None
+        if usage is not None:
+            self.usage = usage
+        if event.request_id or usage:
+            reached = await self.ledger.observe(self.attempt, event.request_id, usage,
+                                                final and usage is not None and self.request is not None)
+            if reached:
+                self.stop = self.stop or "cost_limit"
+
+    async def _receive(self, inbound):
+        try:
+            event = parse_event(inbound.text, str(self.attempt.task_id))
+        except ProtocolError:
+            await self._anomaly("protocol_invalid", inbound)
+            raise
+        if not self.run_control or inbound.control_sequence < self.run_control:
+            raise PocStopped("response_before_run")
+        await self.run_recorded.wait()
+        if event.kind == "task-failed":
+            self.stop = "provider_failed"
+            self.provider_failed = True
+            await self.ledger.protocol(self.attempt, "task-failed")
+            raise PocStopped(self.stop)
+        if event.kind == "task-started" and not self.ready:
+            await self.ledger.protocol(self.attempt, "task-started")
+            self.ready = True
+            self.started.set()
+            return False
+        if not self.ready or event.kind == "task-started":
+            raise PocStopped("event_order")
+
+        final = event.kind == "task-finished"
+        if final:
+            if not self.finish_control or inbound.control_sequence < self.finish_control:
+                raise PocStopped("terminal_before_finish")
+            await self.finish_recorded.wait()
+            await self.ledger.protocol(self.attempt, "task-finished")
+        elif event in self.seen_results:
+            return False
+        else:
+            self.seen_results.add(event)
+
+        if event.request_id and self.request and event.request_id != self.request:
+            self.recognition_tainted = True
+            await self._anomaly("request_identity_conflict", inbound)
+        else:
+            if event.sentence_issue:
+                self.recognition_tainted = True
+                await self._anomaly("sentence_invalid", inbound)
+            await self._sentence(event.sentence, inbound)
+            # Recognition and billing have independent validity boundaries.
+            if final:
+                self.recognition_ok = (not self.recognition_tainted and bool(self.sentences)
+                                       and all(item.final for item, _ in self.sentences.values()))
+            await self._usage(event, inbound, final)
+        if final and not self.recognition_ok:
+            self.stop = self.stop or "incomplete_recognition"
+        return final
 
     async def _read(self):
         try:
             while True:
                 inbound = await self.transport.receive_text()
-                event = parse_event(inbound.text, str(self.attempt.task_id))
-                if not self.run_control or inbound.control_sequence < self.run_control:
-                    raise PocStopped("response_before_run")
-                await self.run_recorded.wait()
-                if event.kind == "task-failed":
-                    self.provider_failed = True
-                    await self.ledger.protocol(self.attempt, "task-failed")
-                    raise PocStopped("provider_failed")
-                if event.kind == "task-started" and not self.ready:
-                    await self.ledger.protocol(self.attempt, "task-started")
-                    self.ready = True
-                    self.started.set()
-                    continue
-                if not self.ready or event.kind == "task-started":
-                    raise PocStopped("event_order")
-                final = event.kind == "task-finished"
-                if final and (not self.finish_control or inbound.control_sequence < self.finish_control):
-                    raise PocStopped("terminal_before_finish")
-                if final:
-                    await self.finish_recorded.wait()
-                    await self.ledger.protocol(self.attempt, "task-finished")
-                    self.terminal = True
-                if event.request_id and self.request and event.request_id != self.request:
-                    self.stop = self.stop or "request_identity_conflict"
-                else:
-                    self.request = event.request_id or self.request
-                    if event.usage_issue or (final and (event.usage is None or self.request is None)):
-                        self.stop = self.stop or "usage_unresolved"
-                    usage = event.usage
-                    if (usage is not None and self.usage is not None
-                            and (usage.input_tokens < self.usage.input_tokens or
-                                 usage.output_tokens < self.usage.output_tokens)):
-                        self.stop = self.stop or "usage_regression"
-                        usage = None
-                    if usage is not None:
-                        self.usage = usage
-                    if event.request_id or usage:
-                        reached = await self.ledger.observe(self.attempt, event.request_id, usage,
-                                                            final and not event.usage_issue and
-                                                            usage is not None and self.request is not None)
-                        if reached:
-                            self.stop = self.stop or "cost_limit"
-                if event.sentence_issue:
-                    self.stop = self.stop or "sentence_invalid"
-                else:
-                    await self._sentence(event, inbound)
-                if final:
-                    if not any(item.final for item, _ in self.sentences.values()):
-                        self.stop = self.stop or "missing_final_sentence"
-                    return
+                self.dispatch_ready.clear()
+                try:
+                    received = inbound.text.encode("utf-8")
+                    self.received_count += 1
+                    self.received_bytes += len(received)
+                    if self.received_count > 512 or self.received_bytes > 2 * 1024 * 1024:
+                        await self._anomaly("inbound_evidence_limit", inbound)
+                        raise PocStopped("inbound_evidence_limit")
+                    await self.ledger.inbound(self.attempt, self.received_count, inbound)
+                    if await self._receive(inbound):
+                        return
+                except Exception:
+                    self.stop = self.stop or "reader_stopped"
+                    raise
+                finally:
+                    self.dispatch_ready.set()
         finally:
             self.started.set()
 
@@ -108,12 +150,19 @@ class _Session:
         reader = None
         transport = self.transport
         transport.claim()
-        watchdog = asyncio.get_running_loop().call_at(deadline, transport.abort)
+        loop = asyncio.get_running_loop()
+        watchdog = loop.call_at(deadline, transport.abort)
+
+        async def authorize_handshake():
+            await self.ledger.check_connection(self.attempt, handshake=True)
+            if loop.time() >= deadline - 0.25:
+                raise PocStopped("handshake_deadline")
+
         try:
             async with asyncio.timeout_at(deadline - 0.25):
-                if asyncio.get_running_loop().time() >= deadline - 0.25:
+                if loop.time() >= deadline - 0.25:
                     raise TimeoutError
-                await transport.connect()
+                await transport.connect(before_handshake=authorize_handshake)
                 await self.ledger.protocol(self.attempt, "handshake")
                 await self.ledger.check_connection(self.attempt)
                 reader = asyncio.create_task(self._read())
@@ -136,7 +185,7 @@ class _Session:
                 reader.cancel()
             try:
                 async with asyncio.timeout_at(deadline):
-                    if asyncio.get_running_loop().time() < deadline:
+                    if loop.time() < deadline:
                         await transport.close()
             finally:
                 transport.abort()
@@ -144,13 +193,17 @@ class _Session:
                 if reader is not None:
                     await asyncio.gather(reader, return_exceptions=True)
 
+    async def _wait_dispatch(self):
+        while not self.dispatch_ready.is_set():
+            await self.dispatch_ready.wait()
+
     async def _send_audio(self, reader):
         size = self.sample.spec.send_samples
         loop = asyncio.get_running_loop()
         next_frame = loop.time()
         for start in range(0, size, FRAME_SAMPLES):
-            # Pace 100 ms PCM frames and let the reader process available events.
             await asyncio.sleep(max(0, next_frame - loop.time()))
+            await self._wait_dispatch()
             if self.stop or reader.done():
                 return
             end = min(start + FRAME_SAMPLES, size)
@@ -160,16 +213,26 @@ class _Session:
             except PocStopped as exc:
                 self.stop = self.stop or str(exc)
                 return
+            await asyncio.sleep(0)
+            await self._wait_dispatch()
             if self.stop or reader.done():
+                await self.ledger.discard_frame(self.attempt, start)
                 return
+            try:
+                self.transport.note_audio_attempt(len(self.ranges))
+            except Exception:
+                await self.ledger.discard_frame(self.attempt, start)
+                raise Disconnected("audio_stamp_failed") from None
             self.ranges.append(end)
-            self.transport.note_audio_attempt(len(self.ranges) - 1)
             next_frame = loop.time() + (end - start) / 16000
             await self.transport.send_binary(frame)
             await self.ledger.confirm_frame(self.attempt, start)
 
 
 async def execute_batch(ledger, samples, reviewed_sha, account_ref, credential_fingerprint, transport_for):
+    if any(len(sample.pcm) != sample.spec.send_samples * 2
+           or digest(sample.pcm) != sample.spec.send_hash for sample in samples):
+        raise PocStopped("pcm_payload_mismatch")
     loop = asyncio.get_running_loop()
     batch_deadline = loop.time() + MAX_BATCH_SECONDS
     receipts = []
@@ -188,7 +251,7 @@ async def execute_batch(ledger, samples, reviewed_sha, account_ref, credential_f
                     attempt = candidate
                     session = _Session(transport_for(candidate), ledger, candidate, sample)
                     await session.run(deadline)
-                state = "succeeded"
+                state = "succeeded" if session.recognition_ok else "unknown"
                 reason = session.stop
                 await ledger.complete(attempt, state, reason)
                 receipts.append(Receipt(sample.spec.slot, state, reason))
@@ -208,7 +271,7 @@ async def execute_batch(ledger, samples, reviewed_sha, account_ref, credential_f
             reason = "connection_failed"
         else:
             reason = "protocol_invalid"
-        if session and (session.terminal or session.provider_failed):
+        if session and (session.recognition_ok or session.provider_failed):
             state = "succeeded" if session.terminal else "failed"
         else:
             state = "failed" if isinstance(exc, AuthenticationRejected) else "unknown"

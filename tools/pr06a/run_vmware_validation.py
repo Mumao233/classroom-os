@@ -114,7 +114,8 @@ def main():
     package = backend / 'classroom_web/asr_dashscope'
     suite = backend / 'tests/asr_dashscope'
     billing_targets = [backend / 'tests/integration/test_pr06a_billing_gate.py',
-                       backend / 'tests/integration/test_pr06a_dashscope_billing.py']
+                       backend / 'tests/integration/test_pr06a_dashscope_billing.py',
+                       backend / 'tests/integration/test_pr06a_real_poc.py']
     scratch = root / 'work/pr06a/dashscope-tests'
     guard = scratch / 'guard'
     guard.mkdir(parents=True, exist_ok=False)
