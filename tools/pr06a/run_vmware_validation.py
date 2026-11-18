@@ -219,7 +219,7 @@ def main():
         'Failed: DID NOT RAISE ProtocolError')
 
     negative_control('dashscope-mutant-post-terminal', 'adapter.py',
-        '    def _accept(self, event):\n        if self._state in _TERMINAL:\n            return\n',
+        '    def _accept(self, event):\n        if self._stopping:\n            return\n',
         '    def _accept(self, event):\n',
         'test_adapter.py::test_ready_reader_cannot_change_a_closed_stream_or_append_after_terminal'
         '[result-generated]', expected_terminal_failure)

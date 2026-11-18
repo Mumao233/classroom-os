@@ -33,7 +33,7 @@
 | `await start(config)` | 完成身份、配置与离线许可门禁，建连和 `run-task` 发送后等到匹配的启动确认。确认事件的 Transport 入队顺序须在该命令交付后。 |
 | `await send(frame)` | 串行核对 PCM 和已授权范围，发出或可能发出的范围归属于原尝试；I/O 结果未明时保留 `unknown`，本连接不重送。 |
 | `await finish()` | 停止新发送，在本连接至多发一次 `finish-task`，接收剩余识别事件和终态。明确拒绝和无证据终态分别保留。 |
-| `events()` | 批量返回内部 `asr.started`、`asr.partial`、`asr.final_candidate`、`asr.transcript_unconfirmed`、`asr.usage`、`asr.usage_anomaly`、`asr.terminal`。`asr.final_candidate` 从 wire 取已确认发送范围的句尾。活动写入期间暂存覆盖未确认样本的句子，无结束时间的 partial 以当时尝试发送的末样本为边界。关闭前先收拢活跃写入结果，仍缺覆盖的句子以 `asr.transcript_unconfirmed` 交给原尝试核对。持久事务完成后才有可公布的 final。 |
+| `events()` | 批量返回内部 `asr.started`、`asr.partial`、`asr.final_candidate`、`asr.transcript_unconfirmed`、`asr.usage`、`asr.usage_anomaly`、`asr.terminal`。`asr.final_candidate` 从 wire 取已确认发送范围的句尾。活动写入期间暂存覆盖未确认样本的句子，无结束时间的 partial 以接收帧入队时已尝试发送的末样本为边界。关闭前先收拢活跃写入结果，仍缺覆盖的句子以 `asr.transcript_unconfirmed` 交给原尝试核对。终态回执与分类完成的事件同批可见。持久事务完成后才有可公布的 final。 |
 | `query(receipt)` | `unsupported`，保留原任务和费用状态。 |
 
 供应商毫秒时间轴从连接开始的音频计算，本轮以首个已提交样本为基点加 `wire_ms × 16`。可空的 partial 结束时间留在内部证据中，最终课堂时间还需用 PR-05b 的采样与 epoch 映射。公开 `transcript.partial` 规约没有 `end_ms`，`transcript.final` 要求持久 `event_id`、`cursor`、`segment_revision_id` 和 `transcript_version_id`，候选适配器不直接发布公开浏览器事件。连接中断、超时或协议歧义后，保留已确认的文本和可疑发送边界供原尝试核对。[事件 Schema](../architecture/contracts/events.schema.json) · [采样时间轴与状态](../architecture/04-CONTRACTS-FLOWS.md)

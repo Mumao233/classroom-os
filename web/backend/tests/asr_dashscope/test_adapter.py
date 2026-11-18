@@ -1002,6 +1002,8 @@ async def test_disconnect_settles_the_runnable_audio_writer_before_classifying_f
         sending = asyncio.Event()
         release = asyncio.Event()
         received_result = asyncio.Event()
+        closing = asyncio.Event()
+        release_close = asyncio.Event()
 
         async def send_binary(self, frame):
             self.sending.set()
@@ -1014,6 +1016,11 @@ async def test_disconnect_settles_the_runnable_audio_writer_before_classifying_f
                 self.received_result.set()
             return raw
 
+        async def close(self):
+            self.closing.set()
+            await self.release_close.wait()
+            await super().close()
+
     cfg = config()
     peer = DisconnectPeer()
     adapter = await open_adapter(cfg, peer)
@@ -1024,8 +1031,13 @@ async def test_disconnect_settles_the_runnable_audio_writer_before_classifying_f
     assert not just(adapter.events(), 'asr.final_candidate')
     peer.feed_disconnect()
     peer.release.set()
+    await peer.closing.wait()
+    await asyncio.sleep(0)
+    assert not writer.done() and adapter.state != 'unknown'
+    with pytest.raises(ProtocolError, match='not accepting frames'):
+        await adapter.send(pcm(160))
+    peer.release_close.set()
     assert (await writer)['state'] == 'unknown'
-    assert (await adapter.finish())['state'] == 'unknown'
     assert adapter.sent_ranges == ((0, 160),)
     remaining = adapter.events()
     assert not just(remaining, 'asr.transcript_unconfirmed')
@@ -1084,4 +1096,45 @@ async def test_each_transcript_uses_its_confirmed_audio_coverage(mode):
     tentative, = just(adapter.events(), 'asr.transcript_unconfirmed')
     assert tentative['text'] == ('unconfirmed-other-segment' if mode == 'independent_final' else 'later')
     assert adapter.sent_ranges == ((0, 160),)
+    assert_clean(peer)
+
+
+@offline
+async def test_open_partial_uses_the_audio_attempt_at_ingress():
+    class BufferedPartialPeer(ScriptedPeer):
+        delayed_partial = asyncio.Event()
+        second_attempt = asyncio.Event()
+        release_second = asyncio.Event()
+        read_partial = asyncio.Event()
+
+        async def send_binary(self, frame):
+            if self.sent_binary:
+                self.second_attempt.set()
+                await self.release_second.wait()
+                raise RuntimeError('second frame never left')
+            await super().send_binary(frame)
+
+        async def receive_text(self):
+            raw = await super().receive_text()
+            if '"buffered partial"' in raw.text:
+                self.delayed_partial.set()
+                await self.second_attempt.wait()
+                self.read_partial.set()
+            return raw
+
+    cfg = config()
+    peer = BufferedPartialPeer()
+    adapter = await open_adapter(cfg, peer)
+    await adapter.send(pcm())
+    peer.feed_json(result(cfg, text='buffered partial'))
+    await peer.delayed_partial.wait()
+    writer = asyncio.create_task(adapter.send(pcm(160)))
+    await peer.read_partial.wait()
+    partial, = just(adapter.events(), 'asr.partial')
+    assert partial['text'] == 'buffered partial'
+    assert adapter.attempted_ranges == ((0, 160), (160, 320))
+    peer.release_second.set()
+    with pytest.raises(ProtocolError, match='send_failed'):
+        await writer
+    assert not just(adapter.events(), 'asr.transcript_unconfirmed')
     assert_clean(peer)

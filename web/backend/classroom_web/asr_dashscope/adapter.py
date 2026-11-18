@@ -25,7 +25,6 @@ class Deadlines:
                 raise ProtocolError('invalid deadline')
 
 
-_TERMINAL = frozenset(('succeeded', 'failed', 'unknown'))
 _ID_FIELDS = frozenset(('task_id', 'attempt_id', 'stream_id', 'provider_task_id'))
 _CONFIG_FIELDS = _ID_FIELDS | {'class_session_id', 'capture_epoch_id'}
 
@@ -48,6 +47,7 @@ class DashScopeAdapter:
         self._permit = permit
         self._deadlines = deadlines
         self._state = 'idle'
+        self._stopping = False
         self._disposed = False
         self._loop = None
         self._session_deadline = self._finish_deadline = None
@@ -149,11 +149,11 @@ class DashScopeAdapter:
         try:
             await self._write(self._transport.connect, seconds=self._deadlines.connect)
             phase = 'initialize'
-            if self._state != 'starting':
+            if self._state != 'starting' or self._stopping:
                 raise ProtocolError('start closed')
             async with self._timeout(self._deadlines.initialize) as limit:
                 await self._write(self._send_run, expires_at=limit.when())
-                if self._state != 'starting':
+                if self._state != 'starting' or self._stopping:
                     raise ProtocolError('start closed')
                 self._reader = asyncio.create_task(self._read(expires_at=limit.when()))
                 try:
@@ -162,7 +162,7 @@ class DashScopeAdapter:
                     if asyncio.current_task().cancelling():
                         raise
                     raise ProtocolError('start closed') from None
-            if self._state != 'streaming':
+            if self._state != 'streaming' or self._stopping:
                 raise ProtocolError('provider did not start')
             self._reader = asyncio.create_task(self._read_events())
             return self._receipt()
@@ -188,10 +188,10 @@ class DashScopeAdapter:
 
     async def send(self, frame):
         self._verify_loop()
-        if self._state != 'streaming':
+        if self._state != 'streaming' or self._stopping:
             raise ProtocolError('not accepting frames')
         async with self._write_lock:
-            if self._state != 'streaming':
+            if self._state != 'streaming' or self._stopping:
                 raise ProtocolError('not accepting frames')
             pcm, start, end = validate_frame(frame, max_bytes=self.MAX_FRAME_BYTES)
             if self._attempted_ranges and start != self._attempted_ranges[-1][1]:
@@ -202,6 +202,9 @@ class DashScopeAdapter:
             self._permit.check_audio(end - base)
             try:
                 await self._write(self._send_frame, pcm, start, end)
+                # A reader can have closed admission while this write resolves.
+                # Its terminal receipt and final evidence become visible together.
+                await self._wait_closed()
             except asyncio.CancelledError:
                 self._stop_unconfirmed('closed')
                 await self._wait_closed()
@@ -215,11 +218,11 @@ class DashScopeAdapter:
 
     async def finish(self):
         self._verify_loop()
-        if self._state == 'streaming':
+        if not self._stopping and self._state == 'streaming':
             self._finish_deadline = min(self._loop.time() + self._deadlines.finish, self._session_deadline)
             self._state = 'draining'
             self._finisher = asyncio.create_task(self._finish())
-        elif self._state != 'draining' and self._state not in _TERMINAL:
+        elif not self._stopping and self._state != 'draining':
             raise ProtocolError('cannot finish this state')
         try:
             if self._finisher is not None:
@@ -234,7 +237,7 @@ class DashScopeAdapter:
         try:
             async with self._timeout(self._deadlines.finish, expires_at=self._finish_deadline) as limit:
                 async with self._write_lock:
-                    if self._state == 'draining':
+                    if self._state == 'draining' and not self._stopping:
                         await self._write(self._send_finish, expires_at=limit.when())
                         self._finish_write_complete = True
                         self._confirm_pending_terminal()
@@ -275,7 +278,7 @@ class DashScopeAdapter:
             raise ProtocolError('transport omitted run handoff')
 
     def _mark_run_handoff(self, control_sequence):
-        if self._state == 'starting':
+        if self._state == 'starting' and not self._stopping:
             if self._run_handoff_sequence is not None:
                 raise ProtocolError('duplicate run handoff')
             self._run_handoff_sequence = integer(control_sequence, 1)
@@ -283,9 +286,10 @@ class DashScopeAdapter:
     async def _send_frame(self, pcm, start, end):
         # A transport exception cannot prove that the bytes did not leave.
         self._attempted_ranges.append((start, end))
+        self._transport.note_audio_attempt(len(self._attempted_ranges))
         await self._transport.send_binary(pcm)
         self._sent_ranges.append((start, end))
-        if self._state not in _TERMINAL:
+        if not self._stopping:
             self._publish_confirmed_transcripts(end)
 
     async def _send_finish(self):
@@ -296,7 +300,7 @@ class DashScopeAdapter:
             raise ProtocolError('transport omitted finish handoff')
 
     def _mark_finish_handoff(self, control_sequence):
-        if self._state == 'draining':
+        if self._state == 'draining' and not self._stopping:
             if self._finish_handoff_sequence is not None:
                 raise ProtocolError('duplicate finish handoff')
             self._finish_handoff_sequence = integer(control_sequence, self._run_handoff_sequence + 1)
@@ -307,7 +311,7 @@ class DashScopeAdapter:
 
         async def invoke():
             self._require_time(limit.when())
-            if self._state in _TERMINAL:
+            if self._stopping:
                 raise ProtocolError('writer stopped with the connection')
             await method(*args)
 
@@ -333,11 +337,12 @@ class DashScopeAdapter:
         if type(raw) is not InboundText:
             raise ProtocolError('inbound transport sequencing is required')
         control_sequence = integer(raw.control_sequence)
-        return (parse_event(raw.text, self._identity.provider_task_id), control_sequence)
+        audio_attempt = integer(raw.audio_attempt, maximum=len(self._attempted_ranges))
+        return parse_event(raw.text, self._identity.provider_task_id), control_sequence, audio_attempt
 
     async def _read_events(self):
         try:
-            while self._state not in _TERMINAL and self._pending_terminal is None:
+            while not self._stopping and self._pending_terminal is None:
                 self._accept(await self._read())
         except asyncio.CancelledError:
             self._stop_unconfirmed('receive_failed')
@@ -352,9 +357,9 @@ class DashScopeAdapter:
             self._stop_unconfirmed('receive_failed')
 
     def _accept(self, event):
-        if self._state in _TERMINAL:
+        if self._stopping:
             return
-        event, ingress_sequence = event
+        event, ingress_sequence, audio_attempt = event
         if self._state == 'starting':
             if ingress_sequence != self._run_handoff_sequence:
                 raise ProtocolError('startup response preceded run-task handoff')
@@ -386,15 +391,15 @@ class DashScopeAdapter:
             self._confirm_pending_terminal()
             return
 
-        self._accept_result(event)
+        self._accept_result(event, audio_attempt)
         self._seen_results.add(event)
 
-    def _accept_result(self, event):
+    def _accept_result(self, event, audio_attempt):
         # A valid sentence and a valid meter reading are independent evidence.
         sentence_issue = event.sentence_issue
         if event.sentence is not None:
             try:
-                self._accept_sentence(event.sentence)
+                self._accept_sentence(event.sentence, audio_attempt)
             except ProtocolError:
                 sentence_issue = True
         if event.usage_issue:
@@ -406,7 +411,7 @@ class DashScopeAdapter:
             raise ProtocolError('invalid result sentence')
 
     def _confirm_pending_terminal(self):
-        if self._state != 'draining' or self._pending_terminal is None:
+        if self._stopping or self._state != 'draining' or self._pending_terminal is None:
             return
         if self._loop.time() >= self._finish_deadline:
             self._stop_unconfirmed('finish_timeout')
@@ -451,7 +456,7 @@ class DashScopeAdapter:
                    input_tokens_limit=self._permit.input_tokens_limit,
                    output_tokens_limit=self._permit.output_tokens_limit)
 
-    def _accept_sentence(self, sentence):
+    def _accept_sentence(self, sentence, audio_attempt):
         number = sentence.sentence_id
         prior, revision = self._sentences.get(number, (None, 0))
         if prior == sentence:
@@ -465,12 +470,13 @@ class DashScopeAdapter:
         seen = self._seen_partials.setdefault(number, set())
         if not sentence.final and sentence in seen:
             return
-        if not self._attempted_ranges:
+        if not audio_attempt:
             raise ProtocolError('sentence before audio')
         base = self._attempted_ranges[0][0]
+        attempted_end = self._attempted_ranges[audio_attempt - 1][1]
         start = base + sentence.begin_ms * 16
         end = base + sentence.end_ms * 16 if sentence.end_ms is not None else None
-        if start >= self._attempted_ranges[-1][1] or (end is not None and end > self._attempted_ranges[-1][1]):
+        if start >= attempted_end or (end is not None and end > attempted_end):
             raise ProtocolError('sentence outside attempted audio')
         if not sentence.final:
             seen.add(sentence)
@@ -483,7 +489,7 @@ class DashScopeAdapter:
                                 start_sample=start, end_sample=end, timestamp_source='provider_segment')
         # A growing partial can reflect the newest attempted frame even
         # when the provider gives no end time for it.
-        required_sample = max(start + 1, end) if end is not None else self._attempted_ranges[-1][1]
+        required_sample = max(start + 1, end) if end is not None else attempted_end
         self._deferred_transcripts.append((required_sample, candidate))
         if self._sent_ranges:
             self._publish_confirmed_transcripts(self._sent_ranges[-1][1])
@@ -516,24 +522,24 @@ class DashScopeAdapter:
         self._event_batch.append(self._event(kind, **data))
 
     def _stop_unconfirmed(self, reason):
-        if self._state != 'idle' and self._state not in _TERMINAL:
+        if self._state != 'idle' and not self._stopping:
             self._stop('unknown' if self._run_attempted else 'failed', reason)
 
     def _stop(self, state, reason):
-        if self._state in _TERMINAL:
+        if self._stopping:
             return
         if self._pending_terminal is not None:
             self._usage_anomaly('unconfirmed_finish_dispatch', self._pending_terminal.usage, final=True)
             self._pending_terminal = None
-        self._state = state
+        self._stopping = True
         self._terminal_event.set()
-        self._closer = asyncio.create_task(self._close_transport(reason))
+        self._closer = asyncio.create_task(self._close_transport(state, reason))
 
     async def _wait_closed(self):
         if self._closer is not None:
             await asyncio.shield(self._closer)
 
-    async def _close_transport(self, reason):
+    async def _close_transport(self, state, reason):
         pending = [task for task in (self._reader, self._writer) if task is not None and not task.done()]
         for task in pending:
             task.cancel()
@@ -557,5 +563,6 @@ class DashScopeAdapter:
             # cancellation. Release evidence using the settled local frontier.
             confirmed_end = self._sent_ranges[-1][1] if self._sent_ranges else 0
             self._publish_confirmed_transcripts(confirmed_end, finalizing=True)
-            self._emit('asr.terminal', state=self._state, reason=reason,
+            self._state = state
+            self._emit('asr.terminal', state=state, reason=reason,
                        provider_terminal=self._provider_terminal, billing_pending=self.billing_pending)

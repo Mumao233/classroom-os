@@ -20,6 +20,7 @@ class Disconnected(ConnectionError):
 class InboundText:
     text: str = field(repr=False)
     control_sequence: int
+    audio_attempt: int
 
 
 class Transport(Protocol):
@@ -29,8 +30,9 @@ class Transport(Protocol):
     cancellation. For a control write with on_dispatched, invoke the callback
     synchronously with its increasing control sequence when that frame has been
     handed to the underlying connection. Every inbound text frame carries the
-    latest such sequence at ingress, before enqueueing or handing to the reader.
-    A successful return confirms completion of the local write. After a partial
+    latest such sequence and audio attempt at ingress, before handing it to a
+    consumer. The adapter records a new attempt synchronously before each
+    binary write. A successful return confirms completion. After a partial
     connect or a failed close, abort must immediately release the connection.
     """
 
@@ -39,6 +41,7 @@ class Transport(Protocol):
     def claim(self) -> None: ...
     async def connect(self) -> None: ...
     async def send_json(self, message: dict, *, on_dispatched: Callable[[int], None] | None = None) -> None: ...
+    def note_audio_attempt(self, number: int) -> None: ...
     async def send_binary(self, frame: bytes) -> None: ...
     async def receive_text(self) -> InboundText: ...
     async def close(self) -> None: ...
@@ -60,7 +63,7 @@ class FakeTransport:
         self.closed = False
         self.sent = []
         self._inbound = asyncio.Queue()
-        self._control_sequence = 0
+        self._control_sequence = self._audio_attempt = 0
         self._scheduled_text = {}
 
     @property
@@ -78,7 +81,7 @@ class FakeTransport:
         if after_control is not None:
             self._scheduled_text.setdefault(after_control, []).append(value)
             return
-        self._inbound.put_nowait(InboundText(value, self._control_sequence))
+        self._inbound.put_nowait(InboundText(value, self._control_sequence, self._audio_attempt))
 
     def feed_disconnect(self):
         self._inbound.put_nowait(Disconnected('connection closed'))
@@ -110,6 +113,9 @@ class FakeTransport:
             on_dispatched(self._control_sequence)
         for text in self._scheduled_text.pop(message['header']['action'], ()):
             self.feed_text(text)
+
+    def note_audio_attempt(self, number):
+        self._audio_attempt = number
 
     async def send_binary(self, frame):
         self._require_connection()
