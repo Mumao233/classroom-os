@@ -1109,8 +1109,16 @@ try {
       await other.waitForFunction(() => !runtime.snapshot().unlocked);
       assert.deepEqual(await other.evaluate(async () => {
         await expectCode(runtime.readDraft(visibleDraft), 'LOCKED');
-        await expectCode(oldOrdinary.applyDeletion({ object_type: 'media_asset', object_id: crypto.randomUUID(),
-          deletion_id: ids.deletion, state: 'access_revoked' }), 'SYNC_AUTHORITY_REQUIRED');
+        const post = BroadcastChannel.prototype.postMessage;
+        BroadcastChannel.prototype.postMessage = function(message) {
+          if (!message?.ordinaryDecision && !message?.ordinaryDeletion) { post.call(this, message); return; }
+          window.delayedOrdinary = (value = message) => post.call(this, value);
+          window.delayedOrdinaryMessage = message;
+        };
+        try {
+          await expectCode(oldOrdinary.applyDeletion({ object_type: 'class_session', object_id: ids.classroom,
+            deletion_id: ids.deletion, state: 'access_revoked' }), 'SYNC_AUTHORITY_REQUIRED');
+        } finally { BroadcastChannel.prototype.postMessage = post; }
         await expectCode(oldOrdinary.unlockScope('drafts'), 'LOCKED');
         await expectCode(oldOrdinary.read(ordinaryDraft), 'LOCKED');
         const fresh = new NativeTrustedCache(ordinaryOptions);
@@ -1153,6 +1161,20 @@ try {
         return reopening;
       })));
       assert.deepEqual(recovered, Array.from({ length: 2 }, () => ({ cursor: 'after-committed-tombstone', pending: ['restricted', 'restricted'] })));
+      const sealed = () => page.evaluate(async name => JSON.stringify((await records(name)).map(({ id, header, nonce, ciphertext }) =>
+        [id, header, Array.from(nonce), Array.from(new Uint8Array(ciphertext))])), name);
+      const retained = await sealed();
+      await page.evaluate(() => {
+        window.sawDelayedOrdinary = false;
+        cache.addEventListener('locked', () => { sawDelayedOrdinary = true; }, { once: true });
+      });
+      assert.deepEqual(await other.evaluate(() => {
+        delayedOrdinary();
+        return { deletionIds: delayedOrdinaryMessage.deletionIds, pending: delayedOrdinaryMessage.pending, deletionId: ids.deletion };
+      }), { deletionIds: [failure.deletionPage.items[0].object_id], pending: false, deletionId: failure.deletionPage.items[0].object_id });
+      await page.waitForFunction(() => window.sawDelayedOrdinary);
+      await page.evaluate(() => cache.pendingDeletionIds());
+      assert.equal(await sealed(), retained);
       await page.evaluate(() => cache.lockForDeletion([ids.deletion]));
       await other.evaluate(async () => {
         await oldOrdinary.unlockScope('drafts');

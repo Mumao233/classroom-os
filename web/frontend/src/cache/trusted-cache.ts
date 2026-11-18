@@ -21,6 +21,7 @@ type MemoryKey = { key: CryptoKey; id: string; version: number; deadline: number
 type Authorized = { localGeneration: number; namespace: string; identity: CacheIdentity; key: MemoryKey };
 type KnownDeletion = { deletionId: string; kind: string; objectId: string; retainDrafts: boolean };
 type OrdinaryDeletion = KnownDeletion & { token: string };
+type OrdinaryDeletionDecision = { id: string; binding: string; allowed: boolean };
 
 function ordinaryDeletion(value: unknown): value is OrdinaryDeletion {
   return object(value) && typeof value.token === 'string' && !!value.token
@@ -62,8 +63,8 @@ export class TrustedCache extends EventTarget {
         if (!identity) return;
         if (data === 'lock') { this.lock(); return; }
         if (!object(data) || data.namespace !== namespaceOf(identity)) return;
-        if (ordinaryDeletion(data.ordinaryDeletion)) {
-          void this.queueOrdinaryDeletion(identity, data.ordinaryDeletion)
+        if (ordinaryDeletion(data.ordinaryDecision)) {
+          void this.queueOrdinaryDeletion(identity, data.ordinaryDecision)
             .catch(() => this.dispatchEvent(new Event('storage-failed')));
           return;
         }
@@ -697,11 +698,11 @@ export class TrustedCache extends EventTarget {
     if (!this.allowsSyncRecords) {
       const ordinary = { ...scope, token: crypto.randomUUID() };
       // Notify while this adapter is live. A peer can complete the known scope even if this view closes.
-      this.channel?.postMessage({ namespace, ordinaryDeletion: ordinary });
+      this.channel?.postMessage({ namespace, deletionIds: [deletionId], pending: false, ordinaryDecision: ordinary });
       if (!await this.queueOrdinaryDeletion(identity, ordinary)) throw new CacheError('SYNC_AUTHORITY_REQUIRED');
       return;
     }
-    const applying = this.queueDeletion(namespace, scope, completeFence, false);
+    const applying = this.queueDeletion(namespace, scope, completeFence);
     const lockId = completeFence ? deletionId : JSON.stringify([kind, objectId]);
     if (this.rememberDeletionLocks([lockId])) this.notifyLock(identity, [lockId]);
     await applying;
@@ -710,33 +711,33 @@ export class TrustedCache extends EventTarget {
 
   private queueOrdinaryDeletion(identity: CacheIdentity, notice: OrdinaryDeletion): Promise<boolean> {
     const token = 'ordinary:' + notice.token;
-    if (this.deletionLocks.has(token)) return Promise.resolve(true);
+    const repeated = this.deletionLocks.has(token);
     this.deletionLocks.add(token);
-    const applying = this.queueDeletion(namespaceOf(identity), notice, false, true);
-    // An ordinary request cannot complete an active server fence or interrupt its detail check.
-    if (this.keys.size || !this.activeServerDeletions.has(notice.deletionId)) this.lock();
+    const applying = this.queueDeletion(namespaceOf(identity), notice, false, notice.token);
+    if (!repeated) {
+      // Keep an active server detail check alive but invalidate any unfinished key release.
+      if (this.keys.size || !this.activeServerDeletions.has(notice.deletionId)) this.lock();
+      else for (const [slot, attempt] of this.unlockAttempts) this.unlockAttempts.set(slot, attempt + 1);
+    }
     return applying;
   }
 
   private async queueDeletion(namespace: string, { kind, objectId, deletionId, retainDrafts }: KnownDeletion,
-    completeFence: boolean, ordinary: boolean): Promise<boolean> {
+    completeFence: boolean, ordinaryToken?: string): Promise<boolean> {
     let allowed = true;
     const tombstone: Tombstone = { id: JSON.stringify([namespace, kind, objectId]), namespace, kind, objectId, retainDrafts };
     const applying = this.barrier = this.barrier.then(() => cacheTransaction<void>(this.databaseName, 'readwrite', (tx, done) => {
-      const tombstones = tx.objectStore('tombstones');
-      const prior = tombstones.get(tombstone.id);
-      prior.onsuccess = () => {
-        const previous = prior.result as Tombstone | undefined;
-        const retainAllowed = retainDrafts && (!previous || previous.retainDrafts === true);
-        const deletionIds = new Set(previous?.deletionIds);
-        const changed = !previous || previous.retainDrafts !== retainAllowed || (completeFence && !deletionIds.has(deletionId));
-        if (completeFence) deletionIds.add(deletionId);
-        const states = tx.objectStore('namespaces');
-        const loadState = states.get(namespace);
-        loadState.onsuccess = () => {
-          const state = loadState.result as NamespaceState | undefined;
-          const pending = state?.pendingDeletionIds ?? [];
-          if (ordinary && pending.includes(deletionId)) { allowed = false; done(); return; }
+      const states = tx.objectStore('namespaces');
+      const loadState = states.get(namespace);
+      const applyTombstone = (state: NamespaceState | undefined, pending: string[]) => {
+        const tombstones = tx.objectStore('tombstones');
+        const prior = tombstones.get(tombstone.id);
+        prior.onsuccess = () => {
+          const previous = prior.result as Tombstone | undefined;
+          const retainAllowed = retainDrafts && (!previous || previous.retainDrafts === true);
+          const deletionIds = new Set(previous?.deletionIds);
+          const changed = !previous || previous.retainDrafts !== retainAllowed || (completeFence && !deletionIds.has(deletionId));
+          if (completeFence) deletionIds.add(deletionId);
           if (changed || (completeFence && pending.includes(deletionId))) states.put({ ...state, id: namespace,
             generation: (state?.generation ?? 0) + (changed ? 1 : 0),
             pendingDeletionIds: completeFence ? pending.filter(id => id !== deletionId) : pending });
@@ -750,6 +751,27 @@ export class TrustedCache extends EventTarget {
             };
           }
           done();
+        };
+      };
+      loadState.onsuccess = () => {
+        const state = loadState.result as NamespaceState | undefined;
+        const pending = state?.pendingDeletionIds ?? [];
+        if (!ordinaryToken) { applyTombstone(state, pending); return; }
+        const id = JSON.stringify([namespace, 'ordinary-deletion-decision', ordinaryToken]);
+        const binding = JSON.stringify([kind, objectId, deletionId, retainDrafts]);
+        const request = states.get(id);
+        request.onsuccess = () => {
+          const decision = request.result as OrdinaryDeletionDecision | undefined;
+          if (decision !== undefined) {
+            allowed = object(decision) && decision.binding === binding && decision.allowed === true;
+            done();
+            return;
+          }
+          // Every viewer reuses this decision, even if the server fence has since completed.
+          allowed = !pending.includes(deletionId);
+          states.put({ id, binding, allowed } satisfies OrdinaryDeletionDecision);
+          if (allowed) applyTombstone(state, pending);
+          else done();
         };
       };
     }));

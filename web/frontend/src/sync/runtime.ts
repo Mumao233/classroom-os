@@ -249,6 +249,11 @@ export class OfflineSyncRuntime extends EventTarget {
         this.cache.lock();
         throw new SyncError('INCOMPATIBLE_CLIENT');
       }
+      const malformed = !page.items.every(validChange);
+      if (malformed) {
+        this.cache.lock();
+        epoch = this.epoch;
+      }
       const discovered = page.items.filter(change => validChange(change) && change.object_type === 'deletion'
         && !reconciled.has(change.object_id)).map(change => change.object_id);
       if (discovered.length) {
@@ -258,9 +263,8 @@ export class OfflineSyncRuntime extends EventTarget {
         await fencing;
         this.sameEpoch(epoch);
       }
-      if (!page.items.every(validChange)) {
+      if (malformed) {
         // A malformed neighbor cannot erase notice of a valid deletion.
-        this.cache.lock();
         throw new SyncError('INCOMPATIBLE_CLIENT');
       }
       for (const change of page.items) {

@@ -337,6 +337,16 @@ describe('PR-08b encrypted operation queue', () => {
     expect(f.runtime.snapshot()).toMatchObject({ unlocked: false, cursor: 'consumed' });
   });
 
+  it('locks a malformed page even if writing a known deletion fence fails', async () => {
+    const f = fixture(); await f.runtime.unlock('');
+    f.cache.lockForDeletion = async () => { throw new SyncError('STORAGE_UNAVAILABLE'); };
+    const correct = { event_id: id(401), object_type: 'deletion' as const, object_id: id(400), revision: 1, deleted: true };
+    f.transport.changes = async () => ({ items: [correct, { ...correct, event_id: 'invalid' }],
+      next_cursor: 'bad-page', has_more: false });
+    await f.runtime.pollChanges();
+    expect(f.runtime.snapshot()).toMatchObject({ unlocked: false, cursor: 'consumed' });
+  });
+
   it('resumes from the last completed page after the bounded catch-up limit', async () => {
     const f = fixture();
     const cursors: string[] = [];
