@@ -132,7 +132,10 @@ class Peer(FakeTransport):
     async def send_json(self, message, *, on_dispatched=None):
         await super().send_json(message, on_dispatched=on_dispatched)
         if message["header"]["action"] == "run-task":
-            if self.mode == "start-regression":
+            if self.mode == "partial-regression":
+                self.event("task-started", usage={"input_tokens": 100})
+                self.event("task-started", usage={"total_tokens": 5})
+            elif self.mode == "start-regression":
                 self.event("task-started", usage={"input_tokens": 100, "output_tokens": 1})
             elif self.mode != "silent":
                 self.event("task-started")
@@ -207,6 +210,7 @@ class Peer(FakeTransport):
                                                  ("foreign", "request_identity_conflict", 1),
                                                  ("regression", "usage_regression", 1),
                                                  ("start-regression", "usage_regression", 1),
+                                                 ("partial-regression", "usage_regression", 1),
                                                  ("mirrors", "usage_unresolved", 1),
                                                  ("terminal-conflict", "post_terminal_conflict", 1),
                                                  ("terminal-invalid", "protocol_invalid", 1),
@@ -245,6 +249,8 @@ def test_fenced_batch_against_postgres(poc, monkeypatch, mode, expected, count):
         assert receipts[0].state == "unknown"
     if mode == "pre-run":
         assert not peers[0].sent
+    if mode == "partial-regression":
+        assert not peers[0].sent_binary
     with pg.admin.connect() as db:
         batch = db.execute(sa.text("SELECT * FROM pr06a_control.batch")).mappings().one()
         exposure = db.scalar(sa.text("SELECT billing_api.lock_budget(:cycle)"), dict(cycle=batch["period_start"]))

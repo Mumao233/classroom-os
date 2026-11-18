@@ -1,6 +1,7 @@
 """Wire codec for the DashScope Qwen-Audio-ASR-Streaming WebSocket API."""
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
+from decimal import Decimal, InvalidOperation
 from hashlib import sha256
 import json
 import math
@@ -199,16 +200,36 @@ def _bounded_meter_int(value):
     return int(value) if len(value) <= 17 else (2**53 if not value.startswith("-") else None)
 
 
+class _NoncanonicalMeter(int):
+    pass
+
+
+def _bounded_meter_decimal(value):
+    if len(value) > 64:
+        return None
+    try:
+        number = Decimal(value)
+        if number.is_finite() and number >= 0 and number == number.to_integral_value():
+            return _NoncanonicalMeter(min(number, 2**53))
+    except InvalidOperation:
+        pass
+    return None
+
+
 def _meter_totals(containers):
     high = {}
     conflict = False
     for body in containers:
+        if not isinstance(body, _ObjectPairs):
+            conflict = True
+            continue
         current = {}
         for meter in ("input_tokens", "output_tokens", "total_tokens"):
             values = _values(body, meter)
             if not values:
                 continue
-            counts = {min(value, 2**53 - 1) for value in values if type(value) is int and value >= 0}
+            counts = {min(int(value), 2**53 - 1) for value in values
+                      if type(value) in (int, _NoncanonicalMeter) and value >= 0}
             conflict |= (len(counts) != 1 or any(type(v) is not int or not 0 <= v <= 2**53 - 1 for v in values))
             if not counts:
                 continue
@@ -240,7 +261,7 @@ def metering_evidence(raw: str) -> MeteringEvidence | None:
         return None
     try:
         obj = json.loads(raw, object_pairs_hook=_ObjectPairs, parse_constant=_unknown_number,
-                         parse_float=_unknown_number, parse_int=_bounded_meter_int)
+                         parse_float=_bounded_meter_decimal, parse_int=_bounded_meter_int)
         tasks = {uid(task) for header in _values(obj, "header") for task in _values(header, "task_id")}
         if len(tasks) != 1:
             return None
@@ -262,12 +283,16 @@ def metering_evidence(raw: str) -> MeteringEvidence | None:
         return None
 
 
-def observation_fingerprint(raw: str) -> str:
-    try:
-        obj = json.loads(raw, object_pairs_hook=_unique_object, parse_constant=_invalid_constant, parse_float=_finite_float)
-        raw = json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
-    except (ValueError, RecursionError):
-        pass
+def observation_fingerprint(raw: str, evidence: MeteringEvidence | None = None) -> str:
+    evidence = evidence or metering_evidence(raw)
+    if evidence is not None:
+        try:
+            event = parse_event(raw, evidence.task_id)
+        except ProtocolError:
+            pass
+        else:
+            normalized = {"event": asdict(event), "metering": asdict(evidence)}
+            raw = json.dumps(normalized, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     return sha256(raw.encode("utf-8")).hexdigest()
 
 

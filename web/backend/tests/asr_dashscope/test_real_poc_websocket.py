@@ -76,7 +76,13 @@ def test_unrelated_duplicate_keys_do_not_discard_meter_evidence():
                                          '"input_tokens":200000,"input_tokens":9007199254740992')
     assert metering_evidence(out_of_range_duplicate).usage.input_tokens == 200000
     assert metering_evidence(out_of_range_duplicate).metering_conflict
-    parsed = {"header": {"task_id": task}, "payload": {"usage": {"input_tokens": 100, "total_tokens": 5}}}
+    exponent_meter = raw.replace('"input_tokens":200000', '"input_tokens":2e5')
+    assert metering_evidence(exponent_meter).usage.input_tokens == 200000
+    assert metering_evidence(exponent_meter).metering_conflict
+    non_object = raw.replace('{"input_tokens":200000,"output_tokens":1}', '[]')
+    assert metering_evidence(non_object).metering_conflict
+    parsed = {"header": {"task_id": task, "event": "task-started"},
+              "payload": {"usage": {"input_tokens": 100, "total_tokens": 5}}}
     assert metering_evidence(json.dumps(parsed)).metering_conflict
     assert observation_fingerprint(json.dumps(parsed)) == observation_fingerprint(json.dumps(parsed, sort_keys=True, indent=2))
 

@@ -109,13 +109,11 @@ class _Connection(ClientConnection):
         message = await self.recv(decode=False)
         control, audio, text_frame = self.stamps.popleft()
         self.buffered_messages -= 1
-        if not text_frame:
-            raise UnsafeInbound("binary_provider_response", digest(message))
         try:
             text = message.decode("utf-8")
         except UnicodeDecodeError:
             raise UnsafeInbound("invalid_provider_utf8", digest(message)) from None
-        return InboundText(text, control, audio)
+        return InboundText(text, control, audio), text_frame
 
     async def send_control(self, message, on_dispatched):
         # In the pinned library send_context writes the queued data before its
@@ -201,8 +199,16 @@ class _WebSocket:
 
     async def receive_text(self):
         try:
-            frame = await self._connected().stamped_text()
-            return _safe_evidence(frame, self._redaction_key)
+            frame, text_frame = await self._connected().stamped_text()
+            if text_frame:
+                return _safe_evidence(frame, self._redaction_key)
+            try:
+                _safe_evidence(frame, self._redaction_key)
+            except UnsafeInbound as exc:
+                meter = exc.metering
+            else:
+                meter = metering_evidence(frame.text)
+            raise UnsafeInbound("binary_provider_response", digest(frame.text.encode("utf-8")), meter)
         except ConnectionClosedOK:
             raise EndOfStream("peer_closed") from None
         except UnsafeInbound:

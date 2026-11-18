@@ -232,7 +232,7 @@ $f$;
 -- Existing ordinary admission sees the specialized hold and actuals in
 -- the same locked budget row. The production schema alone is unchanged.
 GRANT SELECT (authorization_id, observed_input, observed_output, observed_total, gross_microyuan,
-              reconciled_metering_revision, metering_revision,usage_final) ON pr06a_control.attempts TO classroom_billing_control;
+              reconciled_metering_revision, metering_revision,usage_final,metering_issue_pending) ON pr06a_control.attempts TO classroom_billing_control;
 CREATE VIEW billing_control.pr06a_combined_exposures AS
 SELECT period_start,pool,held,unknown,settled FROM billing_control.exposures
 UNION ALL
@@ -245,7 +245,7 @@ FROM pr06a_control.batch b
 LEFT JOIN LATERAL (
   SELECT ceil(sum(greatest(0,pr06a_control.risk_microyuan(a.observed_input,a.observed_output,a.observed_total)
                                   -coalesce(a.gross_microyuan,0)))) AS unresolved,
-         bool_or(NOT a.usage_final OR a.observed_input IS NULL OR a.observed_output IS NULL) AS unmetered
+         bool_or(a.metering_issue_pending OR NOT a.usage_final OR a.observed_input IS NULL OR a.observed_output IS NULL) AS unmetered
   FROM pr06a_control.attempts a WHERE a.authorization_id=b.authorization_id
     AND (a.gross_microyuan IS NULL OR a.reconciled_metering_revision IS DISTINCT FROM a.metering_revision)
 ) u ON true;
@@ -586,8 +586,7 @@ BEGIN
      OR (a.redacted_request_fingerprint IS NOT NULL AND
          p_request_fingerprint IS DISTINCT FROM a.redacted_request_fingerprint)
      OR (p_request_fingerprint IS NOT NULL AND
-         (p_request IS NOT NULL OR a.request_id IS NOT NULL
-          OR (a.redacted_request_fingerprint IS NULL AND p_resolved IS NOT TRUE)))
+         (p_request IS NOT NULL OR a.request_id IS NOT NULL))
      OR (a.request_id IS NOT NULL AND p_request IS DISTINCT FROM a.request_id) THEN
     RAISE EXCEPTION 'PR06A_BILL_ATTRIBUTION_CONFLICT';
   END IF;

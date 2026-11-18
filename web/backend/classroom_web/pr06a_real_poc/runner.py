@@ -87,12 +87,15 @@ class _Session:
     def _meter_decision(self, evidence, packet_hash):
         usage = evidence.usage
         values = (usage.input_tokens if usage else None, usage.output_tokens if usage else None, evidence.total)
+        floor = sum(max(value or 0, previous or 0)
+                    for value, previous in zip(values[:2], self.meter_high[:2]))
         issue = None
         if packet_hash not in self.meter_packets:
             if evidence.metering_conflict:
                 issue = "usage_unresolved"
-            elif any(value is not None and previous is not None and value < previous
-                     for value, previous in zip(values, self.meter_high)):
+            elif ((evidence.total is not None and evidence.total < floor) or
+                  any(value is not None and previous is not None and value < previous
+                      for value, previous in zip(values, self.meter_high))):
                 issue = "usage_regression"
             elif self.first_terminal and any(value is not None and value != previous
                                              for value, previous in zip(values, self.meter_high)):
@@ -117,7 +120,7 @@ class _Session:
             self.stop = self.stop or issue
             if issue == "usage_regression":
                 self.meter_regressed = True
-            if not self.retention_capped and any(value is not None for value in values):
+            if any(value is not None for value in values):
                 self.meter_packets.add(observation_hash)
             self.meter_high = tuple(max((v for v in pair if v is not None), default=None)
                                     for pair in zip(values, self.meter_high))
@@ -259,7 +262,8 @@ class _Session:
         else:
             packet.update(sequence=self.received_count, control=inbound.control_sequence,
                           frame=inbound.audio_attempt, payload=inbound.text)
-        accepted = await self._retain(packet, metering_evidence(inbound.text), observation_fingerprint(inbound.text))
+        evidence = metering_evidence(inbound.text)
+        accepted = await self._retain(packet, evidence, observation_fingerprint(inbound.text, evidence))
         if accepted and self.run_control and inbound.control_sequence >= self.run_control:
             try:
                 event = parse_event(inbound.text, str(self.attempt.task_id))
@@ -268,6 +272,9 @@ class _Session:
             else:
                 if event.kind == "task-failed":
                     await self._note_provider_failure()
+                elif (event.kind == "task-finished" and self.finish_control and
+                      inbound.control_sequence >= self.finish_control):
+                    self._terminal_kind("task-finished")
                 elif self.first_terminal is not None:
                     self._check_terminal_contradiction(event)
         return accepted
@@ -280,7 +287,7 @@ class _Session:
             return
         if exc.event == "task-failed":
             await self._note_provider_failure()
-        elif exc.event == "task-finished" and self.first_terminal is not None:
+        elif exc.event == "task-finished" and self.finish_control and exc.control >= self.finish_control:
             self._terminal_kind(exc.event)
         if self.terminal_event is not None and exc.final_sentence is not None:
             seen = self.sentences.get(exc.final_sentence[0])
