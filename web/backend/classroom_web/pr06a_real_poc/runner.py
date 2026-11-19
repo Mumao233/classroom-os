@@ -322,7 +322,7 @@ class _Session:
                         return
                     raise Disconnected("closed_before_terminal") from None
                 except Disconnected:
-                    if self.terminal_event is not None and self.usage_final:
+                    if self.terminal_event is not None:
                         # The receive side can finish with an error during a
                         # close/abort. Classify using the socket's close evidence.
                         self.post_terminal_read_failed = True
@@ -373,6 +373,9 @@ class _Session:
         finally:
             if not closed:
                 self.transport.abort()
+                snapshot = getattr(self.transport, "snapshot_expired_close", None)
+                if snapshot is not None and asyncio.get_running_loop().time() >= deadline:
+                    snapshot()
             self.close_audit = getattr(self.transport, "close_audit", None)
             self.network_closed = True
             try:
@@ -385,7 +388,7 @@ class _Session:
                 watchdog.cancel()
         if self.close_audit is not None and self.close_audit.status != "clean":
             self.stop = self.stop or f"close_{self.close_audit.status}"
-        elif self.post_terminal_read_failed:
+        elif self.post_terminal_read_failed and self.stop is None:
             raise Disconnected("read_failed")
 
     async def run(self, deadline):
@@ -551,7 +554,12 @@ async def execute_batch(ledger, samples, reviewed_sha, account_ref, credential_f
     except asyncio.CancelledError:
         try:
             async with asyncio.timeout(1):
-                await ledger.interrupt(attempt, "operator_interrupted")
+                if admitted and session is not None and (session.usage_final or session.close_audit is not None):
+                    state = "succeeded" if session.usage_final and session.terminal_event is not None and (
+                        session.recognition_state() == "succeeded") else "unknown"
+                    await ledger.complete(attempt, state, "operator_interrupted", close=session.close_audit)
+                else:
+                    await ledger.interrupt(attempt, "operator_interrupted")
         except (PocStopped, TimeoutError):
             pass
         raise
@@ -562,6 +570,9 @@ async def execute_batch(ledger, samples, reviewed_sha, account_ref, credential_f
             reason = "authentication_rejected"
         elif isinstance(exc, TimeoutError):
             reason = "timeout"
+            if (session is not None and session.terminal_event is not None and session.close_audit is not None
+                    and session.close_audit.status == "timeout"):
+                reason = session.stop or "close_timeout"
         elif isinstance(exc, Disconnected):
             reason = "connection_failed"
         else:

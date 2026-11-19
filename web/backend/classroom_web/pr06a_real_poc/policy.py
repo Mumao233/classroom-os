@@ -40,6 +40,7 @@ MAX_WAV_BYTES = 320_256
 _DIGITS = "零一二三四五六七八九"
 _NUMERAL_CHARS = f"0-9{_DIGITS}〇两十百千万亿"
 _SINGLE_DIGIT = re.compile(rf"(?<![{_NUMERAL_CHARS}])([{_DIGITS}])(?=[点楼])")
+_NUMERIC_PUNCTUATION = re.compile(r"[-+](?=[0-9])|(?<=[0-9])[.,](?=[0-9])")
 
 
 @dataclass(frozen=True)
@@ -55,9 +56,10 @@ class CloseAudit:
 
 def compare_transcript(actual: str, reference: str, *, allow_prefix: bool = False) -> str:
     def comparable(text):
-        text = normalize("NFKC", text).casefold()
+        text = "".join(normalize("NFKC", text).casefold().split()).replace("−", "-")
         text = _SINGLE_DIGIT.sub(lambda match: str(_DIGITS.index(match[1])), text)
-        return "".join(ch for ch in text if ch.isalnum())
+        numeric_punctuation = {match.start() for match in _NUMERIC_PUNCTUATION.finditer(text)}
+        return "".join(ch for i, ch in enumerate(text) if ch.isalnum() or i in numeric_punctuation)
 
     actual, reference = comparable(actual), comparable(reference)
     if not actual or not reference:

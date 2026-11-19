@@ -20,7 +20,7 @@ from test_billing import billing_pg
 
 from classroom_web.asr_dashscope.transport import AuthenticationRejected, Disconnected, FakeTransport
 from classroom_web.pr06a_real_poc import policy
-from classroom_web.pr06a_real_poc.ledger import Attempt, PgLedger
+from classroom_web.pr06a_real_poc.ledger import Attempt, PgLedger, finish_on_cancel
 from classroom_web.pr06a_real_poc import runner
 from classroom_web.pr06a_real_poc.runner import execute_batch
 from classroom_web.test_support import SYNTHETIC_PASSWORD
@@ -506,9 +506,7 @@ def test_close_timeout_keeps_terminal_recognition_and_stops_with_separate_audit(
             try:
                 return await super().receive_text()
             except policy.EndOfStream:
-                if final:
-                    raise Disconnected("read_failed") from None
-                raise
+                raise Disconnected("read_failed") from None
 
     async def run():
         async with connect() as ledger:
@@ -527,11 +525,122 @@ def test_close_timeout_keeps_terminal_recognition_and_stops_with_separate_audit(
             "timeout", 3000, None, 1000, "", "client")
 
 
+def test_nonclean_close_fences_next_claim_when_stop_is_omitted(poc, monkeypatch):
+    pg, samples, connect = poc
+
+    class ClosingPeer(Peer):
+        async def close(self):
+            self.close_audit = policy.CloseAudit("timeout", 3000, None, None, 1000, "", "client")
+            await super().close()
+
+    async def run():
+        async with connect() as ledger:
+            complete = ledger.complete
+
+            async def omit_stop(attempt, state, reason, *, close=None):
+                assert reason == "close_timeout"
+                await complete(attempt, state, None, close=close)
+                with pytest.raises(policy.PocStopped):
+                    await ledger.claim(samples[1], Attempt.create())
+
+            monkeypatch.setattr(ledger, "complete", omit_stop)
+            return await execute_batch(ledger, samples, REVIEWED, ACCOUNT, FINGERPRINT, ClosingPeer)
+
+    assert _run(run())[0].state == "succeeded"
+    with pg.admin.connect() as db:
+        assert db.execute(sa.text("SELECT closed,stop_code FROM pr06a_control.batch")).one() == (True, None)
+        assert db.execute(sa.text("SELECT slot,state,usage_final FROM pr06a_control.attempts")).one() == (
+            1, "succeeded", True)
+
+
+@pytest.mark.parametrize("interrupted", [False, True], ids=["batch-deadline", "operator-interrupt"])
+def test_close_completion_preserves_evidence_after_outer_cancellation(poc, monkeypatch, interrupted):
+    pg, samples, connect = poc
+    if not interrupted:
+        monkeypatch.setattr(runner, "MAX_BATCH_SECONDS", 2)
+    reason = "operator_interrupted" if interrupted else "close_timeout"
+    status = "clean" if interrupted else "timeout"
+
+    async def run():
+        closing, release_close = asyncio.Event(), asyncio.Event()
+
+        class ClosingPeer(Peer):
+            async def close(self):
+                closing.set()
+                try:
+                    await release_close.wait()
+                finally:
+                    received = 1000 if interrupted else None
+                    self.close_audit = policy.CloseAudit(status, 1000, received, "" if interrupted else None,
+                                                         1000, "", "client")
+                    await super().close()
+
+        async with connect() as ledger:
+            task = asyncio.create_task(execute_batch(ledger, samples, REVIEWED, ACCOUNT, FINGERPRINT, ClosingPeer))
+            if not interrupted:
+                receipts = await task
+                assert [(r.state, r.stop, r.close.status) for r in receipts] == [("succeeded", reason, status)]
+                return
+            async with asyncio.timeout(3):
+                await closing.wait()
+            task.cancel()
+            release_close.set()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+    _run(run())
+    with pg.admin.connect() as db:
+        assert db.execute(sa.text("SELECT closed,stop_code FROM pr06a_control.batch")).one() == (True, reason)
+        assert db.execute(sa.text("SELECT slot,state,usage_final FROM pr06a_control.attempts")).one() == (
+            1, "succeeded", True)
+        assert db.scalar(sa.text("SELECT status FROM pr06a_control.websocket_close")) == status
+
+
+def test_close_snapshot_after_watchdog_abort_does_not_extend_dispatch(poc, monkeypatch):
+    pg, samples, connect = poc
+    monkeypatch.setattr(runner, "MAX_CONNECTION_SECONDS", 0.9)
+    peers = []
+
+    class ExpiredPeer(Peer):
+        def snapshot_expired_close(self):
+            assert self.closed and self.abort_count == 1
+            self.close_audit = policy.CloseAudit("timeout", 0, None, None, None, None, None)
+
+    def peer(attempt):
+        transport = ExpiredPeer(attempt)
+        peers.append(transport)
+        return transport
+
+    async def run():
+        async with connect() as ledger:
+            confirm = ledger.confirm_frame
+
+            async def late_confirm(attempt, start):
+                async def confirm_then_wait():
+                    await confirm(attempt, start)
+                    await asyncio.sleep(1)
+                await finish_on_cancel(confirm_then_wait())
+
+            monkeypatch.setattr(ledger, "confirm_frame", late_confirm)
+            return await execute_batch(ledger, samples, REVIEWED, ACCOUNT, FINGERPRINT, peer)
+
+    receipt, = _run(run())
+    assert (receipt.state, receipt.stop, receipt.close.status) == ("unknown", "timeout", "timeout")
+    assert len(peers) == 1 and len(peers[0].sent_binary) == 1 and peers[0].close_count == 0
+    with pg.admin.connect() as db:
+        assert db.execute(sa.text("SELECT status,elapsed_ms FROM pr06a_control.websocket_close")).one() == (
+            "timeout", 0)
+
+
 @pytest.mark.parametrize("actual,reference,prefix,result", [
     ("下午３点到2楼开会。", "下午三点到二楼开会。", False, "match"),
     ("下午4点到2楼开会。", "下午三点到二楼开会。", False, "differs"),
     ("十2楼", "十二楼", False, "differs"),
     ("三国", "3国", False, "differs"),
+    ("下午三 点到 二 楼。", "下午3点到2楼。", False, "match"),
+    ("去−2楼。", "去二楼。", False, "differs"),
+    ("去-二楼。", "去−2楼。", False, "match"),
+    ("下午3.2点", "下午32点", False, "differs"),
     ("去2楼", "去二楼开会。", True, "prefix_match"),
     ("去2楼", "去二楼开会。", False, "differs"),
 ])
@@ -854,6 +963,13 @@ def test_later_migration_preserves_all_prior_batches(poc, authorization, migrate
         ownership = sa.text("""SELECT oid,proowner,proacl::text FROM pg_proc WHERE
             oid='pr06a_control.check_activation(text)'::regprocedure""")
         original_acl = db.execute(ownership).one()
+        if prior_count == 3:
+            for schema, grant in (("pr06a_control", "INSERT ON TABLES"), ("pr06a_api", "EXECUTE ON FUNCTIONS")):
+                with pytest.raises(sa.exc.DBAPIError, match="PR06A_CLOSE_AUDIT_ACL_UNEXPECTED"), db.begin_nested():
+                    db.exec_driver_sql(f"ALTER DEFAULT PRIVILEGES IN SCHEMA {schema} GRANT {grant} "
+                                       "TO classroom_billing_control")
+                    db.exec_driver_sql(migrate(), execution_options={"no_parameters": True})
+                assert snapshot(db) == original
         db.exec_driver_sql(migrate(), execution_options={"no_parameters": True})
         assert snapshot(db) == original
         assert db.execute(ownership).one() == original_acl

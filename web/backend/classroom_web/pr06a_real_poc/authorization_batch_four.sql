@@ -111,6 +111,14 @@ BEGIN
     WHERE pr06a_control.owns_batch(b,f) AND c.executor_login=session_user
       AND a.attempt=p_attempt AND a.state='submitting';
   IF NOT FOUND THEN RAISE EXCEPTION 'PR06A_CLOSE_AUDIT_BLOCKED'; END IF;
+  IF p_status<>'clean' THEN
+    -- Close the fence even if the executor's completion omits its stop code.
+    -- complete() records the applicable stop code in the same transaction.
+    UPDATE pr06a_control.batch b SET closed=true
+      FROM pr06a_control.attempts a
+      WHERE a.attempt=p_attempt AND b.authorization_id=a.authorization_id
+        AND pr06a_control.owns_batch(b,f);
+  END IF;
 END $f$;
 
 REVOKE ALL ON TABLE pr06a_control.websocket_close FROM PUBLIC,classroom_pr06a_executor,classroom_pr06a_reconciler;
@@ -118,3 +126,20 @@ REVOKE ALL ON FUNCTION pr06a_api.record_close(uuid,uuid,text,integer,integer,tex
   FROM PUBLIC,classroom_pr06a_reconciler;
 GRANT EXECUTE ON FUNCTION pr06a_api.record_close(uuid,uuid,text,integer,integer,text,integer,text,text)
   TO classroom_pr06a_executor;
+
+DO $acl$
+BEGIN
+  IF EXISTS (
+    SELECT FROM pg_catalog.pg_class r
+      CROSS JOIN LATERAL pg_catalog.aclexplode(coalesce(r.relacl,acldefault('r',r.relowner))) acl
+      WHERE r.oid='pr06a_control.websocket_close'::regclass AND acl.grantee<>r.relowner
+  ) OR EXISTS (
+    SELECT FROM pg_catalog.pg_proc p
+      CROSS JOIN LATERAL pg_catalog.aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) acl
+      WHERE p.oid='pr06a_api.record_close(uuid,uuid,text,integer,integer,text,integer,text,text)'::regprocedure
+        AND acl.grantee<>p.proowner
+        AND (acl.grantee<>'classroom_pr06a_executor'::regrole OR acl.is_grantable)
+  ) THEN
+    RAISE EXCEPTION 'PR06A_CLOSE_AUDIT_ACL_UNEXPECTED';
+  END IF;
+END $acl$;

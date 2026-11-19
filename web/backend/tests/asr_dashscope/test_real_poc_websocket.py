@@ -130,7 +130,7 @@ def _loopback_certificate(tmp_path):
     return crt, server_ssl
 
 
-@pytest.mark.parametrize("close_mode", ["delayed", "going-away", "abnormal", "timeout"])
+@pytest.mark.parametrize("close_mode", ["delayed", "going-away", "abnormal", "timeout", "watchdog"])
 def test_pinned_driver_protocol_and_logging(monkeypatch, caplog, tmp_path, close_mode):
     crt, server_ssl = _loopback_certificate(tmp_path)
     monkeypatch.setattr(certifi, "where", lambda: str(crt))
@@ -164,7 +164,7 @@ def test_pinned_driver_protocol_and_logging(monkeypatch, caplog, tmp_path, close
             await socket.send('{"event":"task-finished"}')
             if close_mode == "abnormal":
                 await socket.close(1011, FAKE_KEY)
-            elif close_mode == "going-away":
+            elif close_mode in ("going-away", "watchdog"):
                 await socket.close(1001, "going away")
             else:
                 # Hold the actual close reply past the old 250 ms limit.
@@ -198,10 +198,14 @@ def test_pinned_driver_protocol_and_logging(monkeypatch, caplog, tmp_path, close
             transport.note_audio_attempt(2)
             terminal = await transport.receive_text()
             assert (terminal.control_sequence, terminal.audio_attempt) == (2, 1)
-            if close_mode in ("abnormal", "going-away"):
+            if close_mode in ("abnormal", "going-away", "watchdog"):
                 async with asyncio.timeout(2):
                     await transport._socket.wait_closed()
-            await transport.close()
+            if close_mode == "watchdog":
+                transport.abort()
+                transport.snapshot_expired_close()
+            else:
+                await transport.close()
             close = transport.close_audit
             if close_mode == "abnormal":
                 assert (close.status, close.initiator, close.received_code, close.received_reason) == (
@@ -209,6 +213,9 @@ def test_pinned_driver_protocol_and_logging(monkeypatch, caplog, tmp_path, close
             elif close_mode == "going-away":
                 assert (close.status, close.initiator, close.received_code, close.received_reason) == (
                     "clean", "server", 1001, "going away")
+            elif close_mode == "watchdog":
+                assert (close.status, close.elapsed_ms, close.initiator, close.received_code, close.received_reason) == (
+                    "timeout", 0, "server", 1001, "going away")
             elif close_mode == "timeout":
                 assert (close.status, close.initiator, close.sent_code, close.received_code) == (
                     "timeout", "client", 1000, None)

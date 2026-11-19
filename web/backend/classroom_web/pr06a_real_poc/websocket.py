@@ -320,15 +320,23 @@ class _WebSocket:
         finally:
             if status != "clean":
                 self.abort()
-            protocol = socket.protocol
-            received, sent = protocol.close_rcvd, protocol.close_sent
-            if received is not None and sent is not None:
-                initiator = "server" if protocol.close_rcvd_then_sent else "client"
-            else:
-                initiator = "server" if received is not None else "client" if sent is not None else None
-            self.close_audit = CloseAudit(status, round((loop.time() - began) * 1000),
-                                          int(received.code) if received is not None else None, _safe_close_reason(received),
-                                          int(sent.code) if sent is not None else None, _safe_close_reason(sent), initiator)
+            self._snapshot_close(status, round((loop.time() - began) * 1000))
+
+    def snapshot_expired_close(self):
+        if self._socket is not None and self.close_audit is None:
+            # No orderly close was started before the connection deadline.
+            self._snapshot_close("timeout", 0)
+
+    def _snapshot_close(self, status, elapsed_ms):
+        protocol = self._socket.protocol
+        received, sent = protocol.close_rcvd, protocol.close_sent
+        if received is not None and sent is not None:
+            initiator = "server" if protocol.close_rcvd_then_sent else "client"
+        else:
+            initiator = "server" if received is not None else "client" if sent is not None else None
+        self.close_audit = CloseAudit(status, elapsed_ms,
+                                      int(received.code) if received is not None else None, _safe_close_reason(received),
+                                      int(sent.code) if sent is not None else None, _safe_close_reason(sent), initiator)
 
     def abort(self):
         self._closed = True
