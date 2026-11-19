@@ -123,7 +123,12 @@ def test_final_jsonb_limit_uses_storage_size_and_advances_following_owner(
     assert persisted(pg, "tasks", id=following.task.id)[0]["state"] == "succeeded"
     assert persisted(pg, "operation_receipts", owner_id=owners.a.owner_id) == before["operation_receipts"]
     events = persisted(pg, "outbox_events", aggregate_id=state.task.id)
-    assert len(events) == len(before["outbox_events"]) + 1
+    task_events_before = [event for event in before["outbox_events"]
+                          if event["aggregate_type"] == "task" and event["aggregate_id"] == state.task.id]
+    assert len(events) == len(task_events_before) + 1
+    assert events[:-1] == task_events_before
+    assert events[-1]["aggregate_type"] == "task"
+    assert persisted(pg, "outbox_events", owner_id=owners.a.owner_id) == before["outbox_events"] + [events[-1]]
     assert events[-1]["payload"]["state"] == "failed"
     assert marker not in json.dumps(events[-1]["payload"])
     stable = snapshot(pg, owners.a)
@@ -246,7 +251,12 @@ def test_revoked_source_is_quarantined_once_without_validating_or_starving_other
     assert attempt["provider_outcome"] == before["task_attempts"][0]["provider_outcome"]
     assert persisted(pg, "operation_receipts", owner_id=owners.a.owner_id) == before["operation_receipts"]
     events = persisted(pg, "outbox_events", aggregate_id=state.task.id)
-    assert len(events) == len(before["outbox_events"]) + 1
+    task_events_before = [event for event in before["outbox_events"]
+                          if event["aggregate_type"] == "task" and event["aggregate_id"] == state.task.id]
+    assert len(events) == len(task_events_before) + 1
+    assert events[:-1] == task_events_before
+    assert events[-1]["aggregate_type"] == "task"
+    assert persisted(pg, "outbox_events", owner_id=owners.a.owner_id) == before["outbox_events"] + [events[-1]]
     assert events[-1]["payload"]["error_code"] == "ACCESS_REVOKED"
     assert state.task.id not in {item.id for item in local.candidates()}
     stable = snapshot(pg, owners.a)
@@ -381,7 +391,20 @@ def test_source_graph_move_during_discovery_rolls_back_then_next_poll_finishes(
                 state.source.classroom.revision, destination.id)
             assert moved.course_material_version_id == state.source.original.material.id
         assert future.result(timeout=10) is False
-    assert snapshot(pg, owners.a) == before
+    after = snapshot(pg, owners.a)
+    for name in ("tasks", "task_attempts", "provider_results", "operation_receipts"):
+        assert after[name] == before[name]
+    assert len(after["outbox_events"]) == len(before["outbox_events"]) + 1
+    assert after["outbox_events"][:-1] == before["outbox_events"]
+    moved_event = after["outbox_events"][-1]
+    assert moved_event["event_type"] == "object.changed"
+    assert moved_event["aggregate_type"] == "class_session"
+    assert moved_event["aggregate_id"] == moved.id
+    assert moved_event["aggregate_revision"] == moved.revision
+    assert moved_event["payload"] == dict(object_type="class_session", object_id=str(moved.id), revision=moved.revision)
+    previous_counter = before["owner_event_counters"][0]
+    assert moved_event["event_sequence"] == previous_counter["next_sequence"]
+    assert after["owner_event_counters"] == [dict(previous_counter, next_sequence=previous_counter["next_sequence"] + 1)]
     assert local.reconcile(claim) is True
     assert persisted(pg, "tasks", id=state.task.id)[0]["state"] == "succeeded"
     assert state.provider.calls == 1 and state.provider.evidence == state.evidence

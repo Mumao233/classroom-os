@@ -50,12 +50,18 @@ def contract():
 def services():
     root = Path(os.environ.get('PR04B_OBJECT_ROOT') or pytest.fail('PR04B_OBJECT_ROOT must name the owned object directory'))
     root = root / uuid4().hex
-    media, ledger = ObjectService(root, 'media'), ObjectService(root, 'ledger')
+    media = ObjectService(root, 'media')
+    ledger = None
     try:
-        yield SimpleNamespace(media=media.start(), ledger=ledger.start())
+        # Let the first service bind its HTTP and gRPC ports before choosing the next set.
+        media.start()
+        ledger = ObjectService(root, 'ledger')
+        ledger.start()
+        yield SimpleNamespace(media=media, ledger=ledger)
     finally:
         media.stop()
-        ledger.stop()
+        if ledger is not None:
+            ledger.stop()
 
 
 @pytest.fixture(scope='module')

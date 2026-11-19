@@ -56,7 +56,8 @@ def test_only_required_tables_and_contract_columns_exist(pg):
         'audio_chunk_state': {'chunk_id':False,'owner_id':False,'receipt_id':False,'recovery_grant_id':True},
     }
     capture_tables = capture_contract_tables | set(capture_internal)
-    assert set(inspector.get_table_names()) == expected | set(task_tables) | set(identity_tables) | auth_tables | media_tables | set(QA_TABLES) | set(REVIEW_TABLES) | deletion_tables | cache_tables | capture_tables | {"alembic_version"}
+    from classroom_web.infrastructure.sync_repository import SYNC_TABLES
+    assert set(inspector.get_table_names()) == expected | set(task_tables) | set(identity_tables) | auth_tables | media_tables | set(QA_TABLES) | set(REVIEW_TABLES) | deletion_tables | cache_tables | capture_tables | set(SYNC_TABLES) | {"alembic_version"}
     for table, columns in capture_internal.items():
         assert {column['name']:column['nullable'] for column in inspector.get_columns(table)} == columns
     cache_columns = {column['name']: column['nullable'] for column in inspector.get_columns('cache_keys')}
@@ -79,7 +80,7 @@ def test_only_required_tables_and_contract_columns_exist(pg):
     with pg.admin.connect() as connection:
         # This original gate still compares every legacy metadata object.
         # SQL-managed objects have independent real-PG columns/constraints/ACL checks.
-        differences = compare_metadata(MigrationContext.configure(connection,opts={'include_object':lambda obj,name,kind,reflected,compare_to:not(kind=='table' and name in auth_tables|media_tables|deletion_tables|cache_tables|capture_tables)}), metadata)
+        differences = compare_metadata(MigrationContext.configure(connection,opts={'include_object':lambda obj,name,kind,reflected,compare_to:not(kind=='table' and name in auth_tables|media_tables|deletion_tables|cache_tables|capture_tables|SYNC_TABLES)}), metadata)
     assert differences == []
 
 

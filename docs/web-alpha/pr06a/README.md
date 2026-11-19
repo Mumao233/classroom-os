@@ -1,11 +1,12 @@
 # PR-06a simulated ASR protocol POC
 
-The 2026-11-17 closeout audit is recorded in [AUDIT-20261117.md](AUDIT-20261117.md).
-See [the verification record](CLOSEOUT-20261117.md) and
-[the real-interface verification plan](REAL-API-PLAN-20261117.md) for current
-evidence and remaining gates. The baseline and local report below describe the
-original simulation. Current Web source contains this simulator. DashScope
-transport and provider event parsing still require implementation and validation.
+The [real-interface acceptance record](REAL-POC-CLOSEOUT-20261119.md) covers the
+four authorized batches, the independent debug run, and the pending billing
+reconciliation. Batch B4 passed all three samples on its frozen candidate.
+
+The original simulator is documented below. See the
+[2026-11-17 audit](AUDIT-20261117.md) and
+[simulation verification record](CLOSEOUT-20261117.md) for that baseline.
 
 **SIMULATION ONLY.** Contract baseline 0.1.0; wire protocol_version 1.
 Base: `1cc35d5db3117bce0585acbd9d9c7aa8d2d0498b`, branch

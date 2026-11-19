@@ -2,6 +2,8 @@ import type { components } from '../generated/openapi';
 import canonicalize from 'canonicalize';
 import { AuthenticatedCache } from '../cache/auth-cache';
 import type { CacheOptions } from '../cache/types';
+import { AuthenticatedOfflineSync } from '../sync/authenticated-sync';
+import type { OfflineSyncOptions } from '../sync/authenticated-sync';
 
 type S = components['schemas'];
 type Login = S['LoginResult'];
@@ -62,6 +64,7 @@ export class AuthClient {
     return () => { this.sessionListeners.delete(listener); };
   }
   createTrustedCache(options: CacheOptions = {}) { return new AuthenticatedCache(this, options); }
+  createOfflineSync(options: OfflineSyncOptions = {}) { return new AuthenticatedOfflineSync(this, options); }
   clear() { this.generation++; this.csrf = ''; this.receiver = undefined; this.recovery = undefined; this.orphanedRecovery = false; this.publishSession(null); }
   private async checkRejectedContext(generation: number, sentCsrf: string) {
     // Probe the cookie/CSRF context only; matching CSRF does not establish that
