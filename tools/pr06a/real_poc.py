@@ -1,6 +1,7 @@
 """Operator command for the isolated PR-06a batch. Default is sample inspection."""
 import argparse
 import asyncio
+from dataclasses import asdict
 from io import BytesIO
 import json
 import os
@@ -237,6 +238,8 @@ async def _execute(args, head, key, fingerprint, samples):
                   "recognition": receipt.state, "stop": receipt.stop}
         if receipt.connection_failure is not None:
             record["connection_failure"] = receipt.connection_failure
+        if receipt.close is not None:
+            record["close"] = asdict(receipt.close)
         _emit(record)
     return int(len(receipts) != len(samples) or any(item.stop or item.state != "succeeded" for item in receipts))
 

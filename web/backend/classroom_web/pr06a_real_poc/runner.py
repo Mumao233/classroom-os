@@ -9,7 +9,7 @@ from ..asr_dashscope.wire import finish_task, metering_evidence, observation_fin
 from ..asr_sim.simulator import ProtocolError
 from .ledger import Attempt, finish_on_cancel
 from .policy import (
-    FRAME_SAMPLES, MAX_BATCH_SECONDS, MAX_CONNECTION_SECONDS, ConnectFailure, EndOfStream, PocStopped,
+    FRAME_SAMPLES, MAX_BATCH_SECONDS, MAX_CONNECTION_SECONDS, CloseAudit, ConnectFailure, EndOfStream, PocStopped,
     UnsafeInbound, digest, sentence_proof,
 )
 
@@ -24,6 +24,7 @@ class Receipt:
     state: str
     stop: str | None
     connection_failure: str | None = None
+    close: CloseAudit | None = None
 
 
 class _Session:
@@ -50,6 +51,9 @@ class _Session:
         self.seen_results = set()
         self.request = None
         self.usage = None
+        self.usage_final = False
+        self.close_audit = None
+        self.post_terminal_read_failed = False
         self.meter_high = (None, None, None)
         self.meter_total_floor = 0
         self.meter_packets = set()
@@ -190,8 +194,9 @@ class _Session:
         if usage is not None:
             self.usage = usage
         if event.request_id or usage:
-            reached = await self.ledger.observe(self.attempt, event.request_id, usage,
-                                                final and usage is not None and self.request is not None)
+            usage_final = final and usage is not None and self.request is not None
+            reached = await self.ledger.observe(self.attempt, event.request_id, usage, usage_final)
+            self.usage_final = self.usage_final or usage_final
             if reached:
                 self.stop = self.stop or "cost_limit"
 
@@ -316,6 +321,13 @@ class _Session:
                     if self.terminal_event is not None or self.accounting_only:
                         return
                     raise Disconnected("closed_before_terminal") from None
+                except Disconnected:
+                    if self.terminal_event is not None and self.usage_final:
+                        # The receive side can finish with an error during a
+                        # close/abort. Classify using the socket's close evidence.
+                        self.post_terminal_read_failed = True
+                        return
+                    raise
                 except UnsafeInbound as exc:
                     self.dispatch_ready.clear()
                     try:
@@ -354,9 +366,14 @@ class _Session:
                 if asyncio.get_running_loop().time() < deadline:
                     await self.transport.close()
                     closed = True
+        except TimeoutError:
+            # The connection deadline can cut the close window short.
+            if getattr(self.transport, "close_audit", None) is None:
+                raise
         finally:
             if not closed:
                 self.transport.abort()
+            self.close_audit = getattr(self.transport, "close_audit", None)
             self.network_closed = True
             try:
                 if reader is not None:
@@ -366,6 +383,10 @@ class _Session:
             finally:
                 self.transport.dispose()
                 watchdog.cancel()
+        if self.close_audit is not None and self.close_audit.status != "clean":
+            self.stop = self.stop or f"close_{self.close_audit.status}"
+        elif self.post_terminal_read_failed:
+            raise Disconnected("read_failed")
 
     async def run(self, deadline):
         reader = None
@@ -514,13 +535,13 @@ async def execute_batch(ledger, samples, reviewed_sha, account_ref, credential_f
                 attempt = Attempt.create()
                 async with asyncio.timeout_at(deadline):
                     await ledger.claim(sample, attempt)
-                    admitted = True
-                    session = _Session(transport_for(attempt), ledger, attempt, sample)
-                    await session.run(deadline)
+                admitted = True
+                session = _Session(transport_for(attempt), ledger, attempt, sample)
+                await session.run(deadline)
                 state = session.recognition_state()
                 reason = session.stop
-                await ledger.complete(attempt, state, reason)
-                receipts.append(Receipt(sample.spec.slot, state, reason))
+                await ledger.complete(attempt, state, reason, close=session.close_audit)
+                receipts.append(Receipt(sample.spec.slot, state, reason, close=session.close_audit))
                 attempt = session = None
                 admitted = False
                 if reason:
@@ -550,14 +571,15 @@ async def execute_batch(ledger, samples, reviewed_sha, account_ref, credential_f
             state = "failed"
         if admitted:
             failure = str(exc) if isinstance(exc, ConnectFailure) else None
+            close = session.close_audit if session else None
             # Audit persistence after the I/O deadline cannot grant more I/O.
             try:
                 async with asyncio.timeout(1):
-                    await ledger.complete(attempt, state, reason, connection_failure=failure)
+                    await ledger.complete(attempt, state, reason, connection_failure=failure, close=close)
             except (PocStopped, TimeoutError):
                 reason = "ledger_rejected_or_commit_unknown"
                 state = "unknown"
-            receipts.append(Receipt(sample.spec.slot, state, reason, connection_failure=failure))
+            receipts.append(Receipt(sample.spec.slot, state, reason, connection_failure=failure, close=close))
         else:
             if opened:
                 try:

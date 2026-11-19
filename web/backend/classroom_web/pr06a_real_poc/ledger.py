@@ -49,7 +49,7 @@ class PgLedger:
         self.fence = uuid4()
         self._lock = asyncio.Lock()
 
-    async def _transaction(self, statement, args, *, connection_failure=None):
+    async def _transaction(self, statement, args, *, connection_failure=None, close=None):
         if self.db.info.transaction_status != TransactionStatus.IDLE:
             raise PocStopped("top_level_transactions_required")
         try:
@@ -61,6 +61,11 @@ class PgLedger:
                     code = connection_failure
                     await self.db.execute("SELECT pr06a_api.anomaly(%s,%s,%s,%s)",
                                           (self.fence, args[0], code, digest(code.encode("ascii"))))
+                if close is not None:
+                    await self.db.execute("SELECT pr06a_api.record_close(%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                                          (self.fence, args[0], close.status, close.elapsed_ms,
+                                           close.received_code, close.received_reason,
+                                           close.sent_code, close.sent_reason, close.initiator))
                 cursor = await self.db.execute(statement, (self.fence, *args))
                 row = await cursor.fetchone()
             return row[0]
@@ -69,12 +74,13 @@ class PgLedger:
             await self.db.close()
             raise
 
-    async def _change(self, statement, *args, connection_failure=None):
+    async def _change(self, statement, *args, connection_failure=None, close=None):
         try:
             async with self._lock:
                 # No permit leaves this method before COMMIT. Cancelling its
                 # caller cannot interrupt BEGIN or COMMIT on the shared socket.
-                return await finish_on_cancel(self._transaction(statement, args, connection_failure=connection_failure))
+                return await finish_on_cancel(self._transaction(statement, args, connection_failure=connection_failure,
+                                                                 close=close))
         except Exception as exc:
             if isinstance(exc, Error) and exc.sqlstate == "P6201":
                 raise RequestConflict("request_identity_conflict") from None
@@ -140,9 +146,9 @@ class PgLedger:
                            attempt.id, sentence.sentence_id, revision, sentence.begin_ms,
                            sentence.end_ms, sentence.final, sentence.text, required_sample)
 
-    async def complete(self, attempt, state, reason, *, connection_failure=None):
+    async def complete(self, attempt, state, reason, *, connection_failure=None, close=None):
         await self._change("SELECT pr06a_api.complete(%s,%s,%s,%s)", attempt.id if attempt else None, state, reason,
-                           connection_failure=connection_failure)
+                           connection_failure=connection_failure, close=close)
 
 
     async def interrupt(self, attempt, reason):

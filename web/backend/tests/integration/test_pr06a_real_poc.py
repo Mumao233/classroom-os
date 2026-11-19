@@ -188,8 +188,8 @@ def test_risk_acceptance_rejects_before_db(arm_receipts, monkeypatch, mutation, 
         _run(operator._arm(args, REVIEWED, FINGERPRINT))
 
 
-@pytest.mark.parametrize("authorization", [policy.SECOND_AUTHORIZATION, policy.THIRD_AUTHORIZATION],
-                         ids=["b2", "b3"])
+@pytest.mark.parametrize("authorization", [policy.SECOND_AUTHORIZATION, policy.THIRD_AUTHORIZATION,
+                                           policy.FOURTH_AUTHORIZATION], ids=["b2", "b3", "b4"])
 @pytest.mark.parametrize("mutation,reason", [
     ("unregistered-id", "unregistered_authorization"),
     ("changed-file", "authorization_digest_mismatch"),
@@ -283,6 +283,8 @@ def poc(billing_pg, request):
             db.exec_driver_sql(batch_migration(), execution_options={"no_parameters": True})
             if overlay != "two-batches":
                 db.exec_driver_sql(third_batch_migration(), execution_options={"no_parameters": True})
+                if overlay != "three-batches":
+                    db.exec_driver_sql(fourth_batch_migration(), execution_options={"no_parameters": True})
         db.exec_driver_sql(f'GRANT classroom_pr06a_executor TO "{executor}"')
         registry = json.loads((PACKAGE / "samples.json").read_bytes())
         assert [dict(row) for row in db.execute(sa.text(
@@ -345,9 +347,14 @@ def third_batch_migration():
     return fixture_dates((PACKAGE / "authorization_batch_three.sql").read_text(encoding="utf-8"))
 
 
+def fourth_batch_migration():
+    return fixture_dates((PACKAGE / "authorization_batch_four.sql").read_text(encoding="utf-8"))
+
+
 def fixture_dates(ddl):
     return (ddl.replace("'2026-11-18 00:00:00+08'", "clock_timestamp()-interval '1 day'")
             .replace("'2026-11-19 00:00:00+08'", "clock_timestamp()-interval '1 day'")
+            .replace("'2026-11-20 00:00:00+08'", "clock_timestamp()-interval '1 day'")
             .replace("'2027-01-01 00:00:00+08'::timestamptz", "(clock_timestamp()+interval '1 day')")
             .replace("'2027-01-01 00:00:00+08'", "clock_timestamp()+interval '1 day'"))
 
@@ -480,6 +487,56 @@ class Peer(FakeTransport):
             self.event("result-generated", output={"request_id": self.task, "sentence": {
                 "sentence_id": 2, "begin_time": 100, "end_time": None,
                 "sentence_end": False, "text": "synthetic partial"}})
+
+
+@pytest.mark.parametrize("mode,reason,final", [
+    ("normal", "close_timeout", True),
+    ("missing", "usage_unresolved", False),
+])
+def test_close_timeout_keeps_terminal_recognition_and_stops_with_separate_audit(poc, mode, reason, final):
+    pg, samples, connect = poc
+    evidence = policy.CloseAudit("timeout", 3000, None, None, 1000, "", "client")
+
+    class ClosingPeer(Peer):
+        async def close(self):
+            self.close_audit = evidence
+            await super().close()
+
+        async def receive_text(self):
+            try:
+                return await super().receive_text()
+            except policy.EndOfStream:
+                if final:
+                    raise Disconnected("read_failed") from None
+                raise
+
+    async def run():
+        async with connect() as ledger:
+            return await execute_batch(ledger, samples, REVIEWED, ACCOUNT, FINGERPRINT,
+                                       lambda attempt: ClosingPeer(attempt, mode=mode))
+
+    receipts = _run(run())
+    assert [(r.slot, r.state, r.stop, r.connection_failure, r.close) for r in receipts] == [
+        (1, "succeeded", reason, None, evidence)]
+    with pg.admin.connect() as db:
+        assert db.execute(sa.text("SELECT state,usage_final FROM pr06a_control.attempts")).one() == (
+            "succeeded", final)
+        assert db.execute(sa.text("SELECT closed,stop_code FROM pr06a_control.batch")).one() == (True, reason)
+        assert db.execute(sa.text("""SELECT status,elapsed_ms,received_code,sent_code,sent_reason,initiator
+                                       FROM pr06a_control.websocket_close""")).one() == (
+            "timeout", 3000, None, 1000, "", "client")
+
+
+@pytest.mark.parametrize("actual,reference,prefix,result", [
+    ("下午３点到2楼开会。", "下午三点到二楼开会。", False, "match"),
+    ("下午4点到2楼开会。", "下午三点到二楼开会。", False, "differs"),
+    ("十2楼", "十二楼", False, "differs"),
+    ("三国", "3国", False, "differs"),
+    ("去2楼", "去二楼开会。", True, "prefix_match"),
+    ("去2楼", "去二楼开会。", False, "differs"),
+])
+def test_private_transcript_comparison(actual, reference, prefix, result):
+    assert policy.compare_transcript(actual, reference, allow_prefix=prefix) == result
 
 
 @pytest.mark.parametrize("authenticate", [False, True], ids=["tls", "authentication"])
@@ -738,13 +795,18 @@ def test_migration_and_second_batch_preserve_first_exposure(poc, arm_receipts, m
                                      WHERE authorization_id=:id"""), second).one() == (0, True)
 
 
-@pytest.mark.parametrize("poc", ["two-batches"], indirect=True)
-def test_third_migration_preserves_both_prior_batches(poc, arm_receipts, monkeypatch):
+@pytest.mark.parametrize("poc,authorization,migrate,prior_count", [
+    ("two-batches", policy.THIRD_AUTHORIZATION, third_batch_migration, 2),
+    ("three-batches", policy.FOURTH_AUTHORIZATION, fourth_batch_migration, 3),
+], indirect=["poc"], ids=["b3", "b4"])
+def test_later_migration_preserves_all_prior_batches(poc, authorization, migrate, prior_count, arm_receipts, monkeypatch):
     pg, samples, connect = poc
     operator, args, _, _, _ = arm_receipts
     args.account_ref = SECOND_ACCOUNT
     args.executor_login = connect.executor
-    preceding = {"first": policy.AUTHORIZATION, "second": policy.SECOND_AUTHORIZATION}
+    prior_ids = [policy.AUTHORIZATION, policy.SECOND_AUTHORIZATION, policy.THIRD_AUTHORIZATION][:prior_count]
+    preceding = {"prior_ids": prior_ids}
+    auth_sha = policy.authorization_digest(authorization)
 
     async def control_db(arm):
         assert arm
@@ -756,18 +818,18 @@ def test_third_migration_preserves_both_prior_batches(poc, arm_receipts, monkeyp
 
     def snapshot(db):
         return tuple(db.execute(sa.text(f"""SELECT to_jsonb(r) FROM pr06a_control.{table} r
-                            WHERE authorization_id IN (:first,:second)
+                            WHERE authorization_id = ANY(:prior_ids)
                             ORDER BY authorization_id"""), preceding).scalars().all()
                      for table in ("activation", "batch", "attempts"))
 
     async def failed_batch(authorization, account):
         async with connect(authorization_id=authorization) as ledger:
             await ledger.open(REVIEWED, account, FINGERPRINT, samples)
-            if authorization == policy.SECOND_AUTHORIZATION:
+            if authorization == prior_ids[-1]:
                 with pg.admin.begin() as db:
                     before = snapshot(db)
                     with pytest.raises(sa.exc.DBAPIError, match="PR06A_BATCH_MIGRATION_REQUIRES_CLOSED_BATCH"), db.begin_nested():
-                        db.exec_driver_sql(third_batch_migration(), execution_options={"no_parameters": True})
+                        db.exec_driver_sql(migrate(), execution_options={"no_parameters": True})
                     assert snapshot(db) == before
             attempt = Attempt.create()
             await ledger.claim(samples[0], attempt)
@@ -777,18 +839,22 @@ def test_third_migration_preserves_both_prior_batches(poc, arm_receipts, monkeyp
     args.authorization_id = policy.SECOND_AUTHORIZATION
     _run(operator._arm(args, REVIEWED, FINGERPRINT))
     _run(failed_batch(policy.SECOND_AUTHORIZATION, SECOND_ACCOUNT))
+    if prior_count == 3:
+        args.authorization_id = policy.THIRD_AUTHORIZATION
+        _run(operator._arm(args, REVIEWED, FINGERPRINT))
+        _run(failed_batch(policy.THIRD_AUTHORIZATION, SECOND_ACCOUNT))
 
-    args.authorization_id = policy.THIRD_AUTHORIZATION
+    args.authorization_id = authorization
     with pytest.raises(errors.CheckViolation):
         _run(operator._arm(args, REVIEWED, FINGERPRINT))
     with pg.admin.begin() as db:
         original = snapshot(db)
-        assert len(original[0]) == len(original[1]) == len(original[2]) == 2
+        assert len(original[0]) == len(original[1]) == len(original[2]) == prior_count
         assert all(b["closed"] and b["held_microyuan"] == 1_000_000 and not b["released"] for b in original[1])
         ownership = sa.text("""SELECT oid,proowner,proacl::text FROM pg_proc WHERE
             oid='pr06a_control.check_activation(text)'::regprocedure""")
         original_acl = db.execute(ownership).one()
-        db.exec_driver_sql(third_batch_migration(), execution_options={"no_parameters": True})
+        db.exec_driver_sql(migrate(), execution_options={"no_parameters": True})
         assert snapshot(db) == original
         assert db.execute(ownership).one() == original_acl
         forged = sa.text("""INSERT INTO pr06a_control.activation
@@ -796,9 +862,9 @@ def test_third_migration_preserves_both_prior_batches(poc, arm_receipts, monkeyp
                 'authorization_id',cast(:auth AS text),'source_sha256',cast(:source AS text),
                 'account_ref',cast(:account AS text)))).*
             FROM pr06a_control.activation a WHERE a.authorization_id=:second""")
-        for source, account in (("7" * 64, SECOND_ACCOUNT), (policy.THIRD_AUTH_SHA256, "incorrect account")):
+        for source, account in (("7" * 64, SECOND_ACCOUNT), (auth_sha, "incorrect account")):
             with pytest.raises(sa.exc.IntegrityError), db.begin_nested():
-                db.execute(forged, {"auth": policy.THIRD_AUTHORIZATION, "source": source,
+                db.execute(forged, {"auth": authorization, "source": source,
                                     "account": account, "second": policy.SECOND_AUTHORIZATION})
 
     _run(operator._arm(args, REVIEWED, FINGERPRINT))
@@ -812,10 +878,10 @@ def test_third_migration_preserves_both_prior_batches(poc, arm_receipts, monkeyp
         return instance
 
     def forbidden(_attempt):
-        pytest.fail("Wrong candidate or repeated B3 execution reached transport")
+        pytest.fail("Wrong candidate or repeated execution reached transport")
 
     async def run(factory, sha=REVIEWED):
-        async with connect(authorization_id=policy.THIRD_AUTHORIZATION) as ledger:
+        async with connect(authorization_id=authorization) as ledger:
             return await execute_batch(ledger, samples, sha, SECOND_ACCOUNT, FINGERPRINT, factory)
 
     with pytest.raises(policy.PocStopped):
@@ -826,36 +892,37 @@ def test_third_migration_preserves_both_prior_batches(poc, arm_receipts, monkeyp
     with pytest.raises(policy.PocStopped):
         _run(run(forbidden))
 
-    third = {"id": policy.THIRD_AUTHORIZATION}
+    selected = {"id": authorization}
     with pg.admin.begin() as db:
         assert snapshot(db) == original
         assert db.execute(sa.text("""SELECT source_sha256,reviewed_sha,account_ref FROM pr06a_control.activation
-                                     WHERE authorization_id=:id"""), third).one() == (
-             policy.THIRD_AUTH_SHA256, REVIEWED, SECOND_ACCOUNT)
+                                     WHERE authorization_id=:id"""), selected).one() == (
+             auth_sha, REVIEWED, SECOND_ACCOUNT)
         batch = db.execute(sa.text("""SELECT held_microyuan,closed,period_start FROM pr06a_control.batch
-                                      WHERE authorization_id=:id"""), third).one()
+                                      WHERE authorization_id=:id"""), selected).one()
         assert batch[:2] == (1_000_000, True)
         exposure = db.scalar(sa.text("SELECT billing_api.lock_budget(:cycle)"), {"cycle": batch.period_start})
-        assert exposure["unknown"] == exposure["pool_risk"]["asr"] == 3_000_000
+        assert exposure["unknown"] == exposure["pool_risk"]["asr"] == (prior_count + 1) * 1_000_000
 
         release = sa.text("SELECT pr06a_api.release_reconciled(:id)")
         with pytest.raises(sa.exc.DBAPIError, match="PR06A_EXPOSURE_UNRESOLVED"), db.begin_nested():
-            db.execute(release, third)
-        db.execute(sa.text("SELECT pr06a_api.revoke(:id)"), third)
-        assert db.scalar(sa.text("SELECT authorization_id FROM pr06a_control.revocation")) == policy.THIRD_AUTHORIZATION
+            db.execute(release, selected)
+        db.execute(sa.text("SELECT pr06a_api.revoke(:id)"), selected)
+        assert db.scalar(sa.text("SELECT authorization_id FROM pr06a_control.revocation")) == authorization
         attempts = db.execute(sa.text("""SELECT attempt,request_id,input_tokens,output_tokens,metering_revision
-                                     FROM pr06a_control.attempts WHERE authorization_id=:id"""), third).mappings()
+                                     FROM pr06a_control.attempts WHERE authorization_id=:id"""), selected).mappings()
         bill = sa.text("""SELECT pr06a_api.settle(:attempt,1,:request_id,:input_tokens,:output_tokens,0,0,
                          '2027-01',:evidence,:metering_revision,true)""")
         for attempt in attempts:
             db.execute(bill, dict(attempt) | {"evidence": "d" * 64})
-        db.execute(release, third)
+        db.execute(release, selected)
         assert db.execute(sa.text("""SELECT held_microyuan,released FROM pr06a_control.batch
-                                     WHERE authorization_id=:id"""), third).one() == (0, True)
+                                     WHERE authorization_id=:id"""), selected).one() == (0, True)
         assert snapshot(db) == original
 
 
-def test_third_batch_requires_both_prior_batches_closed(poc):
+@pytest.mark.parametrize("authorization", [policy.THIRD_AUTHORIZATION, policy.FOURTH_AUTHORIZATION], ids=["b3", "b4"])
+def test_later_batch_requires_all_prior_batches_closed(poc, authorization):
     pg, samples, connect = poc
     with pg.admin.begin() as db:
         db.execute(sa.text("""INSERT INTO pr06a_control.activation
@@ -863,19 +930,19 @@ def test_third_batch_requires_both_prior_batches_closed(poc):
                 'authorization_id',cast(:id AS text),'source_sha256',cast(:source AS text),
                 'account_ref',cast(:account AS text)))).*
             FROM pr06a_control.activation a"""),
-                   {"id": policy.THIRD_AUTHORIZATION, "source": policy.THIRD_AUTH_SHA256,
+                   {"id": authorization, "source": policy.authorization_digest(authorization),
                     "account": SECOND_ACCOUNT})
 
     async def run():
         async with connect() as first:
             await first.open(REVIEWED, ACCOUNT, FINGERPRINT, samples)
             await first.complete(None, None, "synthetic_closed")
-        async with connect(authorization_id=policy.THIRD_AUTHORIZATION) as third:
+        async with connect(authorization_id=authorization) as selected:
             def forbidden(_attempt):
-                pytest.fail("B3 with missing B2 reached transport")
+                pytest.fail("later batch with missing predecessors reached transport")
 
             with pytest.raises(policy.PocStopped):
-                await execute_batch(third, samples, REVIEWED, SECOND_ACCOUNT, FINGERPRINT, forbidden)
+                await execute_batch(selected, samples, REVIEWED, SECOND_ACCOUNT, FINGERPRINT, forbidden)
 
     _run(run())
     with pg.admin.connect() as db:

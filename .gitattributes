@@ -13,3 +13,4 @@
 # Preserve the byte-for-byte PR-06a authorization, including CRLF.
 docs/web-alpha/pr06a/PR06A-REAL-POC-AUTH-20261118.md -text whitespace=trailing-space,space-before-tab,cr-at-eol
 docs/web-alpha/pr06a/PR06A-REAL-POC-AUTH-20261119-B3.md -text whitespace=trailing-space,space-before-tab,cr-at-eol
+docs/web-alpha/pr06a/PR06A-REAL-POC-AUTH-20261120-B4.md -text whitespace=trailing-space,space-before-tab,cr-at-eol

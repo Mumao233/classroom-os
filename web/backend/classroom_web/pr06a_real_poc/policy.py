@@ -4,6 +4,8 @@ from hashlib import sha256
 from io import BytesIO
 import json
 from pathlib import Path
+import re
+from unicodedata import normalize
 import wave
 
 from ..asr_dashscope.transport import AuthenticationRejected, Disconnected
@@ -15,10 +17,13 @@ SECOND_AUTHORIZATION = "PR06A-REAL-POC-AUTH-20261119-B2"
 SECOND_AUTH_SHA256 = "9a56d2ea65799d821b19120a080b00d51689bc9644dce013f04213e4169d8047"
 THIRD_AUTHORIZATION = "PR06A-REAL-POC-AUTH-20261119-B3"
 THIRD_AUTH_SHA256 = "613acf9ba5fca8033e41bcebb34a7b6b0ad307e116733326031ff46e7cab80c2"
+FOURTH_AUTHORIZATION = "PR06A-REAL-POC-AUTH-20261120-B4"
+FOURTH_AUTH_SHA256 = "405f31b2836c711436aebb7f8bfe62db609f3960923861f4426361bbda13aa9a"
 AUTHORIZATION_DIGESTS = {
     AUTHORIZATION: AUTH_SHA256,
     SECOND_AUTHORIZATION: SECOND_AUTH_SHA256,
     THIRD_AUTHORIZATION: THIRD_AUTH_SHA256,
+    FOURTH_AUTHORIZATION: FOURTH_AUTH_SHA256,
 }
 BASELINE = "6ecd364d20bbd06a25fa4654570e454a04807e07"
 OPERATOR = "林珈诚"
@@ -29,8 +34,37 @@ LIB_VERSION = "17.4"
 MAX_CONNECTION_SECONDS = 10
 MAX_BATCH_SECONDS = 30
 FRAME_SAMPLES = 1600
+CLOSE_WAIT_SECONDS = 3
 BUDGET = 1_000_000
 MAX_WAV_BYTES = 320_256
+_DIGITS = "零一二三四五六七八九"
+_NUMERAL_CHARS = f"0-9{_DIGITS}〇两十百千万亿"
+_SINGLE_DIGIT = re.compile(rf"(?<![{_NUMERAL_CHARS}])([{_DIGITS}])(?=[点楼])")
+
+
+@dataclass(frozen=True)
+class CloseAudit:
+    status: str
+    elapsed_ms: int
+    received_code: int | None
+    received_reason: str | None
+    sent_code: int | None
+    sent_reason: str | None
+    initiator: str | None
+
+
+def compare_transcript(actual: str, reference: str, *, allow_prefix: bool = False) -> str:
+    def comparable(text):
+        text = normalize("NFKC", text).casefold()
+        text = _SINGLE_DIGIT.sub(lambda match: str(_DIGITS.index(match[1])), text)
+        return "".join(ch for ch in text if ch.isalnum())
+
+    actual, reference = comparable(actual), comparable(reference)
+    if not actual or not reference:
+        return "unavailable"
+    if actual == reference:
+        return "match"
+    return "prefix_match" if allow_prefix and reference.startswith(actual) else "differs"
 
 
 class PocStopped(Exception):

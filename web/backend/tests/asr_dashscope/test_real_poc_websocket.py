@@ -130,10 +130,12 @@ def _loopback_certificate(tmp_path):
     return crt, server_ssl
 
 
-@pytest.mark.parametrize("abnormal", [False, True])
-def test_pinned_driver_protocol_and_logging(monkeypatch, caplog, tmp_path, abnormal):
+@pytest.mark.parametrize("close_mode", ["delayed", "going-away", "abnormal", "timeout"])
+def test_pinned_driver_protocol_and_logging(monkeypatch, caplog, tmp_path, close_mode):
     crt, server_ssl = _loopback_certificate(tmp_path)
     monkeypatch.setattr(certifi, "where", lambda: str(crt))
+    if close_mode == "timeout":
+        monkeypatch.setattr(websocket, "CLOSE_WAIT_SECONDS", 0.1)
 
     async def exercise():
         seen = []
@@ -160,8 +162,15 @@ def test_pinned_driver_protocol_and_logging(monkeypatch, caplog, tmp_path, abnor
             seen.append(await socket.recv())
             seen.append(json.loads(await socket.recv()))
             await socket.send('{"event":"task-finished"}')
-            if abnormal:
+            if close_mode == "abnormal":
                 await socket.close(1011, FAKE_KEY)
+            elif close_mode == "going-away":
+                await socket.close(1001, "going away")
+            else:
+                # Hold the actual close reply past the old 250 ms limit.
+                socket.transport.pause_reading()
+                loop.call_later(1.047 if close_mode == "delayed" else 0.4,
+                                socket.transport.resume_reading)
             await socket.wait_closed()
 
         async with serve(peer, "127.0.0.1", 0, ssl=server_ssl, logger=websocket._wire_log) as server:
@@ -189,13 +198,25 @@ def test_pinned_driver_protocol_and_logging(monkeypatch, caplog, tmp_path, abnor
             transport.note_audio_attempt(2)
             terminal = await transport.receive_text()
             assert (terminal.control_sequence, terminal.audio_attempt) == (2, 1)
-            if abnormal:
+            if close_mode in ("abnormal", "going-away"):
                 async with asyncio.timeout(2):
                     await transport._socket.wait_closed()
-                with pytest.raises(Disconnected, match="close_failed"):
-                    await transport.close()
+            await transport.close()
+            close = transport.close_audit
+            if close_mode == "abnormal":
+                assert (close.status, close.initiator, close.received_code, close.received_reason) == (
+                    "abnormal", "server", 1011, "provider_reason_redacted")
+            elif close_mode == "going-away":
+                assert (close.status, close.initiator, close.received_code, close.received_reason) == (
+                    "clean", "server", 1001, "going away")
+            elif close_mode == "timeout":
+                assert (close.status, close.initiator, close.sent_code, close.received_code) == (
+                    "timeout", "client", 1000, None)
             else:
-                await transport.close()
+                assert (close.status, close.initiator, close.sent_code, close.received_code) == (
+                    "clean", "client", 1000, 1000)
+                assert 250 < close.elapsed_ms < 3000
+            assert FAKE_KEY not in repr(close)
             transport.dispose()
             assert transport._socket is None
             with pytest.raises(Disconnected):

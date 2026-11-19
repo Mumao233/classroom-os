@@ -17,7 +17,7 @@ from ..asr_dashscope.transport import Disconnected, InboundText
 from ..asr_dashscope.wire import MAX_MESSAGE_CHARS, metering_evidence, observation_fingerprint, parse_event
 from ..asr_sim.simulator import ProtocolError
 from .policy import (
-    ENDPOINT, LIB_VERSION, ConnectAuthenticationFailure, ConnectFailure, EndOfStream, PocStopped,
+    CLOSE_WAIT_SECONDS, ENDPOINT, LIB_VERSION, CloseAudit, ConnectAuthenticationFailure, ConnectFailure, EndOfStream, PocStopped,
     UnsafeInbound, digest, sentence_proof,
 )
 
@@ -25,6 +25,15 @@ _wire_log = logging.Logger("pr06a.websocket")
 _wire_log.addHandler(logging.NullHandler())
 _wire_log.propagate = False
 _wire_log.setLevel(logging.CRITICAL + 1)
+_CLOSE_REASONS = frozenset(("", "normal closure", "going away", "task finished", "task-finished",
+                            "connection closed", "timeout"))
+
+
+def _safe_close_reason(frame):
+    if frame is None:
+        return None
+    reason = frame.reason.strip().casefold()
+    return reason if reason in _CLOSE_REASONS else "provider_reason_redacted"
 
 
 def _tls_context():
@@ -204,6 +213,7 @@ class _WebSocket:
         self._claimed = False
         self._started = False
         self._closed = False
+        self.close_audit = None
 
     def claim(self):
         if self._claimed or self._closed:
@@ -221,7 +231,7 @@ class _WebSocket:
             tls = _tls_context()
             dial = _SingleDial(
                 ENDPOINT, additional_headers={"Authorization": f"Bearer {self._key}"}, ssl=tls, proxy=None,
-                open_timeout=3, close_timeout=0.25, ping_interval=None,
+                open_timeout=3, close_timeout=None, ping_interval=None,
                 max_size=MAX_MESSAGE_CHARS, max_queue=8, compression=None,
                 create_connection=partial(_Connection, before_handshake=before_handshake),
                 logger=_wire_log, user_agent_header=None,
@@ -285,20 +295,40 @@ class _WebSocket:
             raise Disconnected("read_failed") from None
 
     async def close(self):
-        if self._socket is not None:
-            self._closed = True
-            try:
-                async with asyncio.timeout(0.25):
-                    await self._socket.close()
-                    if self._socket.close_code != 1000:
-                        raise Disconnected("abnormal_close")
-            except BaseException as exc:
-                self.abort()
-                if not isinstance(exc, Exception):
-                    raise
-                raise Disconnected("close_failed") from None
-        else:
+        socket = self._socket
+        if socket is None:
             self.abort()
+            return
+        self._closed = True
+        loop = asyncio.get_running_loop()
+        began = loop.time()
+        status = "failed"
+        try:
+            # Own the timeout here so a timer expiry remains distinct from a
+            # peer close code or a library abort. The runner also fences the socket.
+            async with asyncio.timeout(CLOSE_WAIT_SECONDS):
+                await socket.close()
+                await socket.wait_closed()
+            status = "clean" if isinstance(socket.protocol.close_exc, ConnectionClosedOK) else "abnormal"
+        except TimeoutError:
+            status = "timeout"
+        except asyncio.CancelledError:
+            status = "timeout"
+            raise
+        except Exception:
+            pass
+        finally:
+            if status != "clean":
+                self.abort()
+            protocol = socket.protocol
+            received, sent = protocol.close_rcvd, protocol.close_sent
+            if received is not None and sent is not None:
+                initiator = "server" if protocol.close_rcvd_then_sent else "client"
+            else:
+                initiator = "server" if received is not None else "client" if sent is not None else None
+            self.close_audit = CloseAudit(status, round((loop.time() - began) * 1000),
+                                          int(received.code) if received is not None else None, _safe_close_reason(received),
+                                          int(sent.code) if sent is not None else None, _safe_close_reason(sent), initiator)
 
     def abort(self):
         self._closed = True
