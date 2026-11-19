@@ -95,6 +95,8 @@ psql -X --dbname classroom_pr06a_real_poc --set ON_ERROR_STOP=1 --single-transac
 
    上述命令适用于整包 Astra `PASS` 且零 P0/P1。使用已登记风险接受路径时，向同一命令增加 `--risk-acceptance-sha256 $riskAcceptanceSha256`。取 [风险接受记录](risk-acceptance/REPORT.md) 的固定 SHA-256 `c8f6eb43c3ec7d041bb8a63a847d70f7175e45e446528b89fc68ec607078451c`。Astra 必须对当前候选基于 `05559351` 的门禁改动给出 `PASS`，并提交同摘要的 `RISK-ACCEPTANCE` 确认行和原样列出的四项已接受发现。旧的整包 `BLOCK` 回执作为历史证据。新发现、候选 SHA 不符、报告摘要或发现内容不符立即拒绝。通过时在 `pr06a_control.activation.risk_acceptance_sha256` 与脱敏启动回执中保留风险记录摘要。
 
+   林珈诚于 2026-11-19 授权第四批额外一轮，确认仅接受该轮实际复审留下的 P2。决定编号为 `PR06A-B4-P2-ACCEPT-20261119`。若该轮回执显示 `BLOCK` 且所有发现均为 P2，则取验收报告中的同候选登记文件和独立核对的 SHA-256，在原命令增加 `--b4-p2-risk-record $b4RiskRecord --risk-acceptance-sha256 $b4RiskRecordSha256`。登记包含决定人、授权 ID、候选 SHA、同一复审状态和正文摘要、顺序编号及完整发现。任意 P0/P1、其他等级、缺失或变化的发现、候选和摘要不符均拒绝。核对通过后用同一审计列和启动回执登记该报告摘要。该路径仍需用户另行明确启动、同候选的完整 VMware 回执和无 Key TLS 前置。
+
 2. 关闭控制会话，在专用执行账户的来宾会话向当前进程安全注入同一个 Key。使用本次已核对的账号证明引用。运行一次，按提示输入启动词。执行后清除该会话中的环境变量和执行 DSN。任何失败都按下节停止。保留原数据库与审批记录，即使进程在 COMMIT 回执之前退出。
 
    ```powershell

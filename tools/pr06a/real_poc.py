@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "web" / "backend"))
 
 from classroom_web.pr06a_real_poc.policy import (AUTHORIZATION, BASELINE, ENDPOINT,
+                                                    FOURTH_AUTHORIZATION, OPERATOR,
                                                     KEY_ID, MODEL, REGION, WORKSPACE,
                                                     PocStopped, authorization_digest, digest, load_samples,
                                                     verify_authorization)
@@ -23,6 +24,9 @@ AUTH_FILE = ROOT / "docs" / "web-alpha" / "pr06a" / f"{AUTHORIZATION}.md"
 RISK_REPORT = AUTH_FILE.parent / "risk-acceptance" / "REPORT.md"
 RISK_REPORT_SHA256 = "c8f6eb43c3ec7d041bb8a63a847d70f7175e45e446528b89fc68ec607078451c"
 RISK_REVIEW_BASE = "05559351bd709a07f7eee88fb357b749a6f49288"
+B4_P2_DECISION = "PR06A-B4-P2-ACCEPT-20261119"
+B4_P2_REVIEW_ROUND = 3
+B4_P2_REVIEW_PARENT = "cc8889f5998311bdfb31cc0acf0bd789b2607a6b"
 ASTRA_INTEGRITY_GATES = frozenset((
     "no_dangerous_flags", "codex_exit_zero", "turn_completed", "review_output_present",
     "actual_model", "actual_effort", "actual_sandbox_read_only", "sandbox_commands_worked",
@@ -123,9 +127,41 @@ def _verify_risk_acceptance(review, lines, expected_sha):
     return expected_sha
 
 
+def _verify_b4_p2_acceptance(args, head, review, lines, verdict_lines):
+    risk_sha = args.risk_acceptance_sha256
+    if (args.authorization_id != FOURTH_AUTHORIZATION or not risk_sha or head == B4_P2_REVIEW_PARENT
+            or review.get("round") != B4_P2_REVIEW_ROUND or review.get("exit_code") != 0
+            or review["gates"].keys() != ASTRA_INTEGRITY_GATES
+            or verdict_lines != [f"VERDICT: BLOCK {head}"]):
+        raise PocStopped("b4_p2_review_not_accepted")
+    sections = "\n".join(lines).split("\nFull review comments:\n")
+    if len(sections) != 2 or re.search(r"\[P[0-3]\]", sections[0]):
+        raise PocStopped("b4_p2_findings_mismatch")
+    body = sections[1].strip()
+    pattern = r"^- \[P2\] (.+?) — ([^:\n]+):(\d+)(?:-\d+)?[ \t]*$"
+    findings = [dict(priority=2, title=title, file=file, line=int(line), missing_fields=[])
+                for title, file, line in re.findall(pattern, body, re.MULTILINE)]
+    if (not findings or re.findall(r"\[P[0-3]\]", body) != ["[P2]"] * len(findings)
+            or review.get("findings_total") != len(findings) or review.get("findings") != findings
+            or review.get("findings_by_priority") != [0, 0, len(findings), 0]):
+        raise PocStopped("b4_p2_findings_mismatch")
+    record = _receipt(args.b4_p2_risk_record, risk_sha, "risk_acceptance_digest_mismatch")
+    expected = {
+        "authorization": FOURTH_AUTHORIZATION, "candidate": head,
+        "decision_ref": B4_P2_DECISION, "decided_by": OPERATOR, "date": "2026-11-19",
+        "review_receipt_sha256": args.review_sha256, "review_sha256": review["review_sha256"],
+        "finding_ids": [f"P2-{i}" for i in range(1, len(findings) + 1)], "findings_markdown": body,
+    }
+    if record != expected:
+        raise PocStopped("b4_p2_risk_record_mismatch")
+    _git("merge-base", "--is-ancestor", B4_P2_REVIEW_PARENT, head)
+    return risk_sha
+
+
 def _verify_review(args, head):
     risk_sha = args.risk_acceptance_sha256
-    scope_base = BASELINE if risk_sha is None else RISK_REVIEW_BASE
+    b4_record = getattr(args, "b4_p2_risk_record", None)
+    scope_base = RISK_REVIEW_BASE if risk_sha is not None or b4_record else BASELINE
     review = _receipt(args.review, args.review_sha256, "review_receipt_digest_mismatch")
     if (review.get("head") != head or review.get("state") != "review_completed"
             or review.get("scope") != "base" or review.get("scope_value") != scope_base
@@ -136,7 +172,11 @@ def _verify_review(args, head):
     verdict = Path(args.review).with_name("review.md").read_bytes()
     lines = verdict.decode("utf-8-sig").splitlines()
     verdict_lines = [line.strip() for line in lines if line.strip().upper().startswith("VERDICT:")]
-    if (digest(verdict) != review.get("review_sha256") or verdict_lines != [f"VERDICT: PASS {head}"]):
+    if digest(verdict) != review.get("review_sha256"):
+        raise PocStopped("explicit_review_verdict_required")
+    if b4_record:
+        return _verify_b4_p2_acceptance(args, head, review, lines, verdict_lines)
+    if verdict_lines != [f"VERDICT: PASS {head}"]:
         raise PocStopped("explicit_review_verdict_required")
     if risk_sha is not None:
         if review["gates"].keys() != ASTRA_INTEGRITY_GATES:
@@ -265,10 +305,13 @@ def main():
     parser.add_argument("--review")
     parser.add_argument("--review-sha256")
     parser.add_argument("--risk-acceptance-sha256")
+    parser.add_argument("--b4-p2-risk-record", type=Path)
     parser.add_argument("--vmware-receipt")
     parser.add_argument("--vmware-sha256")
     try:
         args = parser.parse_args()
+        if args.b4_p2_risk_record is not None and not args.arm:
+            raise PocStopped("b4_p2_record_requires_arm")
         samples = load_samples(args.samples, _authorization_path(args.authorization_id), args.authorization_id)
         if not args.arm and not args.execute:
             for sample in samples:

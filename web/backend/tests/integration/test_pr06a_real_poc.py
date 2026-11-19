@@ -132,12 +132,89 @@ def arm_receipts(tmp_path, monkeypatch, poc_operator):
     def git(*arguments):
         if arguments == ("archive", "--format=zip", REVIEWED):
             return archive.getvalue()
-        assert arguments == ("merge-base", "--is-ancestor", operator.RISK_REVIEW_BASE, REVIEWED)
+        assert arguments in (("merge-base", "--is-ancestor", operator.RISK_REVIEW_BASE, REVIEWED),
+                             ("merge-base", "--is-ancestor", operator.B4_P2_REVIEW_PARENT, REVIEWED))
         return b""
 
     monkeypatch.setattr(operator, "_git", git)
     write_review(markdown)
     return operator, args, status, markdown, write_review
+
+
+@pytest.fixture
+def b4_p2_receipts(arm_receipts, tmp_path):
+    operator, args, status, _, write_review = arm_receipts
+    args.authorization_id = policy.FOURTH_AUTHORIZATION
+    args.account_ref = SECOND_ACCOUNT
+    args.b4_p2_risk_record = tmp_path / "b4-risk.json"
+    finding = dict(priority=2, title="Synthetic residual", file="tools/pr06a/real_poc.py", line=1,
+                   missing_fields=[])
+    body = ("- [P2] Synthetic residual — tools/pr06a/real_poc.py:1\n"
+            "  Severity: medium\n  Trigger: Synthetic event.\n"
+            "  Evidence: An offline fixture.\n  Fix: Follow-up.")
+    markdown = f"VERDICT: BLOCK {REVIEWED}\n\nFull review comments:\n\n{body}\n"
+    status.update(round=3, exit_code=0, findings_total=1, findings=[finding], findings_by_priority=[0, 0, 1, 0])
+    write_review(markdown)
+    record = dict(authorization=args.authorization_id, candidate=REVIEWED, decision_ref=operator.B4_P2_DECISION,
+                  decided_by=policy.OPERATOR, date="2026-11-19", review_receipt_sha256=args.review_sha256,
+                  review_sha256=status["review_sha256"], finding_ids=["P2-1"], findings_markdown=body)
+
+    def write_record():
+        data = json.dumps(record).encode()
+        args.b4_p2_risk_record.write_bytes(data)
+        args.risk_acceptance_sha256 = policy.digest(data)
+
+    write_record()
+    return operator, args, status, markdown, write_review, record, write_record
+
+
+@pytest.mark.parametrize("mutation,reason", [
+    ("p0", "b4_p2_findings_mismatch"),
+    ("p1", "b4_p2_findings_mismatch"),
+    ("added-p2", "b4_p2_risk_record_mismatch"),
+    ("changed-body", "b4_p2_risk_record_mismatch"),
+    ("head", "review_receipt_not_accepted"),
+    ("earlier-round", "b4_p2_review_not_accepted"),
+    ("other-authorization", "b4_p2_review_not_accepted"),
+    ("no-risk-digest", "b4_p2_review_not_accepted"),
+    ("changed-file", "risk_acceptance_digest_mismatch"),
+    ("wrong-approver", "b4_p2_risk_record_mismatch"),
+])
+def test_b4_p2_risk_gate_rejects_unapproved_evidence(b4_p2_receipts, monkeypatch, mutation, reason):
+    operator, args, status, markdown, write_review, record, write_record = b4_p2_receipts
+    if mutation in ("p0", "p1"):
+        priority = int(mutation[1])
+        status["findings"][0]["priority"] = priority
+        status["findings_by_priority"] = [int(i == priority) for i in range(4)]
+        write_review(markdown.replace("[P2]", f"[P{priority}]"))
+    elif mutation == "added-p2":
+        status["findings"].append(status["findings"][0] | {"title": "Additional synthetic residual", "line": 2})
+        status.update(findings_total=2, findings_by_priority=[0, 0, 2, 0])
+        write_review(markdown + "\n- [P2] Additional synthetic residual — tools/pr06a/real_poc.py:2\n")
+    elif mutation == "changed-body":
+        write_review(markdown.replace("An offline fixture.", "A changed fixture."))
+    elif mutation == "head":
+        status["head"] = "7" * 40
+        write_review(markdown)
+    elif mutation == "earlier-round":
+        status["round"] = 2
+        write_review(markdown)
+    elif mutation == "other-authorization":
+        args.authorization_id = policy.THIRD_AUTHORIZATION
+    elif mutation == "no-risk-digest":
+        args.risk_acceptance_sha256 = None
+    elif mutation == "changed-file":
+        args.b4_p2_risk_record.write_bytes(args.b4_p2_risk_record.read_bytes() + b" ")
+    else:
+        record["decided_by"] = "Synthetic different approver"
+        write_record()
+
+    async def no_database(_arm):
+        pytest.fail("unregistered residual findings reached the activation database")
+
+    monkeypatch.setattr(operator, "_db", no_database)
+    with pytest.raises(policy.PocStopped, match=f"^{reason}$"):
+        _run(operator._arm(args, REVIEWED, FINGERPRINT))
 
 
 @pytest.mark.parametrize("mutation,reason", [
@@ -222,11 +299,13 @@ def test_additional_authorization_rejects_before_db(arm_receipts, tmp_path, monk
         _run(operator._arm(args, REVIEWED, FINGERPRINT))
 
 
-@pytest.mark.parametrize("use_exception", [False, True], ids=["ordinary-pass", "accepted-risks"])
-def test_arm_audit_records_only_the_validated_risk_digest(poc, arm_receipts, monkeypatch, capsys, use_exception):
+@pytest.mark.parametrize("mode", ["ordinary-pass", "accepted-risks", "b4-p2"])
+def test_arm_audit_records_only_the_validated_risk_digest(poc, arm_receipts, request, monkeypatch, capsys, mode):
     pg, _, connect = poc
     operator, args, status, _, write_review = arm_receipts
-    if not use_exception:
+    if mode == "b4-p2":
+        operator, args, *_ = request.getfixturevalue("b4_p2_receipts")
+    elif mode == "ordinary-pass":
         args.risk_acceptance_sha256 = None
         status.update(scope_value=operator.BASELINE, findings_by_priority=[0, 0, 0, 0],
                       findings_total=0, findings=[])
