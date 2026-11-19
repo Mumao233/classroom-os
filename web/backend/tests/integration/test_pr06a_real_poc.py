@@ -503,7 +503,8 @@ def test_close_timeout_keeps_terminal_recognition_and_stops_with_separate_audit(
             if mode == "provider-failed" and message["header"]["action"] == "finish-task":
                 await FakeTransport.send_json(self, message, on_dispatched=on_dispatched)
                 self.feed_json({"header": {"event": "task-failed", "task_id": self.task,
-                                           "error_code": "synthetic_failure"}, "payload": {}})
+                                           "error_code": "synthetic_failure", "error_message": "synthetic failure"},
+                                "payload": {}})
             else:
                 await super().send_json(message, on_dispatched=on_dispatched)
 
