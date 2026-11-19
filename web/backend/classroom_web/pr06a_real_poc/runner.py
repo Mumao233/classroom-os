@@ -557,7 +557,12 @@ async def execute_batch(ledger, samples, reviewed_sha, account_ref, credential_f
                 if admitted and session is not None and (session.usage_final or session.close_audit is not None):
                     state = "succeeded" if session.usage_final and session.terminal_event is not None and (
                         session.recognition_state() == "succeeded") else "unknown"
-                    await ledger.complete(attempt, state, "operator_interrupted", close=session.close_audit)
+                    try:
+                        await ledger.complete(attempt, state, "operator_interrupted", close=session.close_audit)
+                    except PocStopped:
+                        # A cancellation during COMMIT can leave the attempt
+                        # already completed. Interrupt still closes its batch.
+                        await ledger.interrupt(attempt, "operator_interrupted")
                 else:
                     await ledger.interrupt(attempt, "operator_interrupted")
         except (PocStopped, TimeoutError):

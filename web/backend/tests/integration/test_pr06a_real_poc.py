@@ -553,16 +553,17 @@ def test_nonclean_close_fences_next_claim_when_stop_is_omitted(poc, monkeypatch)
             1, "succeeded", True)
 
 
-@pytest.mark.parametrize("interrupted", [False, True], ids=["batch-deadline", "operator-interrupt"])
-def test_close_completion_preserves_evidence_after_outer_cancellation(poc, monkeypatch, interrupted):
+@pytest.mark.parametrize("mode", ["batch-deadline", "operator-interrupt", "interrupt-after-commit"])
+def test_close_completion_preserves_evidence_after_outer_cancellation(poc, monkeypatch, mode):
     pg, samples, connect = poc
+    interrupted = mode != "batch-deadline"
     if not interrupted:
         monkeypatch.setattr(runner, "MAX_BATCH_SECONDS", 2)
     reason = "operator_interrupted" if interrupted else "close_timeout"
     status = "clean" if interrupted else "timeout"
 
     async def run():
-        closing, release_close = asyncio.Event(), asyncio.Event()
+        closing, release_close, committed = asyncio.Event(), asyncio.Event(), asyncio.Event()
 
         class ClosingPeer(Peer):
             async def close(self):
@@ -576,6 +577,16 @@ def test_close_completion_preserves_evidence_after_outer_cancellation(poc, monke
                     await super().close()
 
         async with connect() as ledger:
+            if mode == "interrupt-after-commit":
+                complete = ledger.complete
+
+                async def complete_then_wait(attempt, state, stop, **kwargs):
+                    await complete(attempt, state, stop, **kwargs)
+                    if stop is None:
+                        committed.set()
+                        await asyncio.Future()
+
+                monkeypatch.setattr(ledger, "complete", complete_then_wait)
             task = asyncio.create_task(execute_batch(ledger, samples, REVIEWED, ACCOUNT, FINGERPRINT, ClosingPeer))
             if not interrupted:
                 receipts = await task
@@ -583,6 +594,9 @@ def test_close_completion_preserves_evidence_after_outer_cancellation(poc, monke
                 return
             async with asyncio.timeout(3):
                 await closing.wait()
+                if mode == "interrupt-after-commit":
+                    release_close.set()
+                    await committed.wait()
             task.cancel()
             release_close.set()
             with pytest.raises(asyncio.CancelledError):
