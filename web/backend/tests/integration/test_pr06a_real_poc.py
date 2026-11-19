@@ -489,15 +489,24 @@ class Peer(FakeTransport):
                 "sentence_end": False, "text": "synthetic partial"}})
 
 
-@pytest.mark.parametrize("mode,reason,final", [
-    ("normal", "close_timeout", True),
-    ("missing", "usage_unresolved", False),
+@pytest.mark.parametrize("mode,reason,state,final", [
+    ("normal", "close_timeout", "succeeded", True),
+    ("missing", "usage_unresolved", "succeeded", False),
+    ("provider-failed", "provider_failed", "failed", False),
 ])
-def test_close_timeout_keeps_terminal_recognition_and_stops_with_separate_audit(poc, mode, reason, final):
+def test_close_timeout_keeps_terminal_recognition_and_stops_with_separate_audit(poc, mode, reason, state, final):
     pg, samples, connect = poc
     evidence = policy.CloseAudit("timeout", 3000, None, None, 1000, "", "client")
 
     class ClosingPeer(Peer):
+        async def send_json(self, message, *, on_dispatched=None):
+            if mode == "provider-failed" and message["header"]["action"] == "finish-task":
+                await FakeTransport.send_json(self, message, on_dispatched=on_dispatched)
+                self.feed_json({"header": {"event": "task-failed", "task_id": self.task,
+                                           "error_code": "synthetic_failure"}, "payload": {}})
+            else:
+                await super().send_json(message, on_dispatched=on_dispatched)
+
         async def close(self):
             self.close_audit = evidence
             await super().close()
@@ -515,10 +524,10 @@ def test_close_timeout_keeps_terminal_recognition_and_stops_with_separate_audit(
 
     receipts = _run(run())
     assert [(r.slot, r.state, r.stop, r.connection_failure, r.close) for r in receipts] == [
-        (1, "succeeded", reason, None, evidence)]
+        (1, state, reason, None, evidence)]
     with pg.admin.connect() as db:
         assert db.execute(sa.text("SELECT state,usage_final FROM pr06a_control.attempts")).one() == (
-            "succeeded", final)
+            state, final)
         assert db.execute(sa.text("SELECT closed,stop_code FROM pr06a_control.batch")).one() == (True, reason)
         assert db.execute(sa.text("""SELECT status,elapsed_ms,received_code,sent_code,sent_reason,initiator
                                        FROM pr06a_control.websocket_close""")).one() == (
@@ -539,6 +548,9 @@ def test_nonclean_close_fences_next_claim_when_stop_is_omitted(poc, monkeypatch)
 
             async def omit_stop(attempt, state, reason, *, close=None):
                 assert reason == "close_timeout"
+                malformed = policy.CloseAudit("clean", 0, None, None, None, None, None)
+                with pytest.raises(policy.PocStopped):
+                    await complete(attempt, state, None, close=malformed)
                 await complete(attempt, state, None, close=close)
                 with pytest.raises(policy.PocStopped):
                     await ledger.claim(samples[1], Attempt.create())
@@ -553,10 +565,11 @@ def test_nonclean_close_fences_next_claim_when_stop_is_omitted(poc, monkeypatch)
             1, "succeeded", True)
 
 
-@pytest.mark.parametrize("mode", ["batch-deadline", "operator-interrupt", "interrupt-after-commit"])
+@pytest.mark.parametrize("mode", ["batch-deadline", "batch-after-commit", "operator-interrupt",
+                                  "interrupt-without-usage", "interrupt-after-commit"])
 def test_close_completion_preserves_evidence_after_outer_cancellation(poc, monkeypatch, mode):
     pg, samples, connect = poc
-    interrupted = mode != "batch-deadline"
+    interrupted = not mode.startswith("batch-")
     if not interrupted:
         monkeypatch.setattr(runner, "MAX_BATCH_SECONDS", 2)
     reason = "operator_interrupted" if interrupted else "close_timeout"
@@ -577,7 +590,7 @@ def test_close_completion_preserves_evidence_after_outer_cancellation(poc, monke
                     await super().close()
 
         async with connect() as ledger:
-            if mode == "interrupt-after-commit":
+            if mode in ("interrupt-after-commit", "batch-after-commit"):
                 complete = ledger.complete
 
                 async def complete_then_wait(attempt, state, stop, **kwargs):
@@ -585,9 +598,15 @@ def test_close_completion_preserves_evidence_after_outer_cancellation(poc, monke
                     if stop is None:
                         committed.set()
                         await asyncio.Future()
+                    elif mode == "batch-after-commit":
+                        await asyncio.sleep(2.1)
 
                 monkeypatch.setattr(ledger, "complete", complete_then_wait)
-            task = asyncio.create_task(execute_batch(ledger, samples, REVIEWED, ACCOUNT, FINGERPRINT, ClosingPeer))
+            if mode == "batch-after-commit":
+                release_close.set()
+            peer_mode = "missing" if mode == "interrupt-without-usage" else "normal"
+            task = asyncio.create_task(execute_batch(ledger, samples, REVIEWED, ACCOUNT, FINGERPRINT,
+                                                     lambda attempt: ClosingPeer(attempt, mode=peer_mode)))
             if not interrupted:
                 receipts = await task
                 assert [(r.state, r.stop, r.close.status) for r in receipts] == [("succeeded", reason, status)]
@@ -606,7 +625,7 @@ def test_close_completion_preserves_evidence_after_outer_cancellation(poc, monke
     with pg.admin.connect() as db:
         assert db.execute(sa.text("SELECT closed,stop_code FROM pr06a_control.batch")).one() == (True, reason)
         assert db.execute(sa.text("SELECT slot,state,usage_final FROM pr06a_control.attempts")).one() == (
-            1, "succeeded", True)
+            1, "succeeded", mode != "interrupt-without-usage")
         assert db.scalar(sa.text("SELECT status FROM pr06a_control.websocket_close")) == status
 
 
@@ -617,8 +636,9 @@ def test_close_snapshot_after_watchdog_abort_does_not_extend_dispatch(poc, monke
 
     class ExpiredPeer(Peer):
         def snapshot_expired_close(self):
-            assert self.closed and self.abort_count == 1
-            self.close_audit = policy.CloseAudit("timeout", 0, None, None, None, None, None)
+            if getattr(self, "close_audit", None) is None:
+                assert not self.closed and self.abort_count == 0
+                self.close_audit = policy.CloseAudit("timeout", 0, None, None, None, None, None)
 
     def peer(attempt):
         transport = ExpiredPeer(attempt)
@@ -646,6 +666,34 @@ def test_close_snapshot_after_watchdog_abort_does_not_extend_dispatch(poc, monke
             "timeout", 0)
 
 
+def test_late_terminal_evidence_does_not_reclassify_write_timeout(poc, monkeypatch):
+    pg, samples, connect = poc
+    monkeypatch.setattr(runner, "MAX_CONNECTION_SECONDS", 1)
+
+    class ClosingPeer(Peer):
+        async def close(self):
+            self.close_audit = policy.CloseAudit("timeout", 250, None, None, 1000, "", "client")
+            await super().close()
+
+    async def run():
+        async with connect() as ledger:
+            observe = ledger.observe
+
+            async def hold_final(attempt, request, usage, final):
+                if final:
+                    await asyncio.sleep(1)
+                return await observe(attempt, request, usage, final)
+
+            monkeypatch.setattr(ledger, "observe", hold_final)
+            return await execute_batch(ledger, samples, REVIEWED, ACCOUNT, FINGERPRINT, ClosingPeer)
+
+    receipt, = _run(run())
+    assert (receipt.state, receipt.stop, receipt.close.status) == ("succeeded", "timeout", "timeout")
+    with pg.admin.connect() as db:
+        assert db.execute(sa.text("SELECT state,usage_final FROM pr06a_control.attempts")).one() == ("succeeded", True)
+        assert db.scalar(sa.text("SELECT stop_code FROM pr06a_control.batch")) == "timeout"
+
+
 @pytest.mark.parametrize("actual,reference,prefix,result", [
     ("下午３点到2楼开会。", "下午三点到二楼开会。", False, "match"),
     ("下午4点到2楼开会。", "下午三点到二楼开会。", False, "differs"),
@@ -655,6 +703,10 @@ def test_close_snapshot_after_watchdog_abort_does_not_extend_dispatch(poc, monke
     ("去−2楼。", "去二楼。", False, "differs"),
     ("去-二楼。", "去−2楼。", False, "match"),
     ("下午3.2点", "下午32点", False, "differs"),
+    ("去.2楼", "去二楼", False, "differs"),
+    ("去-十楼", "去十楼", False, "differs"),
+    ("去-.2楼", "去.2楼开会", True, "differs"),
+    ("去-.2楼", "去−.二楼开会", True, "prefix_match"),
     ("去2楼", "去二楼开会。", True, "prefix_match"),
     ("去2楼", "去二楼开会。", False, "differs"),
 ])
@@ -918,11 +970,13 @@ def test_migration_and_second_batch_preserve_first_exposure(poc, arm_receipts, m
                                      WHERE authorization_id=:id"""), second).one() == (0, True)
 
 
-@pytest.mark.parametrize("poc,authorization,migrate,prior_count", [
-    ("two-batches", policy.THIRD_AUTHORIZATION, third_batch_migration, 2),
-    ("three-batches", policy.FOURTH_AUTHORIZATION, fourth_batch_migration, 3),
-], indirect=["poc"], ids=["b3", "b4"])
-def test_later_migration_preserves_all_prior_batches(poc, authorization, migrate, prior_count, arm_receipts, monkeypatch):
+@pytest.mark.parametrize("poc,authorization,migrate,prior_count,missing_close", [
+    ("two-batches", policy.THIRD_AUTHORIZATION, third_batch_migration, 2, False),
+    ("three-batches", policy.FOURTH_AUTHORIZATION, fourth_batch_migration, 3, False),
+    ("three-batches", policy.FOURTH_AUTHORIZATION, fourth_batch_migration, 3, True),
+], indirect=["poc"], ids=["b3", "b4", "b4-missing-close"])
+def test_later_migration_preserves_all_prior_batches(poc, authorization, migrate, prior_count, missing_close,
+                                                    arm_receipts, monkeypatch):
     pg, samples, connect = poc
     operator, args, _, _, _ = arm_receipts
     args.account_ref = SECOND_ACCOUNT
@@ -977,8 +1031,9 @@ def test_later_migration_preserves_all_prior_batches(poc, authorization, migrate
         ownership = sa.text("""SELECT oid,proowner,proacl::text FROM pg_proc WHERE
             oid='pr06a_control.check_activation(text)'::regprocedure""")
         original_acl = db.execute(ownership).one()
-        if prior_count == 3:
-            for schema, grant in (("pr06a_control", "INSERT ON TABLES"), ("pr06a_api", "EXECUTE ON FUNCTIONS")):
+        if prior_count == 3 and not missing_close:
+            for schema, grant in (("pr06a_control", "INSERT ON TABLES"), ("pr06a_api", "EXECUTE ON FUNCTIONS"),
+                                  ("pr06a_control", "EXECUTE ON FUNCTIONS")):
                 with pytest.raises(sa.exc.DBAPIError, match="PR06A_CLOSE_AUDIT_ACL_UNEXPECTED"), db.begin_nested():
                     db.exec_driver_sql(f"ALTER DEFAULT PRIVILEGES IN SCHEMA {schema} GRANT {grant} "
                                        "TO classroom_billing_control")
@@ -1002,8 +1057,14 @@ def test_later_migration_preserves_all_prior_batches(poc, authorization, migrate
         _run(operator._arm(args, REVIEWED, FINGERPRINT))
     peers = []
 
+    class ApprovedPeer(Peer):
+        async def close(self):
+            if authorization == policy.FOURTH_AUTHORIZATION and not missing_close:
+                self.close_audit = policy.CloseAudit("clean", 1000, 1000, "", 1000, "", "client")
+            await super().close()
+
     def peer(attempt):
-        instance = Peer(attempt)
+        instance = ApprovedPeer(attempt)
         peers.append(instance)
         return instance
 
@@ -1016,7 +1077,17 @@ def test_later_migration_preserves_all_prior_batches(poc, authorization, migrate
 
     with pytest.raises(policy.PocStopped):
         _run(run(forbidden, "7" * 40))
-    assert [(item.slot, item.state, item.stop) for item in _run(run(peer))] == [
+    actual = [(item.slot, item.state, item.stop) for item in _run(run(peer))]
+    if missing_close:
+        assert actual == [(1, "succeeded", None), (2, "not_dialed", "ledger_rejected_or_commit_unknown")]
+        assert len(peers) == 1 and peers[0].connect_count == 1
+        with pg.admin.connect() as db:
+            assert snapshot(db) == original
+            assert db.execute(sa.text("""SELECT slot,state,usage_final FROM pr06a_control.attempts
+                                      WHERE authorization_id=:id"""), {"id": authorization}).one() == (
+                1, "succeeded", True)
+        return
+    assert actual == [
         (1, "succeeded", None), (2, "succeeded", None), (3, "succeeded", None)]
     assert len(peers) == 3 and all(p.connect_count == 1 and len(p.sent_binary) == 2 and p.closed for p in peers)
     with pytest.raises(policy.PocStopped):
@@ -1025,6 +1096,8 @@ def test_later_migration_preserves_all_prior_batches(poc, authorization, migrate
     selected = {"id": authorization}
     with pg.admin.begin() as db:
         assert snapshot(db) == original
+        if authorization == policy.FOURTH_AUTHORIZATION:
+            assert db.scalar(sa.text("SELECT count(*) FROM pr06a_control.websocket_close WHERE status='clean'")) == 3
         assert db.execute(sa.text("""SELECT source_sha256,reviewed_sha,account_ref FROM pr06a_control.activation
                                      WHERE authorization_id=:id"""), selected).one() == (
              auth_sha, REVIEWED, SECOND_ACCOUNT)

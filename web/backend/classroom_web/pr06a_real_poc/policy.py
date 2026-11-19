@@ -40,7 +40,9 @@ MAX_WAV_BYTES = 320_256
 _DIGITS = "零一二三四五六七八九"
 _NUMERAL_CHARS = f"0-9{_DIGITS}〇两十百千万亿"
 _SINGLE_DIGIT = re.compile(rf"(?<![{_NUMERAL_CHARS}])([{_DIGITS}])(?=[点楼])")
-_NUMERIC_PUNCTUATION = re.compile(r"[-+](?=[0-9])|(?<=[0-9])[.,](?=[0-9])")
+_NUMERIC_PUNCTUATION = re.compile(
+    rf"[-+](?=\.?[{_NUMERAL_CHARS}])|\.(?=[{_NUMERAL_CHARS}])|(?<=[{_NUMERAL_CHARS}]),(?=[{_NUMERAL_CHARS}])"
+)
 
 
 @dataclass(frozen=True)

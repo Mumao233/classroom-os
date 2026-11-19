@@ -213,6 +213,8 @@ class _WebSocket:
         self._claimed = False
         self._started = False
         self._closed = False
+        self._closing = False
+        self._expiry_status = None
         self.close_audit = None
 
     def claim(self):
@@ -300,6 +302,7 @@ class _WebSocket:
             self.abort()
             return
         self._closed = True
+        self._closing = True
         loop = asyncio.get_running_loop()
         began = loop.time()
         status = "failed"
@@ -309,23 +312,34 @@ class _WebSocket:
             async with asyncio.timeout(CLOSE_WAIT_SECONDS):
                 await socket.close()
                 await socket.wait_closed()
-            status = "clean" if isinstance(socket.protocol.close_exc, ConnectionClosedOK) else "abnormal"
+            status = self._completed_close_status()
         except TimeoutError:
-            status = "timeout"
+            status = self._completed_close_status() or "timeout"
         except asyncio.CancelledError:
-            status = "timeout"
+            status = self._completed_close_status() or "timeout"
             raise
         except Exception:
             pass
         finally:
+            self._closing = False
+            status = self._expiry_status or status or "failed"
             if status != "clean":
                 self.abort()
             self._snapshot_close(status, round((loop.time() - began) * 1000))
 
     def snapshot_expired_close(self):
         if self._socket is not None and self.close_audit is None:
-            # No orderly close was started before the connection deadline.
-            self._snapshot_close("timeout", 0)
+            status = self._completed_close_status() or "timeout"
+            if self._closing:
+                # Save the state before abort. The close coroutine supplies
+                # elapsed time when it unwinds.
+                self._expiry_status = status
+            else:
+                self._snapshot_close(status, 0)
+
+    def _completed_close_status(self):
+        if self._socket.close_code is not None:
+            return "clean" if isinstance(self._socket.protocol.close_exc, ConnectionClosedOK) else "abnormal"
 
     def _snapshot_close(self, status, elapsed_ms):
         protocol = self._socket.protocol

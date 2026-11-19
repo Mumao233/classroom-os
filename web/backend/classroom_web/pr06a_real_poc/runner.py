@@ -45,13 +45,13 @@ class _Session:
         self.ready = self.recognition_ok = self.recognition_tainted = self.provider_failed = False
         self.accounting_only = self.network_closed = False
         self.stop = None
+        self.io_timeout_reason = None
         self.ranges = [0]
         self.sentences = {}
         self.seen_sentences = set()
         self.seen_results = set()
         self.request = None
         self.usage = None
-        self.usage_final = False
         self.close_audit = None
         self.post_terminal_read_failed = False
         self.meter_high = (None, None, None)
@@ -196,7 +196,6 @@ class _Session:
         if event.request_id or usage:
             usage_final = final and usage is not None and self.request is not None
             reached = await self.ledger.observe(self.attempt, event.request_id, usage, usage_final)
-            self.usage_final = self.usage_final or usage_final
             if reached:
                 self.stop = self.stop or "cost_limit"
 
@@ -322,7 +321,7 @@ class _Session:
                         return
                     raise Disconnected("closed_before_terminal") from None
                 except Disconnected:
-                    if self.terminal_event is not None:
+                    if self.terminal_event is not None or self.provider_failed:
                         # The receive side can finish with an error during a
                         # close/abort. Classify using the socket's close evidence.
                         self.post_terminal_read_failed = True
@@ -357,6 +356,14 @@ class _Session:
             self.started.set()
             self.terminal_signal.set()
 
+    def _expire_transport(self):
+        try:
+            snapshot = getattr(self.transport, "snapshot_expired_close", None)
+            if snapshot is not None:
+                snapshot()
+        finally:
+            self.transport.abort()
+
     async def _cleanup(self, reader, deadline, watchdog):
         self.run_recorded.set()
         self.finish_done.set()
@@ -372,10 +379,10 @@ class _Session:
                 raise
         finally:
             if not closed:
-                self.transport.abort()
-                snapshot = getattr(self.transport, "snapshot_expired_close", None)
-                if snapshot is not None and asyncio.get_running_loop().time() >= deadline:
-                    snapshot()
+                if asyncio.get_running_loop().time() >= deadline:
+                    self._expire_transport()
+                else:
+                    self.transport.abort()
             self.close_audit = getattr(self.transport, "close_audit", None)
             self.network_closed = True
             try:
@@ -396,7 +403,7 @@ class _Session:
         transport = self.transport
         transport.claim()
         loop = asyncio.get_running_loop()
-        watchdog = loop.call_at(deadline, transport.abort)
+        watchdog = loop.call_at(deadline, self._expire_transport)
         write_deadline = deadline - 0.25
 
         @asynccontextmanager
@@ -450,6 +457,11 @@ class _Session:
                 await self._wait_dispatch(reader)
                 if reader.done():
                     await reader
+        except TimeoutError:
+            # Later evidence joined during teardown cannot change which phase
+            # first reached its I/O deadline.
+            self.io_timeout_reason = self.stop or "timeout"
+            raise
         finally:
             await finish_on_cancel(self._cleanup(reader, deadline, watchdog))
         if reader is not None and not reader.cancelled():
@@ -532,31 +544,35 @@ async def execute_batch(ledger, samples, reviewed_sha, account_ref, credential_f
     try:
         async with asyncio.timeout_at(batch_deadline):
             await ledger.open(reviewed_sha, account_ref, credential_fingerprint, samples)
-            opened = True
-            for sample in samples:
-                deadline = min(batch_deadline, loop.time() + MAX_CONNECTION_SECONDS)
-                attempt = Attempt.create()
-                async with asyncio.timeout_at(deadline):
-                    await ledger.claim(sample, attempt)
-                admitted = True
-                session = _Session(transport_for(attempt), ledger, attempt, sample)
-                await session.run(deadline)
-                state = session.recognition_state()
-                reason = session.stop
-                await ledger.complete(attempt, state, reason, close=session.close_audit)
-                receipts.append(Receipt(sample.spec.slot, state, reason, close=session.close_audit))
-                attempt = session = None
-                admitted = False
-                if reason:
-                    break
-            if not reason:
-                await ledger.complete(None, None, "sequence_complete")
+        opened = True
+        for sample in samples:
+            deadline = min(batch_deadline, loop.time() + MAX_CONNECTION_SECONDS)
+            attempt = Attempt.create()
+            if loop.time() >= deadline:
+                raise TimeoutError
+            async with asyncio.timeout_at(deadline):
+                await ledger.claim(sample, attempt)
+            admitted = True
+            session = _Session(transport_for(attempt), ledger, attempt, sample)
+            await session.run(deadline)
+            state = session.recognition_state()
+            reason = session.stop
+            # The socket is fenced and disposed. The independently bounded PG
+            # completion must not be cancelled by the provider I/O timer.
+            await ledger.complete(attempt, state, reason, close=session.close_audit)
+            receipts.append(Receipt(sample.spec.slot, state, reason, close=session.close_audit))
+            attempt = session = None
+            admitted = False
+            if reason:
+                break
+        if not reason:
+            await ledger.complete(None, None, "sequence_complete")
     except asyncio.CancelledError:
         try:
             async with asyncio.timeout(1):
-                if admitted and session is not None and (session.usage_final or session.close_audit is not None):
-                    state = "succeeded" if session.usage_final and session.terminal_event is not None and (
-                        session.recognition_state() == "succeeded") else "unknown"
+                if admitted and session is not None and (
+                        session.terminal_event is not None or session.provider_failed or session.close_audit is not None):
+                    state = session.recognition_state()
                     try:
                         await ledger.complete(attempt, state, "operator_interrupted", close=session.close_audit)
                     except PocStopped:
@@ -574,10 +590,7 @@ async def execute_batch(ledger, samples, reviewed_sha, account_ref, credential_f
         elif isinstance(exc, AuthenticationRejected):
             reason = "authentication_rejected"
         elif isinstance(exc, TimeoutError):
-            reason = "timeout"
-            if (session is not None and session.terminal_event is not None and session.close_audit is not None
-                    and session.close_audit.status == "timeout"):
-                reason = session.stop or "close_timeout"
+            reason = (session.io_timeout_reason if session else None) or "timeout"
         elif isinstance(exc, Disconnected):
             reason = "connection_failed"
         else:

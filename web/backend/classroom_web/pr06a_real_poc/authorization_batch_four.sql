@@ -96,8 +96,28 @@ CREATE TABLE pr06a_control.websocket_close (
   initiator text CHECK (initiator IN ('client','server')),
   observed_at timestamptz NOT NULL DEFAULT clock_timestamp(),
   CHECK ((received_code IS NULL)=(received_reason IS NULL)),
-  CHECK ((sent_code IS NULL)=(sent_reason IS NULL))
+  CHECK ((sent_code IS NULL)=(sent_reason IS NULL)),
+  CHECK (status<>'clean' OR coalesce(received_code IN (1000,1001,1005)
+    AND sent_code IN (1000,1001,1005) AND initiator IS NOT NULL,false))
 );
+
+CREATE FUNCTION pr06a_control.require_clean_predecessors() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $f$
+BEGIN
+  IF EXISTS (
+    SELECT FROM pr06a_control.attempts a
+      LEFT JOIN pr06a_control.websocket_close c USING(attempt)
+      WHERE a.authorization_id=NEW.authorization_id AND a.slot<NEW.slot
+        AND c.status IS DISTINCT FROM 'clean'
+  ) THEN
+    RAISE EXCEPTION 'PR06A_CLEAN_PREDECESSOR_REQUIRED';
+  END IF;
+  RETURN NEW;
+END $f$;
+
+CREATE TRIGGER b4_clean_predecessors BEFORE INSERT ON pr06a_control.attempts
+  FOR EACH ROW WHEN (NEW.authorization_id='PR06A-REAL-POC-AUTH-20261120-B4' AND NEW.slot>1)
+  EXECUTE FUNCTION pr06a_control.require_clean_predecessors();
 
 CREATE FUNCTION pr06a_api.record_close(f uuid, p_attempt uuid, p_status text, p_elapsed integer,
     p_received integer, p_received_reason text, p_sent integer, p_sent_reason text, p_initiator text) RETURNS void
@@ -122,6 +142,7 @@ BEGIN
 END $f$;
 
 REVOKE ALL ON TABLE pr06a_control.websocket_close FROM PUBLIC,classroom_pr06a_executor,classroom_pr06a_reconciler;
+REVOKE ALL ON FUNCTION pr06a_control.require_clean_predecessors() FROM PUBLIC;
 REVOKE ALL ON FUNCTION pr06a_api.record_close(uuid,uuid,text,integer,integer,text,integer,text,text)
   FROM PUBLIC,classroom_pr06a_reconciler;
 GRANT EXECUTE ON FUNCTION pr06a_api.record_close(uuid,uuid,text,integer,integer,text,integer,text,text)
@@ -139,6 +160,10 @@ BEGIN
       WHERE p.oid='pr06a_api.record_close(uuid,uuid,text,integer,integer,text,integer,text,text)'::regprocedure
         AND acl.grantee<>p.proowner
         AND (acl.grantee<>'classroom_pr06a_executor'::regrole OR acl.is_grantable)
+  ) OR EXISTS (
+    SELECT FROM pg_catalog.pg_proc p
+      CROSS JOIN LATERAL pg_catalog.aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) acl
+      WHERE p.oid='pr06a_control.require_clean_predecessors()'::regprocedure AND acl.grantee<>p.proowner
   ) THEN
     RAISE EXCEPTION 'PR06A_CLOSE_AUDIT_ACL_UNEXPECTED';
   END IF;

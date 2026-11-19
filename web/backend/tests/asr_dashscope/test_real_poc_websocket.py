@@ -215,7 +215,7 @@ def test_pinned_driver_protocol_and_logging(monkeypatch, caplog, tmp_path, close
                     "clean", "server", 1001, "going away")
             elif close_mode == "watchdog":
                 assert (close.status, close.elapsed_ms, close.initiator, close.received_code, close.received_reason) == (
-                    "timeout", 0, "server", 1001, "going away")
+                    "clean", 0, "server", 1001, "going away")
             elif close_mode == "timeout":
                 assert (close.status, close.initiator, close.sent_code, close.received_code) == (
                     "timeout", "client", 1000, None)
