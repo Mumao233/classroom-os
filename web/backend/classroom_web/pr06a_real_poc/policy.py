@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import wave
 
+from ..asr_dashscope.transport import AuthenticationRejected, Disconnected
 from ..asr_dashscope.wire import MODEL, REGION
 
 AUTHORIZATION = "PR06A-REAL-POC-AUTH-20261118"
@@ -36,6 +37,14 @@ class RequestConflict(PocStopped):
 
 class EndOfStream(ConnectionError):
     """The peer closed the WebSocket normally."""
+
+
+class ConnectFailure(Disconnected):
+    """A fixed, credential-free diagnostic code from the managed WSS dial."""
+
+
+class ConnectAuthenticationFailure(AuthenticationRejected, ConnectFailure):
+    """The opening HTTP request was rejected with 401 or 403."""
 
 
 def sentence_proof(sentence):

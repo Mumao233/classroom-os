@@ -17,6 +17,7 @@ dependencies = [
   "starlette==1.10.0",
   "uvicorn==0.54.0",
   "websockets==17.4",
+  "certifi==2026.10.23",
   "cryptography==50.0.2",
   "pyotp==2.9.0",
   "rfc8785==0.1.4",

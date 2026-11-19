@@ -6,8 +6,10 @@ from ipaddress import ip_address
 import json
 import logging
 from http import HTTPStatus
+import socket
 import ssl
 
+import certifi
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -18,9 +20,10 @@ from websockets.asyncio.server import serve
 from classroom_web.asr_dashscope.transport import AuthenticationRejected, Disconnected, InboundText
 from classroom_web.asr_dashscope.wire import metering_evidence, observation_fingerprint
 from classroom_web.pr06a_real_poc import websocket
-from classroom_web.pr06a_real_poc.policy import ENDPOINT, PocStopped, UnsafeInbound, digest
+from classroom_web.pr06a_real_poc.policy import ConnectFailure, ENDPOINT, PocStopped, UnsafeInbound, digest
 
 FAKE_KEY = "synthetic-pr06a-test-key"
+PEER_NAME = "pr06a-loopback.invalid"
 
 
 @asynccontextmanager
@@ -114,7 +117,9 @@ def _loopback_certificate(tmp_path):
     cert = (x509.CertificateBuilder().subject_name(subject).issuer_name(subject)
             .public_key(key.public_key()).serial_number(x509.random_serial_number())
             .not_valid_before(now - timedelta(minutes=1)).not_valid_after(now + timedelta(hours=1))
-            .add_extension(x509.SubjectAlternativeName([x509.IPAddress(ip_address("127.0.0.1"))]), critical=False)
+            .add_extension(x509.SubjectAlternativeName([
+                x509.IPAddress(ip_address("127.0.0.1")), x509.DNSName(PEER_NAME),
+            ]), critical=False)
             .sign(key, hashes.SHA256()))
     crt, pem = tmp_path / "synthetic-cert.pem", tmp_path / "synthetic-key.pem"
     crt.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
@@ -128,11 +133,27 @@ def _loopback_certificate(tmp_path):
 @pytest.mark.parametrize("abnormal", [False, True])
 def test_pinned_driver_protocol_and_logging(monkeypatch, caplog, tmp_path, abnormal):
     crt, server_ssl = _loopback_certificate(tmp_path)
+    monkeypatch.setattr(certifi, "where", lambda: str(crt))
+
     async def exercise():
         seen = []
+        sni = []
+        dns = []
         dial = websocket._SingleDial
+        server_ssl.set_servername_callback(lambda _socket, name, _: sni.append(name))
+        loop = asyncio.get_running_loop()
+        resolve = loop.getaddrinfo
+
+        async def resolve_peer(host, port, **options):
+            if host == PEER_NAME:
+                dns.append(host)
+                host = "127.0.0.1"
+            return await resolve(host, port, **options)
+
+        monkeypatch.setattr(loop, "getaddrinfo", resolve_peer)
 
         async def peer(socket):
+            seen.append(socket.request.headers["Host"])
             seen.append(socket.request.headers["Authorization"])
             seen.append(json.loads(await socket.recv()))
             await socket.send(['{"event":', '"task-started"}'])
@@ -150,8 +171,7 @@ def test_pinned_driver_protocol_and_logging(monkeypatch, caplog, tmp_path, abnor
                 assert endpoint == ENDPOINT and options["proxy"] is None
                 tls = options["ssl"]
                 assert tls.check_hostname and tls.verify_mode == ssl.CERT_REQUIRED
-                tls.load_verify_locations(cafile=str(crt))
-                return dial(f"wss://127.0.0.1:{port}/", **options)
+                return dial(f"wss://{PEER_NAME}:{port}/", **options)
 
             monkeypatch.setattr(websocket, "_SingleDial", loopback)
             transport = websocket._WebSocket(FAKE_KEY)
@@ -201,17 +221,23 @@ def test_pinned_driver_protocol_and_logging(monkeypatch, caplog, tmp_path, abnor
                 await expired.connect(before_handshake=stale_commit)
             assert expired._socket is None
         assert sent == [1, 2]
-        assert seen == [f"Bearer {FAKE_KEY}", {"action": "run-task"}, b"\0\0", {"action": "finish-task"}]
+        assert dns == sni == [PEER_NAME] * 3
+        assert seen == [f"{PEER_NAME}:{port}", f"Bearer {FAKE_KEY}", {"action": "run-task"},
+                        b"\0\0", {"action": "finish-task"}]
 
     with caplog.at_level(logging.DEBUG):
-        asyncio.run(exercise())
+        with asyncio.Runner(loop_factory=asyncio.SelectorEventLoop) as runner:
+            runner.run(exercise())
     assert FAKE_KEY not in caplog.text and "Authorization" not in caplog.text
 
 
-@pytest.mark.parametrize("status,error", [(HTTPStatus.UNAUTHORIZED, AuthenticationRejected),
-                                          (HTTPStatus.FORBIDDEN, AuthenticationRejected),
-                                          (HTTPStatus.FOUND, Disconnected)])
-def test_handshake_rejection_does_not_redirect_or_log(monkeypatch, status, error, caplog):
+@pytest.mark.parametrize("status,error,code", [
+    (HTTPStatus.UNAUTHORIZED, AuthenticationRejected, "connect_authentication_http_401"),
+    (HTTPStatus.FORBIDDEN, AuthenticationRejected, "connect_authentication_http_403"),
+    (HTTPStatus.FOUND, Disconnected, "connect_http_upgrade_status_302"),
+    (HTTPStatus.BAD_REQUEST, Disconnected, "connect_http_upgrade_status_400"),
+])
+def test_handshake_rejection_does_not_redirect_or_log(monkeypatch, status, error, code, caplog):
     async def exercise():
         visits = []
         dial = websocket._SingleDial
@@ -233,7 +259,7 @@ def test_handshake_rejection_does_not_redirect_or_log(monkeypatch, status, error
             monkeypatch.setattr(websocket, "_SingleDial", loopback)
             transport = websocket._WebSocket(FAKE_KEY)
             transport.claim()
-            with pytest.raises(error) as exc:
+            with pytest.raises(error, match=f"^{code}$") as exc:
                 await transport.connect(before_handshake=_allow)
             assert FAKE_KEY not in str(exc.value) and visits == ["/initial"]
             assert transport._socket is None
@@ -242,3 +268,67 @@ def test_handshake_rejection_does_not_redirect_or_log(monkeypatch, status, error
     with caplog.at_level(logging.DEBUG):
         asyncio.run(exercise())
     assert FAKE_KEY not in caplog.text
+
+
+@pytest.mark.parametrize("stage,code", [
+    ("local", "connect_local_value_error"),
+    ("dns", "connect_dns_gaierror"),
+    ("tcp", "connect_tcp_connection_refused"),
+])
+def test_pre_tls_failure_code_and_socket_cleanup(monkeypatch, stage, code, caplog):
+    def reject_local():
+        raise ValueError(FAKE_KEY)
+
+    async def exercise():
+        opened = []
+        loop = asyncio.get_running_loop()
+
+        async def resolve(*_args, **_kwargs):
+            assert stage != "local"
+            if stage == "dns":
+                raise socket.gaierror(socket.EAI_NONAME, FAKE_KEY)
+            return [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("127.0.0.1", 1))]
+
+        async def connect_tcp(sock, _address):
+            assert stage == "tcp"
+            opened.append(sock)
+            raise ConnectionRefusedError(FAKE_KEY)
+
+        if stage == "local":
+            monkeypatch.setattr(websocket, "_tls_context", reject_local)
+        monkeypatch.setattr(loop, "getaddrinfo", resolve)
+        monkeypatch.setattr(loop, "sock_connect", connect_tcp)
+        transport = websocket._WebSocket(FAKE_KEY)
+        transport.claim()
+        with pytest.raises(ConnectFailure, match=f"^{code}$"):
+            await transport.connect(before_handshake=lambda: pytest.fail("HTTP upgrade gate ran"))
+        assert transport._socket is None and transport._key is None
+        assert [sock.fileno() for sock in opened] == ([-1] if stage == "tcp" else [])
+        transport.dispose()
+
+    with caplog.at_level(logging.DEBUG):
+        asyncio.run(exercise())
+    assert FAKE_KEY not in caplog.text
+
+
+def test_tls_certificate_rejection_precedes_http_upgrade_intent(monkeypatch, tmp_path, caplog):
+    _, server_ssl = _loopback_certificate(tmp_path)
+
+    async def exercise():
+        dial = websocket._SingleDial
+
+        async with serve(lambda _: pytest.fail("HTTP upgrade succeeded"), "127.0.0.1", 0,
+                         ssl=server_ssl, logger=websocket._wire_log) as server:
+            port = server.sockets[0].getsockname()[1]
+            monkeypatch.setattr(websocket, "_SingleDial", lambda _, **opts: dial(f"wss://127.0.0.1:{port}/", **opts))
+            transport = websocket._WebSocket(FAKE_KEY)
+            transport.claim()
+            with pytest.raises(ConnectFailure, match=r"^connect_tls_certificate_\d+$"):
+                await transport.connect(before_handshake=lambda: pytest.fail("HTTP upgrade gate ran"))
+            assert transport._socket is None
+            transport.dispose()
+
+    with caplog.at_level(logging.DEBUG):
+        with asyncio.Runner(loop_factory=asyncio.SelectorEventLoop) as runner:
+            runner.run(exercise())
+    assert FAKE_KEY not in caplog.text and "Authorization" not in caplog.text

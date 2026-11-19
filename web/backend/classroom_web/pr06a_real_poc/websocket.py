@@ -10,18 +10,56 @@ import ssl
 
 import websockets
 from websockets.asyncio.client import ClientConnection, connect
-from websockets.exceptions import ConnectionClosedOK, InvalidStatus
+from websockets.exceptions import ConnectionClosedOK, InvalidHandshake, InvalidStatus, InvalidURI
 from websockets.frames import Frame, Opcode
 
-from ..asr_dashscope.transport import AuthenticationRejected, Disconnected, InboundText
+from ..asr_dashscope.transport import Disconnected, InboundText
 from ..asr_dashscope.wire import MAX_MESSAGE_CHARS, metering_evidence, observation_fingerprint, parse_event
 from ..asr_sim.simulator import ProtocolError
-from .policy import ENDPOINT, LIB_VERSION, EndOfStream, PocStopped, UnsafeInbound, digest, sentence_proof
+from .policy import (
+    ENDPOINT, LIB_VERSION, ConnectAuthenticationFailure, ConnectFailure, EndOfStream, PocStopped,
+    UnsafeInbound, digest, sentence_proof,
+)
 
 _wire_log = logging.Logger("pr06a.websocket")
 _wire_log.addHandler(logging.NullHandler())
 _wire_log.propagate = False
 _wire_log.setLevel(logging.CRITICAL + 1)
+
+
+def _tls_context():
+    import certifi
+
+    tls = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    tls.load_default_certs()
+    tls.load_verify_locations(cafile=certifi.where())
+    return tls
+
+
+def _dial_failure(phase, exc):
+    if isinstance(exc, InvalidStatus):
+        status = exc.response.status_code
+        if type(status) is int and status in (401, 403):
+            return ConnectAuthenticationFailure(f"connect_authentication_http_{status}")
+        if type(status) is int and 100 <= status <= 599:
+            return ConnectFailure(f"connect_http_upgrade_status_{status}")
+        return ConnectFailure("connect_http_upgrade_invalid_status")
+    if phase != "local" and isinstance(exc, ssl.SSLCertVerificationError):
+        code = getattr(exc, "verify_code", None)
+        if type(code) is int and 0 <= code <= 999:
+            return ConnectFailure(f"connect_tls_certificate_{code}")
+        return ConnectFailure("connect_tls_certificate")
+    if isinstance(exc, (TypeError, ValueError, ImportError, InvalidURI)):
+        phase = "local"
+    for kind, error in (
+        ("gaierror", socket.gaierror), ("timeout", TimeoutError), ("ssl_error", ssl.SSLError),
+        ("invalid_handshake", InvalidHandshake), ("connection_refused", ConnectionRefusedError),
+        ("os_error", OSError), ("type_error", TypeError), ("value_error", ValueError),
+        ("import_error", ImportError), ("invalid_uri", InvalidURI),
+    ):
+        if isinstance(exc, error):
+            return ConnectFailure(f"connect_{phase}_{kind}")
+    return ConnectFailure(f"connect_{phase}_error")
 
 
 def _credential_echo(text, key, control):
@@ -71,14 +109,42 @@ def _safe_evidence(frame, key):
 
 
 class _SingleDial(connect):
+    _phase = "local"
+    _opened_connection = None
+
+    @property
+    def phase(self):
+        if self._opened_connection is not None:
+            return "http_upgrade" if self._opened_connection.upgrade_started else "local"
+        return self._phase
+
     async def open_tcp_connection(self):
-        # Resolve once and select one numeric address. The pinned client
-        # preserves ws_uri.host for TLS SNI, certificate checks and HTTP Host.
-        answers = await asyncio.get_running_loop().getaddrinfo(
+        # Complete one numeric TCP dial before transferring the socket to the
+        # pinned client's TLS setup. That client keeps ws_uri.host for SNI,
+        # certificate verification and the HTTP Host header.
+        loop = asyncio.get_running_loop()
+        self._phase = "dns"
+        answers = await loop.getaddrinfo(
             self.ws_uri.host, self.ws_uri.port, type=socket.SOCK_STREAM, proto=socket.IPPROTO_TCP)
-        family, _, _, _, address = answers[0]
-        self.create_connection_kwargs.update(host=address[0], family=family, flags=socket.AI_NUMERICHOST)
-        return await super().open_tcp_connection()
+        if not answers:
+            raise ConnectFailure("connect_dns_no_address")
+        self._phase = "local"
+        family, kind, protocol, _, address = answers[0]
+        sock = socket.socket(family, kind, protocol)
+        try:
+            sock.setblocking(False)
+            self._phase = "tcp"
+            await loop.sock_connect(sock, address)
+            self._phase = "tls" if self.ws_uri.secure else "local"
+            self.create_connection_kwargs["sock"] = sock
+            connection = await super().open_tcp_connection()
+        except BaseException:
+            sock.close()
+            raise
+        finally:
+            self.create_connection_kwargs.pop("sock", None)
+        self._opened_connection = connection
+        return connection
 
     def process_redirect(self, exc):
         return exc
@@ -88,6 +154,7 @@ class _Connection(ClientConnection):
     def __init__(self, protocol, *, before_handshake, **kwargs):
         super().__init__(protocol, **kwargs)
         self._before_handshake = before_handshake
+        self.upgrade_started = False
         self.control = self.audio = self.buffered_messages = 0
         self.stamps = deque()
 
@@ -97,6 +164,7 @@ class _Connection(ClientConnection):
         async with self._before_handshake() as deadline:
             if deadline is not None and asyncio.get_running_loop().time() >= deadline:
                 raise PocStopped("handshake_deadline")
+            self.upgrade_started = True
             await super().handshake(additional_headers, user_agent_header)
 
     def process_event(self, event):
@@ -144,33 +212,31 @@ class _WebSocket:
 
     async def connect(self, *, before_handshake):
         if not self._claimed or self._started or self._closed:
-            raise Disconnected("transport_used")
+            raise ConnectFailure("connect_local_transport_used")
         self._started = True
-        if websockets.__version__ != LIB_VERSION:
-            raise Disconnected("websocket_version_mismatch")
-        tls = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-        tls.load_default_certs()
-        headers = {"Authorization": f"Bearer {self._key}"}
-        self._key = None
+        dial = None
         try:
-            self._socket = await _SingleDial(
-                ENDPOINT, additional_headers=headers, ssl=tls, proxy=None,
+            if websockets.__version__ != LIB_VERSION:
+                raise ConnectFailure("connect_local_version_mismatch")
+            tls = _tls_context()
+            dial = _SingleDial(
+                ENDPOINT, additional_headers={"Authorization": f"Bearer {self._key}"}, ssl=tls, proxy=None,
                 open_timeout=3, close_timeout=0.25, ping_interval=None,
                 max_size=MAX_MESSAGE_CHARS, max_queue=8, compression=None,
                 create_connection=partial(_Connection, before_handshake=before_handshake),
                 logger=_wire_log, user_agent_header=None,
             )
+            self._key = None
+            self._socket = await dial
             if self._closed:
                 self.dispose()
-                raise Disconnected("handshake_after_close")
-        except PocStopped:
+                raise ConnectFailure("connect_http_upgrade_transport_closed")
+        except (PocStopped, ConnectFailure):
             raise
-        except InvalidStatus as exc:
-            if exc.response.status_code in (401, 403):
-                raise AuthenticationRejected("authentication_rejected") from None
-            raise Disconnected("handshake_rejected") from None
-        except Exception:
-            raise Disconnected("handshake_failed") from None
+        except Exception as exc:
+            raise _dial_failure(dial.phase if dial is not None else "local", exc) from None
+        finally:
+            self._key = None
 
     def _connected(self):
         if self._socket is None:

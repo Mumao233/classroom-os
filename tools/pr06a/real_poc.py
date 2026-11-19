@@ -233,8 +233,11 @@ async def _execute(args, head, key, fingerprint, samples):
         receipts = await execute_batch(PgLedger(db, args.authorization_id), samples, head, args.account_ref, fingerprint,
                                        lambda _: _WebSocket(key))
     for receipt in receipts:
-        _emit({"authorization": args.authorization_id, "slot": receipt.slot,
-               "recognition": receipt.state, "stop": receipt.stop})
+        record = {"authorization": args.authorization_id, "slot": receipt.slot,
+                  "recognition": receipt.state, "stop": receipt.stop}
+        if receipt.connection_failure is not None:
+            record["connection_failure"] = receipt.connection_failure
+        _emit(record)
     return int(len(receipts) != len(samples) or any(item.stop or item.state != "succeeded" for item in receipts))
 
 

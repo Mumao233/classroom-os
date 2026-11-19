@@ -473,6 +473,43 @@ class Peer(FakeTransport):
                 "sentence_end": False, "text": "synthetic partial"}})
 
 
+@pytest.mark.parametrize("authenticate", [False, True], ids=["tls", "authentication"])
+def test_connect_failure_is_audited_with_the_attempt_stop(poc, authenticate):
+    pg, samples, connect = poc
+    code = "connect_authentication_http_401" if authenticate else "connect_tls_certificate_20"
+    state = "failed" if authenticate else "unknown"
+    stop = "authentication_rejected" if authenticate else "connection_failed"
+    peers = []
+
+    class Reject(Peer):
+        async def connect(self, *, before_handshake):
+            if authenticate:
+                async with before_handshake():
+                    raise policy.ConnectAuthenticationFailure(code)
+            raise policy.ConnectFailure(code)
+
+    def create(attempt):
+        transport = Reject(attempt)
+        peers.append(transport)
+        return transport
+
+    async def run():
+        async with connect() as ledger:
+            return await execute_batch(ledger, samples, REVIEWED, ACCOUNT, FINGERPRINT, create)
+
+    assert _run(run()) == (runner.Receipt(1, state, stop, code),)
+    assert len(peers) == 1 and peers[0].closed and not peers[0].sent
+    with pg.admin.connect() as db:
+        assert db.execute(sa.text("SELECT closed,stop_code,held_microyuan FROM pr06a_control.batch")).one() == (
+            True, stop, 1_000_000)
+        assert db.execute(sa.text("""SELECT a.state,g.code,g.observed_hash FROM pr06a_control.attempts a
+                                     JOIN pr06a_control.anomalies g USING(attempt)""")).one() == (
+            state, code, policy.digest(code.encode("ascii")))
+        assert db.execute(sa.text("SELECT event FROM pr06a_control.protocol")).scalars().all() == (
+            ["handshake-intent"] if authenticate else [])
+        assert db.scalar(sa.text("SELECT count(*) FROM pr06a_control.frames")) == 0
+
+
 @pytest.mark.parametrize("mode,expected,count", [("normal", None, 3), ("auth", "authentication_rejected", 1),
                                                  ("silent", "timeout", 1),
                                                  ("missing", "usage_unresolved", 1), ("limit", "cost_limit", 1),

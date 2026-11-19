@@ -8,7 +8,10 @@ from ..asr_dashscope.transport import AuthenticationRejected, Disconnected
 from ..asr_dashscope.wire import finish_task, metering_evidence, observation_fingerprint, parse_event, run_task
 from ..asr_sim.simulator import ProtocolError
 from .ledger import Attempt, finish_on_cancel
-from .policy import FRAME_SAMPLES, MAX_BATCH_SECONDS, MAX_CONNECTION_SECONDS, EndOfStream, PocStopped, UnsafeInbound, digest, sentence_proof
+from .policy import (
+    FRAME_SAMPLES, MAX_BATCH_SECONDS, MAX_CONNECTION_SECONDS, ConnectFailure, EndOfStream, PocStopped,
+    UnsafeInbound, digest, sentence_proof,
+)
 
 
 MAX_INBOUND_PACKETS = 512
@@ -20,6 +23,7 @@ class Receipt:
     slot: int | None
     state: str
     stop: str | None
+    connection_failure: str | None = None
 
 
 class _Session:
@@ -545,14 +549,15 @@ async def execute_batch(ledger, samples, reviewed_sha, account_ref, credential_f
         if isinstance(exc, AuthenticationRejected):
             state = "failed"
         if admitted:
+            failure = str(exc) if isinstance(exc, ConnectFailure) else None
             # Audit persistence after the I/O deadline cannot grant more I/O.
             try:
                 async with asyncio.timeout(1):
-                    await ledger.complete(attempt, state, reason)
+                    await ledger.complete(attempt, state, reason, connection_failure=failure)
             except (PocStopped, TimeoutError):
                 reason = "ledger_rejected_or_commit_unknown"
                 state = "unknown"
-            receipts.append(Receipt(sample.spec.slot, state, reason))
+            receipts.append(Receipt(sample.spec.slot, state, reason, connection_failure=failure))
         else:
             if opened:
                 try:
