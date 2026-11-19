@@ -27,6 +27,12 @@ class Receipt:
     close: CloseAudit | None = None
 
 
+class BatchInterrupted(asyncio.CancelledError):
+    def __init__(self, receipts):
+        super().__init__()
+        self.receipts = tuple(receipts)
+
+
 class _Session:
     def __init__(self, transport, ledger, attempt, sample):
         self.transport, self.ledger, self.attempt, self.sample = transport, ledger, attempt, sample
@@ -321,7 +327,7 @@ class _Session:
                         return
                     raise Disconnected("closed_before_terminal") from None
                 except Disconnected:
-                    if self.terminal_event is not None or self.provider_failed:
+                    if self.terminal_event is not None or self.provider_failed or self.accounting_only:
                         # The receive side can finish with an error during a
                         # close/abort. Classify using the socket's close evidence.
                         self.post_terminal_read_failed = True
@@ -541,82 +547,80 @@ async def execute_batch(ledger, samples, reviewed_sha, account_ref, credential_f
     attempt = session = None
     opened = admitted = False
     reason = None
+
+    async def complete_slot(state, stop, **evidence):
+        close = session.close_audit if session else None
+        await ledger.complete(attempt, state, stop, close=close, **evidence)
+        receipts.append(Receipt(sample.spec.slot, state, stop, close=close, **evidence))
+
     try:
-        async with asyncio.timeout_at(batch_deadline):
-            await ledger.open(reviewed_sha, account_ref, credential_fingerprint, samples)
-        opened = True
-        for sample in samples:
-            deadline = min(batch_deadline, loop.time() + MAX_CONNECTION_SECONDS)
-            attempt = Attempt.create()
-            if loop.time() >= deadline:
-                raise TimeoutError
-            async with asyncio.timeout_at(deadline):
-                await ledger.claim(sample, attempt)
-            admitted = True
-            session = _Session(transport_for(attempt), ledger, attempt, sample)
-            await session.run(deadline)
-            state = session.recognition_state()
-            reason = session.stop
-            # The socket is fenced and disposed. The independently bounded PG
-            # completion must not be cancelled by the provider I/O timer.
-            await ledger.complete(attempt, state, reason, close=session.close_audit)
-            receipts.append(Receipt(sample.spec.slot, state, reason, close=session.close_audit))
-            attempt = session = None
-            admitted = False
-            if reason:
-                break
-        if not reason:
-            await ledger.complete(None, None, "sequence_complete")
+        try:
+            async with asyncio.timeout_at(batch_deadline):
+                await ledger.open(reviewed_sha, account_ref, credential_fingerprint, samples)
+            opened = True
+            for sample in samples:
+                deadline = min(batch_deadline, loop.time() + MAX_CONNECTION_SECONDS)
+                attempt = Attempt.create()
+                if loop.time() >= deadline:
+                    raise TimeoutError
+                async with asyncio.timeout_at(deadline):
+                    await ledger.claim(sample, attempt)
+                admitted = True
+                session = _Session(transport_for(attempt), ledger, attempt, sample)
+                await session.run(deadline)
+                reason = session.stop
+                # Once disposed, the socket is fenced. Finish the independently
+                # bounded commit and capture its receipt together.
+                await finish_on_cancel(complete_slot(session.recognition_state(), reason))
+                attempt = session = None
+                admitted = False
+                if reason:
+                    break
+            if not reason:
+                await ledger.complete(None, None, "sequence_complete")
+        except (PocStopped, AuthenticationRejected, Disconnected, ProtocolError, TimeoutError) as exc:
+            if isinstance(exc, PocStopped):
+                reason = str(exc)
+            elif isinstance(exc, AuthenticationRejected):
+                reason = "authentication_rejected"
+            elif isinstance(exc, TimeoutError):
+                reason = (session.io_timeout_reason if session else None) or "timeout"
+            elif isinstance(exc, Disconnected):
+                reason = "connection_failed"
+            else:
+                reason = "protocol_invalid"
+            if admitted:
+                state = "failed" if isinstance(exc, AuthenticationRejected) else (
+                    session.recognition_state() if session else "unknown")
+                failure = str(exc) if isinstance(exc, ConnectFailure) else None
+                try:
+                    await finish_on_cancel(complete_slot(state, reason, connection_failure=failure))
+                except (PocStopped, TimeoutError):
+                    receipts.append(Receipt(sample.spec.slot, "unknown", "ledger_rejected_or_commit_unknown",
+                                            connection_failure=failure, close=session.close_audit if session else None))
+            else:
+                if opened:
+                    try:
+                        await ledger.interrupt(attempt, reason)
+                    except (PocStopped, TimeoutError):
+                        reason = "ledger_rejected_or_commit_unknown"
+                if not receipts:
+                    raise PocStopped(reason) from None
+                receipts.append(Receipt(sample.spec.slot if attempt is not None else None, "not_dialed", reason))
     except asyncio.CancelledError:
         try:
-            async with asyncio.timeout(1):
-                if admitted and session is not None and (
-                        session.terminal_event is not None or session.provider_failed or session.close_audit is not None):
-                    state = session.recognition_state()
-                    try:
-                        await ledger.complete(attempt, state, "operator_interrupted", close=session.close_audit)
-                    except PocStopped:
-                        # A cancellation during COMMIT can leave the attempt
-                        # already completed. Interrupt still closes its batch.
-                        await ledger.interrupt(attempt, "operator_interrupted")
-                else:
+            # Completion may have committed while the caller was being
+            # cancelled. Keep its captured receipt and only fence the batch.
+            if admitted and session is not None and (not receipts or receipts[-1].slot != sample.spec.slot):
+                state = (session.recognition_state() if session.terminal_event is not None or session.provider_failed
+                         else "unknown")
+                try:
+                    await finish_on_cancel(complete_slot(state, "operator_interrupted"))
+                except (PocStopped, TimeoutError):
                     await ledger.interrupt(attempt, "operator_interrupted")
+            else:
+                await ledger.interrupt(attempt, "operator_interrupted")
         except (PocStopped, TimeoutError):
             pass
-        raise
-    except (PocStopped, AuthenticationRejected, Disconnected, ProtocolError, TimeoutError) as exc:
-        if isinstance(exc, PocStopped):
-            reason = str(exc)
-        elif isinstance(exc, AuthenticationRejected):
-            reason = "authentication_rejected"
-        elif isinstance(exc, TimeoutError):
-            reason = (session.io_timeout_reason if session else None) or "timeout"
-        elif isinstance(exc, Disconnected):
-            reason = "connection_failed"
-        else:
-            reason = "protocol_invalid"
-        state = session.recognition_state() if session else "unknown"
-        if isinstance(exc, AuthenticationRejected):
-            state = "failed"
-        if admitted:
-            failure = str(exc) if isinstance(exc, ConnectFailure) else None
-            close = session.close_audit if session else None
-            # Audit persistence after the I/O deadline cannot grant more I/O.
-            try:
-                async with asyncio.timeout(1):
-                    await ledger.complete(attempt, state, reason, connection_failure=failure, close=close)
-            except (PocStopped, TimeoutError):
-                reason = "ledger_rejected_or_commit_unknown"
-                state = "unknown"
-            receipts.append(Receipt(sample.spec.slot, state, reason, connection_failure=failure, close=close))
-        else:
-            if opened:
-                try:
-                    async with asyncio.timeout(1):
-                        await ledger.interrupt(attempt, reason)
-                except (PocStopped, TimeoutError):
-                    reason = "ledger_rejected_or_commit_unknown"
-            if not receipts:
-                raise PocStopped(reason) from None
-            receipts.append(Receipt(sample.spec.slot if attempt is not None else None, "not_dialed", reason))
+        raise BatchInterrupted(receipts) from None
     return tuple(receipts)

@@ -223,24 +223,32 @@ async def _arm(args, head, fingerprint):
     _emit(receipt)
 
 
-async def _execute(args, head, key, fingerprint, samples):
-    from classroom_web.pr06a_real_poc.ledger import PgLedger
-    from classroom_web.pr06a_real_poc.runner import execute_batch
-    from classroom_web.pr06a_real_poc.websocket import _WebSocket
-
-    if _reviewed_head() != head:
-        raise PocStopped("reviewed_checkout_changed")
-    async with await _db(False) as db:
-        receipts = await execute_batch(PgLedger(db, args.authorization_id), samples, head, args.account_ref, fingerprint,
-                                       lambda _: _WebSocket(key))
+def _emit_receipts(authorization, receipts):
     for receipt in receipts:
-        record = {"authorization": args.authorization_id, "slot": receipt.slot,
+        record = {"authorization": authorization, "slot": receipt.slot,
                   "recognition": receipt.state, "stop": receipt.stop}
         if receipt.connection_failure is not None:
             record["connection_failure"] = receipt.connection_failure
         if receipt.close is not None:
             record["close"] = asdict(receipt.close)
         _emit(record)
+
+
+async def _execute(args, head, key, fingerprint, samples):
+    from classroom_web.pr06a_real_poc.ledger import PgLedger
+    from classroom_web.pr06a_real_poc.runner import BatchInterrupted, execute_batch
+    from classroom_web.pr06a_real_poc.websocket import _WebSocket
+
+    if _reviewed_head() != head:
+        raise PocStopped("reviewed_checkout_changed")
+    try:
+        async with await _db(False) as db:
+            receipts = await execute_batch(PgLedger(db, args.authorization_id), samples, head, args.account_ref,
+                                           fingerprint, lambda _: _WebSocket(key))
+    except BatchInterrupted as exc:
+        _emit_receipts(args.authorization_id, exc.receipts)
+        raise
+    _emit_receipts(args.authorization_id, receipts)
     return int(len(receipts) != len(samples) or any(item.stop or item.state != "succeeded" for item in receipts))
 
 

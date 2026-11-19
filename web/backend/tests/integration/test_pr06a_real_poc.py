@@ -493,6 +493,7 @@ class Peer(FakeTransport):
     ("normal", "close_timeout", "succeeded", True),
     ("missing", "usage_unresolved", "succeeded", False),
     ("provider-failed", "provider_failed", "failed", False),
+    ("protocol-invalid", "protocol_invalid", "unknown", False),
 ])
 def test_close_timeout_keeps_terminal_recognition_and_stops_with_separate_audit(poc, mode, reason, state, final):
     pg, samples, connect = poc
@@ -500,11 +501,14 @@ def test_close_timeout_keeps_terminal_recognition_and_stops_with_separate_audit(
 
     class ClosingPeer(Peer):
         async def send_json(self, message, *, on_dispatched=None):
-            if mode == "provider-failed" and message["header"]["action"] == "finish-task":
+            if mode in ("provider-failed", "protocol-invalid") and message["header"]["action"] == "finish-task":
                 await FakeTransport.send_json(self, message, on_dispatched=on_dispatched)
-                self.feed_json({"header": {"event": "task-failed", "task_id": self.task,
-                                           "error_code": "synthetic_failure", "error_message": "synthetic failure"},
-                                "payload": {}})
+                if mode == "provider-failed":
+                    self.feed_json({"header": {"event": "task-failed", "task_id": self.task,
+                                               "error_code": "synthetic_failure", "error_message": "synthetic failure"},
+                                    "payload": {}})
+                else:
+                    self.event("invalid-event")
             else:
                 await super().send_json(message, on_dispatched=on_dispatched)
 
@@ -568,7 +572,7 @@ def test_nonclean_close_fences_next_claim_when_stop_is_omitted(poc, monkeypatch)
 
 @pytest.mark.parametrize("mode", ["batch-deadline", "batch-after-commit", "operator-interrupt",
                                   "interrupt-without-usage", "interrupt-after-commit"])
-def test_close_completion_preserves_evidence_after_outer_cancellation(poc, monkeypatch, mode):
+def test_close_completion_preserves_evidence_after_outer_cancellation(poc, monkeypatch, mode, poc_operator, capsys):
     pg, samples, connect = poc
     interrupted = not mode.startswith("batch-")
     if not interrupted:
@@ -578,6 +582,7 @@ def test_close_completion_preserves_evidence_after_outer_cancellation(poc, monke
 
     async def run():
         closing, release_close, committed = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        return_after_commit = asyncio.Event()
 
         class ClosingPeer(Peer):
             async def close(self):
@@ -598,20 +603,43 @@ def test_close_completion_preserves_evidence_after_outer_cancellation(poc, monke
                     await complete(attempt, state, stop, **kwargs)
                     if stop is None:
                         committed.set()
-                        await asyncio.Future()
+                        await return_after_commit.wait()
                     elif mode == "batch-after-commit":
                         await asyncio.sleep(2.1)
 
                 monkeypatch.setattr(ledger, "complete", complete_then_wait)
             if mode == "batch-after-commit":
                 release_close.set()
-            peer_mode = "missing" if mode == "interrupt-without-usage" else "normal"
-            task = asyncio.create_task(execute_batch(ledger, samples, REVIEWED, ACCOUNT, FINGERPRINT,
-                                                     lambda attempt: ClosingPeer(attempt, mode=peer_mode)))
             if not interrupted:
-                receipts = await task
+                receipts = await execute_batch(ledger, samples, REVIEWED, ACCOUNT, FINGERPRINT, ClosingPeer)
                 assert [(r.state, r.stop, r.close.status) for r in receipts] == [("succeeded", reason, status)]
                 return
+            peers = []
+
+            def peer(attempt):
+                if mode == "interrupt-without-usage":
+                    selected = ClosingPeer(attempt, mode="missing") if peers else Peer(attempt)
+                else:
+                    selected = ClosingPeer(attempt)
+                peers.append(selected)
+                return selected
+
+            @asynccontextmanager
+            async def borrowed_db():
+                yield ledger.db
+
+            async def open_db(arm):
+                assert not arm
+                return borrowed_db()
+
+            async def use_offline_peer(_ledger, samples, head, account_ref, fingerprint, _transport_for):
+                return await execute_batch(ledger, samples, head, account_ref, fingerprint, peer)
+
+            monkeypatch.setattr(poc_operator, "_db", open_db)
+            monkeypatch.setattr(poc_operator, "_reviewed_head", lambda: REVIEWED)
+            monkeypatch.setattr(runner, "execute_batch", use_offline_peer)
+            args = SimpleNamespace(authorization_id=policy.AUTHORIZATION, account_ref=ACCOUNT)
+            task = asyncio.create_task(poc_operator._execute(args, REVIEWED, "synthetic-key", FINGERPRINT, samples))
             async with asyncio.timeout(3):
                 await closing.wait()
                 if mode == "interrupt-after-commit":
@@ -619,14 +647,27 @@ def test_close_completion_preserves_evidence_after_outer_cancellation(poc, monke
                     await committed.wait()
             task.cancel()
             release_close.set()
+            return_after_commit.set()
             with pytest.raises(asyncio.CancelledError):
                 await task
 
     _run(run())
+    missing_usage = mode == "interrupt-without-usage"
+    if interrupted:
+        emitted = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+        if missing_usage:
+            assert [(item["slot"], item["recognition"], item["stop"]) for item in emitted[:-1]] == [
+                (1, "succeeded", None)]
+        else:
+            assert len(emitted) == 1
+        last = emitted[-1]
+        assert (last["slot"], last["recognition"], last["stop"], last["close"]["status"]) == (
+            2 if missing_usage else 1, "succeeded", None if mode == "interrupt-after-commit" else reason, status)
     with pg.admin.connect() as db:
         assert db.execute(sa.text("SELECT closed,stop_code FROM pr06a_control.batch")).one() == (True, reason)
-        assert db.execute(sa.text("SELECT slot,state,usage_final FROM pr06a_control.attempts")).one() == (
-            1, "succeeded", mode != "interrupt-without-usage")
+        rows = db.execute(sa.text("SELECT slot,state,usage_final FROM pr06a_control.attempts ORDER BY slot")).all()
+        assert rows == ([(1, "succeeded", True), (2, "succeeded", False)] if missing_usage
+                        else [(1, "succeeded", True)])
         assert db.scalar(sa.text("SELECT status FROM pr06a_control.websocket_close")) == status
 
 
@@ -679,6 +720,7 @@ def test_late_terminal_evidence_does_not_reclassify_write_timeout(poc, monkeypat
     async def run():
         async with connect() as ledger:
             observe = ledger.observe
+            complete = ledger.complete
 
             async def hold_final(attempt, request, usage, final):
                 if final:
@@ -686,6 +728,12 @@ def test_late_terminal_evidence_does_not_reclassify_write_timeout(poc, monkeypat
                 return await observe(attempt, request, usage, final)
 
             monkeypatch.setattr(ledger, "observe", hold_final)
+            async def slow_completion(*args, **kwargs):
+                async def commit():
+                    await asyncio.sleep(1.1)
+                    await complete(*args, **kwargs)
+                await finish_on_cancel(commit())
+            monkeypatch.setattr(ledger, "complete", slow_completion)
             return await execute_batch(ledger, samples, REVIEWED, ACCOUNT, FINGERPRINT, ClosingPeer)
 
     receipt, = _run(run())
@@ -708,6 +756,12 @@ def test_late_terminal_evidence_does_not_reclassify_write_timeout(poc, monkeypat
     ("去-十楼", "去十楼", False, "differs"),
     ("去-.2楼", "去.2楼开会", True, "differs"),
     ("去-.2楼", "去−.二楼开会", True, "prefix_match"),
+    ("去2–3楼", "去23楼", False, "differs"),
+    ("去2–3楼", "去23楼开会", True, "differs"),
+    ("去2–3楼", "去2-3楼", False, "match"),
+    ("还剩1/2", "还剩12", False, "differs"),
+    ("还剩1/2", "还剩12份", True, "differs"),
+    ("还剩½", "还剩1/2", False, "match"),
     ("去2楼", "去二楼开会。", True, "prefix_match"),
     ("去2楼", "去二楼开会。", False, "differs"),
 ])

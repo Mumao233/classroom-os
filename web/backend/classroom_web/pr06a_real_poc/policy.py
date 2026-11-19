@@ -41,8 +41,9 @@ _DIGITS = "零一二三四五六七八九"
 _NUMERAL_CHARS = f"0-9{_DIGITS}〇两十百千万亿"
 _SINGLE_DIGIT = re.compile(rf"(?<![{_NUMERAL_CHARS}])([{_DIGITS}])(?=[点楼])")
 _NUMERIC_PUNCTUATION = re.compile(
-    rf"[-+](?=\.?[{_NUMERAL_CHARS}])|\.(?=[{_NUMERAL_CHARS}])|(?<=[{_NUMERAL_CHARS}]),(?=[{_NUMERAL_CHARS}])"
+    rf"(?<=[{_NUMERAL_CHARS}])[\W_]+(?=[{_NUMERAL_CHARS}])|[-+](?=\.?[{_NUMERAL_CHARS}])|\.(?=[{_NUMERAL_CHARS}])"
 )
+_NUMERIC_GLYPHS = str.maketrans("−–—⁄∕", "---//")
 
 
 @dataclass(frozen=True)
@@ -58,9 +59,9 @@ class CloseAudit:
 
 def compare_transcript(actual: str, reference: str, *, allow_prefix: bool = False) -> str:
     def comparable(text):
-        text = "".join(normalize("NFKC", text).casefold().split()).replace("−", "-")
+        text = "".join(normalize("NFKC", text).casefold().split()).translate(_NUMERIC_GLYPHS)
         text = _SINGLE_DIGIT.sub(lambda match: str(_DIGITS.index(match[1])), text)
-        numeric_punctuation = {match.start() for match in _NUMERIC_PUNCTUATION.finditer(text)}
+        numeric_punctuation = {i for match in _NUMERIC_PUNCTUATION.finditer(text) for i in range(*match.span())}
         return "".join(ch for i, ch in enumerate(text) if ch.isalnum() or i in numeric_punctuation)
 
     actual, reference = comparable(actual), comparable(reference)
