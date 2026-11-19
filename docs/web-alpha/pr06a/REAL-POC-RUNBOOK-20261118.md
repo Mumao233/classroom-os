@@ -1,6 +1,6 @@
 # PR-06a 真实接口最小 POC 执行清单
 
-负责人林珈诚。工作包 PR-06a，Draft PR #19。专项费用策略 v1 对应[第一批授权原件](PR06A-REAL-POC-AUTH-20261118.md)、[第二批授权原件](PR06A-REAL-POC-AUTH-20261119-B2.md)和[费用契约](../architecture/06-COST-OPERATIONS.md)。等用户明确说「开始真实调用」后才允许置为可执行。执行候选必须和 VMware 完整回归及 Astra 独审回执指向同一个 Git SHA。
+负责人林珈诚。工作包 PR-06a，Draft PR #19。专项费用策略 v1 对应[第一批授权原件](PR06A-REAL-POC-AUTH-20261118.md)、[第二批授权原件](PR06A-REAL-POC-AUTH-20261119-B2.md)、[第三批授权原件](PR06A-REAL-POC-AUTH-20261119-B3.md)和[费用契约](../architecture/06-COST-OPERATIONS.md)。等用户明确说「开始真实调用」后才允许置为可执行。执行候选必须和 VMware 完整回归及 Astra 独审回执指向同一个 Git SHA。
 
 ## 执行位置与身份
 
@@ -8,12 +8,14 @@
 - 在阿里云控制台或受信密钥记录核对实际账号标识、北京 Workspace `ws-bm2ftvz01aej1eof`、Key ID `8245225`、模型 `qwen-audio-3.1-asr-flash-streaming`、权限和费用预警。保留可审计的账号核对记录引用。由核对者把该 Key 通过安全输入注入来宾当前操作进程的 `DASHSCOPE_API_KEY`。授权记录中的 Key ID 无法从 Key 值推导，严禁试连核验归属。
 - 先正常安装后端锁定依赖 `web/backend/requirements.lock`。真实驱动固定用 `websockets==17.4`、北京 Workspace 地址、TLS 主机校验和 Bearer 握手。TLS 使用系统信任锚和锁定的 `certifi` 公共信任锚，始终验证链及主机名。整个客户端禁代理、重定向和自动重连。
 
-## 离线预检
+## 第三批 TLS 前置和离线预检
 
-在来宾已复审检出根目录运行。为本次执行指定授权 ID，下方以第二批为例。同一 ID 用于预检、控制和执行。预检只读该 ID 对应的原件和样本，输出摘要、样本数和发送前缀。
+第三批启动后，先用将用于执行的同一来宾、同一 Python、同一候选的 TLS 上下文，对北京 Workspace 完成一次无 Key 的 TLS 握手。记录候选 SHA、时间、证书链和主机名的验证结果。检查只发起 TLS 握手，HTTP 升级、WebSocket 和 ASR 请求均为零。验证失败则停止在 `--arm` 前。换候选须按同一要求重新检查。第三批按林珈诚最新确认，在准备、验证、执行及完成后保持来宾联网。
+
+TLS 检查通过后，在来宾已复审检出根目录运行离线预检。下方以第三批为例，同一 ID 用于预检、控制和执行。预检只读该 ID 对应的原件和样本，输出摘要、样本数和发送前缀。
 
 ```powershell
-$authorizationId = 'PR06A-REAL-POC-AUTH-20261119-B2'
+$authorizationId = 'PR06A-REAL-POC-AUTH-20261119-B3'
 python -I -B tools/pr06a/real_poc.py --samples $pocSamples --authorization-id $authorizationId
 ```
 
@@ -23,7 +25,7 @@ python -I -B tools/pr06a/real_poc.py --samples $pocSamples --authorization-id $a
 | `2_mixed.wav` | 82,176 | `2d2a37fbbf63e32d0245e1d996c2fe121d3c23b6674ad5e58cc18b17ab243db2` | [0, 82176) |
 | `3_long.wav` | 137,472 | `a27033e0bec1c74ff49d3e81259234733301404d3737008cc1983858713a1a37` | [0, 32000)，SHA-256 `e8e7098ccede40dfd05964a6e3ee6b3b54bfddb66bfa531a0e13c2f8c6684c27` |
 
-每批最多发送 184,064 个采样，11.504 秒。第一批 SHA-256 为 `233859c7a90ea2ddb0b3b7069edb39b20a82a88cc889c363297d31e96809b777`。第二批 SHA-256 为 `9a56d2ea65799d821b19120a080b00d51689bc9644dce013f04213e4169d8047`。两份授权原件均按原始字节保留。按第二批授权，执行前在来宾确认网卡 Up，并在无 Key 情况下检查 DNS 与 443 端口。POC 结束后由操作员恢复网络隔离。
+每批最多发送 184,064 个采样，11.504 秒。第一批 SHA-256 为 `233859c7a90ea2ddb0b3b7069edb39b20a82a88cc889c363297d31e96809b777`。第二批 SHA-256 为 `9a56d2ea65799d821b19120a080b00d51689bc9644dce013f04213e4169d8047`。第三批 SHA-256 为 `613acf9ba5fca8033e41bcebb34a7b6b0ad307e116733326031ff46e7cab80c2`。三份授权原件均保留原始字节。第二批执行前确认来宾网卡 Up，在无 Key 情况下检查 DNS 与 443 端口，结束后恢复网络隔离。
 
 ## 配置独立 PG
 
@@ -33,7 +35,8 @@ python -I -B tools/pr06a/real_poc.py --samples $pocSamples --authorization-id $a
    psql -X --dbname classroom_pr06a_real_poc --set ON_ERROR_STOP=1 --single-transaction `
      --file web/backend/classroom_web/infrastructure/billing_schema.sql `
      --file web/backend/classroom_web/pr06a_real_poc/install.sql `
-     --file web/backend/classroom_web/pr06a_real_poc/authorization_batches.sql
+     --file web/backend/classroom_web/pr06a_real_poc/authorization_batches.sql `
+     --file web/backend/classroom_web/pr06a_real_poc/authorization_batch_three.sql
    ```
 
 2. 在这个库撤销 PUBLIC 的 CONNECT。分别建立专用 `NOSUPERUSER` 执行和复核登录，授予本库 `CONNECT` 及对应的 `classroom_pr06a_executor` 或 `classroom_pr06a_reconciler` 角色。执行登录无底表权限，复核登录只有对账和确认释放两项函数权限。Web、worker、浏览器、本项目的其他数据库用户无权进入。
@@ -41,7 +44,7 @@ python -I -B tools/pr06a/real_poc.py --samples $pocSamples --authorization-id $a
    控制登录仅由 DBA 持有。首次安装使用独立控制登录时，仅为该登录授予本库 `CONNECT`、`pr06a_api` 和 `pr06a_control` 的 `USAGE`、`pr06a_control.activation` 的 `INSERT`、`pr06a_control.revocation` 的 `SELECT`（由激活触发器使用）及 `pr06a_api.revoke(text)` 的 `EXECUTE`。按控制连接的实际生效角色确认这些权限，紧急撤销使用同一控制角色。核对执行和复核主体及其可切换的角色均无撤销权限。核对范围包括本库中已改为 `NOLOGIN` 的主体尚未断开的会话。
 
    以 DBA 为该库将 `log_parameter_max_length` 和 `log_parameter_max_length_on_error` 均设为 0，把 `log_error_verbosity` 设为 `terse`，在新连接中生效。保持转录和账户证明访问受控。
-3. DBA 查验北京时间当月的 `billing_control.platform_budgets`。已有预算行时复用该行，核对 ASR 池、安全余量、固定费用及累积敞口能容纳本批独立 ¥1。第二批与第一批同月时，预算核对包含第一批的原预留。仅当当月无预算行时，才用 `billing_api.open_period` 签开该月周期。检查 `billing`、`asr_streaming` 为 false，所选授权 ID 在 `pr06a_control.activation`、`pr06a_control.batch` 和 `pr06a_control.revocation` 中均无行。第二批还需核实第一批已关闭且原始预留仍在原账期。设置来宾安全连接参数。仅控制进程使用 `PR06A_CONTROL_DSN`，执行进程使用 `PR06A_EXECUTOR_DSN`，两者须使用 `host=127.0.0.1 dbname=classroom_pr06a_real_poc` 和已授权的专用登录。
+3. DBA 查验北京时间当月的 `billing_control.platform_budgets`。已有预算行时复用该行，核对 ASR 池、安全余量、固定费用及累积敞口能容纳本批独立 ¥1。同月执行时，预算核对包含前面各批的原预留。仅当当月无预算行时，才用 `billing_api.open_period` 签开该月周期。检查 `billing`、`asr_streaming` 为 false，所选授权 ID 在 `pr06a_control.activation`、`pr06a_control.batch` 和 `pr06a_control.revocation` 中均无行。第二批核实第一批已关闭，第三批核实前两批均已关闭且各自的原预留仍在原账期。设置来宾安全连接参数。仅控制进程使用 `PR06A_CONTROL_DSN`，执行进程使用 `PR06A_EXECUTOR_DSN`，两者须使用 `host=127.0.0.1 dbname=classroom_pr06a_real_poc` 和已授权的专用登录。
 
 若专用库已经安装覆盖层，以下增列仅适用于安装证据可证明与 `05559351` 覆盖层一致的数据库。核对实际安装源。该提交 Git 源树中 `install.sql` 的 SHA-256 为 `e9487b357965e30d4264ffcaa322d2b0ecaed1fc15c6d0cf9d35e3e451d9e3f0`。安装版本更早、无法确认或数据库有未核实变更时，停在此步，先完成经验证且保留既有数据的迁移。对确认无误的原库由 DBA 事务执行以下增列。原激活行的风险摘要为空，保留既有授权、激活、撤销和批次记录。
 
@@ -64,9 +67,16 @@ psql -X --dbname classroom_pr06a_real_poc --set ON_ERROR_STOP=1 --single-transac
   --file web/backend/classroom_web/pr06a_real_poc/authorization_batches.sql
 ```
 
+已有第二批覆盖层的专用库先核对其安装证据和前两批的关闭状态。执行第三批的无 Key TLS 前置并通过后，DBA 在同一库事务执行以下增量 SQL。争用或仍有开放批次时迁移退出。迁移后核对前两批的激活、尝试、账单和各自待核 ¥1 预留未变化。第三批另计 ¥1，同一账期合计本地预留最多 ¥3。
+
+```powershell
+psql -X --dbname classroom_pr06a_real_poc --set ON_ERROR_STOP=1 --single-transaction `
+  --file web/backend/classroom_web/pr06a_real_poc/authorization_batch_three.sql
+```
+
 ## 明确启动授权后
 
-1. 操作员在控制会话核对用户本次「开始真实调用」记录、受信 Astra `status.json` 和 VMware `digest.json` 的 SHA-256。独审 `review.md` 须与 `status.json` 同目录。VMware 回执与 `host-SOURCE.json` 同目录。两份回执均绑定干净候选 HEAD。核对账号证明和费用基线。以安全输入在来宾当前进程设置 `DASHSCOPE_API_KEY`。例如 `[System.Net.NetworkCredential]::new('', (Read-Host -AsSecureString)).Password` 的结果直接赋给环境变量，勿打印。运行一次预授权登记，按提示输入用户已给出的启动词。此步骤写入 PG 并绑定候选、账号证明、Key 指纹和专用执行登录。
+1. 操作员在控制会话核对用户本次「开始真实调用」记录、受信 Astra `status.json` 和 VMware `digest.json` 的 SHA-256。独审 `review.md` 须与 `status.json` 同目录。VMware 回执与 `host-SOURCE.json` 同目录。两份回执均绑定干净候选 HEAD。第三批确认同一候选的无 Key TLS 已通过。离线预检、数据库准备、账号证明和费用基线核对通过后，在来宾控制会话第一次看到隐藏提示时才输入 Key。以安全输入在来宾当前进程设置 `DASHSCOPE_API_KEY`。例如 `[System.Net.NetworkCredential]::new('', (Read-Host -AsSecureString)).Password` 的结果直接赋给环境变量，勿打印。运行一次预授权登记，按提示输入用户已给出的启动词。此步骤写入 PG 并绑定候选、账号证明、Key 指纹和专用执行登录。
 
    ```powershell
    python -I -B tools/pr06a/real_poc.py --samples $pocSamples --authorization-id $authorizationId --arm `

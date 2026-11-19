@@ -188,15 +188,17 @@ def test_risk_acceptance_rejects_before_db(arm_receipts, monkeypatch, mutation, 
         _run(operator._arm(args, REVIEWED, FINGERPRINT))
 
 
+@pytest.mark.parametrize("authorization", [policy.SECOND_AUTHORIZATION, policy.THIRD_AUTHORIZATION],
+                         ids=["b2", "b3"])
 @pytest.mark.parametrize("mutation,reason", [
     ("unregistered-id", "unregistered_authorization"),
     ("changed-file", "authorization_digest_mismatch"),
     ("wrong-review-head", "review_receipt_not_accepted"),
     ("wrong-vmware-head", "vmware_receipt_not_accepted"),
 ])
-def test_second_authorization_rejects_before_db(arm_receipts, tmp_path, monkeypatch, mutation, reason):
+def test_additional_authorization_rejects_before_db(arm_receipts, tmp_path, monkeypatch, authorization, mutation, reason):
     operator, args, status, markdown, write_review = arm_receipts
-    args.authorization_id = policy.SECOND_AUTHORIZATION
+    args.authorization_id = authorization
     if mutation == "unregistered-id":
         args.authorization_id += "-unregistered"
     elif mutation == "changed-file":
@@ -272,12 +274,15 @@ def test_documented_risk_audit_upgrade_checks_overlay(poc, compatible):
 def poc(billing_pg, request):
     pg = billing_pg
     executor = "pr06a_executor_" + uuid4().hex[:16]
+    overlay = getattr(request, "param", None)
     with pg.admin.begin() as db:
         db.exec_driver_sql(f'CREATE ROLE "{executor}" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS')
         db.exec_driver_sql(f'ALTER ROLE "{executor}" PASSWORD \'{SYNTHETIC_PASSWORD}\'')
         db.exec_driver_sql(open_overlay(), execution_options={"no_parameters": True})
-        if getattr(request, "param", None) != "legacy":
+        if overlay != "legacy":
             db.exec_driver_sql(batch_migration(), execution_options={"no_parameters": True})
+            if overlay != "two-batches":
+                db.exec_driver_sql(third_batch_migration(), execution_options={"no_parameters": True})
         db.exec_driver_sql(f'GRANT classroom_pr06a_executor TO "{executor}"')
         registry = json.loads((PACKAGE / "samples.json").read_bytes())
         assert [dict(row) for row in db.execute(sa.text(
@@ -315,7 +320,7 @@ def poc(billing_pg, request):
 
     try:
         connect.executor = executor
-        connect.legacy_overlay = getattr(request, "param", None) == "legacy"
+        connect.legacy_overlay = overlay == "legacy"
         yield pg, tuple(fixtures), connect
     finally:
         with pg.admin.begin() as db:
@@ -334,6 +339,10 @@ def open_overlay():
 
 def batch_migration():
     return fixture_dates((PACKAGE / "authorization_batches.sql").read_text(encoding="utf-8"))
+
+
+def third_batch_migration():
+    return fixture_dates((PACKAGE / "authorization_batch_three.sql").read_text(encoding="utf-8"))
 
 
 def fixture_dates(ddl):
@@ -727,6 +736,152 @@ def test_migration_and_second_batch_preserve_first_exposure(poc, arm_receipts, m
         assert first_snapshot(db) == first
         assert db.execute(sa.text("""SELECT held_microyuan,released FROM pr06a_control.batch
                                      WHERE authorization_id=:id"""), second).one() == (0, True)
+
+
+@pytest.mark.parametrize("poc", ["two-batches"], indirect=True)
+def test_third_migration_preserves_both_prior_batches(poc, arm_receipts, monkeypatch):
+    pg, samples, connect = poc
+    operator, args, _, _, _ = arm_receipts
+    args.account_ref = SECOND_ACCOUNT
+    args.executor_login = connect.executor
+    preceding = {"first": policy.AUTHORIZATION, "second": policy.SECOND_AUTHORIZATION}
+
+    async def control_db(arm):
+        assert arm
+        url = pg.admin_url
+        return await AsyncConnection.connect(host=url.host, port=url.port, dbname=url.database,
+                                             user=url.username, password=url.password, autocommit=True)
+
+    monkeypatch.setattr(operator, "_db", control_db)
+
+    def snapshot(db):
+        return tuple(db.execute(sa.text(f"""SELECT to_jsonb(r) FROM pr06a_control.{table} r
+                            WHERE authorization_id IN (:first,:second)
+                            ORDER BY authorization_id"""), preceding).scalars().all()
+                     for table in ("activation", "batch", "attempts"))
+
+    async def failed_batch(authorization, account):
+        async with connect(authorization_id=authorization) as ledger:
+            await ledger.open(REVIEWED, account, FINGERPRINT, samples)
+            if authorization == policy.SECOND_AUTHORIZATION:
+                with pg.admin.begin() as db:
+                    before = snapshot(db)
+                    with pytest.raises(sa.exc.DBAPIError, match="PR06A_BATCH_MIGRATION_REQUIRES_CLOSED_BATCH"), db.begin_nested():
+                        db.exec_driver_sql(third_batch_migration(), execution_options={"no_parameters": True})
+                    assert snapshot(db) == before
+            attempt = Attempt.create()
+            await ledger.claim(samples[0], attempt)
+            await ledger.complete(attempt, "unknown", "connection_failed")
+
+    _run(failed_batch(policy.AUTHORIZATION, ACCOUNT))
+    args.authorization_id = policy.SECOND_AUTHORIZATION
+    _run(operator._arm(args, REVIEWED, FINGERPRINT))
+    _run(failed_batch(policy.SECOND_AUTHORIZATION, SECOND_ACCOUNT))
+
+    args.authorization_id = policy.THIRD_AUTHORIZATION
+    with pytest.raises(errors.CheckViolation):
+        _run(operator._arm(args, REVIEWED, FINGERPRINT))
+    with pg.admin.begin() as db:
+        original = snapshot(db)
+        assert len(original[0]) == len(original[1]) == len(original[2]) == 2
+        assert all(b["closed"] and b["held_microyuan"] == 1_000_000 and not b["released"] for b in original[1])
+        ownership = sa.text("""SELECT oid,proowner,proacl::text FROM pg_proc WHERE
+            oid='pr06a_control.check_activation(text)'::regprocedure""")
+        original_acl = db.execute(ownership).one()
+        db.exec_driver_sql(third_batch_migration(), execution_options={"no_parameters": True})
+        assert snapshot(db) == original
+        assert db.execute(ownership).one() == original_acl
+        forged = sa.text("""INSERT INTO pr06a_control.activation
+            SELECT (jsonb_populate_record(a,jsonb_build_object(
+                'authorization_id',cast(:auth AS text),'source_sha256',cast(:source AS text),
+                'account_ref',cast(:account AS text)))).*
+            FROM pr06a_control.activation a WHERE a.authorization_id=:second""")
+        for source, account in (("7" * 64, SECOND_ACCOUNT), (policy.THIRD_AUTH_SHA256, "incorrect account")):
+            with pytest.raises(sa.exc.IntegrityError), db.begin_nested():
+                db.execute(forged, {"auth": policy.THIRD_AUTHORIZATION, "source": source,
+                                    "account": account, "second": policy.SECOND_AUTHORIZATION})
+
+    _run(operator._arm(args, REVIEWED, FINGERPRINT))
+    with pytest.raises(errors.UniqueViolation):
+        _run(operator._arm(args, REVIEWED, FINGERPRINT))
+    peers = []
+
+    def peer(attempt):
+        instance = Peer(attempt)
+        peers.append(instance)
+        return instance
+
+    def forbidden(_attempt):
+        pytest.fail("Wrong candidate or repeated B3 execution reached transport")
+
+    async def run(factory, sha=REVIEWED):
+        async with connect(authorization_id=policy.THIRD_AUTHORIZATION) as ledger:
+            return await execute_batch(ledger, samples, sha, SECOND_ACCOUNT, FINGERPRINT, factory)
+
+    with pytest.raises(policy.PocStopped):
+        _run(run(forbidden, "7" * 40))
+    assert [(item.slot, item.state, item.stop) for item in _run(run(peer))] == [
+        (1, "succeeded", None), (2, "succeeded", None), (3, "succeeded", None)]
+    assert len(peers) == 3 and all(p.connect_count == 1 and len(p.sent_binary) == 2 and p.closed for p in peers)
+    with pytest.raises(policy.PocStopped):
+        _run(run(forbidden))
+
+    third = {"id": policy.THIRD_AUTHORIZATION}
+    with pg.admin.begin() as db:
+        assert snapshot(db) == original
+        assert db.execute(sa.text("""SELECT source_sha256,reviewed_sha,account_ref FROM pr06a_control.activation
+                                     WHERE authorization_id=:id"""), third).one() == (
+             policy.THIRD_AUTH_SHA256, REVIEWED, SECOND_ACCOUNT)
+        batch = db.execute(sa.text("""SELECT held_microyuan,closed,period_start FROM pr06a_control.batch
+                                      WHERE authorization_id=:id"""), third).one()
+        assert batch[:2] == (1_000_000, True)
+        exposure = db.scalar(sa.text("SELECT billing_api.lock_budget(:cycle)"), {"cycle": batch.period_start})
+        assert exposure["unknown"] == exposure["pool_risk"]["asr"] == 3_000_000
+
+        release = sa.text("SELECT pr06a_api.release_reconciled(:id)")
+        with pytest.raises(sa.exc.DBAPIError, match="PR06A_EXPOSURE_UNRESOLVED"), db.begin_nested():
+            db.execute(release, third)
+        db.execute(sa.text("SELECT pr06a_api.revoke(:id)"), third)
+        assert db.scalar(sa.text("SELECT authorization_id FROM pr06a_control.revocation")) == policy.THIRD_AUTHORIZATION
+        attempts = db.execute(sa.text("""SELECT attempt,request_id,input_tokens,output_tokens,metering_revision
+                                     FROM pr06a_control.attempts WHERE authorization_id=:id"""), third).mappings()
+        bill = sa.text("""SELECT pr06a_api.settle(:attempt,1,:request_id,:input_tokens,:output_tokens,0,0,
+                         '2027-01',:evidence,:metering_revision,true)""")
+        for attempt in attempts:
+            db.execute(bill, dict(attempt) | {"evidence": "d" * 64})
+        db.execute(release, third)
+        assert db.execute(sa.text("""SELECT held_microyuan,released FROM pr06a_control.batch
+                                     WHERE authorization_id=:id"""), third).one() == (0, True)
+        assert snapshot(db) == original
+
+
+def test_third_batch_requires_both_prior_batches_closed(poc):
+    pg, samples, connect = poc
+    with pg.admin.begin() as db:
+        db.execute(sa.text("""INSERT INTO pr06a_control.activation
+            SELECT (jsonb_populate_record(a,jsonb_build_object(
+                'authorization_id',cast(:id AS text),'source_sha256',cast(:source AS text),
+                'account_ref',cast(:account AS text)))).*
+            FROM pr06a_control.activation a"""),
+                   {"id": policy.THIRD_AUTHORIZATION, "source": policy.THIRD_AUTH_SHA256,
+                    "account": SECOND_ACCOUNT})
+
+    async def run():
+        async with connect() as first:
+            await first.open(REVIEWED, ACCOUNT, FINGERPRINT, samples)
+            await first.complete(None, None, "synthetic_closed")
+        async with connect(authorization_id=policy.THIRD_AUTHORIZATION) as third:
+            def forbidden(_attempt):
+                pytest.fail("B3 with missing B2 reached transport")
+
+            with pytest.raises(policy.PocStopped):
+                await execute_batch(third, samples, REVIEWED, SECOND_ACCOUNT, FINGERPRINT, forbidden)
+
+    _run(run())
+    with pg.admin.connect() as db:
+        assert db.execute(sa.text("SELECT authorization_id,closed FROM pr06a_control.batch")).one() == (
+            policy.AUTHORIZATION, True)
+        assert db.scalar(sa.text("SELECT count(*) FROM pr06a_control.attempts")) == 0
 
 
 @pytest.mark.parametrize("poc", ["legacy"], indirect=True)
