@@ -33,6 +33,23 @@ def _entry(path, content):
     return ArchiveAsset(path, len(content), hashlib.sha256(content).hexdigest(), lambda: io.BytesIO(content))
 
 
+def require_portable_metadata(value):
+    forbidden = {'ai_usage', 'authorization', 'consent', 'credentials', 'device', 'key_material_b64',
+                 'password', 'password_hash', 'session', 'settings', 'tasks', 'token'}
+    pending = [(0, value)]
+    nodes = 0
+    while pending:
+        depth, item = pending.pop()
+        nodes += 1
+        require(depth <= 28 and nodes <= 250_000, 'CAPACITY_EXCEEDED')
+        if isinstance(item, dict):
+            require(not forbidden.intersection(item))
+            pending.extend((depth + 1, child) for child in item.values())
+        elif isinstance(item, (list, tuple)):
+            require(len(item) <= PORTABLE_V21.files, 'CAPACITY_EXCEEDED')
+            pending.extend((depth + 1, child) for child in item)
+
+
 def aggregate_entries(scope, classrooms):
     policy = PORTABLE_V21
     require(scope in ('account', 'course', 'class_session') and 0 < len(classrooms) <= policy.files
@@ -42,6 +59,8 @@ def aggregate_entries(scope, classrooms):
     metadata_bytes = 0
     declared_pixels = 0
     for classroom in classrooms:
+        require_portable_metadata(classroom.session)
+        require_portable_metadata(classroom.media)
         references = session_references(classroom.session)
         identity = classroom.session['id']
         identities.append(identity)

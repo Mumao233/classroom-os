@@ -112,6 +112,9 @@ def test_four_waiting_previews_reject_fifth_without_queue(d):
 def test_range_rechecks_expiry_source_and_object_version(d):
     service = candidate(d)
     secondary = classroom(d)
+    invalid = archive_room(secondary)
+    invalid.session['credentials'] = {'synthetic': 'excluded'}
+    denied('VALIDATION_FAILED', service.publish_zip, d.ctx, uuid4(), 'class_session', [invalid])
     published = service.publish_zip(d.ctx, uuid4(), 'course', [archive_room(d.classroom), archive_room(secondary)])
     asset = UUID(published['asset_id'])
     ticket = service.issue_ticket(d.ctx, asset)
