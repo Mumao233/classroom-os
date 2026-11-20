@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -23,6 +24,30 @@ import xml.etree.ElementTree as ET
 
 BASE = Path('J:/class-assistant/worktrees/web-pr03b-sessions')
 MEDIA = Path('J:/class-assistant/worktrees/web-pr04a-storage')
+GUARD_VERIFIED = 'Combined pytest loopback guard verified'
+GUARDED_PYTEST = f"""
+from pathlib import Path
+import sys
+
+import sitecustomize
+
+expected = Path(sys.argv.pop(1)).resolve(strict=True)
+if Path(sitecustomize.__file__).resolve() != expected:
+    raise SystemExit('Combined pytest loaded a different loopback guard')
+try:
+    sys.audit('socket.connect', None, ('198.51.100.1', 443))
+except PermissionError as error:
+    if str(error) != 'PR-02b tests deny non-loopback network connections':
+        raise
+else:
+    raise SystemExit('Combined pytest did not deny a non-loopback audit event')
+sys.audit('socket.connect', None, ('127.0.0.1', 443))
+print({GUARD_VERIFIED!r}, flush=True)
+
+import pytest
+
+raise SystemExit(pytest.main(sys.argv[1:]))
+"""
 
 
 def ephemeral_port():
@@ -86,6 +111,8 @@ def main():
                         help='build this snapshot frontend and include real HTTPS/WSS auth browser validation')
     parser.add_argument('--deps', default=os.environ.get('PR07B_VALIDATION_DEPS'),
                         help='explicit pip --target directory used only by this validation process')
+    parser.add_argument('--pytest-loopback-guard', type=Path,
+                        help='run pytest only after verifying this sitecustomize.py in the same process')
     parser.add_argument('--timeout', type=int, default=1800)
     args = parser.parse_args()
     if not args.root:
@@ -97,6 +124,10 @@ def main():
         parser.error('this evidence runner requires the prepared Windows VMware guest')
     if not 60 <= args.timeout <= 7200:
         parser.error('--timeout must be between 60 and 7200 seconds')
+    guard = args.pytest_loopback_guard
+    if guard is not None and (not guard.is_absolute() or guard.name != 'sitecustomize.py'
+                              or not guard.is_file()):
+        parser.error('--pytest-loopback-guard must name an existing absolute sitecustomize.py')
 
     tag = uuid.uuid4().hex
     run = root / 'work/pr07b/combined' / tag
@@ -129,12 +160,12 @@ def main():
     if args.auth_browser:
         environment['PR03B_REAL_BROWSER'] = '1'
 
-    def call(arguments, *, timeout, cwd=None):
+    def call(arguments, *, timeout, cwd=None, env=None):
         command = [str(value) for value in arguments]
         commands.append(command)
         capture = output / f'command-{len(commands):02d}.log'
         with capture.open('wb') as stream:
-            return subprocess.run(command, cwd=cwd, env=environment, stdout=stream,
+            return subprocess.run(command, cwd=cwd, env=environment if env is None else env, stdout=stream,
                                   stderr=subprocess.STDOUT, creationflags=flags, timeout=timeout)
 
     pg_started = False
@@ -144,6 +175,7 @@ def main():
     failure = None
     cleanup_errors = []
     frontend_build = []
+    pytest_guard = None
     pg_port = ephemeral_port()
     admin = 'pr02a_admin_' + tag[:12]
     try:
@@ -232,9 +264,27 @@ def main():
                     time.sleep(1)
             else:
                 raise RuntimeError('owned object service write readiness timed out')
-            test = call([sys.executable, '-B', '-m', 'pytest', 'tests', '-q',
+            test_entry = ['-m', 'pytest']
+            test_environment = None
+            if guard is not None:
+                test_entry = ['-c', GUARDED_PYTEST, guard]
+                test_environment = {key: value for key, value in environment.items()
+                                    if not key.upper().endswith('_PROXY')}
+                test_paths = [str(guard.parent)]
+                if 'PYTHONPATH' in environment:
+                    test_paths.append(environment['PYTHONPATH'])
+                test_environment['PYTHONPATH'] = os.pathsep.join(test_paths)
+                pytest_guard = dict(path=str(guard), sha256=hashlib.sha256(guard.read_bytes()).hexdigest(),
+                                   verified=False)
+            test = call([sys.executable, '-B', *test_entry, 'tests', '-q',
                          '--basetemp=' + str(run / 'pytest'), '-o', 'cache_dir=' + str(run / 'cache'),
-                         '--junitxml=' + str(junit)], cwd=root / 'web/backend', timeout=args.timeout)
+                         '--junitxml=' + str(junit)], cwd=root / 'web/backend', env=test_environment,
+                         timeout=args.timeout)
+            if pytest_guard is not None:
+                log = output / f'command-{len(commands):02d}.log'
+                pytest_guard['verified'] = GUARD_VERIFIED in log.read_text(encoding='utf8', errors='replace').splitlines()
+                if not pytest_guard['verified']:
+                    raise RuntimeError('Combined pytest loopback guard verification failed')
             suite = suite_evidence(root, junit, args.auth_browser)
     except Exception as error:
         failure = type(error).__name__
@@ -263,7 +313,7 @@ def main():
             postgres='17.11', postgres_log=str(pg_log), object_service='SeaweedFS 4.53', synthetic_only=True,
             auth_browser_included=args.auth_browser, frontend_build=frontend_build,
             validation_dependencies=str(dependencies) if dependencies.is_dir() else None,
-            suite=suite, runner_failure=failure, cleanup_errors=cleanup_errors)
+            pytest_loopback_guard=pytest_guard, suite=suite, runner_failure=failure, cleanup_errors=cleanup_errors)
         (output / 'result.json').write_text(json.dumps(result, indent=2) + '\n', encoding='utf8')
         print(json.dumps(result))
         for path in sorted(output.glob('command-*.log')):

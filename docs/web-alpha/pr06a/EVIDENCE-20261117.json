@@ -1,0 +1,355 @@
+{
+  "schema_version": 1,
+  "work_package": "PR-06a",
+  "date": "2026-11-17",
+  "owner": "林珈诚",
+  "draft_pr": "https://github.com/Mumao233/classroom-os/pull/19",
+  "base_sha": "8b1e44e5fd87f43f0e675856de68dce069d8080f",
+  "branch": "feature/web-pr06a-closeout",
+  "validation_scope": "VMware offline simulation and synthetic loopback integration",
+  "provider_api": {
+    "authorized_calls": 0,
+    "executed_calls": 0,
+    "status": "not_authorized_not_executed"
+  },
+  "job_id": "pr06a-20261117-135443-c237ecb2",
+  "environment": {
+    "os": "Windows 11 Pro 10.0.26100 64-bit",
+    "vm": "VMware20,1",
+    "backend_python": "3.12.14",
+    "legacy_python": "3.10.4",
+    "node": "24.19.0",
+    "postgres": "17.11",
+    "object_service": "SeaweedFS 4.53"
+  },
+  "source": {
+    "archive_sha256": "3236f10bc183d4309b5c0881597e8ae79838effb8b925a59af895f8bb8a4a19c",
+    "file_count": 853,
+    "executed_runner_sha256": "f6c18f6b89c46d74906153f0e514c911bd1a21d13a6db77c1b70affcf77d39d0",
+    "before_mismatches": [],
+    "after_mismatches": [],
+    "source_to_candidate_binding": "head_sha is the source base, patch_sha256 is the complete source ZIP hash"
+  },
+  "archives": {
+    "collection": {
+      "local_path": "outputs/pr06a/final/collection.zip",
+      "sha256": "853bfbeceeff676396bd8ea0795a6aa4d1b94fb21fc0a9ad3d915218dd750dca"
+    },
+    "full": {
+      "local_path": "outputs/pr06a/final/collection/full-final.zip",
+      "sha256": "de28d1493616d9fe0852c0ef1cb83bad86dc672180139e6ca06e78a552803def",
+      "matches_guest": true
+    },
+    "targeted": {
+      "local_path": "outputs/pr06a/final/collection/targeted-final.zip",
+      "sha256": "2341ea384a872870277e453270ca8eef707da9e72a9ae4098fdd104d5e8b793d",
+      "matches_guest": true
+    }
+  },
+  "commands": [
+    {
+      "name": "asr-candidate",
+      "command": [
+        "C:\\j\\class-assistant\\worktrees\\web-pr04a-storage\\work\\pr04a\\venv\\Scripts\\python.exe",
+        "-I",
+        "-X",
+        "utf8",
+        "-B",
+        "tools/overnight/asr_gate.py",
+        "--stage",
+        "candidate",
+        "--workspace",
+        "C:\\j\\p06a\\5500bfae",
+        "--deps",
+        "J:\\p06a\\5500bfae\\work\\pr06a\\validation-deps",
+        "--nonce",
+        "6237740e4e8e42c0a30b7bc84d234066",
+        "--head",
+        "8b1e44e5fd87f43f0e675856de68dce069d8080f",
+        "--patch",
+        "3236f10bc183d4309b5c0881597e8ae79838effb8b925a59af895f8bb8a4a19c"
+      ],
+      "process_exit_code": 0,
+      "exit_code": 0
+    },
+    {
+      "name": "asr-trusted",
+      "command": [
+        "C:\\j\\class-assistant\\worktrees\\web-pr04a-storage\\work\\pr04a\\venv\\Scripts\\python.exe",
+        "-I",
+        "-X",
+        "utf8",
+        "-B",
+        "tools/overnight/asr_gate.py",
+        "--stage",
+        "trusted",
+        "--workspace",
+        "C:\\j\\p06a\\5500bfae",
+        "--deps",
+        "J:\\p06a\\5500bfae\\work\\pr06a\\validation-deps",
+        "--nonce",
+        "311ce6da024b4b2b8d24c1f597472603",
+        "--head",
+        "8b1e44e5fd87f43f0e675856de68dce069d8080f",
+        "--patch",
+        "3236f10bc183d4309b5c0881597e8ae79838effb8b925a59af895f8bb8a4a19c"
+      ],
+      "process_exit_code": 0,
+      "exit_code": 0
+    },
+    {
+      "name": "contracts",
+      "command": [
+        "C:\\j\\class-assistant\\worktrees\\web-pr04a-storage\\work\\pr04a\\venv\\Scripts\\python.exe",
+        "-I",
+        "-X",
+        "utf8",
+        "-B",
+        "tools/overnight/check_contracts.py",
+        "--deps",
+        "J:\\p06a\\5500bfae\\work\\pr06a\\validation-deps",
+        "--output",
+        "C:\\j\\p06a\\5500bfae\\outputs\\pr06a\\contracts.json"
+      ],
+      "process_exit_code": 0,
+      "exit_code": 0
+    },
+    {
+      "name": "controller",
+      "command": [
+        "C:\\j\\class-assistant\\worktrees\\web-pr04a-storage\\work\\pr04a\\venv\\Scripts\\python.exe",
+        "-X",
+        "utf8",
+        "-B",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tools/overnight/tests",
+        "-p",
+        "test_*.py",
+        "-v"
+      ],
+      "process_exit_code": 0,
+      "exit_code": 0
+    },
+    {
+      "name": "backend",
+      "command": [
+        "C:\\j\\class-assistant\\worktrees\\web-pr04a-storage\\work\\pr04a\\venv\\Scripts\\python.exe",
+        "-I",
+        "-X",
+        "utf8",
+        "-B",
+        "tools/pr07b/run_combined.py",
+        "--root",
+        "C:\\j\\p06a\\5500bfae",
+        "--auth-browser",
+        "--deps",
+        "J:\\p06a\\5500bfae\\work\\pr06a\\validation-deps"
+      ],
+      "process_exit_code": 0,
+      "exit_code": 0
+    },
+    {
+      "name": "legacy",
+      "command": [
+        "J:\\class-assistant\\worktrees\\pr06a-legacy-toolchain-20261117\\venv\\Scripts\\python.exe",
+        "-X",
+        "utf8",
+        "-B",
+        "tools/pr00/run_checks.py",
+        "--node",
+        "J:\\class-assistant\\worktrees\\web-pr03b-sessions\\work\\pr03b\\vmware-broker\\payload\\node\\node.exe",
+        "--powershell",
+        "powershell.exe",
+        "--output-dir",
+        "C:\\j\\p06a\\5500bfae\\work\\pr00\\pr06a-validation"
+      ],
+      "process_exit_code": 0,
+      "exit_code": 0
+    }
+  ],
+  "tests": {
+    "backend": {
+      "tests": 1188,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "asr_cases": 34,
+      "billing_default_case": true,
+      "auth_browser_case": true
+    },
+    "legacy": {
+      "tests": 696,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "parent_testcases": 525,
+      "subtests": 171
+    },
+    "legacy_nodes": [
+      {
+        "name": "node-audio",
+        "exit_code": 0
+      },
+      {
+        "name": "node-ai-settings",
+        "exit_code": 0
+      },
+      {
+        "name": "node-input-limits",
+        "exit_code": 0
+      },
+      {
+        "name": "node-study-ui",
+        "exit_code": 0
+      },
+      {
+        "name": "node-study-cache",
+        "exit_code": 0
+      },
+      {
+        "name": "node-review-render",
+        "exit_code": 0
+      },
+      {
+        "name": "node-review-ui",
+        "exit_code": 0
+      },
+      {
+        "name": "node-review-mount",
+        "exit_code": 0
+      },
+      {
+        "name": "node-portable-reader",
+        "exit_code": 0
+      }
+    ],
+    "controller": {
+      "tests_run": 281,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 1
+    },
+    "asr": {
+      "asr-candidate": {
+        "candidate_binding": {
+          "head_sha": "8b1e44e5fd87f43f0e675856de68dce069d8080f",
+          "patch_sha256": "3236f10bc183d4309b5c0881597e8ae79838effb8b925a59af895f8bb8a4a19c"
+        },
+        "complete": true,
+        "completed": 34,
+        "discovered": 34,
+        "errors": 0,
+        "expected_failures": 0,
+        "failures": 0,
+        "nonce": "6237740e4e8e42c0a30b7bc84d234066",
+        "schema_version": 1,
+        "skipped": 0,
+        "stage": "candidate",
+        "tests_run": 34,
+        "unexpected_successes": 0
+      },
+      "asr-trusted": {
+        "candidate_binding": {
+          "head_sha": "8b1e44e5fd87f43f0e675856de68dce069d8080f",
+          "patch_sha256": "3236f10bc183d4309b5c0881597e8ae79838effb8b925a59af895f8bb8a4a19c"
+        },
+        "complete": true,
+        "completed": 4,
+        "discovered": 4,
+        "errors": 0,
+        "expected_failures": 0,
+        "failures": 0,
+        "nonce": "311ce6da024b4b2b8d24c1f597472603",
+        "schema_version": 1,
+        "skipped": 0,
+        "stage": "trusted",
+        "tests_run": 4,
+        "unexpected_successes": 0
+      }
+    },
+    "billing_default_targeted": {
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    }
+  },
+  "frontend": [
+    {
+      "step": "contracts",
+      "exit_code": 0
+    },
+    {
+      "step": "typescript",
+      "exit_code": 0
+    },
+    {
+      "step": "vite",
+      "exit_code": 0
+    },
+    {
+      "step": "verify-build",
+      "exit_code": 0
+    }
+  ],
+  "service_cleanup": {
+    "pg_stop_exit": 0,
+    "object_process_stopped": true,
+    "cleanup_errors": []
+  },
+  "driver_negative_probes": {
+    "tampered_driver_exit": 1,
+    "tampered_driver_rejected": true,
+    "missing_interpreter_exit": 1,
+    "missing_interpreter_rejected": true,
+    "probe_result": true
+  },
+  "regression_negative_control": {
+    "original_cases_passed": 24,
+    "total_new_suite_cases": 34,
+    "failing_new_test_groups": 6,
+    "sub_errors": 22,
+    "evidence": "outputs/pr06a/negative-control/assessment.json"
+  },
+  "status": "passed_with_skips",
+  "complete_without_skips": false,
+  "limitations": [
+    "Backend 1188 includes the 34 simulator cases and new PG default-off case.",
+    "Legacy 696 includes 525 parent cases and 171 subtests.",
+    "Controller test_symlink_descendants_rejected_without_following_them skipped because guest could not create symlink (WinError 1314).",
+    "Provider transport, wire parser, version pinning, network lifecycle and billing integration remain unimplemented.",
+    "Astra integrity_failed before reading diff. No valid independent review conclusion.",
+    "Initial encoding, path-length and probe failures are retained under outputs/pr06a/.",
+    "Raw logs remain local. This versioned manifest preserves commands, counts and content hashes."
+  ],
+  "astra": {
+    "candidate_head": "98d16a1537cf60262e49486480106d803f1727a8",
+    "model": "gpt-6-astra",
+    "reasoning": "ultra",
+    "sandbox": "read-only",
+    "result": "integrity_failed",
+    "completed_full_reviews": 0,
+    "attempts": 1,
+    "error": "registered Core launch requires an installed app",
+    "record": "REVIEW-20261117.md"
+  },
+  "ci_observed": {
+    "head": "097b7eec73643aacf54f5969e377e88269975439",
+    "successful_checks": 8,
+    "conditional_skips": [
+      "Pages build",
+      "Pages deploy"
+    ],
+    "runs": [
+      44100525522,
+      44100645181,
+      44100645084,
+      44100645268
+    ],
+    "final_documentation_head": "See Draft PR checks and outputs/pr06a/ci/latest-head.json"
+  },
+  "work_package_status": "doing"
+}

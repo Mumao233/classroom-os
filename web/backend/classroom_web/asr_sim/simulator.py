@@ -1,4 +1,4 @@
-"""Bounded in-memory evidence model, deliberately not a durable adapter."""
+"""Bounded ASR simulator and protocol validators shared with PR-06a."""
 from copy import deepcopy
 from hashlib import sha256
 import struct
@@ -16,7 +16,13 @@ def integer(value, minimum=0, maximum=2**53 - 1):
 
 
 def uid(value):
-    if type(value) is not str or str(UUID(value)) != value:
+    if type(value) is not str or len(value) != 36:
+        raise ProtocolError('canonical UUID required')
+    try:
+        canonical = str(UUID(value))
+    except ValueError:
+        raise ProtocolError('canonical UUID required') from None
+    if canonical != value:
         raise ProtocolError('canonical UUID required')
     return value
 
@@ -90,6 +96,27 @@ def _wave_container(pcm):
     return True
 
 
+def validate_frame(frame, *, max_bytes):
+    keys = {'pcm', 'sample_rate', 'channels', 'encoding', 'start_sample', 'end_sample',
+            'sample_count', 'byte_length', 'sha256'}
+    if type(frame) is not dict or set(frame) != keys:
+        raise ProtocolError('invalid frame descriptor')
+    pcm = frame['pcm']
+    if type(pcm) is not bytes or not pcm or len(pcm) > max_bytes or len(pcm) % 2:
+        raise ProtocolError('PCM length bound')
+    if _wave_container(pcm):
+        raise ProtocolError('WAV container is not raw PCM')
+    if (integer(frame['sample_rate']), integer(frame['channels']), frame['encoding']) != (16000, 1, 'signed16le'):
+        raise ProtocolError('PCM format required')
+    start, end = integer(frame['start_sample']), integer(frame['end_sample'])
+    count = integer(frame['sample_count'], 1)
+    if end - start != count or integer(frame['byte_length']) != count * 2 or len(pcm) != count * 2:
+        raise ProtocolError('range/length mismatch')
+    if frame['sha256'] != sha256(pcm).hexdigest():
+        raise ProtocolError('hash mismatch')
+    return pcm, start, end
+
+
 class Simulator:
     """One bounded capture lineage, with multiple sequential streams.
 
@@ -135,7 +162,8 @@ class Simulator:
         allowed = {'durable_audio', 'budget_permit', 'consent', 'dispatch_intent',
                    'class_session_id', 'capture_epoch_id', 'stream_id', 'script',
                    'commit_failures', 'query_result'}
-        if type(config) is not dict or set(config) - allowed:
+        required = {'class_session_id', 'capture_epoch_id', 'stream_id'}
+        if type(config) is not dict or set(config) - allowed or not required <= set(config):
             raise ProtocolError('invalid config')
         if any(config.get(k) is not True for k in
                ('durable_audio', 'budget_permit', 'consent', 'dispatch_intent')):
@@ -203,23 +231,7 @@ class Simulator:
     def send(self, frame):
         if self.state != 'streaming':
             raise ProtocolError('not accepting frames')
-        keys = {'pcm', 'sample_rate', 'channels', 'encoding', 'start_sample', 'end_sample',
-                'sample_count', 'byte_length', 'sha256'}
-        if type(frame) is not dict or set(frame) != keys:
-            raise ProtocolError('invalid frame descriptor')
-        pcm = frame['pcm']
-        if type(pcm) is not bytes or not pcm or len(pcm) > self.MAX_FRAME or len(pcm) % 2:
-            raise ProtocolError('PCM length bound')
-        if _wave_container(pcm):
-            raise ProtocolError('WAV container is not raw PCM')
-        if (integer(frame['sample_rate']), integer(frame['channels']), frame['encoding']) != (16000, 1, 'signed16le'):
-            raise ProtocolError('PCM format required')
-        start, end = integer(frame['start_sample']), integer(frame['end_sample'])
-        count = integer(frame['sample_count'], 1)
-        if end - start != count or integer(frame['byte_length']) != count * 2 or len(pcm) != count * 2:
-            raise ProtocolError('range/length mismatch')
-        if frame['sha256'] != sha256(pcm).hexdigest():
-            raise ProtocolError('hash mismatch')
+        pcm, start, end = validate_frame(frame, max_bytes=self.MAX_FRAME)
         if self._last_end is not None and start != self._last_end:
             raise ProtocolError('frames must be contiguous')
         if any(start < b and a < end for a, b in self._sent):
@@ -236,7 +248,7 @@ class Simulator:
     def finish(self):
         if self.state == 'streaming':
             self.state = 'draining'
-        elif self.state != 'draining':
+        elif self.state not in ('draining', 'unknown', 'succeeded', 'failed'):
             raise ProtocolError('cannot finish this state')
         return self._receipt()
 
@@ -331,7 +343,7 @@ class Simulator:
         return output
 
     def query(self, receipt):
-        if type(receipt) is not dict or receipt.get('stream_id') != self._stream:
+        if self.state == 'idle' or type(receipt) is not dict or receipt.get('stream_id') != self._stream:
             raise ProtocolError('receipt does not identify current stream')
         if self._query_result is None:
             return {'status': 'unsupported'}

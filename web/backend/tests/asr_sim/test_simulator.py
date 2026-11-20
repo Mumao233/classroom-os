@@ -1,10 +1,14 @@
 import copy
+from contextlib import redirect_stderr, redirect_stdout
 import hashlib
+import io
 import json
 from pathlib import Path
 import struct
 import sys
+import traceback
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[4]
 sys.path.insert(0, str(ROOT / 'web/backend'))
@@ -496,6 +500,164 @@ class SimulatorTests(unittest.TestCase):
         self.assertEqual(sim.pending_bytes, 0)
         with self.assertRaises(ProtocolError):
             sim.send(frame(1600))
+
+    def test_missing_start_identifiers_are_atomic_protocol_errors(self):
+        for field in ('class_session_id', 'capture_epoch_id', 'stream_id'):
+            with self.subTest(field=field):
+                sim = Simulator()
+                bad = config()
+                del bad[field]
+                with self.assertRaisesRegex(ProtocolError, '^invalid config$'):
+                    sim.start(bad)
+                self.assertEqual(sim.state, 'idle')
+                self.assertEqual(sim._streams, set())
+                self.assertEqual(sim.pending_bytes, 0)
+                self.assertEqual(sim.start(config())['state'], 'streaming')
+
+    def test_invalid_uuids_use_sanitized_protocol_errors(self):
+        sensitive = 'PRIVATEKEYVALUE0123456789ABCDEFGH'
+        invalid = (sensitive, '00000000-0000-4000-8000-' + 'SECRETKEY123',
+                   '', None, 42, uid(1).upper().replace('4', 'A', 1))
+        for value in invalid:
+            for field in ('class_session_id', 'capture_epoch_id', 'stream_id', 'segment_id'):
+                with self.subTest(field=field, value_type=type(value).__name__):
+                    sim = Simulator()
+                    bad = config()
+                    if field == 'segment_id':
+                        bad['script'] = [final(segment_id=value)]
+                    else:
+                        bad[field] = value
+                    try:
+                        sim.start(bad)
+                    except ProtocolError as error:
+                        self.assertEqual(str(error), 'canonical UUID required')
+                        self.assertIsNone(error.__cause__)
+                        rendered = ''.join(traceback.format_exception(type(error), error, error.__traceback__))
+                        self.assertNotIn(sensitive, rendered)
+                        self.assertNotIn('SECRETKEY123', rendered)
+                    else:
+                        self.fail('invalid UUID was accepted')
+                    self.assertEqual(sim.state, 'idle')
+                    self.assertEqual(sim._streams, set())
+                    sim.start(config())
+
+    def test_query_before_start_is_a_protocol_error(self):
+        sim = Simulator()
+        for receipt in ({'stream_id': uid(3)}, {}, None):
+            with self.subTest(receipt_type=type(receipt).__name__):
+                with self.assertRaisesRegex(ProtocolError, 'current stream'):
+                    sim.query(receipt)
+                self.assertEqual(sim.state, 'idle')
+        sim.start(config())
+        self.assertEqual(sim.query({'stream_id': uid(3)}), {'status': 'unsupported'})
+
+    def test_finish_is_idempotent_after_each_terminal_outcome(self):
+        for outcome, state in (('terminal', 'succeeded'), ('failure', 'failed'), ('lost', 'unknown')):
+            with self.subTest(outcome=outcome):
+                sim = self.running([final(), {'kind': outcome}])
+                sim.finish()
+                self.assertEqual(sim.finish()['state'], 'draining')
+                self.assertEqual(len(sim.events()), 1)
+                self.assertEqual(sim.state, state)
+                saved = copy.deepcopy(sim.__dict__)
+                for _ in range(3):
+                    self.assertEqual(sim.finish(), {'stream_id': uid(3), 'state': state})
+                    self.assertEqual(sim.events(), [])
+                    self.assertEqual(sim.__dict__, saved)
+                self.assertEqual(sim.pending_bytes, 0)
+                with self.assertRaises(ProtocolError):
+                    sim.send(frame(1600))
+        with self.assertRaises(ProtocolError):
+            Simulator().finish()
+
+    def test_duplicate_or_nonfinal_control_outcomes_are_rejected(self):
+        for outcome in ('terminal', 'failure', 'lost'):
+            for trailing in ({'kind': outcome}, final()):
+                with self.subTest(outcome=outcome, trailing=trailing['kind']):
+                    sim = Simulator()
+                    with self.assertRaisesRegex(ProtocolError, 'control outcome must end script'):
+                        sim.start(config([{'kind': outcome}, trailing]))
+                    self.assertEqual(sim.state, 'idle')
+                    self.assertEqual(sim._streams, set())
+                    sim.start(config())
+
+    def test_malformed_actions_reject_without_consuming_stream_identity(self):
+        actions = [None, [], {'kind': 'unknown'}, {'kind': 'failure', 'error_message': 'PRIVATE'},
+                   final(revision=False), final(sequence=-1), final(text=None)]
+        for field in final():
+            incomplete = final()
+            del incomplete[field]
+            actions.append(incomplete)
+        for action in actions:
+            with self.subTest(action_type=type(action).__name__):
+                sim = Simulator()
+                with self.assertRaises(ProtocolError) as caught:
+                    sim.start(config([action]))
+                self.assertNotIn('PRIVATE', str(caught.exception))
+                self.assertEqual(sim.state, 'idle')
+                self.assertEqual(sim._streams, set())
+                sim.start(config())
+
+    def test_failed_reconnect_initialization_preserves_previous_evidence(self):
+        sim = self.running([final(), {'kind': 'lost'}])
+        receipt = sim.finish()
+        sim.events()
+        saved = copy.deepcopy(sim.__dict__)
+        invalid = [config(stream_id=uid(8), commit_failures=-1),
+                   config(stream_id=uid(8), script=[{'kind': 'failure', 'extra': True}]),
+                   config(stream_id=uid(8), query_result={'proven': True, 'script': []}),
+                   config(stream_id=uid(8), class_session_id='invalid')]
+        for bad in invalid:
+            with self.assertRaises(ProtocolError):
+                sim.start(bad)
+            self.assertEqual(sim.__dict__, saved)
+            self.assertEqual(sim.query(receipt), {'status': 'unsupported'})
+        sim.start(config(stream_id=uid(8)))
+        with self.assertRaisesRegex(ProtocolError, 'never automatically resend'):
+            sim.send(frame())
+        sim.send(frame(1600))
+
+    def test_guards_default_to_denied_without_changing_state(self):
+        for guard in ('durable_audio', 'budget_permit', 'consent', 'dispatch_intent'):
+            sim = Simulator()
+            bad = config()
+            del bad[guard]
+            with self.assertRaisesRegex(ProtocolError, 'start guards required'):
+                sim.start(bad)
+            self.assertEqual(sim.state, 'idle')
+            self.assertEqual(sim._streams, set())
+
+    def test_every_simulated_outcome_is_offline_and_silent_with_dummy_key(self):
+        output, errors = io.StringIO(), io.StringIO()
+        dummy_key = 'synthetic-secret-must-stay-unused'
+        with patch.dict('os.environ', {'DASHSCOPE_API_KEY': dummy_key}), \
+                patch('socket.socket', side_effect=AssertionError('socket forbidden')) as socket_call, \
+                patch('socket.create_connection', side_effect=AssertionError('network forbidden')) as connect, \
+                patch('urllib.request.urlopen', side_effect=AssertionError('HTTP forbidden')) as urlopen, \
+                patch('subprocess.Popen', side_effect=AssertionError('subprocess forbidden')) as process, \
+                redirect_stdout(output), redirect_stderr(errors):
+            for outcome in ('terminal', 'failure', 'lost'):
+                sim = self.running([partial(), final(), {'kind': outcome}], query_result=dict(
+                    proven=True, script=[final(), {'kind': 'terminal'}]))
+                receipt = sim.finish()
+                self.assertEqual(len(sim.events()), 2)
+                sim.query(receipt)
+                sim.finish()
+            for guard in ('durable_audio', 'budget_permit', 'consent', 'dispatch_intent'):
+                with self.assertRaises(ProtocolError):
+                    Simulator().start(config(**{guard: False}))
+            for call in (socket_call, connect, urlopen, process):
+                call.assert_not_called()
+        self.assertEqual(output.getvalue(), '')
+        self.assertEqual(errors.getvalue(), '')
+
+    def test_secret_configuration_is_rejected_without_echo(self):
+        for field in ('api_key', 'authorization', 'endpoint', 'enable_paid_calls'):
+            sim = Simulator()
+            with self.assertRaisesRegex(ProtocolError, '^invalid config$') as caught:
+                sim.start(config(**{field: 'synthetic-sensitive-value'}))
+            self.assertNotIn('synthetic-sensitive-value', str(caught.exception))
+            self.assertEqual(sim.state, 'idle')
 
 
 if __name__ == '__main__':
