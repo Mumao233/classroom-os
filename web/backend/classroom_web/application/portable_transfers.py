@@ -85,7 +85,7 @@ class PortableTransfers:
         # A verified package created before the candidate may have no asset TTL.
         with self._transaction(ctx, write=True) as (life, repo, _):
             life.gate()
-            upload, asset = repo.upload(identifier(upload_id))
+            upload, asset = repo.upload(identifier(upload_id), lock=False)
             if upload['state'] != 'verified' or asset['status'] != 'committed':
                 raise AuthRejected('SOURCE_UNAVAILABLE', 409)
             return self._link_legacy(life, upload, asset, verified=True)
@@ -106,8 +106,11 @@ class PortableTransfers:
         life.rows('''INSERT INTO portable_transfer_media(owner_id,transfer_id,asset_id,part_number)
             VALUES(:owner,:transfer,:asset,0) ON CONFLICT (transfer_id,part_number) DO NOTHING''',
             transfer=current['id'], asset=asset['id'])
-        life.rows('''UPDATE media_assets SET expires_at=:until WHERE owner_id=:owner AND id=:id
-            AND (expires_at IS NULL OR expires_at>:until)''', id=asset['id'],until=cutoff)
+        life.rows('''WITH available AS (
+                SELECT id FROM media_assets WHERE owner_id=:owner AND id=:id
+                  AND (expires_at IS NULL OR expires_at>:until) FOR UPDATE SKIP LOCKED
+            ) UPDATE media_assets a SET expires_at=:until FROM available WHERE a.id=available.id''',
+            id=asset['id'],until=cutoff)
         life.rows('''UPDATE portable_transfers SET state=:state,access_until=:until
             WHERE owner_id=:owner AND id=:id''', id=current['id'],until=cutoff,
             state='verified' if verified else current['state'])

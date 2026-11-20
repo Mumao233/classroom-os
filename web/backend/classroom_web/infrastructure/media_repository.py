@@ -23,12 +23,25 @@ class PgMediaRepository:
             # Reuse the catalog's ancestor-first lock order and tombstone checks.
             self.tx.catalog._load(Resource.CLASS_SESSION, asset['class_session_id'], share=True)
 
-    def asset(self, asset_id, *, available=False):
+    def _require_portable_access(self, asset):
+        if asset['kind'] != 'import_package' or not self.execute(
+                "SELECT to_regclass('public.portable_transfer_media') IS NOT NULL").scalar_one():
+            return
+        closed = self.execute('''SELECT EXISTS(SELECT FROM portable_transfer_media p JOIN portable_transfers t
+            ON (p.owner_id,p.transfer_id)=(t.owner_id,t.id) WHERE p.owner_id=:owner AND p.asset_id=:id
+                AND (t.state='closed' OR t.access_until<=clock_timestamp()))''', id=asset['id']).scalar_one()
+        if closed:
+            raise AuthRejected('GONE', 410)
+
+    def asset(self, asset_id, *, available=False, lock=True):
         row = self.execute('SELECT * FROM media_assets WHERE owner_id=:owner AND id=:id', id=asset_id).mappings().one_or_none()
         if row is None:
             raise AuthRejected('NOT_FOUND', 404)
         self.ancestors(row)
-        row = self.execute('SELECT * FROM media_assets WHERE owner_id=:owner AND id=:id FOR UPDATE', id=asset_id).mappings().one()
+        self._require_portable_access(row)
+        if lock:
+            row = self.execute('SELECT * FROM media_assets WHERE owner_id=:owner AND id=:id FOR UPDATE', id=asset_id).mappings().one()
+            self._require_portable_access(row)
         row = dict(row, byte_length=row['size_bytes'], state=media_state(row['status'],row['access_revoked_at']))
         if (row['deleted_at'] or row['access_revoked_at'] or row['state'] in ('pending_delete','delete_failed','deleted')
                 or (row['expires_at'] and row['expires_at'] <= self.now())
@@ -38,12 +51,13 @@ class PgMediaRepository:
             raise AuthRejected('NOT_FOUND', 404)
         return row
 
-    def upload(self, upload_id):
+    def upload(self, upload_id, *, lock=True):
         upload = self.execute('SELECT * FROM media_uploads WHERE owner_id=:owner AND id=:id', id=upload_id).mappings().one_or_none()
         if upload is None:
             raise AuthRejected('NOT_FOUND', 404)
-        asset = self.asset(upload['asset_id'])
-        upload = self.execute('SELECT * FROM media_uploads WHERE owner_id=:owner AND id=:id FOR UPDATE', id=upload_id).mappings().one()
+        asset = self.asset(upload['asset_id'], lock=lock)
+        if lock:
+            upload = self.execute('SELECT * FROM media_uploads WHERE owner_id=:owner AND id=:id FOR UPDATE', id=upload_id).mappings().one()
         if upload['state'] == 'rejected' or upload['expires_at'] <= self.now():
             raise AuthRejected('GONE', 410)
         return upload, asset
@@ -59,12 +73,12 @@ class PgMediaRepository:
             id=uuid4(), operation=operation, key=key, hash=fingerprint, type=resource_type,
             resource=resource_id, status=status, body=json.dumps(body))
 
-    def create(self, body, key, fingerprint, policy, *, max_import_assets=None):
+    def create(self, body, key, fingerprint, policy, *, max_import_assets=None, replay_lock=True):
         # Serialize capacity checks for concurrent uploads from the same owner.
         self.execute("SELECT pg_advisory_xact_lock(hashtextextended(CAST(:owner AS text)||'media',0))")
         receipt = self.receipt('createMediaUpload', key, fingerprint)
         if receipt:
-            return self.upload(receipt['resource_id'])
+            return self.upload(receipt['resource_id'], lock=replay_lock)
         if max_import_assets is not None:
             reserved = self.execute("""SELECT count(*) FROM media_assets
                 WHERE owner_id=:owner AND kind='import_package' AND status<>'deleted'""").scalar_one()

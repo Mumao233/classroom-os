@@ -1,5 +1,8 @@
 """PR-08c HTTP, crash recovery, queue and charged pool capacity over PostgreSQL and S3."""
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
+from threading import Event
+from types import SimpleNamespace
 import hashlib
 import io
 import json
@@ -23,7 +26,7 @@ from classroom_web.infrastructure.portable_lifecycle import PortableLifecycle
 from classroom_web.infrastructure.qa_repository import PgQaRepository
 from classroom_web.infrastructure.review_repository import PgReviewRepository
 from classroom_web.entrypoints.worker import portable_worker
-from deletion_support import BASE, auth, contract, d, deploy, new_user, one, pg, rows, services, versions
+from deletion_support import BASE, auth, contract, d, deploy, login, new_user, one, pg, rows, services, versions
 from test_persistent_tasks import scheduler
 from test_deletion_lifecycle import delete
 from object_service import ACCESS, REGION, SECRET
@@ -400,3 +403,43 @@ def test_abandoned_legacy_upload_cancels_using_returned_id(d,enabled,monkeypatch
     replacement = response(client.post(BASE+'/media/uploads',headers=write_headers(d),json=metadata),201)
     assert replacement['id'] != legacy['id']
     assert one(d,'SELECT state FROM media_uploads WHERE id=:id',id=UUID(legacy['id']))['state'] == 'rejected'
+
+
+def test_cancel_during_legacy_upload_never_holds_admission_waiting_on_storage(d,enabled,monkeypatch):
+    _,client = enabled
+    data = json.dumps(archive_room(d.classroom).session).encode()
+    digest = hashlib.sha256(data).hexdigest()
+    metadata = dict(purpose='import_package',class_session_id=None,mime_type='application/json',
+                    byte_length=len(data),sha256=digest,filename='synthetic')
+    create_key = uuid4()
+    upload = response(client.post(BASE+'/media/uploads',headers=write_headers(d,create_key),json=metadata),201)
+    entered, release = Event(), Event()
+    put = d.store.put
+    def stall_before_write(*args, **kwargs):
+        entered.set()
+        if not release.wait(timeout=15):
+            raise RuntimeError('expected cancellation to finish without waiting on the writer')
+        return put(*args, **kwargs)
+    monkeypatch.setattr(d.store,'put',stall_before_write)
+    with TestClient(client.app,base_url='https://testserver') as second:
+        writer = SimpleNamespace(client=second,email=d.a.email)
+        writer.session = login(writer)
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            active = pool.submit(second.put,upload['upload_path'],content=data,
+                                 headers=write_headers(writer)|{'content-type':'application/octet-stream'})
+            try:
+                assert entered.wait(timeout=10)
+                replay = response(client.post(BASE+'/media/uploads',headers=write_headers(d,create_key),json=metadata),201)
+                assert replay['id'] == upload['id']
+                url = BASE + '/imports/uploads/' + upload['id'] + '/cancel'
+                response(client.post(url,headers=write_headers(d),json={}),200)
+                response(client.post(BASE+'/imports/uploads',headers=write_headers(d),json={
+                    'byte_length':len(data),'archive_sha256':digest,'mime_type':'application/json'}),201)
+            finally:
+                release.set()
+            assert active.result(timeout=15).status_code == 410
+    linked = one(d,'SELECT object_key FROM media_assets WHERE id=:id',id=UUID(upload['asset_id']))
+    assert versions(d,linked['object_key'])
+    PortableMaintenance(PortableTransfers(d.service,d.deletion,d.spool),d.worker).tick()
+    assert not versions(d,linked['object_key'])
+    assert one(d,'SELECT state FROM media_uploads WHERE id=:id',id=UUID(upload['id']))['state'] == 'rejected'

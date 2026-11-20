@@ -101,7 +101,8 @@ class MediaService:
             if portable_imports is not None:
                 portable_imports.lock_legacy_admission(repo)
             upload, asset = repo.create(value, identifier(key), fingerprint(body), self.policy,
-                                        max_import_assets=self.IMPORT_PACKAGE_MAX_ASSETS if import_package else None)
+                                        max_import_assets=self.IMPORT_PACKAGE_MAX_ASSETS if import_package else None,
+                                        replay_lock=portable_imports is None)
             if portable_imports is not None:
                 portable_imports.register_legacy_upload(repo, upload, asset)
             return upload_dto(upload, asset)

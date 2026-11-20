@@ -114,6 +114,14 @@ CREATE POLICY portable_import_room_live ON public.portable_imported_classrooms A
     TO classroom_web_runtime USING (public.classroom_web_qa_class_live(class_session_id))
     WITH CHECK (public.classroom_web_qa_class_live(class_session_id));
 
+GRANT SELECT (id,owner_id,asset_id,state), UPDATE (state)
+    ON public.media_uploads TO classroom_web_portable_maintainer;
+CREATE POLICY portable_legacy_upload_keeper ON public.media_uploads TO classroom_web_portable_maintainer
+    USING (EXISTS(SELECT FROM public.portable_transfer_media p
+        WHERE (p.owner_id,p.asset_id)=(media_uploads.owner_id,media_uploads.asset_id)))
+    WITH CHECK (EXISTS(SELECT FROM public.portable_transfer_media p
+        WHERE (p.owner_id,p.asset_id)=(media_uploads.owner_id,media_uploads.asset_id)));
+
 CREATE FUNCTION public.classroom_web_portable_import_cleanup(batch integer, settle integer)
 RETURNS TABLE(id uuid, object_key text)
 LANGUAGE sql SECURITY DEFINER SET search_path=pg_catalog,public,pg_temp AS $cleanup$
@@ -226,6 +234,15 @@ BEGIN
         ORDER BY a.id FOR UPDATE OF a SKIP LOCKED
     )
     UPDATE public.media_assets a SET expires_at=due.access_until FROM due WHERE a.id=due.id;
+
+    WITH retired AS (
+        SELECT u.id FROM public.media_uploads u
+        JOIN public.portable_transfer_media l ON (l.owner_id,l.asset_id)=(u.owner_id,u.asset_id)
+        JOIN public.portable_transfers t ON (t.owner_id,t.id)=(l.owner_id,l.transfer_id)
+        WHERE t.kind='import' AND t.state='closed' AND u.state IN ('staging','uploaded')
+        ORDER BY u.id FOR UPDATE OF u SKIP LOCKED
+    )
+    UPDATE public.media_uploads u SET state='rejected' FROM retired WHERE u.id=retired.id;
 
     UPDATE public.portable_transfers t SET erased_at=ts
     WHERE t.state='closed' AND t.erased_at IS NULL AND NOT EXISTS (
