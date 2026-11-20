@@ -245,7 +245,8 @@ class PortableTaskWorker:
         media_bytes = 0
         entries = 1
         for source in sources:
-            classroom, dependencies = reader.read(source, allow_missing=body['allow_missing'])
+            classroom, dependencies = reader.read(
+                source, allow_missing=body['allow_missing'], include_images=body['format']=='zip')
             metadata += len(as_json(classroom.session).encode('utf8')) + len(as_json(classroom.media).encode('utf8'))
             media_bytes += sum(asset.size for asset in classroom.assets)
             entries += len(classroom.assets) + 2
@@ -308,8 +309,21 @@ class PortableTaskWorker:
                 for collection in ('segments','web_transcript'):
                     for row in classroom.session.get(collection, ()):
                         write(literal_markdown(row['text']) + '\n\n')
-                for row in classroom.session.get('web_notes', ()):
-                    write('## ' + literal_markdown(row['title']) + '\n\n' + literal_markdown(row['body']) + '\n\n')
+                notes = classroom.session.get('web_notes', ())
+                replaced = {row['legacy_review_key'] for row in notes if 'legacy_review_key' in row}
+                for group in ('cards','notes'):
+                    for item in classroom.session.get('review', {}).get(group, ()):
+                        draft = item['user_draft']
+                        if draft['revision'] <= 0 or f'{group}:{item["id"]}' in replaced:
+                            continue
+                        title = item['ai_content'].get('title') or 'Imported review'
+                        write('## ' + literal_markdown(title) + '\n\n'
+                              + literal_markdown(draft['content'],max_chars=PORTABLE_V21.metadata_bytes) + '\n\n')
+                        if draft['personal_note']:
+                            write(literal_markdown(draft['personal_note']) + '\n\n')
+                for row in notes:
+                    write('## ' + literal_markdown(row['title']) + '\n\n'
+                          + literal_markdown(row['body'],max_chars=PORTABLE_V21.metadata_bytes) + '\n\n')
                     if row.get('personal_note'):
                         write(literal_markdown(row['personal_note']) + '\n\n')
             mime = 'text/markdown'

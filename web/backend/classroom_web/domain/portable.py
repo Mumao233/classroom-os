@@ -356,6 +356,8 @@ def session_references(session):
                 require(type(content) is dict and type(draft) is dict
                         and type(draft.get('revision')) is int and draft['revision'] >= 0
                         and isinstance(draft.get('content'), str) and isinstance(draft.get('personal_note'), str))
+                if 'title' in content:
+                    require(isinstance(content['title'], str) and len(content['title']) <= 200)
                 parts = [content] if collection == 'cards' else records(content.get('sections'))
                 fields = ('title', 'front', 'back') if collection == 'cards' else ('section', 'title', 'body')
                 for part in parts:

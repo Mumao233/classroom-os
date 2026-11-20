@@ -6,7 +6,9 @@ import json
 import zipfile
 from typing import BinaryIO, Callable
 
-from .portable import (ASSET, PORTABLE_V21, inspect_candidate, match, require, safe_path,
+from PIL import Image
+
+from .portable import (ASSET, InvalidPackage, PORTABLE_V21, inspect_candidate, match, require, safe_path,
                        session_references)
 
 
@@ -51,6 +53,17 @@ def require_portable_metadata(value):
             pending.extend((depth + 1, child) for child in item)
 
 
+def _probe_dimensions(asset):
+    require(type(asset.size) is int and 0 < asset.size <= PORTABLE_V21.part_bytes,
+            'CAPACITY_EXCEEDED')
+    expected = 'PNG' if asset.path.endswith('.png') else 'JPEG'
+    try:
+        with asset.open_stream() as source, Image.open(source, formats=[expected]) as image:
+            return image.size
+    except (OSError, ValueError, Image.DecompressionBombError):
+        raise InvalidPackage() from None
+
+
 def aggregate_entries(scope, classrooms):
     policy = PORTABLE_V21
     require(scope in ('account', 'course', 'class_session') and 0 < len(classrooms) <= policy.files
@@ -71,15 +84,17 @@ def aggregate_entries(scope, classrooms):
                         include_audio=False, media=classroom.media,
                         files=[dict(path='session.json', size=session.size, sha256=session.sha256)])
         declared_assets = {}
+        files = {entry.path:entry for entry in classroom.assets}
         for item in classroom.media:
             if item.get('availability') != 'available':
                 continue
             ref = references.get(item.get('original_path'))
-            require(ref is not None and ref.kind == 'image' and ref.dimensions is not None)
+            require(ref is not None and ref.kind == 'image')
             path = item.get('archive_path')
-            require(match(ASSET, path))
+            require(match(ASSET, path) and path in files)
             if path not in declared_assets:
-                pixels = ref.dimensions[0] * ref.dimensions[1]
+                width, height = ref.dimensions or _probe_dimensions(files[path])
+                pixels = width * height
                 require(pixels <= policy.image_pixels, 'CAPACITY_EXCEEDED')
                 declared_pixels += pixels
             declared_assets[path] = item.get('size'), ref.sha256

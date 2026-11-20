@@ -74,7 +74,7 @@ def pack(d):
     media = dict(id='P0001', kind='image', version=1, sha256=sha, availability='available',
                  original_path=original, archive_path=path, size=len(image))
     slide = dict(id='P0001', version=1, path=original, sha256=sha, mime_type='image/png',
-                 start=0, end=1, width=2, height=3)
+                 start=0, end=1)
     snapshot = archive_room(d.classroom, [media], [ArchiveAsset(path, len(image), sha, lambda: io.BytesIO(image))], [slide])
     segment = snapshot.session['segments'][0]
     snapshot.session['review'] = dict(schema_version=1,cards=[dict(id='card01',
@@ -82,6 +82,9 @@ def pack(d):
                       source_ids=['S0001']),
         ai_content=dict(title='Synthetic review',front='Question',back='Answer',source_ids=['S0001']),
         user_draft=dict(revision=1,content='<script>synthetic</script>',personal_note='Source kept'))])
+    initial = snapshot.session['review']['cards'][0]
+    snapshot.session['review']['cards'].append(dict(initial,id='ai-default',
+        user_draft=dict(revision=0,content='Untouched AI suggestion',personal_note='')))
     package = io.BytesIO()
     write_aggregate(package, 'class_session', [snapshot], heartbeat=lambda: None)
     return package.getvalue(), sha
@@ -135,6 +138,7 @@ def test_commit_crash_rolls_back_catalog_and_ack_loss_replays(d, enabled, schedu
     assert lineage['id_map']['segments']['S0001']['original_version'] == 0
     assert lineage['snapshot']['session']['review']['cards'][0]['evidence']['source_ids'] == ['S0001']
     note = UUID(lineage['id_map']['review']['cards:card01']['id'])
+    assert lineage['id_map']['review']['cards:ai-default']['native'] is False
     assert '<script>' not in one(d, 'SELECT body_markdown FROM review_revisions WHERE document_id=:id',id=note)['body_markdown']
     with d.pg.db.transaction(OwnerContext(new_user(d).uid)) as other:
         assert PortableLifecycle(other).rows('SELECT * FROM portable_imported_classrooms').all() == []
@@ -145,6 +149,15 @@ def test_commit_crash_rolls_back_catalog_and_ack_loss_replays(d, enabled, schedu
     assert one(d,'SELECT count(*) FROM provider_results WHERE attempt_id=:id',id=attempt['id'])['count'] == 0
     assert one(d,'SELECT recovery_count FROM portable_slots WHERE id='
                  '(SELECT slot_id FROM portable_task_bindings WHERE task_id=:id)',id=task)['recovery_count'] == 1
+
+    base_request = dict(scope='class_session',scope_id=final['result_id'],format='markdown',
+                        include_audio=False,confirmed_audio_privacy=False,allow_missing=False)
+    reading = response(client.post(BASE+'/exports',json=base_request,headers=write_headers(d)),202)
+    assert PortableTaskWorker(jobs,scheduler,worker_id='reading').run_once()
+    markdown = fetch_export(d,client,reading['id'])
+    assert b'Source kept' in markdown and b'Untouched AI suggestion' not in markdown
+    transfer = one(d,'SELECT transfer_id FROM portable_task_bindings WHERE task_id=:id',id=UUID(reading['id']))
+    jobs.transfers.cancel(d.ctx,transfer['transfer_id'])
 
     with d.pg.db.transaction(OwnerContext(d.uid)) as tx:
         source = UUID(lineage['id_map']['segments']['S0001']['id'])
@@ -282,10 +295,17 @@ def test_json_missing_images_and_audio_are_reported_and_preserved(d,enabled,sche
     assert 'credentials' not in saved['session']
 
 
-def test_preview_rejects_blank_title_with_typed_error(d,enabled):
+@pytest.mark.parametrize('invalid', ['blank_classroom','typed_review_title'])
+def test_preview_rejects_malformed_titles_with_typed_error(d,enabled,invalid):
     jobs,_ = enabled
     source = archive_room(d.classroom).session
-    source['title'] = '   '
+    if invalid == 'blank_classroom':
+        source['title'] = '   '
+    else:
+        source['review'] = dict(schema_version=1,notes=[dict(id='note01',
+            evidence=dict(segments=source['segments'],slides=[],source_ids=['S0001']),
+            ai_content=dict(title=7,sections=[]),
+            user_draft=dict(revision=1,content='Written text',personal_note=''))])
     payload = json.dumps(source).encode()
     digest = hashlib.sha256(payload).hexdigest()
     transfer = jobs.transfers.begin_upload(d.ctx,uuid4(),len(payload),digest,'application/json')
@@ -294,3 +314,67 @@ def test_preview_rejects_blank_title_with_typed_error(d,enabled):
     with pytest.raises(AuthRejected) as error:
         jobs.transfers.preview(d.ctx,uuid4(),transfer['id'],d.course.id)
     assert error.value.code == 'VALIDATION_FAILED'
+
+
+def fetch_export(d, client, identity):
+    result = state(client,identity)
+    assert result['state'] == 'succeeded', result
+    access = client.post(f'{BASE}/media/{result["result_id"]}/access',json={},headers=write_headers(d))
+    reply = client.get(response(access,200)['download_path'],headers={'range':'bytes=0-'})
+    assert reply.status_code == 206
+    return reply.content
+
+
+def media_upload(d,client,data,*,mime,purpose,classroom):
+    body = dict(byte_length=len(data),sha256=hashlib.sha256(data).hexdigest(),purpose=purpose,
+                mime_type=mime,class_session_id=classroom,filename='synthetic')
+    upload = response(client.post(BASE+'/media/uploads',json=body,headers=write_headers(d)),201)
+    response(client.put(upload['upload_path'],content=data,
+                        headers=write_headers(d)|{'content-type':'application/octet-stream'}),200)
+    return upload,response(client.post(BASE+f'/media/uploads/{upload["id"]}/complete',
+        json={field:body[field] for field in ('sha256','byte_length')},headers=write_headers(d)),200)
+
+
+def test_standard_legacy_media_upload_without_asset_expiry_commits(d,enabled,scheduler):
+    jobs,client = enabled
+    data = json.dumps(archive_room(d.classroom).session).encode()
+    upload,asset = media_upload(d,d.client,data,mime='application/json',purpose='import_package',classroom=None)
+    assert asset['expires_at'] is None
+    preview = response(client.post(BASE+'/imports/preview',headers=write_headers(d),json={
+        'upload_id':upload['id'],'destination_course_id':str(d.course.id)}),201)
+    job = response(client.post(BASE+'/imports/commit',headers=write_headers(d),json=dict(
+        preview_id=preview['id'],archive_sha256=preview['archive_sha256'],
+        confirm_independent_copy=True,allow_missing=False)),202)
+    assert PortableTaskWorker(jobs,scheduler,worker_id='legacy-http').run_once()
+    assert state(client,job['id'])['state'] == 'succeeded'
+
+
+@pytest.mark.parametrize('format_name',['json','markdown'])
+def test_reading_export_works_when_classroom_contains_native_webp(d,enabled,scheduler,format_name):
+    jobs,client = enabled
+    content = io.BytesIO()
+    Image.new('RGB',(2,3),'white').save(content,'WEBP')
+    media_upload(d,client,content.getvalue(),mime='image/webp',purpose='slide',classroom=str(d.classroom.id))
+    request = dict(scope='class_session',scope_id=str(d.classroom.id),format=format_name,
+                   include_audio=False,confirmed_audio_privacy=False,allow_missing=False)
+    queued = response(client.post(BASE+'/exports',headers=write_headers(d),json=request),202)
+    assert PortableTaskWorker(jobs,scheduler,worker_id='supported-reading').run_once()
+    artifact = fetch_export(d,client,queued['id'])
+    if format_name == 'json':
+        assert json.loads(artifact)['classrooms'][0]['web_media'][0]['mime_type'] == 'image/webp'
+    else:
+        assert artifact.startswith(b'# Synthetic deletion session')
+
+
+def test_legacy_api_and_multipart_share_one_upload_budget(d,enabled):
+    _,client = enabled
+    data = json.dumps(archive_room(d.classroom).session).encode()
+    upload,asset = media_upload(d,client,data,mime='application/json',purpose='import_package',classroom=None)
+    assert asset['expires_at'] == upload['expires_at']
+    digest = hashlib.sha256(data).hexdigest()
+    denied = client.post(BASE+'/imports/uploads',headers=write_headers(d),
+        json=dict(byte_length=len(data),archive_sha256=digest,mime_type='application/json'))
+    assert denied.status_code == 429
+    preview = response(client.post(BASE+'/imports/preview',headers=write_headers(d),json={
+        'upload_id':upload['id'],'destination_course_id':str(d.course.id)}),201)
+    assert preview['archive_sha256'] == digest

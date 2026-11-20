@@ -86,7 +86,7 @@ class MediaService:
         except ObjectUnavailable:
             raise AuthRejected('STORAGE_UNAVAILABLE', 503) from None
 
-    def create(self, ctx, key, body):
+    def create(self, ctx, key, body, *, portable_imports=None):
         import_package = self.expire_import_packages and body['purpose'] == 'import_package'
         if import_package and body['byte_length'] > self.IMPORT_PACKAGE_MAX_BYTES:
             raise AuthRejected('CAPACITY_EXCEEDED', 413)
@@ -98,8 +98,12 @@ class MediaService:
         value = dict(body)
         value['class_session_id'] = identifier(body['class_session_id']) if body['class_session_id'] else None
         with self.transaction(ctx, write=True) as (repo, _):
+            if portable_imports is not None:
+                portable_imports.lock_legacy_admission(repo)
             upload, asset = repo.create(value, identifier(key), fingerprint(body), self.policy,
                                         max_import_assets=self.IMPORT_PACKAGE_MAX_ASSETS if import_package else None)
+            if portable_imports is not None:
+                portable_imports.register_legacy_upload(repo, upload, asset)
             return upload_dto(upload, asset)
 
     def descriptor(self, ctx, upload_id):

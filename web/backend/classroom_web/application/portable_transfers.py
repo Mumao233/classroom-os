@@ -72,32 +72,46 @@ class PortableTransfers:
                                archive_sha256=digest, mime=mime)
             return life.transfer(row['id'])
 
+    def lock_legacy_admission(self, repo):
+        if not self.deletion.ready:
+            raise AuthRejected('SERVICE_DISABLED', 503)
+        PortableLifecycle(repo.tx).gate()
+
+    def register_legacy_upload(self, repo, upload, asset):
+        life = PortableLifecycle(repo.tx)
+        return self._link_legacy(life, upload, asset, verified=False)
+
     def adapt_legacy(self, ctx, upload_id):
-        # Read the original pinned private object, preserving its earlier expiry.
-        # This applies only to verified package uploads from the existing Media route.
-        upload_id = identifier(upload_id)
+        # A verified package created before the candidate may have no asset TTL.
         with self._transaction(ctx, write=True) as (life, repo, _):
             life.gate()
-            upload, asset = repo.upload(upload_id)
-            if (upload['state'] != 'verified' or asset['kind'] != 'import_package'
-                    or asset['status'] != 'committed' or asset['class_session_id'] is not None
-                    or asset['expires_at'] is None
-                    or asset['mime_type'] not in ('application/json','application/zip')
-                    or asset['byte_length'] > PORTABLE_V21.part_bytes):
+            upload, asset = repo.upload(identifier(upload_id))
+            if upload['state'] != 'verified' or asset['status'] != 'committed':
                 raise AuthRejected('SOURCE_UNAVAILABLE', 409)
-            digest = fingerprint({'legacy_upload': str(upload_id), 'sha256': asset['sha256']})
-            row = life.reserve('import', asset['byte_length'], upload_id, digest,
-                               archive_sha256=asset['sha256'], mime=asset['mime_type'])
-            current = life.transfer(row['id'])
-            if current['state'] == 'uploading':
-                cutoff = min(d for d in (current['access_until'],upload['expires_at'],asset['expires_at'],
-                                         asset['hard_expire_at']) if d)
-                life.rows('''INSERT INTO portable_transfer_media(owner_id,transfer_id,asset_id,part_number)
-                    VALUES(:owner,:transfer,:asset,0) RETURNING asset_id''',
-                    transfer=current['id'], asset=asset['id']).one()
-                life.rows('''UPDATE portable_transfers SET state='verified',access_until=:until
-                    WHERE owner_id=:owner AND id=:id RETURNING id''', id=current['id'],until=cutoff).one()
-            return current['id']
+            return self._link_legacy(life, upload, asset, verified=True)
+
+    @staticmethod
+    def _link_legacy(life, upload, asset, *, verified):
+        if (asset['kind'] != 'import_package' or asset['class_session_id'] is not None
+                or asset['mime_type'] not in ('application/json','application/zip')
+                or asset['byte_length'] > PORTABLE_V21.part_bytes):
+            raise AuthRejected('VALIDATION_FAILED', 422)
+        upload_id = upload['id']
+        digest = fingerprint({'legacy_upload': str(upload_id), 'sha256': asset['sha256']})
+        row = life.reserve('import', asset['byte_length'], upload_id, digest,
+                           archive_sha256=asset['sha256'], mime=asset['mime_type'])
+        current = life.transfer(row['id'])
+        cutoff = min(d for d in (current['access_until'],upload['expires_at'],asset['expires_at'],
+                                 asset['hard_expire_at']) if d)
+        life.rows('''INSERT INTO portable_transfer_media(owner_id,transfer_id,asset_id,part_number)
+            VALUES(:owner,:transfer,:asset,0) ON CONFLICT (transfer_id,part_number) DO NOTHING''',
+            transfer=current['id'], asset=asset['id'])
+        life.rows('''UPDATE media_assets SET expires_at=:until WHERE owner_id=:owner AND id=:id
+            AND (expires_at IS NULL OR expires_at>:until)''', id=asset['id'],until=cutoff)
+        life.rows('''UPDATE portable_transfers SET state=:state,access_until=:until
+            WHERE owner_id=:owner AND id=:id''', id=current['id'],until=cutoff,
+            state='verified' if verified else current['state'])
+        return current['id']
 
     def upload_status(self, ctx, identity):
         with self._transaction(ctx) as (life, _, _):

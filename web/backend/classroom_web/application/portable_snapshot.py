@@ -92,7 +92,7 @@ class ExportSnapshot:
             available = {row['id']: repo.asset(row['id'], available=True) for row in images}
         return clazz, history, sources, available, notes, evidence
 
-    def read(self, classroom_id, *, allow_missing):
+    def read(self, classroom_id, *, allow_missing, include_images=True):
         self.pulse()
         clazz, history, sources, images, notes, evidence = self._read(classroom_id)
         session, media, mappings = {}, [], {}
@@ -104,6 +104,14 @@ class ExportSnapshot:
         session.setdefault('created_at', clazz.created_at.isoformat())
         self._refresh_segments(session, mappings.get('segments', {}), sources)
         self._refresh_notes(session, mappings.get('review', {}), notes, evidence)
+        dependencies = {('media', identity) for identity in images}
+        dependencies.update(('transcript', row['id']) for row in sources)
+        dependencies.update(('transcript', item['source_id']) for selection in evidence.values() for item in selection)
+        if not include_images:
+            session['web_media'] = [dict(id=image_id.hex, mime_type=asset['mime_type'],
+                                         sha256=asset['sha256'], byte_length=asset['byte_length'])
+                                    for image_id,asset in images.items()]
+            return ArchiveClassroom(session, (), ()), dependencies
         by_path = {}
         used = set()
         for item in media:
@@ -149,9 +157,6 @@ class ExportSnapshot:
             media.append(dict(kind='image', id=alias, version=row['version'], sha256=row['sha256'],
                               original_path=original, archive_path=path, availability='available', size=member.size))
             by_path.setdefault(path, member)
-        dependencies = {('media', identity) for identity in images}
-        dependencies.update(('transcript', row['id']) for row in sources)
-        dependencies.update(('transcript', item['source_id']) for selection in evidence.values() for item in selection)
         return ArchiveClassroom(session, tuple(media), tuple(by_path.values())), dependencies
 
     @staticmethod

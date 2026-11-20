@@ -19,10 +19,10 @@ def as_json(value):
     return json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(',', ':'))
 
 
-def literal_markdown(value):
+def literal_markdown(value, *, max_chars=120000):
     # Legacy input is plain text here. Preserve the untouched value in the archival snapshot.
     escaped = re.sub(r'([\\`*_{}\[\]()<>#!|+~>:.&-])', lambda match: chr(92) + match[0], value)
-    require(len(escaped) <= 120000, 'CAPACITY_EXCEEDED')
+    require(len(escaped) <= max_chars, 'CAPACITY_EXCEEDED')
     return escaped
 
 
@@ -164,9 +164,8 @@ class ImportCopy:
                 if kind in ('cards', 'notes') and key not in overlays:
                     draft = item['user_draft']
                     content = draft['content']
-                    if content.strip() or draft['personal_note'].strip():
+                    if draft['revision'] > 0 and (content.strip() or draft['personal_note'].strip()):
                         title = item['ai_content'].get('title') or 'Imported review'
-                        require(len(title) <= 200)
                         document = review.create_note(dict(class_session_id=str(classroom), title=title,
                             body_markdown=literal_markdown(content + ('\n\n' + draft['personal_note'] if draft['personal_note'] else '')),
                             draft_id=str(uuid4())), uuid4())
