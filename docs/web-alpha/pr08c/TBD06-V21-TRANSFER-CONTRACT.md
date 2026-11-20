@@ -46,7 +46,7 @@
 
 ## 实现候选接线
 
-- `create_app(portable_jobs=...)` 在同一显式合成环境中挂载业务路由和 multipart。冻结的 `ExportRequest`、`ImportCommit`、`ImportPreview`、`Task`、`MediaAccess` 响应体维持原样。兼容上传经现有 Media 流程校验后可转换为同一原样重导流程，使用更早的既有访问截止时间。
+- `create_app(portable_jobs=...)` 在同一显式合成环境中挂载业务路由和 multipart。冻结的 `ExportRequest`、`ImportCommit`、`ImportPreview`、`Task`、`MediaAccess` 响应体维持原样。兼容上传经现有 Media 流程校验后可转换为同一原样重导流程，使用更早的既有访问截止时间。旧 Media 客户端可使用 `Upload.id` 调用候选 cancel 路径，释放未完成上传的 owner 名额；对象字节仍计到物理擦除。
 - `POST /exports` 和 `POST /imports/commit` 均按现有 202 Task 协议回执。平台槽位、Task、回执、Outbox、绑定在同一事务建立。仅 `pr08c-1` 专用 worker 执行，可查询或取消。成功导出的 Task.result_id 指向私有资产，导入指向首个新课堂。所有原课堂 UUID 与新课堂 UUID 的映射随提交持久化。
 - 现行候选封口在有界请求内完成流式校验并提交 verified。对象存储或数据库失败后按同一操作键和固定分片版本重试。封口未写正式课堂，也不排入执行槽。旧草案设想过异步 sealing 状态，本次 §3.1 复审覆盖这项调整。
 - 聚合 ZIP 根为 `aggregate.json`，字段为 `schema_version=1`、`format=classroom-assistant-aggregate`、`scope` 和 `sessions`。每个课堂命名空间由清单列出的 32 位小写十六进制 ID 界定。成员只含 `session.json`、`manifest.json` 及清单列出的图片，单课堂清单兼容 schema 1。Web 持久模型使用 `web_transcript`、`web_images`、`web_notes` 保留真实版本和缺失时间信息。原始来源 UUID、片段哈希与 frozen excerpt 不重写，独立副本另建本地映射。已导入后编辑的正文与 Review 导出当前版本，旧证据独立保留。Web Review 的 Markdown 与个人注释分别存储，并通过原 Review 映射覆盖个人稿。

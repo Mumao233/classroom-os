@@ -378,3 +378,21 @@ def test_legacy_api_and_multipart_share_one_upload_budget(d,enabled):
     preview = response(client.post(BASE+'/imports/preview',headers=write_headers(d),json={
         'upload_id':upload['id'],'destination_course_id':str(d.course.id)}),201)
     assert preview['archive_sha256'] == digest
+
+
+def test_abandoned_legacy_upload_cancels_using_returned_id(d,enabled):
+    _,client = enabled
+    data = json.dumps(archive_room(d.classroom).session).encode()
+    digest = hashlib.sha256(data).hexdigest()
+    legacy = response(client.post(BASE+'/media/uploads',headers=write_headers(d),json=dict(
+        purpose='import_package',class_session_id=None,mime_type='application/json',
+        byte_length=len(data),sha256=digest,filename='synthetic')),201)
+    assert client.post(BASE+'/imports/uploads',headers=write_headers(d),
+        json=dict(byte_length=len(data),archive_sha256=digest,mime_type='application/json')).status_code == 429
+    url = BASE + '/imports/uploads/' + legacy['id'] + '/cancel'
+    key = uuid4()
+    cancelled = response(client.post(url,headers=write_headers(d,key),json={}),200)
+    assert cancelled['upload_id'] == legacy['id'] and cancelled['state'] == 'cancelled'
+    assert response(client.post(url,headers=write_headers(d,key),json={}),200) == cancelled
+    response(client.post(BASE+'/imports/uploads',headers=write_headers(d),
+        json=dict(byte_length=len(data),archive_sha256=digest,mime_type='application/json')),201)

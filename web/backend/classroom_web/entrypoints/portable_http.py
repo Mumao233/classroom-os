@@ -93,8 +93,8 @@ def register_portable(app, *, service, secure, request_context, body_for, failur
                         row, _ = await blocking(service.upload_status, ctx, upload)
                         result = result | {'expires_at': row['access_until'].isoformat()}
                     else:
-                        row = await blocking(partial(service.cancel, key=key), ctx, upload)
-                        result = dict(upload_id=str(row['id']), state='cancelled', expires_at=row['access_until'].isoformat())
+                        row = await blocking(partial(service.cancel, key=key, import_only=True), ctx, upload)
+                        result = dict(upload_id=upload, state='cancelled', expires_at=row['access_until'].isoformat())
                 return JSONResponse(result, status_code=status, headers={
                     'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff'})
             except AuthRejected as error:

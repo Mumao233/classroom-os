@@ -291,19 +291,29 @@ class PortableTransfers:
             # Revocation or a reclaimed lease already owns cleanup.
             pass
 
-    def cancel(self, ctx, identity, *, key=None):
-        identity = identifier(identity)
+    def cancel(self, ctx, identity, *, key=None, import_only=False):
+        requested = identifier(identity)
         with self._transaction(ctx, write=True) as (life, repo, _):
             life.gate()
-            digest = fingerprint({'transfer_id': str(identity)})
-            prior = repo.receipt('portableCancel', operation_key(key), digest) if key is not None else None
-            row = life.close(identity)
+            row = life.rows('''SELECT id,kind FROM portable_transfers WHERE owner_id=:owner AND id=:id''',
+                            id=requested).one_or_none()
             if row is None:
+                row = life.rows('''SELECT t.id,t.kind FROM media_uploads u
+                    JOIN portable_transfer_media p ON (p.owner_id,p.asset_id)=(u.owner_id,u.asset_id)
+                    JOIN portable_transfers t ON (t.owner_id,t.id)=(p.owner_id,p.transfer_id)
+                    WHERE u.owner_id=:owner AND u.id=:upload AND t.kind='import' ''',
+                    upload=requested).one_or_none()
+            if row is None or (import_only and row['kind'] != 'import'):
                 raise AuthRejected('NOT_FOUND', 404)
-            if key is not None and prior is None:
-                repo.remember('portableCancel', operation_key(key), digest, 'media_upload', identity, {}, 200)
+            transfer_id = row['id']
+            digest = fingerprint({'transfer_id': str(transfer_id)})
+            op = operation_key(key) if key is not None else None
+            prior = repo.receipt('portableCancel', op, digest) if op is not None else None
+            closed = life.close(transfer_id)
+            if op is not None and prior is None:
+                repo.remember('portableCancel', op, digest, 'media_upload', transfer_id, {}, 200)
             life.gate()
-            return row
+            return closed
 
     @staticmethod
     def _authorize_sources(repo, sources):
