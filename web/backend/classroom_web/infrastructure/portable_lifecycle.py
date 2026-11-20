@@ -259,6 +259,11 @@ class PortableLifecycle:
 
     def close(self, transfer_id):
         self.gate()
-        return self.rows('''UPDATE portable_transfers SET state='closed',access_until=least(access_until,:now)
+        row = self.rows('''UPDATE portable_transfers SET state='closed',access_until=least(access_until,:now)
             WHERE owner_id=:owner AND id=:id RETURNING *''',
             id=transfer_id, now=self.now()).one_or_none()
+        if row is not None and row['kind'] == 'import':
+            self.rows('''UPDATE media_uploads u SET state='rejected' FROM portable_transfer_media p
+                WHERE (p.owner_id,p.asset_id)=(u.owner_id,u.asset_id) AND p.owner_id=:owner
+                    AND p.transfer_id=:id AND u.state IN ('staging','uploaded')''', id=transfer_id)
+        return row

@@ -1,4 +1,5 @@
 """PR-08c HTTP, crash recovery, queue and charged pool capacity over PostgreSQL and S3."""
+from dataclasses import replace
 import hashlib
 import io
 import json
@@ -380,13 +381,15 @@ def test_legacy_api_and_multipart_share_one_upload_budget(d,enabled):
     assert preview['archive_sha256'] == digest
 
 
-def test_abandoned_legacy_upload_cancels_using_returned_id(d,enabled):
+def test_abandoned_legacy_upload_cancels_using_returned_id(d,enabled,monkeypatch):
     _,client = enabled
+    monkeypatch.setattr(d.service, 'policy', replace(d.service.policy,max_pending=1))
     data = json.dumps(archive_room(d.classroom).session).encode()
     digest = hashlib.sha256(data).hexdigest()
-    legacy = response(client.post(BASE+'/media/uploads',headers=write_headers(d),json=dict(
-        purpose='import_package',class_session_id=None,mime_type='application/json',
-        byte_length=len(data),sha256=digest,filename='synthetic')),201)
+    metadata = dict(purpose='import_package',class_session_id=None,mime_type='application/json',
+                    byte_length=len(data),sha256=digest,filename='synthetic')
+    legacy = response(client.post(BASE+'/media/uploads',headers=write_headers(d),json=metadata),201)
+    assert client.post(BASE+'/media/uploads',headers=write_headers(d),json=metadata).status_code == 429
     assert client.post(BASE+'/imports/uploads',headers=write_headers(d),
         json=dict(byte_length=len(data),archive_sha256=digest,mime_type='application/json')).status_code == 429
     url = BASE + '/imports/uploads/' + legacy['id'] + '/cancel'
@@ -394,5 +397,6 @@ def test_abandoned_legacy_upload_cancels_using_returned_id(d,enabled):
     cancelled = response(client.post(url,headers=write_headers(d,key),json={}),200)
     assert cancelled['upload_id'] == legacy['id'] and cancelled['state'] == 'cancelled'
     assert response(client.post(url,headers=write_headers(d,key),json={}),200) == cancelled
-    response(client.post(BASE+'/imports/uploads',headers=write_headers(d),
-        json=dict(byte_length=len(data),archive_sha256=digest,mime_type='application/json')),201)
+    replacement = response(client.post(BASE+'/media/uploads',headers=write_headers(d),json=metadata),201)
+    assert replacement['id'] != legacy['id']
+    assert one(d,'SELECT state FROM media_uploads WHERE id=:id',id=UUID(legacy['id']))['state'] == 'rejected'
