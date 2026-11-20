@@ -69,6 +69,14 @@ class S3ObjectStore:
             raise ObjectUnavailable('object inspection failed') from None
 
     def put(self, key, content, length, sha256):
+        return self._put(key, content, length, sha256, 64_000)
+
+    def put_portable(self, key, content, length, sha256):
+        if not self.synthetic_loopback:
+            raise ObjectUnavailable('portable candidate requires a synthetic store')
+        return self._put(key, content, length, sha256, 1_000_000)
+
+    def _put(self, key, content, length, sha256, block_size):
         self._key(key)
         try:
             content.seek(0)
@@ -83,9 +91,9 @@ class S3ObjectStore:
         if obj is None or obj.byte_length != length:
             raise ObjectUnavailable('object size mismatch')
         digest = hashlib.sha256()
-        for first in range(0, length, 64_000):
+        for first in range(0, length, block_size):
             remaining()
-            digest.update(self.read(obj, first, min(length - 1, first + 63_999)))
+            digest.update(self.read(obj, first, min(length - 1, first + block_size - 1)))
         if digest.hexdigest() != sha256:
             raise ObjectUnavailable('object integrity mismatch')
         return obj

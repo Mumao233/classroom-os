@@ -254,6 +254,9 @@ class PgDeletionQueue(_SystemIdentity):
     """Lease-fenced physical deletion queue; sees identifiers and object keys only."""
     GROUP = 'classroom_web_deletion_worker'
 
+    def portable_maintenance(self):
+        return dict(self._call('SELECT * FROM classroom_web_portable_gate()')[0])
+
     def claim(self, worker, lease_seconds):
         rows = self._call('SELECT * FROM classroom_web_claim_deletion(:worker,:seconds)', worker=worker, seconds=lease_seconds)
         return DeletionClaim(**rows[0]) if rows else None

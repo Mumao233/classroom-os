@@ -71,7 +71,8 @@ class Database:
                       'deletion_assets','deletion_executions','retention_policies','restore_task_quarantine',
                       'capture_policy','consent_records','capture_epochs','capture_leases','capture_gaps',
                       'audio_chunks','capture_epoch_state','capture_recovery_grants','audio_chunk_state',
-                      'sync_operations','sync_conflicts','sync_resolutions','sync_preferences','sync_marks')
+                      'sync_operations','sync_conflicts','sync_resolutions','sync_preferences','sync_marks',
+                      'portable_transfers','portable_transfer_media','portable_export_sources','portable_slots')
                     AND pg_has_role(current_user, c.relowner, 'USAGE')
                 ) FROM pg_roles r WHERE r.rolname=current_user
             """))

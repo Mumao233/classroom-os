@@ -29,3 +29,13 @@
 - P1 成立。旧版 `plan_batches()` 在 `evidence_subset()` 的快照哈希后添加三项批次上下文。批次按原版哈希投影验签，并核对上下文引用与父快照内容。卡片等原本包含这些字段的全量哈希仍按原语义校验。黄金测试加入旧版实际批次生成器。
 - P2 成立。畸形 `selected_note_id` 和不可解码 ZIP 文件名分别在类型和归档边界返回确定性的 422，测试覆盖两条路径。历史课件版本额外拒绝重复版本或倒挂版本。
 - R0 审查进程自行运行过一组宿主只读探针，这些结果未计入项目验证。项目回归证据来自 VMware 来宾及独立 GitHub CI。
+
+
+## 2026-11-20 · TBD-06 v2.1 探索候选
+
+- 续接 Draft #22，原 head 为 `20085ec5444efc3cac85da8ed6c13add0b97807f`，分支合流点为 `01a8ab833ecd4aee21081bebb8b93bd86bb9996a`。本轮查得远端 main 为 `db0bc8337787cc89a11a989b125d22ce28d0e01d`，其新增提交不包含 Alembic 变更。保持 PR-08c 独立提交。
+- [字段级契约](TBD06-V21-TRANSFER-CONTRACT.md) 提交 `da03efd1ecc39e6cf9f373daec6239256b3178d0` 经 Astra 静态复审，P0/P1/P2/P3 为 0/0/0/0。报告位于 `outputs/astra-review/20261120T183709Z-commit-da03efd1ecc39e6cf9f373daec6239256b3178d0-r0-7u9BJV/review.md`。此次覆盖该契约提交。之后的实现和聚合包形状待复审。
+- Alembic `0015_portable_lifecycle` 接在 `0014_offline_sync` 后。新增 owner RLS 表和受限维护身份，两个暂存池各计 5 GB，以数据库事务决定准入。撤权及到期后复用 04b 账本及对象版本擦除，确认已清除后才回收预留。维护入口返回超过 24 小时的告警数和超过 72 小时的事故数，探索环境由测试显式驱动。
+- 候选 ZIP 写入器接受固定版本、已授权的课堂快照。根 `aggregate.json` 携带 `schema_version=1`、`format=classroom-assistant-aggregate`、`scope`、`sessions`，每个会话目录包含旧 schema-1 的 `manifest.json` 和 `session.json` 及图片。生成前估算边界，实际生成后由同一导入解析器复核，私有对象的版本和字节再次核验后才生成候选下载能力。该 ZIP 布局属于实现实验。
+- 新服务仅接受隔离的合成 PostgreSQL 与私有 loopback S3。正式 HTTP/WS 契约和既有入口沿用。§8 探索直接调用候选服务。正式 `/exports` Task/Attempt/Outbox 挂接、封口异步 202 状态、HTTP Range 206 集成、撤权与物理删除后台接线、全来源的原生快照采集和 `/imports/commit` 独立课堂持久化，仍属于 PR Draft 阻断。按停用候选调用方回退，保留前向迁移和删除账本。尚无生产启用，后续须在改造后台前保留受控暂存的清理能力。
+- VMware 首轮后端为 1 通过、2 失败。候选维护函数的固定 search path 缺少受保护的 public schema，使 05b 现有媒体触发器无法解析 capture 表类型。仅修复新函数的 search path，未修改 05b 触发器。第二轮 3 通过。浏览器探针两次测试夹具错误均保留日志，修复路径解析及 grant 克隆后在真实 Chromium 验证通过。此探针调低真实 origin quota，尚未测 1 GB 近满池性能。05b/08a 产品文件均未更改。

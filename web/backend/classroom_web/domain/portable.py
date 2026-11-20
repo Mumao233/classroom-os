@@ -12,7 +12,7 @@ import wave
 import zipfile
 import zlib
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import PurePosixPath
 
 from PIL import Image
@@ -53,6 +53,30 @@ class PackageLimits:
 
 
 @dataclass(frozen=True)
+class PortableV21Policy:
+    version: str = 'tbd06-v2'
+    archive_bytes: int = 500_000_000
+    expanded_bytes: int = 1_000_000_000
+    metadata_bytes: int = 16_000_000
+    total_metadata_bytes: int = 64_000_000
+    part_bytes: int = 16_000_000
+    files: int = 10_000
+    path_depth: int = 32
+    ratio: int = 100
+    image_pixels: int = 50_000_000
+    total_image_pixels: int = 4_000_000_000
+    pool_bytes: int = 5_000_000_000
+    slots: int = 4
+    worker_lease: timedelta = timedelta(minutes=5)
+    confirmation_lease: timedelta = timedelta(minutes=30)
+    access_age: timedelta = timedelta(hours=24)
+    ticket_age: timedelta = timedelta(seconds=60)
+
+
+PORTABLE_V21 = PortableV21Policy()
+
+
+@dataclass(frozen=True)
 class MediaReference:
     kind: str
     path: str
@@ -85,7 +109,7 @@ def canonical_hash(value):
     return hashlib.sha256(raw.encode('utf8')).hexdigest()
 
 
-def strict_json(raw, maximum):
+def strict_json(raw, maximum, *, max_items=4096, max_nodes=60_000):
     require(len(raw) <= maximum, 'CAPACITY_EXCEEDED')
 
     def object_members(pairs):
@@ -110,14 +134,14 @@ def strict_json(raw, maximum):
     while pending:
         depth, item = pending.pop()
         count += 1
-        require(depth <= 28 and count <= 60_000, 'CAPACITY_EXCEEDED')
+        require(depth <= 28 and count <= max_nodes, 'CAPACITY_EXCEEDED')
         if type(item) is dict:
             require(all(len(key) <= 128 and key.isprintable() for key in item))
             require(not any(key in item for key in ('required_fields', 'required_features', 'critical')),
                     'PORTABLE_VERSION_UNSUPPORTED')
             pending.extend((depth + 1, child) for child in item.values())
         elif type(item) is list:
-            require(len(item) <= 4096, 'CAPACITY_EXCEEDED')
+            require(len(item) <= max_items, 'CAPACITY_EXCEEDED')
             pending.extend((depth + 1, child) for child in item)
         elif isinstance(item, str):
             require(len(item) <= 400_000, 'CAPACITY_EXCEEDED')
@@ -307,15 +331,19 @@ def session_references(session):
     return media
 
 
-def archive_entries(raw, limits):
+def archive_entries(source, length, limits, *, directories=0):
     # Bound the actual directory bytes before ZipFile allocates ZipInfo objects.
     # A non-ZIP64 archive is sufficient within the experimental bounds.
-    end_at = raw.rfind(b'PK\x05\x06', max(0, len(raw) - 65_557))
-    require(end_at >= 0 and end_at + 22 <= len(raw))
-    _, disk, first_disk, disk_count, count, size, offset, comment = struct.unpack_from('<4s4H2IH', raw, end_at)
-    require(disk == first_disk == 0 and disk_count == count and end_at + 22 + comment == len(raw))
-    require(0 < count <= limits.files and size <= limits.files * 1024, 'CAPACITY_EXCEEDED')
-    require(offset + size == end_at)
+    tail_start = max(0, length - 65_557)
+    source.seek(tail_start)
+    tail = source.read(length - tail_start)
+    end_at = tail.rfind(b'PK\x05\x06')
+    require(end_at >= 0 and end_at + 22 <= len(tail))
+    _, disk, first_disk, disk_count, count, size, offset, comment = struct.unpack_from('<4s4H2IH', tail, end_at)
+    require(disk == first_disk == 0 and disk_count == count and end_at + 22 + comment == len(tail))
+    maximum = limits.files + directories
+    require(0 < count <= maximum and size <= maximum * 1024, 'CAPACITY_EXCEEDED')
+    require(offset + size == tail_start + end_at)
     return count
 
 
@@ -381,77 +409,175 @@ def verify_asset(content, name, pixel_budget):
 
 
 def inspect_zip(raw, limits):
-    count = archive_entries(raw, limits)
-    with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+    return inspect_zip_stream(io.BytesIO(raw), len(raw), limits)
+
+
+def inspect_zip_stream(source, length, limits, *, v21=False):
+    require(0 < length <= limits.archive_bytes, 'CAPACITY_EXCEEDED')
+    max_dirs = limits.files if v21 else 0
+    count = archive_entries(source, length, limits, directories=max_dirs)
+    with zipfile.ZipFile(source) as archive:
         entries = archive.infolist()
         require(len(entries) == count)
-        require(sum(item.file_size for item in entries) <= limits.expanded_bytes, 'CAPACITY_EXCEEDED')
+        expanded = sum(item.file_size for item in entries)
+        require(expanded <= limits.expanded_bytes, 'CAPACITY_EXCEEDED')
+        if v21:
+            require(expanded <= length * limits.ratio, 'CAPACITY_EXCEEDED')
         names = set()
+        by_name = {}
         for entry in entries:
-            name = safe_path(entry.orig_filename)
+            directory = entry.is_dir()
+            original = entry.orig_filename
+            name = safe_path(original[:-1] if directory and v21 else original)
             mode = (entry.external_attr >> 16) & 0o170000
-            require(name == entry.filename and name.casefold() not in names and not entry.is_dir()
-                    and not entry.flag_bits & 1 and mode in (0, stat.S_IFREG)
+            require(original == entry.filename and name.casefold() not in names
+                    and not entry.flag_bits & 1
                     and entry.compress_type in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED))
+            if v21:
+                require(len(PurePosixPath(name).parts) <= limits.path_depth, 'CAPACITY_EXCEEDED')
+            names.add(name.casefold())
+            if directory:
+                require(v21 and mode in (0, stat.S_IFDIR) and entry.file_size == 0 and entry.compress_size == 0)
+                continue
+            require(mode in (0, stat.S_IFREG))
             if entry.compress_type == zipfile.ZIP_STORED:
                 require(entry.file_size == entry.compress_size)
             require(entry.file_size <= max(entry.compress_size, 1) * limits.ratio, 'CAPACITY_EXCEEDED')
-            names.add(name.casefold())
-        by_name = {entry.filename: entry for entry in entries}
-        require({'manifest.json', 'session.json'} <= by_name.keys())
-        manifest = strict_json(read_member(archive, by_name.pop('manifest.json'), limits.metadata_bytes),
-                               limits.metadata_bytes)
-        schema(manifest, required=('format', 'source_session_id', 'media', 'files'))
-        require(manifest['format'] == 'classroom-assistant-package', 'PORTABLE_VERSION_UNSUPPORTED')
-        declared = {}
-        for entry in records(manifest['files']):
-            name = safe_path(entry.get('path'))
-            require(name not in declared and name in by_name and match(SHA, entry.get('sha256'))
-                    and type(entry.get('size')) is int and entry['size'] == by_name[name].file_size)
-            declared[name] = entry['sha256']
-        require(declared.keys() == by_name.keys())
-        session = strict_json(read_member(archive, by_name['session.json'], limits.metadata_bytes),
-                              limits.metadata_bytes)
-        references = session_references(session)
-        require(manifest['source_session_id'] == session['id'])
-        assets, omitted = {}, set()
-        registered = set()
-        for item in records(manifest['media']):
-            path, state = item.get('original_path'), item.get('availability')
-            require(isinstance(path, str) and path in references and path not in registered
-                    and isinstance(state, str) and state in UNAVAILABLE | {'available'})
-            ref = references[path]
-            require(type(item.get('id')) is type(ref.identity) and item['id'] == ref.identity
-                    and item.get('kind') == ref.kind)
-            if ref.kind == 'image':
-                require(type(item.get('version')) is int and item['version'] == ref.version
-                        and item.get('sha256') == ref.sha256)
-            registered.add(path)
-            if state != 'available':
-                require('archive_path' not in item and state not in ('invalid', 'corrupt'))
-                omitted.add(path)
-                continue
-            asset, sha = item.get('archive_path'), item.get('sha256')
-            require(match(ASSET, asset) and match(SHA, sha)
-                    and asset == f'assets/{sha}{PurePosixPath(path).suffix}'
-                    and declared.get(asset) == sha and type(item.get('size')) is int
-                    and by_name[asset].file_size == item['size'] > 0)
-            assets.setdefault(asset, []).append(ref)
+            by_name[name] = entry
+        require(len(by_name) <= limits.files and count-len(by_name) <= max_dirs, 'CAPACITY_EXCEEDED')
+        if v21:
+            metadata = [entry.file_size for name, entry in by_name.items() if name.lower().endswith('.json')]
+            require(all(size <= limits.metadata_bytes for size in metadata)
+                    and sum(metadata) <= limits.total_metadata_bytes, 'CAPACITY_EXCEEDED')
+        if v21 and 'aggregate.json' in by_name:
+            return inspect_aggregate(archive, by_name, limits)
+        return inspect_members(archive, by_name, limits, v21, limits.total_image_pixels)[:4]
 
-        require(registered == references.keys()
-                and assets.keys() == {name for name in declared if name.startswith('assets/')})
-        pixel_budget = limits.total_image_pixels
-        for name, sha in declared.items():
-            content = read_member(archive, by_name[name], limits.expanded_bytes)
-            require(hashlib.sha256(content).hexdigest() == sha)
-            if name in assets:
-                size = verify_asset(content, name, min(limits.image_pixels, pixel_budget))
-                require(all(ref.dimensions in (None, size) for ref in assets[name]))
-                if size:
-                    pixel_budget -= size[0] * size[1]
-        media_bytes = sum(by_name[name].file_size for name, refs in assets.items() if refs[0].kind == 'image')
-        audio_excluded = any(ref.kind == 'audio' for ref in references.values())
-        return session, media_bytes, bool(omitted), audio_excluded
+
+def inspect_members(archive, by_name, limits, v21, pixel_budget):
+    require({'manifest.json', 'session.json'} <= by_name.keys())
+    bounds = dict(max_items=limits.files, max_nodes=250_000) if v21 else {}
+    manifest = strict_json(read_member(archive, by_name.pop('manifest.json'), limits.metadata_bytes),
+                           limits.metadata_bytes, **bounds)
+    schema(manifest, required=('format', 'source_session_id', 'media', 'files'))
+    require(manifest['format'] == 'classroom-assistant-package', 'PORTABLE_VERSION_UNSUPPORTED')
+    declared = {}
+    for entry in records(manifest['files']):
+        name = safe_path(entry.get('path'))
+        require(name not in declared and name in by_name and match(SHA, entry.get('sha256'))
+                and type(entry.get('size')) is int and entry['size'] == by_name[name].file_size)
+        declared[name] = entry['sha256']
+    require(declared.keys() == by_name.keys())
+    session = strict_json(read_member(archive, by_name['session.json'], limits.metadata_bytes),
+                          limits.metadata_bytes, **bounds)
+    references = session_references(session)
+    require(manifest['source_session_id'] == session['id'])
+    assets, omitted = {}, set()
+    registered = set()
+    for item in records(manifest['media']):
+        path, state = item.get('original_path'), item.get('availability')
+        require(isinstance(path, str) and path in references and path not in registered
+                and isinstance(state, str) and state in UNAVAILABLE | {'available'})
+        ref = references[path]
+        require(type(item.get('id')) is type(ref.identity) and item['id'] == ref.identity
+                and item.get('kind') == ref.kind)
+        if ref.kind == 'image':
+            require(type(item.get('version')) is int and item['version'] == ref.version
+                    and item.get('sha256') == ref.sha256)
+        registered.add(path)
+        if state != 'available':
+            require('archive_path' not in item and state not in ('invalid', 'corrupt'))
+            omitted.add(path)
+            continue
+        asset, sha = item.get('archive_path'), item.get('sha256')
+        require(match(ASSET, asset) and match(SHA, sha)
+                and asset == f'assets/{sha}{PurePosixPath(path).suffix}'
+                and declared.get(asset) == sha and type(item.get('size')) is int
+                and by_name[asset].file_size == item['size'] > 0)
+        assets.setdefault(asset, []).append(ref)
+
+    require(registered == references.keys()
+            and assets.keys() == {name for name in declared if name.startswith('assets/')})
+    for name, sha in declared.items():
+        entry = by_name[name]
+        if v21 and name not in assets:
+            digest = hashlib.sha256()
+            with archive.open(entry) as member:
+                for block in iter(lambda: member.read(1_048_576), b''):
+                    digest.update(block)
+            require(digest.hexdigest() == sha)
+            continue
+        content = read_member(archive, entry, limits.part_bytes if v21 else limits.expanded_bytes)
+        require(hashlib.sha256(content).hexdigest() == sha)
+        if name in assets:
+            size = verify_asset(content, name, min(limits.image_pixels, pixel_budget))
+            require(all(ref.dimensions in (None, size) for ref in assets[name]))
+            if size:
+                pixel_budget -= size[0] * size[1]
+    media_bytes = sum(by_name[name].file_size for name, refs in assets.items() if refs[0].kind == 'image')
+    audio_excluded = any(ref.kind == 'audio' for ref in references.values())
+    return session, media_bytes, bool(omitted), audio_excluded, pixel_budget
+
+def inspect_aggregate(archive, by_name, limits):
+    index = strict_json(read_member(archive, by_name.pop('aggregate.json'), limits.metadata_bytes),
+                        limits.metadata_bytes, max_items=limits.files)
+    schema(index, required=('format', 'scope', 'sessions'))
+    require(set(index) == {'schema_version', 'format', 'scope', 'sessions'})
+    require(index['format'] == 'classroom-assistant-aggregate', 'PORTABLE_VERSION_UNSUPPORTED')
+    scope, identities = index['scope'], index['sessions']
+    require(scope in ('account', 'course', 'class_session') and type(identities) is list
+            and 0 < len(identities) <= limits.files and all(match(LEGACY_ID, item) for item in identities)
+            and len(set(identities)) == len(identities))
+    require(scope != 'class_session' or len(identities) == 1)
+    groups = {identity: {} for identity in identities}
+    for name, entry in by_name.items():
+        root, separator, relative = name.partition('/')
+        require(separator and root in groups and (relative in ('manifest.json', 'session.json')
+                or match(ASSET, relative) and relative.endswith(('.png', '.jpg'))))
+        groups[root][relative] = entry
+    total_media = 0
+    pixel_budget = limits.total_image_pixels
+    reports = []
+    for identity, members in groups.items():
+        session, media, omitted, audio, pixel_budget = inspect_members(archive, members, limits, True, pixel_budget)
+        require(session['id'] == identity)
+        total_media += media
+        reports.append(dict(id=identity, omitted_media=omitted, audio_references=audio,
+                            transcript_segments=len(session.get('segments', []))))
+    return scope, tuple(reports), total_media
+
+
+@dataclass(frozen=True)
+class CandidateInspection:
+    scope: str
+    sessions: tuple[dict, ...]
+    media_bytes: int
+
+
+def inspect_candidate(source, length, mime):
+    """The same bounded importer is used for Preview and after ZIP generation."""
+    policy = PORTABLE_V21
+    try:
+        source.seek(0)
+        if mime == 'application/json':
+            require(0 < length <= policy.metadata_bytes, 'CAPACITY_EXCEEDED')
+            raw = source.read(length + 1)
+            require(len(raw) == length)
+            session = strict_json(raw, policy.metadata_bytes, max_items=policy.files, max_nodes=250_000)
+            refs = session_references(session)
+            audio = any(ref.kind == 'audio' for ref in refs.values())
+            return CandidateInspection('class_session', (dict(id=session['id'], omitted_media=bool(refs),
+                audio_references=audio, transcript_segments=len(session.get('segments', []))),), 0)
+        require(mime == 'application/zip')
+        result = inspect_zip_stream(source, length, policy, v21=True)
+        if len(result) == 3:
+            scope, reports, total_media = result
+            return CandidateInspection(scope, reports, total_media)
+        session, media, omitted, audio = result
+        return CandidateInspection('class_session', (dict(id=session['id'], omitted_media=omitted,
+            audio_references=audio, transcript_segments=len(session.get('segments', []))),), media)
+    except (zipfile.BadZipFile, EOFError, RuntimeError, UnicodeError, struct.error, zlib.error) as error:
+        raise InvalidPackage() from error
 
 
 def inspect_package(raw: bytes, mime: str, limits: PackageLimits) -> PackageInspection:
