@@ -66,7 +66,7 @@ class MediaRequestLifecycle:
                 self.slots.release()
 
 
-def register_media(app, *, media, contract, secure, request_context, check, body_for, failure, spool_directory):
+def register_media(app, *, media, contract, secure, request_context, check, body_for, failure, spool_directory, portable=None):
     spool = Path(spool_directory)
     if not spool.is_absolute() or not spool.is_dir():
         raise ValueError('an explicit existing media spool directory is required')
@@ -105,16 +105,25 @@ def register_media(app, *, media, contract, secure, request_context, check, body
                     if len(pairs) != 1 or pairs[0][0] != 'ticket' or len(request.headers.getlist('range')) > 1:
                         raise AuthRejected('VALIDATION_FAILED', 422)
                     token = pairs[0][1]
-                    descriptor = await blocking(media.download, ctx, params['asset_id'], token, request.headers.get('range'))
+                    source = media
+                    if portable is not None:
+                        try:
+                            descriptor = await blocking(portable.download, ctx, params['asset_id'], token, request.headers.get('range'))
+                            source = portable
+                        except AuthRejected as error:
+                            if error.code != 'NOT_FOUND':
+                                raise
+                    if source is media:
+                        descriptor = await blocking(media.download, ctx, params['asset_id'], token, request.headers.get('range'))
                     first, last = descriptor['first'], descriptor['last']
                     # Read the first block before sending headers so storage errors remain typed failures.
                     initial_last = min(last, first + media.policy.block_bytes - 1)
-                    initial = await blocking(media.read_block, ctx, params['asset_id'], token, first, initial_last)
+                    initial = await blocking(source.read_block, ctx, params['asset_id'], token, first, initial_last)
 
                     async def chunks():
                         yield initial
                         for offset in range(initial_last + 1, last + 1, media.policy.block_bytes):
-                            yield await blocking(media.read_block, ctx, params['asset_id'], token,
+                            yield await blocking(source.read_block, ctx, params['asset_id'], token,
                                                  offset, min(last, offset + media.policy.block_bytes - 1))
                     headers = {'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff',
                                'Accept-Ranges': 'bytes', 'Content-Length': str(last-first+1),
@@ -128,6 +137,7 @@ def register_media(app, *, media, contract, secure, request_context, check, body
                 key = request.headers.get('idempotency-key')
                 if identifier(key).version != 4:
                     raise AuthRejected('VALIDATION_FAILED', 422)
+                extra_headers = {}
                 if method == 'put':
                     descriptor = await blocking(media.descriptor, ctx, params['upload_id'])
                     if (request.headers.get('content-type') != 'application/octet-stream'
@@ -153,11 +163,31 @@ def register_media(app, *, media, contract, secure, request_context, check, body
                                  'completeMediaUpload': (media.complete, (ctx, key, params.get('upload_id'), body)),
                                  'issueMediaAccess': (media.access, (ctx, key, params.get('asset_id')))}
                     function, args = functions[operation['operationId']]
-                    result = await blocking(function, *args)
+                    versions = request.headers.getlist('x-asset-version')
+                    if operation['operationId'] == 'issueMediaAccess' and portable is not None:
+                        from ..domain.portable import SHA, match
+                        if len(versions) > 1 or (versions and not match(SHA, versions[0])):
+                            raise AuthRejected('VALIDATION_FAILED', 422)
+                        try:
+                            ticket = await blocking(lambda: portable.issue_ticket(
+                                ctx, params['asset_id'], expected_version=versions[0] if versions else None, key=key))
+                        except AuthRejected as error:
+                            if error.code != 'NOT_FOUND' or versions:
+                                raise
+                            result = await blocking(function, *args)
+                        else:
+                            asset = ticket['asset_id']
+                            result = dict(download_path=f'{prefix}/media/{asset}/content?ticket={ticket["ticket"]}',
+                                          expires_at=ticket['expires_at'].isoformat(), requires_session=True)
+                            extra_headers = {'X-Asset-Version': ticket['asset_version'],
+                                             'X-Archive-SHA256': ticket['sha256'],
+                                             'X-Archive-Length': str(ticket['byte_length'])}
+                    else:
+                        result = await blocking(function, *args)
                 success = next(k for k in operation['responses'] if k.startswith('2'))
                 schema = operation['responses'][success]['content']['application/json']['schema']
                 check(schema, result, response=True)
-                return JSONResponse(result, status_code=int(success), headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'})
+                return JSONResponse(result, status_code=int(success), headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff', **extra_headers})
             except AuthRejected as error:
                 response = failure(error, request_id)
                 if error.status == 416:

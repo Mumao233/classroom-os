@@ -257,6 +257,20 @@ class PgDeletionQueue(_SystemIdentity):
     def portable_maintenance(self):
         return dict(self._call('SELECT * FROM classroom_web_portable_gate()')[0])
 
+    def portable_import_cleanup(self, settle_seconds):
+        return self._call('SELECT * FROM classroom_web_portable_import_cleanup(100,:settle)',
+                          settle=settle_seconds)
+
+    @contextmanager
+    def portable_erasing(self, asset_id, settle_seconds):
+        with self._session() as connection:
+            key = connection.scalar(text('SELECT classroom_web_portable_import_lock(:asset,:settle)'),
+                                    {'asset': asset_id, 'settle': settle_seconds})
+            def confirm():
+                return connection.scalar(text('SELECT classroom_web_portable_import_erased(:asset)'),
+                                         {'asset': asset_id})
+            yield key, confirm
+
     def claim(self, worker, lease_seconds):
         rows = self._call('SELECT * FROM classroom_web_claim_deletion(:worker,:seconds)', worker=worker, seconds=lease_seconds)
         return DeletionClaim(**rows[0]) if rows else None

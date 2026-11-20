@@ -133,7 +133,7 @@ class PgTaskRepository:
                 schema_version='1', plan_id=None):
         if kind not in KINDS or type(priority) is not int or not -100 <= priority <= 100:
             raise ValueError('invalid task kind or priority')
-        if schema_version not in ('1', 'pr07a-1', 'pr07b-1', 'pr07b-batch-1'):
+        if schema_version not in ('1', 'pr07a-1', 'pr07b-1', 'pr07b-batch-1', 'pr08c-1'):
             raise ValueError('unsupported task schema version')
         if schema_version == 'pr07a-1' and (kind != 'ai_question' or plan_id is None or class_session_id is None):
             raise ValueError('question tasks require their generation plan')
@@ -141,6 +141,8 @@ class PgTaskRepository:
             raise ValueError('legacy tasks cannot reference question plans')
         if schema_version in ('pr07b-1', 'pr07b-batch-1') and (kind != 'review_summary' or plan_id is None or class_session_id is None):
             raise ValueError('review tasks require their generation plan')
+        if schema_version == 'pr08c-1' and (kind not in ('import', 'export') or plan_id or class_session_id):
+            raise ValueError('portable jobs use their own owner-scoped binding')
         reference = input_reference(input_ref)
         request = {'kind': kind, 'input_ref': reference,
             'class_session_id': str(class_session_id) if class_session_id else None,
@@ -194,11 +196,27 @@ class PgTaskRepository:
             if history[-1].state == 'planned':
                 return history[-1]
             raise UnsafeRetry('attempt is no longer dispatchable')
+        local_only = task.schema_version == 'pr08c-1'
         row = self.connection.execute(tables['task_attempts'].insert().values(
             id=uuid4(), owner_id=self.owner_id, task_id=task_id, attempt_number=1,
-            state='planned', provider='mock', model='synthetic', price_revision='synthetic-no-charge',
+            state='planned', provider=None if local_only else 'mock', model=None if local_only else 'synthetic',
+            price_revision=None if local_only else 'synthetic-no-charge',
             provider_outcome='not_submitted').returning(tables['task_attempts'])).mappings().one()
         return Attempt(**row)
+
+    def finish_portable(self, task_id, lease_token, worker, attempt_id, *, error=None):
+        task = self._fenced(task_id, lease_token, worker)
+        history = self._history(task_id)
+        if (task.schema_version != 'pr08c-1' or task.state != 'running' or len(history) != 1
+                or history[0].id != attempt_id or self._submitted(history[0])):
+            raise UnsafeRetry('portable completion requires a live local-only attempt')
+        state = 'failed' if error else 'succeeded'
+        self.connection.execute(tables['task_attempts'].update().where(
+            tables['task_attempts'].c.owner_id == self.owner_id,
+            tables['task_attempts'].c.id == attempt_id
+        ).values(state=state, finished_at=sa.func.clock_timestamp(), error_code=error))
+        return self._write(task, state=state, error_code=error, completed_at=sa.func.clock_timestamp(),
+                           leased_by=None, lease_expires_at=None, lease_token=task.lease_token + 1)
 
     def mark_submitting(self, task_id, attempt_id, lease_token, worker):
         task = self._fenced(task_id, lease_token, worker)

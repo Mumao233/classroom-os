@@ -260,6 +260,33 @@ def session_references(session):
             }))
         return identities
 
+    for item in rows(session.get('web_transcript', []), LEGACY_ID):
+        require(set(item) == {'id', 'text', 'start_ms', 'end_ms', 'version', 'sha256'})
+        text = item['text']
+        require(isinstance(text, str) and 0 < len(text.encode('utf8')) <= 32768
+                and type(item['version']) is int and item['version'] >= 1
+                and hashlib.sha256(text.encode('utf8')).hexdigest() == item['sha256'])
+        start, end = item['start_ms'], item['end_ms']
+        require((start is None and end is None) or
+                (type(start) is int and type(end) is int and 0 <= start < end <= 2**53-1))
+    for item in rows(session.get('web_images', []), r'P[0-9]{4,}'):
+        path, version = item.get('path'), item.get('version')
+        require(set(item) == {'id', 'path', 'version', 'mime_type', 'sha256', 'width', 'height'}
+                and match(SLIDE, path) and type(version) is int and version >= 1
+                and item['mime_type'] == IMAGE_MIMES[path[-4:]] and match(SHA, item.get('sha256'))
+                and all(type(item[field]) is int and item[field] > 0 for field in ('width', 'height')))
+        register(MediaReference('image', path, item['id'], version, item['sha256'], (item['width'], item['height'])))
+    for item in rows(session.get('web_notes', []), LEGACY_ID):
+        require(set(item) == {'id', 'title', 'body', 'version', 'evidence'}
+                and isinstance(item['title'], str) and len(item['title']) <= 200
+                and isinstance(item['body'], str) and len(item['body']) <= 120000
+                and type(item['version']) is int and item['version'] >= 1
+                and type(item['evidence']) is list)
+        for source in records(item['evidence']):
+            require(set(source) == {'source_id', 'revision_id', 'frozen_text', 'content_sha256'}
+                    and match(LEGACY_ID, source['source_id']) and match(LEGACY_ID, source['revision_id'])
+                    and isinstance(source['frozen_text'], str) and match(SHA, source['content_sha256']))
+
     segments = rows(session.get('segments', []), r'S[0-9]{4,}')
     identities = {item['id'] for item in segments}
     for item in segments:
@@ -412,7 +439,7 @@ def inspect_zip(raw, limits):
     return inspect_zip_stream(io.BytesIO(raw), len(raw), limits)
 
 
-def inspect_zip_stream(source, length, limits, *, v21=False):
+def inspect_zip_stream(source, length, limits, *, v21=False, on_room=None):
     require(0 < length <= limits.archive_bytes, 'CAPACITY_EXCEEDED')
     max_dirs = limits.files if v21 else 0
     count = archive_entries(source, length, limits, directories=max_dirs)
@@ -450,11 +477,11 @@ def inspect_zip_stream(source, length, limits, *, v21=False):
             require(all(size <= limits.metadata_bytes for size in metadata)
                     and sum(metadata) <= limits.total_metadata_bytes, 'CAPACITY_EXCEEDED')
         if v21 and 'aggregate.json' in by_name:
-            return inspect_aggregate(archive, by_name, limits)
-        return inspect_members(archive, by_name, limits, v21, limits.total_image_pixels)[:4]
+            return inspect_aggregate(archive, by_name, limits, on_room=on_room)
+        return inspect_members(archive, by_name, limits, v21, limits.total_image_pixels, on_room=on_room)[:4]
 
 
-def inspect_members(archive, by_name, limits, v21, pixel_budget):
+def inspect_members(archive, by_name, limits, v21, pixel_budget, *, on_room=None):
     require({'manifest.json', 'session.json'} <= by_name.keys())
     bounds = dict(max_items=limits.files, max_nodes=250_000) if v21 else {}
     manifest = strict_json(read_member(archive, by_name.pop('manifest.json'), limits.metadata_bytes),
@@ -516,9 +543,11 @@ def inspect_members(archive, by_name, limits, v21, pixel_budget):
                 pixel_budget -= size[0] * size[1]
     media_bytes = sum(by_name[name].file_size for name, refs in assets.items() if refs[0].kind == 'image')
     audio_excluded = any(ref.kind == 'audio' for ref in references.values())
+    if on_room is not None:
+        on_room(session, manifest['media'], archive, by_name)
     return session, media_bytes, bool(omitted), audio_excluded, pixel_budget
 
-def inspect_aggregate(archive, by_name, limits):
+def inspect_aggregate(archive, by_name, limits, *, on_room=None):
     index = strict_json(read_member(archive, by_name.pop('aggregate.json'), limits.metadata_bytes),
                         limits.metadata_bytes, max_items=limits.files)
     schema(index, required=('format', 'scope', 'sessions'))
@@ -539,8 +568,12 @@ def inspect_aggregate(archive, by_name, limits):
     pixel_budget = limits.total_image_pixels
     reports = []
     for identity, members in groups.items():
-        session, media, omitted, audio, pixel_budget = inspect_members(archive, members, limits, True, pixel_budget)
-        require(session['id'] == identity)
+        def verify_room(session, media, source, entries):
+            require(session['id'] == identity)
+            if on_room is not None:
+                on_room(session, media, source, entries)
+        session, media, omitted, audio, pixel_budget = inspect_members(
+            archive, members, limits, True, pixel_budget, on_room=verify_room)
         total_media += media
         reports.append(dict(id=identity, omitted_media=omitted, audio_references=audio,
                             transcript_segments=len(session.get('segments', []))))
@@ -554,7 +587,7 @@ class CandidateInspection:
     media_bytes: int
 
 
-def inspect_candidate(source, length, mime):
+def inspect_candidate(source, length, mime, *, on_room=None):
     """The same bounded importer is used for Preview and after ZIP generation."""
     policy = PORTABLE_V21
     try:
@@ -565,11 +598,13 @@ def inspect_candidate(source, length, mime):
             require(len(raw) == length)
             session = strict_json(raw, policy.metadata_bytes, max_items=policy.files, max_nodes=250_000)
             refs = session_references(session)
+            if on_room is not None:
+                on_room(session, [], None, {})
             audio = any(ref.kind == 'audio' for ref in refs.values())
             return CandidateInspection('class_session', (dict(id=session['id'], omitted_media=bool(refs),
                 audio_references=audio, transcript_segments=len(session.get('segments', []))),), 0)
         require(mime == 'application/zip')
-        result = inspect_zip_stream(source, length, policy, v21=True)
+        result = inspect_zip_stream(source, length, policy, v21=True, on_room=on_room)
         if len(result) == 3:
             scope, reports, total_media = result
             return CandidateInspection(scope, reports, total_media)

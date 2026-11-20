@@ -71,11 +71,13 @@ tasks = sa.Table("tasks", metadata, *_base(owner=True),
                        "(schema_version='pr07a-1' AND plan_id IS NOT NULL "
                        "AND class_session_id IS NOT NULL AND kind='ai_question') OR "
                        "(schema_version IN ('pr07b-1','pr07b-batch-1') AND plan_id IS NOT NULL "
-                       "AND class_session_id IS NOT NULL AND kind='review_summary')",
+                        "AND class_session_id IS NOT NULL AND kind='review_summary') OR "
+                       "(schema_version='pr08c-1' AND plan_id IS NULL AND class_session_id IS NULL "
+                       "AND kind IN ('import','export'))",
                        name="qa_plan"),
     sa.CheckConstraint("jsonb_typeof(input_ref) = 'object' AND pg_column_size(input_ref) <= 16384",
                        name="bounded_input"),
-    sa.CheckConstraint("schema_version IN ('1','pr07a-1','pr07b-1','pr07b-batch-1')", name="schema_version"),
+    sa.CheckConstraint("schema_version IN ('1','pr07a-1','pr07b-1','pr07b-batch-1','pr08c-1')", name="schema_version"),
     sa.CheckConstraint("leased_by IS NULL OR char_length(leased_by) BETWEEN 1 AND 100", name="worker"),
     sa.CheckConstraint("error_code IS NULL OR char_length(error_code) <= 64", name="error_code"),
     sa.CheckConstraint("(leased_by IS NULL) = (lease_expires_at IS NULL)", name="lease_pair"),

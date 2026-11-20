@@ -34,8 +34,9 @@ def _entry(path, content):
 
 
 def require_portable_metadata(value):
-    forbidden = {'ai_usage', 'authorization', 'consent', 'credentials', 'device', 'key_material_b64',
-                 'password', 'password_hash', 'session', 'settings', 'tasks', 'token'}
+    forbidden = {'ai_usage', 'api_key', 'authorization', 'consent', 'consent_record', 'credentials',
+                 'device', 'device_authorization', 'key_material_b64', 'password', 'password_hash',
+                 'private_key', 'queue', 'secret', 'session', 'session_cookie', 'settings', 'tasks', 'token'}
     pending = [(0, value)]
     nodes = 0
     while pending:
@@ -43,7 +44,7 @@ def require_portable_metadata(value):
         nodes += 1
         require(depth <= 28 and nodes <= 250_000, 'CAPACITY_EXCEEDED')
         if isinstance(item, dict):
-            require(not forbidden.intersection(item))
+            require(not any(key.casefold() in forbidden for key in item))
             pending.extend((depth + 1, child) for child in item.values())
         elif isinstance(item, (list, tuple)):
             require(len(item) <= PORTABLE_V21.files, 'CAPACITY_EXCEEDED')

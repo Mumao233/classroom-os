@@ -39,3 +39,15 @@
 - 候选 ZIP 写入器接受固定版本、已授权的课堂快照。根 `aggregate.json` 携带 `schema_version=1`、`format=classroom-assistant-aggregate`、`scope`、`sessions`，每个会话目录包含旧 schema-1 的 `manifest.json` 和 `session.json` 及图片。生成前估算边界，实际生成后由同一导入解析器复核，私有对象的版本和字节再次核验后才生成候选下载能力。该 ZIP 布局属于实现实验。
 - 新服务仅接受隔离的合成 PostgreSQL 与私有 loopback S3。正式 HTTP/WS 契约和既有入口沿用。§8 探索直接调用候选服务。正式 `/exports` Task/Attempt/Outbox 挂接、封口异步 202 状态、HTTP Range 206 集成、撤权与物理删除后台接线、全来源的原生快照采集和 `/imports/commit` 独立课堂持久化，仍属于 PR Draft 阻断。按停用候选调用方回退，保留前向迁移和删除账本。尚无生产启用，后续须在改造后台前保留受控暂存的清理能力。
 - VMware 首轮后端为 1 通过、2 失败。候选维护函数的固定 search path 缺少受保护的 public schema，使 05b 现有媒体触发器无法解析 capture 表类型。仅修复新函数的 search path，未修改 05b 触发器。第二轮 3 通过。浏览器探针两次测试夹具错误均保留日志，修复路径解析及 grant 克隆后在真实 Chromium 验证通过。此探针调低真实 origin quota，尚未测 1 GB 近满池性能。05b/08a 产品文件均未更改。
+
+
+## 2026-11-20 · Draft 阻断项续作
+
+- 基线为主线 `db0bc8337787cc89a11a989b125d22ce28d0e01d`、Draft 起点 `56bc6c37cdd70e0c352279004e82fb78a7a51fcd`。用户决定最终是否转 Ready。TBD-06 的测试数值沿用 v2.1，候选只在合成环境启用。
+- `0016_portable_jobs` 保留 08a/08b 迁移与策略。单事务接受持久 Task、回执、Outbox、owner 绑定和准入槽。专用 worker 只认 `pr08c-1`，使用本地 Attempt，无 provider dispatch intent、raw provider result、计费或配额写入。
+- 导入的外部图片先用持久 manifest 跟踪，实际对象版本二次核对后，课堂、图片、正文、Review 个人笔记、原始证据快照和 ID 映射在同一数据库事务发布。旧 Review AI 产物作为来源快照保留，可以生成独立个人笔记。其原始产物不会被注册成新模型任务，也不构成采用。中途发生数据库回滚时只留下可重试的暂存。同键重放用持久 Task 确认，取消后从新旧对象账本回收。
+- 导出生产入口读取 Web owner 授权课堂、正文、Review 个人/已采用内容与私有图片。ZIP 验证同一路径重导后才发布。Range 使用已有媒体路径，每个块重做会话、owner、来源和对象版本检查，待转发的版本及校验信息走候选头。详细接口和聚合布局见字段契约。
+- 专用 worker 每 30 秒执行候选维护，重用 04b 对象版本擦除。为独立副本暂存先落持久清单，擦除和对象写入竞争同一行锁。失败或取消访问立即截止，物理处理受正在进行的写入、结算等待窗和实际对象版本证明约束。告警只包含计数。
+- `pr08c-jobs-target-01` 后端 30 项通过。`pr08c-jobs-target-02` 32 项通过。导入和导出池分别真实写入 5,000,000,000 字节（320 和 10 个版本对象），过额拒绝、删除前占用、擦除后回收及零残留均通过。现有 CI 本次基线失败是严格表清单遗漏 PR-08c 添加的表，扩充了精确清单，并补 FORCE RLS 验证，保留其他表和列断言。
+- `pr08c-jobs-delta-03` 为 guest runner 选项拼接错误，未执行测试。恢复为 `pr08c-jobs-delta-04`，两轮日志均保留在 `outputs/pr08c/`。
+- `pr08c-jobs-delta-04` 31 通过、1 失败。并发池用例共享了前一正常提交留下、仍处于 04b 删除等待窗的暂存，得到 9 个新准入而非 10。并发池用例移入独立的压测数据库和对象服务，与正常任务用例分开。

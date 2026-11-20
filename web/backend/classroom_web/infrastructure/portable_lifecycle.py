@@ -6,6 +6,11 @@ from sqlalchemy import text
 from ..domain.auth import AuthRejected
 from ..domain.portable import PORTABLE_V21
 
+PORTABLE_TABLES = frozenset(('portable_transfers','portable_transfer_media','portable_export_sources','portable_slots',
+                            'portable_imported_classrooms','portable_import_assets','portable_task_bindings',
+                            'portable_export_dependencies'))
+
+
 def ticket_deadline(now, session_until, access_until, *, expected_version, current_version):
     if expected_version is not None and expected_version != current_version:
         raise AuthRejected('SOURCE_CHANGED', 409)
@@ -208,10 +213,11 @@ class PortableLifecycle:
                           revision=revision+1
                 WHERE owner_id=:owner AND id=:asset RETURNING id''',
                 asset=parts[0]['id'], until=now + PORTABLE_V21.access_age).one()
-        self.rows('''UPDATE portable_transfers SET state=:state,access_until=:until
+        self.rows('''UPDATE portable_transfers SET state=:state,access_until=:until,reserved_bytes=:reserved
             WHERE owner_id=:owner AND id=:id RETURNING id''',
             id=transfer['id'], state='published' if publish else 'closed',
-            until=now + PORTABLE_V21.access_age if publish else min(now, transfer['access_until'] or now)).one()
+            until=now + PORTABLE_V21.access_age if publish else min(now, transfer['access_until'] or now),
+            reserved=parts[0]['size_bytes'] if publish else transfer['reserved_bytes']).one()
         return self.rows('''UPDATE portable_slots SET state=:state,worker_id=NULL,fence=fence+1,
             finished_at=:now WHERE owner_id=:owner AND id=:id RETURNING *''',
             state=outcome, now=now, id=slot_id).one()

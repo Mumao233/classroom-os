@@ -7,11 +7,12 @@ from uuid import UUID, uuid4
 
 from .media import MediaRangeRejected, fingerprint, identifier, stored
 from ..domain.auth import AuthRejected
-from ..domain.data import Resource
+from ..domain.data import OwnerContext, Resource
 from ..domain.media import ObjectUnavailable, byte_range
 from ..domain.portable import InvalidPackage, PORTABLE_V21, SHA, inspect_candidate, match
 from ..domain.portable_export import aggregate_entries, write_aggregate
 from ..infrastructure.auth_deadlines import remaining
+from ..infrastructure.media_repository import PgMediaRepository
 from ..infrastructure.portable_lifecycle import PortableLifecycle, ticket_deadline
 from ..test_support import validate_test_database_target
 
@@ -38,10 +39,16 @@ class PortableTransfers:
     def _transaction(self, ctx, *, write=False):
         if not self.deletion.ready:
             raise AuthRejected('SERVICE_DISABLED', 503)
-        with self.media.transaction(ctx, write=write) as (repo, principal):
-            yield PortableLifecycle(repo.tx), repo, principal
-            if not self.deletion.ready:
-                raise AuthRejected('SERVICE_DISABLED', 503)
+        if isinstance(ctx, OwnerContext):
+            with self.media.database.transaction(ctx) as tx:
+                yield PortableLifecycle(tx), PgMediaRepository(tx, ctx.owner_id), None
+                if not self.deletion.ready:
+                    raise AuthRejected('SERVICE_DISABLED', 503)
+        else:
+            with self.media.transaction(ctx, write=write) as (repo, principal):
+                yield PortableLifecycle(repo.tx), repo, principal
+                if not self.deletion.ready:
+                    raise AuthRejected('SERVICE_DISABLED', 503)
 
     def _spool(self):
         return TemporaryFile(dir=self.spool_directory, mode='w+b')
@@ -65,6 +72,33 @@ class PortableTransfers:
                                archive_sha256=digest, mime=mime)
             return life.transfer(row['id'])
 
+    def adapt_legacy(self, ctx, upload_id):
+        # Read the original pinned private object, preserving its earlier expiry.
+        # This applies only to verified package uploads from the existing Media route.
+        upload_id = identifier(upload_id)
+        with self._transaction(ctx, write=True) as (life, repo, _):
+            life.gate()
+            upload, asset = repo.upload(upload_id)
+            if (upload['state'] != 'verified' or asset['kind'] != 'import_package'
+                    or asset['status'] != 'committed' or asset['class_session_id'] is not None
+                    or asset['expires_at'] is None
+                    or asset['mime_type'] not in ('application/json','application/zip')
+                    or asset['byte_length'] > PORTABLE_V21.part_bytes):
+                raise AuthRejected('SOURCE_UNAVAILABLE', 409)
+            digest = fingerprint({'legacy_upload': str(upload_id), 'sha256': asset['sha256']})
+            row = life.reserve('import', asset['byte_length'], upload_id, digest,
+                               archive_sha256=asset['sha256'], mime=asset['mime_type'])
+            current = life.transfer(row['id'])
+            if current['state'] == 'uploading':
+                cutoff = min(d for d in (current['access_until'],upload['expires_at'],asset['expires_at'],
+                                         asset['hard_expire_at']) if d)
+                life.rows('''INSERT INTO portable_transfer_media(owner_id,transfer_id,asset_id,part_number)
+                    VALUES(:owner,:transfer,:asset,0) RETURNING asset_id''',
+                    transfer=current['id'], asset=asset['id']).one()
+                life.rows('''UPDATE portable_transfers SET state='verified',access_until=:until
+                    WHERE owner_id=:owner AND id=:id RETURNING id''', id=current['id'],until=cutoff).one()
+            return current['id']
+
     def upload_status(self, ctx, identity):
         with self._transaction(ctx) as (life, _, _):
             upload = life.transfer(identifier(identity))
@@ -72,18 +106,21 @@ class PortableTransfers:
                 raise AuthRejected('NOT_FOUND', 404)
             return upload, [part for part in life.parts(upload['id']) if part['status'] == 'verified']
 
-    def put_part(self, ctx, key, identity, number, offset, length, digest, source):
-        identity, key = identifier(identity), operation_key(key)
+    def authorize_part(self, ctx, identity, number, offset, length, digest):
         if (type(number) is not int or type(offset) is not int or type(length) is not int
                 or number < 0 or offset != number * PORTABLE_V21.part_bytes
                 or not 0 < length <= PORTABLE_V21.part_bytes or not match(SHA, digest)):
             raise AuthRejected('VALIDATION_FAILED', 422)
-        signature = fingerprint(dict(upload=str(identity), number=number, offset=offset, length=length, sha256=digest))
         with self._transaction(ctx, write=True) as (life, _, _):
-            upload = life.transfer(identity)
+            upload = life.transfer(identifier(identity))
             expected = min(PORTABLE_V21.part_bytes, upload['reserved_bytes'] - offset)
             if upload['kind'] != 'import' or length != expected:
                 raise AuthRejected('VALIDATION_FAILED', 422)
+
+    def put_part(self, ctx, key, identity, number, offset, length, digest, source):
+        identity, key = identifier(identity), operation_key(key)
+        signature = fingerprint(dict(upload=str(identity), number=number, offset=offset, length=length, sha256=digest))
+        self.authorize_part(ctx, identity, number, offset, length, digest)
         with self._spool() as content:
             verify = hashlib.sha256()
             left = length
@@ -106,13 +143,25 @@ class PortableTransfers:
                     return prior['response_body']
                 if repo.receipt('portablePutIntent', key, signature) is None:
                     repo.remember('portablePutIntent', key, signature, 'media_asset', part['id'], {}, 202)
-            obj = self._put(part, content)
+            obj = self.write_staged(ctx, identity, part, content)
         with self._transaction(ctx, write=True) as (life, repo, _):
             life.attach(identity, part, obj)
             response = dict(upload_id=str(identity), part_number=number, offset=offset, byte_length=length, sha256=digest)
             if repo.receipt('portablePutPart', key, signature) is None:
                 repo.remember('portablePutPart', key, signature, 'media_asset', part['id'], response, 200)
             return response
+
+    def write_staged(self, ctx, transfer_id, part, content, *, copy=False):
+        # The eraser has to obtain the same row before proving absence. This
+        # transaction holds no platform gate during the external operation.
+        table = 'portable_import_assets' if copy else 'media_assets'
+        with self._transaction(ctx) as (life, _, _):
+            row = life.rows(f'SELECT id FROM {table} WHERE owner_id=:owner AND id=:id FOR SHARE',
+                            id=part['id']).one_or_none()
+            if row is None:
+                raise AuthRejected('GONE', 410)
+            life.transfer(transfer_id)
+            return self._put(part, content)
 
     def _put(self, part, content):
         try:
@@ -149,7 +198,7 @@ class PortableTransfers:
         length = upload['reserved_bytes']
         count = (length + PORTABLE_V21.part_bytes - 1) // PORTABLE_V21.part_bytes
         if ([p['part_number'] for p in parts] != list(range(count))
-                or any(p['status'] != 'verified' for p in parts)):
+                or any(p['status'] not in ('verified', 'committed') for p in parts)):
             raise AuthRejected('SOURCE_UNAVAILABLE', 409)
 
     def seal(self, ctx, key, identity, digest):
@@ -221,16 +270,43 @@ class PortableTransfers:
             # Revocation or a reclaimed lease already owns cleanup.
             pass
 
-    def cancel(self, ctx, identity):
-        with self._transaction(ctx, write=True) as (life, _, _):
-            if life.close(identifier(identity)) is None:
-                raise AuthRejected('NOT_FOUND', 404)
+    def cancel(self, ctx, identity, *, key=None):
+        identity = identifier(identity)
+        with self._transaction(ctx, write=True) as (life, repo, _):
             life.gate()
+            digest = fingerprint({'transfer_id': str(identity)})
+            prior = repo.receipt('portableCancel', operation_key(key), digest) if key is not None else None
+            row = life.close(identity)
+            if row is None:
+                raise AuthRejected('NOT_FOUND', 404)
+            if key is not None and prior is None:
+                repo.remember('portableCancel', operation_key(key), digest, 'media_upload', identity, {}, 200)
+            life.gate()
+            return row
 
     @staticmethod
     def _authorize_sources(repo, sources):
         for source in sorted(sources):
             repo.tx.catalog._load(Resource.CLASS_SESSION, source, share=True)
+
+    @staticmethod
+    def authorize_dependencies(life, repo, transfer_id):
+        deps = life.rows('''SELECT kind,source_id FROM portable_export_dependencies
+            WHERE owner_id=:owner AND transfer_id=:id''', id=transfer_id).all()
+        assets = [row['source_id'] for row in deps if row['kind']=='media']
+        sources = [row['source_id'] for row in deps if row['kind']=='transcript']
+        if assets:
+            visible = life.rows('''SELECT id FROM media_assets WHERE owner_id=:owner AND id=ANY(:ids)
+                AND status='committed' AND deleted_at IS NULL AND access_revoked_at IS NULL
+                AND (expires_at IS NULL OR expires_at>clock_timestamp())
+                AND (hard_expire_at IS NULL OR hard_expire_at>clock_timestamp()) ORDER BY id FOR SHARE''',ids=assets).all()
+            if len(visible) != len(assets):
+                raise AuthRejected('GONE', 410)
+        if sources:
+            visible = life.rows('''SELECT id FROM qa_sources WHERE owner_id=:owner AND id=ANY(:ids)
+                ORDER BY id FOR SHARE''', ids=sources).all()
+            if len(visible) != len(sources):
+                raise AuthRejected('GONE', 410)
 
     def publish_zip(self, ctx, key, scope, classrooms, *, include_audio=False):
         """Worker-side candidate publication from already supplied immutable snapshots."""
@@ -263,7 +339,7 @@ class PortableTransfers:
                     life.gate()
                     life.live_work(*lease)
                     asset = life.stage(transfer['id'], 0, length, digest, 'application/zip')
-                obj = self._put(asset, output)
+                obj = self.write_staged(ctx, transfer['id'], asset, output)
             with self._transaction(ctx) as (life, repo, _):
                 self._authorize_sources(repo, sources)
                 life.attach(transfer['id'], asset, obj)
@@ -294,6 +370,7 @@ class PortableTransfers:
         if not sources:
             raise AuthRejected('GONE', 410)
         self._authorize_sources(repo, sources)
+        self.authorize_dependencies(life, repo, transfer['id'])
         # The generic MediaService will not issue access to this verified-only asset.
         asset = repo.asset(asset_id)
         if asset['status'] != 'verified':
@@ -308,13 +385,18 @@ class PortableTransfers:
             raise AuthRejected('SOURCE_CHANGED', 409)
         return asset, pinned, transfer
 
-    def issue_ticket(self, ctx, asset_id, *, expected_version=None):
+    def issue_ticket(self, ctx, asset_id, *, expected_version=None, key=None):
         with self._transaction(ctx, write=True) as (life, repo, principal):
             repo.execute("SELECT pg_advisory_xact_lock(hashtextextended(CAST(:owner AS text)||'media_ticket',0))")
             asset, _, transfer = self._export_asset(life, repo, identifier(asset_id))
             metadata = self._export_metadata(asset)
             deadline = ticket_deadline(life.now(), principal.expires_at, transfer['access_until'],
                                        expected_version=expected_version, current_version=metadata['asset_version'])
+            if key is not None:
+                op = operation_key(key)
+                digest = fingerprint(dict(asset_id=str(asset['id']), asset_version=expected_version))
+                if repo.receipt('portableIssueTicket', op, digest) is None:
+                    repo.remember('portableIssueTicket', op, digest, 'media_asset', asset['id'], {}, 200)
             count = repo.execute('SELECT count(*) FROM media_tickets WHERE owner_id=:owner AND expires_at>clock_timestamp()').scalar_one()
             if count >= self.media.policy.max_pending * 4:
                 raise AuthRejected('RATE_LIMITED', 429)
@@ -326,7 +408,7 @@ class PortableTransfers:
                 epoch=principal.security_epoch, revision=asset['revision'], hash=hashlib.sha256(token.encode()).hexdigest())
             return dict(**metadata, ticket=token, expires_at=deadline)
 
-    def read_range(self, ctx, asset_id, ticket, range_header):
+    def _download(self, ctx, asset_id, ticket, range_header, *, read):
         if not isinstance(ticket, str) or len(ticket) != 43:
             raise AuthRejected('FORBIDDEN', 403)
         with self._transaction(ctx) as (life, repo, principal):
@@ -344,10 +426,21 @@ class PortableTransfers:
                 raise MediaRangeRejected(pinned.byte_length) from None
             if not partial or last - first + 1 > PORTABLE_V21.part_bytes:
                 raise MediaRangeRejected(pinned.byte_length)
+            if not read:
+                return dict(first=first, last=last, partial=True, length=pinned.byte_length, mime=asset['mime_type'])
             try:
                 return self.media.store.read(pinned, first, last)
             except ObjectUnavailable:
                 raise AuthRejected('STORAGE_UNAVAILABLE', 503) from None
+
+    def download(self, ctx, asset_id, ticket, range_header=None):
+        return self._download(ctx, asset_id, ticket, range_header, read=False)
+
+    def read_range(self, ctx, asset_id, ticket, range_header):
+        return self._download(ctx, asset_id, ticket, range_header, read=True)
+
+    def read_block(self, ctx, asset_id, ticket, first, last):
+        return self.read_range(ctx, asset_id, ticket, f'bytes={first}-{last}')
 
     def maintain(self):
         before = self.deletion.queue.portable_maintenance()

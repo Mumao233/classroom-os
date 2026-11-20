@@ -23,6 +23,7 @@ from classroom_web.infrastructure.schema import metadata, tables
 from classroom_web.infrastructure.task_schema import tables as task_tables
 from classroom_web.infrastructure.identity_schema import tables as identity_tables
 from classroom_web.infrastructure.qa_schema import QA_TABLES
+from classroom_web.infrastructure.portable_lifecycle import PORTABLE_TABLES
 from classroom_web.infrastructure.review_schema import REVIEW_TABLES
 
 from conftest import BACKEND, ROOT, migration_config
@@ -57,9 +58,15 @@ def test_only_required_tables_and_contract_columns_exist(pg):
     }
     capture_tables = capture_contract_tables | set(capture_internal)
     from classroom_web.infrastructure.sync_repository import SYNC_TABLES
-    assert set(inspector.get_table_names()) == expected | set(task_tables) | set(identity_tables) | auth_tables | media_tables | set(QA_TABLES) | set(REVIEW_TABLES) | deletion_tables | cache_tables | capture_tables | set(SYNC_TABLES) | {"alembic_version"}
+    assert set(inspector.get_table_names()) == expected | set(task_tables) | set(identity_tables) | auth_tables | media_tables | set(QA_TABLES) | set(REVIEW_TABLES) | deletion_tables | cache_tables | capture_tables | set(SYNC_TABLES) | PORTABLE_TABLES | {"alembic_version"}
     for table, columns in capture_internal.items():
         assert {column['name']:column['nullable'] for column in inspector.get_columns(table)} == columns
+    with pg.admin.connect() as connection:
+        owner_tables = connection.execute(sa.text('''SELECT relname,relrowsecurity,relforcerowsecurity
+            FROM pg_class WHERE relnamespace='public'::regnamespace AND relname=ANY(:names)'''),
+            {'names': list(PORTABLE_TABLES)}).all()
+        assert {row.relname for row in owner_tables} == PORTABLE_TABLES
+        assert all(row.relrowsecurity and row.relforcerowsecurity for row in owner_tables)
     cache_columns = {column['name']: column['nullable'] for column in inspector.get_columns('cache_keys')}
     assert cache_columns == {'id': False, 'created_at': False, 'owner_id': False, 'device_id': False,
                              'purpose': False, 'class_session_id': True, 'wrapped_dek': False,
@@ -80,7 +87,7 @@ def test_only_required_tables_and_contract_columns_exist(pg):
     with pg.admin.connect() as connection:
         # This original gate still compares every legacy metadata object.
         # SQL-managed objects have independent real-PG columns/constraints/ACL checks.
-        differences = compare_metadata(MigrationContext.configure(connection,opts={'include_object':lambda obj,name,kind,reflected,compare_to:not(kind=='table' and name in auth_tables|media_tables|deletion_tables|cache_tables|capture_tables|SYNC_TABLES)}), metadata)
+        differences = compare_metadata(MigrationContext.configure(connection,opts={'include_object':lambda obj,name,kind,reflected,compare_to:not(kind=='table' and name in auth_tables|media_tables|deletion_tables|cache_tables|capture_tables|SYNC_TABLES|PORTABLE_TABLES)}), metadata)
     assert differences == []
 
 

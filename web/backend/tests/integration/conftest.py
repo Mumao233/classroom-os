@@ -27,6 +27,8 @@ if os.environ.get("PR04B_DELETION_INTEGRATION") != "1":
     collect_ignore.append("test_deletion_lifecycle.py")
     collect_ignore.append("test_deletion_restore.py")
     collect_ignore.append("test_pr08c_v21.py")
+    collect_ignore.append("test_pr08c_jobs.py")
+    collect_ignore.append("test_pr08c_pool.py")
 if os.environ.get("PR05B_CAPTURE_INTEGRATION") != "1":
     collect_ignore.append("test_capture_recovery.py")
 # PR-08b's VMware runner supplies the native browser and two owned object services.
