@@ -249,7 +249,14 @@ class PortableTransfers:
             with self._transaction(ctx, write=True) as (life, repo, _):
                 repo.tx.catalog._load(Resource.COURSE, course_id, share=True)
                 waiting = life.await_confirmation(*lease)
-                result = dict(id=str(key), slot_id=str(slot['id']), class_session_count=len(inspection.sessions),
+                warnings = []
+                if any(room['omitted_media'] for room in inspection.sessions):
+                    warnings.append('Some package media could not be restored from the supplied bytes.')
+                if any(room['audio_references'] for room in inspection.sessions):
+                    warnings.append('Original audio will not be restored.')
+                discarded = sorted({field for room in inspection.sessions for field in room['unsupported_fields']})
+                result = dict(warnings=warnings, unsupported_fields=discarded,
+                              id=str(key), slot_id=str(slot['id']), class_session_count=len(inspection.sessions),
                               media_bytes=inspection.media_bytes, scope=inspection.scope,
                               archive_sha256=upload['archive_sha256'], expires_at=waiting['deadline'].isoformat())
                 repo.remember('portablePreviewV21', key, signature, 'media_asset', parts[0]['id'], result, 201)

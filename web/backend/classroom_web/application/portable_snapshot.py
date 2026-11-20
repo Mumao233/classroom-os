@@ -7,7 +7,7 @@ from .media import identifier, stored
 from ..domain.auth import AuthRejected
 from ..domain.data import Resource
 from ..domain.media import ObjectUnavailable
-from ..domain.portable import PORTABLE_V21
+from ..domain.portable import PORTABLE_V21, canonical_hash
 from ..domain.portable_export import ArchiveAsset, ArchiveClassroom
 
 
@@ -73,7 +73,7 @@ class ExportSnapshot:
                 WHERE owner_id=:owner AND class_session_id=:id AND kind='slide' AND status='committed'
                 AND access_revoked_at IS NULL AND (expires_at IS NULL OR expires_at>clock_timestamp())
                 ORDER BY id LIMIT :limit''', id=classroom_id, limit=PORTABLE_V21.files + 1).all()
-            notes = life.rows('''SELECT d.id,d.title,r.body_markdown,r.revision,r.source_snapshot_id
+            notes = life.rows('''SELECT d.id,d.title,d.revision AS document_revision,r.body_markdown,r.personal_note,r.revision,r.source_snapshot_id
                 FROM review_documents d JOIN review_revisions r
                     ON (d.owner_id,d.id,coalesce(d.latest_personal_revision_id,d.adopted_revision_id))=
                        (r.owner_id,r.document_id,r.id)
@@ -102,20 +102,8 @@ class ExportSnapshot:
             mappings = history['id_map']
         session.update(id=clazz.id.hex, title=clazz.title)
         session.setdefault('created_at', clazz.created_at.isoformat())
-        existing_segments = {row['id'] for row in mappings.get('segments', {}).values() if 'revision_id' in row}
-        if not existing_segments.issubset({str(row['id']) for row in sources}):
-            raise AuthRejected('SOURCE_UNAVAILABLE', 409)
-        session.setdefault('web_transcript', []).extend(
-            dict(id=row['id'].hex, text=row['text'], start_ms=row['start_ms'], end_ms=row['end_ms'],
-                 version=row['revision'], sha256=row['content_sha256'])
-            for row in sources if str(row['id']) not in existing_segments)
-        existing_review = {row['id'] for row in mappings.get('review', {}).values()}
-        session.setdefault('web_notes', []).extend(
-            dict(id=row['id'].hex, title=row['title'], body=row['body_markdown'], version=row['revision'],
-                 evidence=[dict(source_id=item['source_id'].hex, revision_id=item['revision_id'].hex,
-                                frozen_text=item['frozen_text'], content_sha256=item['content_sha256'])
-                           for item in evidence.get(row['id'], ())])
-            for row in notes if str(row['id']) not in existing_review)
+        self._refresh_segments(session, mappings.get('segments', {}), sources)
+        self._refresh_notes(session, mappings.get('review', {}), notes, evidence)
         by_path = {}
         used = set()
         for item in media:
@@ -165,6 +153,64 @@ class ExportSnapshot:
         dependencies.update(('transcript', row['id']) for row in sources)
         dependencies.update(('transcript', item['source_id']) for selection in evidence.values() for item in selection)
         return ArchiveClassroom(session, tuple(media), tuple(by_path.values())), dependencies
+
+    @staticmethod
+    def _refresh_segments(session, mappings, sources):
+        visible = {str(row['id']): row for row in sources}
+        mapped = {row['id'] for row in mappings.values() if 'revision_id' in row}
+        if not mapped.issubset(visible):
+            raise AuthRejected('SOURCE_UNAVAILABLE', 409)
+        for inherited in session.get('segments', ()):
+            link = mappings.get(inherited['id'])
+            current = visible.get(link['id']) if link else None
+            if current is None or current['text'] == inherited['text']:
+                continue
+            original = dict(inherited)
+            session.setdefault('revisions', []).append(
+                dict(id='imported-' + current['id'].hex, segments=[original]))
+            inherited.update(text=current['text'],
+                             version=original.get('version', 0) + current['revision'] - 1)
+            if 'content_hash' in inherited:
+                inherited['content_hash'] = canonical_hash({k:v for k,v in inherited.items() if k != 'content_hash'})
+        web = session.setdefault('web_transcript', [])
+        for inherited in web:
+            link = mappings.get(inherited['id'])
+            current = visible.get(link['id']) if link else None
+            if current is not None and inherited['sha256'] != current['content_sha256']:
+                inherited.update(text=current['text'], version=inherited['version'] + current['revision'] - 1,
+                                 sha256=current['content_sha256'])
+        web.extend(dict(id=row['id'].hex, text=row['text'], start_ms=row['start_ms'], end_ms=row['end_ms'],
+                        version=row['revision'], sha256=row['content_sha256'])
+                   for row in sources if str(row['id']) not in mapped)
+
+    @staticmethod
+    def _refresh_notes(session, mappings, notes, evidence):
+        native = {identity:row['id'] for identity,row in mappings.items() if row.get('native')}
+        # Existing import rows written before this flag are recognized by the
+        # native Review document with their mapped identity.
+        web = session.setdefault('web_notes', [])
+        by_key = {'web_note:' + entry['id']: entry for entry in web}
+        visible_ids = {str(row['id']) for row in notes}
+        if set(native.values()) - visible_ids:
+            raise AuthRejected('SOURCE_UNAVAILABLE', 409)
+        archived_web = {mappings[key]['id']: entry for key,entry in by_key.items() if key in mappings}
+        archived_legacy = {row['id']:key for key,row in mappings.items() if key.startswith(('cards:', 'notes:'))}
+        for row in notes:
+            review_id = str(row['id'])
+            inherited = archived_web.get(review_id)
+            current = dict(title=row['title'], body=row['body_markdown'], personal_note=row['personal_note'])
+            if inherited is not None:
+                inherited.update(current, version=inherited['version'] + row['revision'] - 1)
+                continue
+            legacy = archived_legacy.get(review_id)
+            if legacy is not None and row['document_revision'] <= 2:
+                continue
+            selected = [dict(source_id=item['source_id'].hex, revision_id=item['revision_id'].hex,
+                             frozen_text=item['frozen_text'], content_sha256=item['content_sha256'])
+                        for item in evidence.get(row['id'], ())]
+            if legacy:
+                current['legacy_review_key'] = legacy
+            web.append(dict(id=row['id'].hex, version=row['revision'], evidence=selected, **current))
 
     def _asset(self, path, asset):
         return ArchiveAsset(path, asset['byte_length'], asset['sha256'],

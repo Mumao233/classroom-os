@@ -295,11 +295,12 @@ class PgReviewRepository:
             kind=kind, parent=parent, snapshot=snapshot, raw=raw, task=task, artifact=artifact, draft=draft,
             body=body, structured=_json(structured) if structured is not None else None, note=note).one()
 
-    def create_note(self, body, op_id):
+    def create_note(self, body, op_id, *, portable_annotation=None):
         classroom = self._uuid(body.get('class_session_id'))
         self.sources._class(classroom)
         self._serialize()
-        digest = _hash(body)
+        annotation = '' if portable_annotation is None else self._text(portable_annotation, 12000)
+        digest = _hash(body if portable_annotation is None else dict(body=body, personal_note=annotation))
         old = self.tx.receipts.lock_and_get('createPersonalNote', op_id, digest)
         if old:
             return self.document(old['resource_id'])
@@ -307,7 +308,7 @@ class PgReviewRepository:
         content = self._text(body.get('body_markdown'), 120000)
         draft = self._uuid(body.get('draft_id'))
         document = self._new_document(classroom, 'note', title)
-        revision = self._append(document, kind='personal', body=content, draft=draft)
+        revision = self._append(document, kind='personal', body=content, draft=draft, note=annotation)
         document = self._advance(document, latest_personal_revision_id=revision['id'])
         self._remember('createPersonalNote', op_id, digest, 'review_document', document['id'], 201)
         return self._document_dto(document)

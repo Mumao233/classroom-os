@@ -59,6 +59,7 @@ class PortableJobs:
         request_hash = fingerprint(body)
         with self.transfers._transaction(ctx, write=True) as (life, repo, _):
             tx = repo.tx
+            life.gate()
             task = tx.tasks.enqueue(kind, {'schema_version': 1}, op_id=key,
                                     operation='portable' + kind.title(), schema_version=SCHEMA)
             binding = self._binding(life, task.id)
@@ -99,8 +100,8 @@ class PortableJobs:
                 raise
             upload_id = self.transfers.adapt_legacy(ctx, upload_id)
         result = self.transfers.preview(ctx, key, upload_id, body['destination_course_id'])
-        return {key: result[key] for key in ('id','archive_sha256','class_session_count','media_bytes','expires_at')} | {
-            'warnings': [], 'unsupported_fields': []}
+        return {field: result[field] for field in ('id','archive_sha256','class_session_count','media_bytes','expires_at')} | {
+            'warnings': result.get('warnings', []), 'unsupported_fields': result.get('unsupported_fields', [])}
 
     def task(self, ctx, task_id, *, cancel_key=None):
         task_id = identifier(task_id)
@@ -110,6 +111,7 @@ class PortableJobs:
                 raise AuthRejected('NOT_FOUND', 404)
             task = repo.tx.tasks.get(task_id)
             if cancel_key is not None:
+                life.gate()
                 task = repo.tx.tasks.cancel(task_id, operation_key(cancel_key))
                 if task.state == 'cancelled':
                     life.close(binding['transfer_id'])
@@ -169,15 +171,22 @@ class PortableTaskWorker:
                 if task.schema_version != SCHEMA or binding is None:
                     raise UnsafeRetry('portable queue job has no owner binding')
                 attempt = repo.tx.tasks.prepare_attempt(claim.id, claim.lease_token, self.worker_id)
-                slot = life.rows('SELECT fence FROM portable_slots WHERE owner_id=:owner AND id=:id',
+                slot = life.rows('SELECT fence,state FROM portable_slots WHERE owner_id=:owner AND id=:id',
                                  id=binding['slot_id']).one()
                 lease = binding['slot_id'], task.id, slot['fence']
             def pulse():
                 with self.transfers._transaction(owner) as (life, repo, _):
+                    life.gate()
                     repo.tx.tasks.heartbeat(task.id, claim.lease_token, self.worker_id, LEASE_SECONDS)
                     life.heartbeat(*lease)
 
             try:
+                if slot['state'] != 'running':
+                    with self.transfers._transaction(owner) as (life, repo, _):
+                        life.gate()
+                        repo.tx.tasks._fenced(task.id, claim.lease_token, self.worker_id)
+                        resumed = life.recover_slot(binding['slot_id'], task.id)
+                        lease = resumed['id'], task.id, resumed['fence']
                 pulse()
                 if task.kind == 'export':
                     self._export(owner, task, claim, binding, attempt.id, lease, pulse)
@@ -192,6 +201,7 @@ class PortableTaskWorker:
 
     def _failed(self, owner, task, claim, binding, attempt, code):
         with self.transfers._transaction(owner) as (life, repo, _):
+            life.gate()
             repo.tx.tasks.finish_portable(task.id, claim.lease_token, self.worker_id, attempt, error=code)
             life.close(binding['transfer_id'])
             life.gate()
@@ -216,8 +226,8 @@ class PortableTaskWorker:
         with self.transfers._transaction(owner) as (life, repo, _):
             tx = repo.tx
             tx.catalog._load(Resource.COURSE, upload['destination_course_id'], share=True)
-            tx.tasks._fenced(task.id, claim.lease_token, self.worker_id)
             life.gate()
+            tx.tasks._fenced(task.id, claim.lease_token, self.worker_id)
             current = life.live_work(*lease)
             result = copier.publish(life, tx, task, current, rooms)
             life.finish(*lease, 'completed')
@@ -256,13 +266,14 @@ class PortableTaskWorker:
             length, digest, mime = self._write_export(output, body, classrooms, pulse)
             with self.transfers._transaction(owner) as (life, repo, _):
                 self.transfers._authorize_sources(repo, sources)
-                repo.tx.tasks._fenced(task.id, claim.lease_token, self.worker_id)
                 life.gate()
+                repo.tx.tasks._fenced(task.id, claim.lease_token, self.worker_id)
                 life.live_work(*lease)
                 asset = life.stage(target, 0, length, digest, mime)
             obj = self.transfers.write_staged(owner, target, asset, output)
         with self.transfers._transaction(owner) as (life, repo, _):
             self.transfers._authorize_sources(repo, sources)
+            life.gate()
             repo.tx.tasks._fenced(task.id, claim.lease_token, self.worker_id)
             self.transfers.authorize_dependencies(life, repo, target)
             life.attach(target, asset, obj)
@@ -299,5 +310,7 @@ class PortableTaskWorker:
                         write(literal_markdown(row['text']) + '\n\n')
                 for row in classroom.session.get('web_notes', ()):
                     write('## ' + literal_markdown(row['title']) + '\n\n' + literal_markdown(row['body']) + '\n\n')
+                    if row.get('personal_note'):
+                        write(literal_markdown(row['personal_note']) + '\n\n')
             mime = 'text/markdown'
         return output.tell(), digest.hexdigest(), mime

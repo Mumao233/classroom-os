@@ -25,7 +25,7 @@
 ## 准入与生命周期
 
 - 每 owner 仅一个未完成上传。上传创建即按声明字节预留。平台导入暂存加预留最多 5000000000 bytes，平台导出产物加预留也最多 5000000000 bytes。尚未证明擦除的副本继续占用各自池。组装采用流式逻辑对象或有界 spool，禁止无预留地复制一整份到对象桶。每 owner 最多一个仍可访问的导出产物。重叠的新写入受平台字节预算约束。
-- 预检开始及导出接单共用四槽，每 owner 总共一槽。满额返回 `429 RATE_LIMITED`，复用 Error 的 `retry_after_seconds`，不进入等待队列。PG 在同一事务执行 owner 和平台判定。worker 使用单调 fence 和最长 5 分钟执行租约。过期 worker 的心跳、状态转换及发布均拒绝。成功预检转为最多 30 分钟等确认，取上传 24 小时截止与等待期限的最早值。等待过期只释槽，旧预检凭据拒绝，仍可在上传期限内用新键重做预检。
+- 预检开始及导出接单共用四槽，每 owner 总共一槽。满额返回 `429 RATE_LIMITED`，复用 Error 的 `retry_after_seconds`，不进入等待队列。PG 在同一事务执行 owner 和平台判定。worker 使用单调 fence 和最长 5 分钟执行租约。过期 worker 的心跳、状态转换及发布均拒绝。已绑定持久 Task 的本地作业在最近一次租约失效后的五分钟内可重新申请一次执行槽，须重新取得 Task 与槽位 fence。未取回、超出上传截止或二次丢租约即按原截止进入清除。成功预检转为最多 30 分钟等确认，取上传 24 小时截止与等待期限的最早值。等待过期只释槽，旧预检凭据拒绝，仍可在上传期限内用新键重做预检。
 - 上传从创建起 24 小时截止，导出从发布起 24 小时截止。失败、取消或撤权实际生效时提早截止。清除时钟取最早访问截止，+24 小时仍有残留即告警，+72 小时仍有残留升级事故。清除重试不推迟时钟。逻辑撤权后的清除照原计划重试。
 
 ## 导出续传与原样重导
@@ -49,6 +49,6 @@
 - `create_app(portable_jobs=...)` 在同一显式合成环境中挂载业务路由和 multipart。冻结的 `ExportRequest`、`ImportCommit`、`ImportPreview`、`Task`、`MediaAccess` 响应体维持原样。兼容上传经现有 Media 流程校验后可转换为同一原样重导流程，使用更早的既有访问截止时间。
 - `POST /exports` 和 `POST /imports/commit` 均按现有 202 Task 协议回执。平台槽位、Task、回执、Outbox、绑定在同一事务建立。仅 `pr08c-1` 专用 worker 执行，可查询或取消。成功导出的 Task.result_id 指向私有资产，导入指向首个新课堂。所有原课堂 UUID 与新课堂 UUID 的映射随提交持久化。
 - 现行候选封口在有界请求内完成流式校验并提交 verified。对象存储或数据库失败后按同一操作键和固定分片版本重试。封口未写正式课堂，也不排入执行槽。旧草案设想过异步 sealing 状态，本次 §3.1 复审覆盖这项调整。
-- 聚合 ZIP 根为 `aggregate.json`，字段为 `schema_version=1`、`format=classroom-assistant-aggregate`、`scope` 和 `sessions`。每个课堂命名空间由清单列出的 32 位小写十六进制 ID 界定。成员只含 `session.json`、`manifest.json` 及清单列出的图片，单课堂清单兼容 schema 1。Web 持久模型使用 `web_transcript`、`web_images`、`web_notes` 保留真实版本和缺失时间信息。原始来源 UUID、片段哈希与 frozen excerpt 不重写，独立副本另建本地映射。
+- 聚合 ZIP 根为 `aggregate.json`，字段为 `schema_version=1`、`format=classroom-assistant-aggregate`、`scope` 和 `sessions`。每个课堂命名空间由清单列出的 32 位小写十六进制 ID 界定。成员只含 `session.json`、`manifest.json` 及清单列出的图片，单课堂清单兼容 schema 1。Web 持久模型使用 `web_transcript`、`web_images`、`web_notes` 保留真实版本和缺失时间信息。原始来源 UUID、片段哈希与 frozen excerpt 不重写，独立副本另建本地映射。已导入后编辑的正文与 Review 导出当前版本，旧证据独立保留。Web Review 的 Markdown 与个人注释分别存储，并通过原 Review 映射覆盖个人稿。
 - 单候选范围包含明确授权的课堂集合。对聚合来源课堂、导出的可用图片与转写来源重新做授权，撤销时整个导出失效。图片与转写完整性受源哈希和对象版本约束。JSON/Markdown 仍为阅读格式。
 - 运行 `python -m classroom_web.entrypoints.worker --portable-config <isolated-config>` 时额外明确提供 runtime/scheduler URL 和 worker ID。配置包含相同合成数据库的 deletion_queue_url、已有 spool_directory、私有 loopback media 与 ledger 配置。worker 启动时复核删除账本，每 30 秒处理到期、擦除和计数告警。生产接入、商用额度与生命周期签署留待 TBD-06。

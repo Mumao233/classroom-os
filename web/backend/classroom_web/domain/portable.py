@@ -206,7 +206,8 @@ def slide(item):
 def session_references(session):
     schema(session, required=('id', 'title', 'created_at'), version_optional=True)
     require(match(LEGACY_ID, session['id']) and isinstance(session['title'], str)
-            and 0 < len(session['title']) <= 200 and isinstance(session['created_at'], str))
+            and 0 < len(session['title']) <= 200 and bool(session['title'].strip())
+            and isinstance(session['created_at'], str))
     try:
         datetime.fromisoformat(session['created_at'].replace('Z', '+00:00'))
     except ValueError as error:
@@ -276,12 +277,20 @@ def session_references(session):
                 and item['mime_type'] == IMAGE_MIMES[path[-4:]] and match(SHA, item.get('sha256'))
                 and all(type(item[field]) is int and item[field] > 0 for field in ('width', 'height')))
         register(MediaReference('image', path, item['id'], version, item['sha256'], (item['width'], item['height'])))
+    inherited_notes = set()
     for item in rows(session.get('web_notes', []), LEGACY_ID):
-        require(set(item) == {'id', 'title', 'body', 'version', 'evidence'}
+        expected = {'id', 'title', 'body', 'version', 'evidence'}
+        require(expected <= item.keys() and item.keys() <= expected | {'personal_note', 'legacy_review_key'}
                 and isinstance(item['title'], str) and len(item['title']) <= 200
                 and isinstance(item['body'], str) and len(item['body']) <= 120000
                 and type(item['version']) is int and item['version'] >= 1
                 and type(item['evidence']) is list)
+        annotation = item.get('personal_note', '')
+        require(isinstance(annotation, str) and len(annotation) <= 12000)
+        prior = item.get('legacy_review_key')
+        if prior is not None:
+            require(match(r'(cards|notes):[A-Za-z0-9_-]{1,128}', prior) and prior not in inherited_notes)
+            inherited_notes.add(prior)
         for source in records(item['evidence']):
             require(set(source) == {'source_id', 'revision_id', 'frozen_text', 'content_sha256'}
                     and match(LEGACY_ID, source['source_id']) and match(LEGACY_ID, source['revision_id'])
@@ -321,6 +330,8 @@ def session_references(session):
         elif item.get('study'):
             raise InvalidPackage()
 
+    if inherited_notes and 'review' not in session:
+        raise InvalidPackage()
     if 'review' in session:
         review = session['review']
         schema(review)
@@ -351,6 +362,9 @@ def session_references(session):
                     require(all(isinstance(part.get(field), str) for field in fields))
                     cited = part.get('source_ids', [])
                     require(type(cited) is list and all(isinstance(key, str) and key in allowed for key in cited))
+        known_review_ids = {f'{collection}:{item["id"]}' for collection in ('cards','notes')
+                            for item in review.get(collection, ())}
+        require(inherited_notes <= known_review_ids)
         selected = review.get('selected_note_id')
         if selected is not None:
             require(match(RECORD_ID, selected)
@@ -547,6 +561,16 @@ def inspect_members(archive, by_name, limits, v21, pixel_budget, *, on_room=None
         on_room(session, manifest['media'], archive, by_name)
     return session, media_bytes, bool(omitted), audio_excluded, pixel_budget
 
+UNRESTORED_FIELDS = frozenset(('ai_usage','consent','credentials','device','flush_requested',
+    'owner_id','pending_ids','session','settings','tasks'))
+
+
+def candidate_report(session, omitted, audio):
+    return dict(id=session['id'], omitted_media=omitted, audio_references=audio,
+                unsupported_fields=sorted(set(session) & UNRESTORED_FIELDS),
+                transcript_segments=len(session.get('segments', ())) + len(session.get('web_transcript', ())))
+
+
 def inspect_aggregate(archive, by_name, limits, *, on_room=None):
     index = strict_json(read_member(archive, by_name.pop('aggregate.json'), limits.metadata_bytes),
                         limits.metadata_bytes, max_items=limits.files)
@@ -575,8 +599,7 @@ def inspect_aggregate(archive, by_name, limits, *, on_room=None):
         session, media, omitted, audio, pixel_budget = inspect_members(
             archive, members, limits, True, pixel_budget, on_room=verify_room)
         total_media += media
-        reports.append(dict(id=identity, omitted_media=omitted, audio_references=audio,
-                            transcript_segments=len(session.get('segments', []))))
+        reports.append(candidate_report(session, omitted, audio))
     return scope, tuple(reports), total_media
 
 
@@ -599,18 +622,18 @@ def inspect_candidate(source, length, mime, *, on_room=None):
             session = strict_json(raw, policy.metadata_bytes, max_items=policy.files, max_nodes=250_000)
             refs = session_references(session)
             if on_room is not None:
-                on_room(session, [], None, {})
+                media = [dict(kind=ref.kind, id=ref.identity, version=ref.version, sha256=ref.sha256,
+                              original_path=ref.path, availability='not_included') for ref in refs.values()]
+                on_room(session, media, None, {})
             audio = any(ref.kind == 'audio' for ref in refs.values())
-            return CandidateInspection('class_session', (dict(id=session['id'], omitted_media=bool(refs),
-                audio_references=audio, transcript_segments=len(session.get('segments', []))),), 0)
+            return CandidateInspection('class_session', (candidate_report(session, bool(refs), audio),), 0)
         require(mime == 'application/zip')
         result = inspect_zip_stream(source, length, policy, v21=True, on_room=on_room)
         if len(result) == 3:
             scope, reports, total_media = result
             return CandidateInspection(scope, reports, total_media)
         session, media, omitted, audio = result
-        return CandidateInspection('class_session', (dict(id=session['id'], omitted_media=omitted,
-            audio_references=audio, transcript_segments=len(session.get('segments', []))),), media)
+        return CandidateInspection('class_session', (candidate_report(session, omitted, audio),), media)
     except (zipfile.BadZipFile, EOFError, RuntimeError, UnicodeError, struct.error, zlib.error) as error:
         raise InvalidPackage() from error
 

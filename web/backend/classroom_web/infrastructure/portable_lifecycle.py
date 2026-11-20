@@ -147,6 +147,11 @@ class PortableLifecycle:
             AND state IN ('running','waiting')) AS busy''').one()['busy']
         if budget['slots'] >= PORTABLE_V21.slots or owner_busy:
             raise admission_limited()
+        recovering = self.rows('''SELECT EXISTS(SELECT FROM portable_slots
+            WHERE owner_id=:owner AND transfer_id=:id AND state='failed'
+              AND recover_until>clock_timestamp()) AS pending''', id=transfer_id).one()['pending']
+        if recovering:
+            raise admission_limited()
         if destination is not None:
             self.rows('''UPDATE portable_transfers SET destination_course_id=:course
                 WHERE owner_id=:owner AND id=:id RETURNING id''', id=transfer_id, course=destination).one()
@@ -156,6 +161,26 @@ class PortableLifecycle:
                    least(CAST(:until AS timestamptz),CAST(:access AS timestamptz))) RETURNING *''',
             id=uuid4(), transfer=transfer_id, op=op_id, digest=digest, worker=worker_id,
             until=self.now() + PORTABLE_V21.worker_lease, access=transfer['access_until']).one()
+
+    def recover_slot(self, slot_id, task_id):
+        budget = self.gate()
+        if budget['slots'] >= PORTABLE_V21.slots:
+            raise admission_limited()
+        row = self.rows('''UPDATE portable_slots s SET state='running',worker_id=:task,fence=s.fence+1,
+                deadline=least(clock_timestamp()+interval '5 minutes',t.access_until),
+                recovery_count=s.recovery_count+1,recover_until=NULL,finished_at=NULL
+            FROM portable_task_bindings b,portable_transfers t
+            WHERE s.owner_id=:owner AND s.id=:id AND b.owner_id=s.owner_id AND b.slot_id=s.id
+                AND b.task_id=:task AND t.owner_id=s.owner_id AND t.id=s.transfer_id
+                AND s.state='failed' AND s.recovery_count=0 AND s.recover_until>clock_timestamp()
+                AND t.state IN ('verified','building')
+                AND (t.access_until IS NULL OR t.access_until>clock_timestamp())
+                AND NOT EXISTS(SELECT FROM portable_slots a WHERE a.owner_id=s.owner_id
+                               AND a.state IN ('running','waiting'))
+            RETURNING s.*''', id=slot_id,task=task_id).one_or_none()
+        if row is None:
+            raise AuthRejected('LEASE_CONFLICT', 409)
+        return row
 
     def live_work(self, slot_id, worker_id, fence):
         slot = self.rows('SELECT * FROM portable_slots WHERE owner_id=:owner AND id=:id',

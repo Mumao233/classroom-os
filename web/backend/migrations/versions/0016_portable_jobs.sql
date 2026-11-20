@@ -56,6 +56,13 @@ CREATE TABLE public.portable_import_assets (
 );
 CREATE INDEX portable_import_assets_pending ON public.portable_import_assets(transfer_id)
     WHERE published_at IS NULL AND erased_at IS NULL;
+ALTER TABLE public.portable_slots ADD COLUMN recover_until timestamptz;
+ALTER TABLE public.portable_slots ADD COLUMN recovery_count integer NOT NULL DEFAULT 0 CHECK (recovery_count BETWEEN 0 AND 1);
+GRANT UPDATE (recover_until,recovery_count) ON public.portable_slots TO classroom_web_runtime;
+GRANT UPDATE (recover_until) ON public.portable_slots TO classroom_web_portable_maintainer;
+CREATE POLICY portable_recovery_slot ON public.portable_task_bindings FOR SELECT
+    TO classroom_web_portable_maintainer USING (true);
+GRANT SELECT (slot_id) ON public.portable_task_bindings TO classroom_web_portable_maintainer;
 ALTER TABLE public.portable_slots ADD CONSTRAINT portable_slots_owner_identity UNIQUE(owner_id,id,transfer_id);
 ALTER TABLE public.portable_task_bindings ADD FOREIGN KEY (owner_id,slot_id,transfer_id)
     REFERENCES public.portable_slots(owner_id,id,transfer_id);
@@ -158,13 +165,21 @@ BEGIN
     WITH expired AS (
         UPDATE public.portable_slots s
         SET state=CASE WHEN s.state='running' THEN 'failed' ELSE 'expired' END,
-            finished_at=s.deadline, worker_id=NULL, fence=s.fence+1
+            finished_at=s.deadline, worker_id=NULL, fence=s.fence+1,
+            recover_until=CASE WHEN s.state='running' AND s.recovery_count=0
+                AND EXISTS(SELECT FROM public.portable_task_bindings b WHERE b.slot_id=s.id)
+                THEN s.deadline+interval '5 minutes' END
         WHERE s.state IN ('running','waiting') AND s.deadline<=ts
-        RETURNING s.transfer_id, s.state, s.finished_at
+        RETURNING s.transfer_id, s.state, s.finished_at, s.recover_until
     )
     UPDATE public.portable_transfers t SET state='closed',
         access_until=least(t.access_until, e.finished_at)
-    FROM expired e WHERE e.transfer_id=t.id AND e.state='failed' AND t.state<>'closed';
+    FROM expired e WHERE e.transfer_id=t.id AND e.state='failed' AND t.state<>'closed'
+        AND (e.recover_until IS NULL OR e.recover_until<=ts);
+
+    UPDATE public.portable_transfers t SET state='closed',access_until=least(t.access_until,s.finished_at)
+        FROM public.portable_slots s WHERE s.transfer_id=t.id AND s.state='failed' AND s.recover_until<=ts
+        AND t.state<>'closed';
 
     WITH cutoffs AS (
         SELECT t.id, min(r.access_revoked_at) AS deadline

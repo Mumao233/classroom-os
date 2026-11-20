@@ -155,10 +155,13 @@ class ImportCopy:
     def _review(tx, classroom, session):
         review = PgReviewRepository(tx)
         mapped = {}
+        overlays = {item['legacy_review_key']: item['id'] for item in session.get('web_notes', ())
+                    if 'legacy_review_key' in item}
         for kind in ('cards', 'notes', 'marks', 'runs'):
             for item in session.get('review', {}).get(kind, ()):
                 native = None
-                if kind in ('cards', 'notes'):
+                key = f'{kind}:{item["id"]}'
+                if kind in ('cards', 'notes') and key not in overlays:
                     draft = item['user_draft']
                     content = draft['content']
                     if content.strip() or draft['personal_note'].strip():
@@ -168,10 +171,13 @@ class ImportCopy:
                             body_markdown=literal_markdown(content + ('\n\n' + draft['personal_note'] if draft['personal_note'] else '')),
                             draft_id=str(uuid4())), uuid4())
                         native = document['id']
-                mapped[f'{kind}:{item["id"]}'] = dict(id=native or str(uuid4()),
+                mapped[key] = dict(id=native or str(uuid4()), native=native is not None,
                     original_snapshot_hash=item.get('evidence', {}).get('snapshot_hash'))
         for note in session.get('web_notes', ()):
             document = review.create_note(dict(class_session_id=str(classroom), title=note['title'],
-                body_markdown=literal_markdown(note['body']), draft_id=str(uuid4())), uuid4())
-            mapped[f'web_note:{note["id"]}'] = dict(id=document['id'])
+                body_markdown=note['body'], draft_id=str(uuid4())), uuid4(),
+                portable_annotation=note.get('personal_note', ''))
+            mapped[f'web_note:{note["id"]}'] = dict(id=document['id'], native=True)
+            if 'legacy_review_key' in note:
+                mapped[note['legacy_review_key']].update(id=document['id'], native=True)
         return mapped

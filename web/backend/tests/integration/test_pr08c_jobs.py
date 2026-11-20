@@ -3,6 +3,7 @@ import hashlib
 import io
 import json
 from uuid import UUID, uuid4
+from zipfile import ZipFile
 
 from fastapi.testclient import TestClient
 from PIL import Image
@@ -12,12 +13,14 @@ from classroom_web.application.portable_commit import ImportCopy
 from classroom_web.application.portable_jobs import PortableJobs, PortableTaskWorker
 from classroom_web.application.portable_maintenance import PortableMaintenance
 from classroom_web.application.portable_transfers import PortableTransfers
+from classroom_web.domain.auth import AuthRejected
 from classroom_web.domain.data import OwnerContext
 from classroom_web.domain.portable import PORTABLE_V21
 from classroom_web.domain.portable_export import ArchiveAsset, write_aggregate
 from classroom_web.entrypoints.http import create_app
 from classroom_web.infrastructure.portable_lifecycle import PortableLifecycle
 from classroom_web.infrastructure.qa_repository import PgQaRepository
+from classroom_web.infrastructure.review_repository import PgReviewRepository
 from classroom_web.entrypoints.worker import portable_worker
 from deletion_support import BASE, auth, contract, d, deploy, new_user, one, pg, rows, services, versions
 from test_persistent_tasks import scheduler
@@ -118,6 +121,8 @@ def test_commit_crash_rolls_back_catalog_and_ack_loss_replays(d, enabled, schedu
     staged = one(d, 'SELECT * FROM portable_import_assets WHERE task_id=:id', id=task)
     assert staged['published_at'] is None and len(versions(d, staged['object_key'])) == 1
     modify(d, "UPDATE tasks SET lease_expires_at=clock_timestamp()-interval '1 second' WHERE id=:id", id=task)
+    modify(d, "UPDATE portable_slots SET deadline=clock_timestamp()-interval '1 second' "
+              "WHERE id=(SELECT slot_id FROM portable_task_bindings WHERE task_id=:id)", id=task)
     assert PortableTaskWorker(jobs, scheduler, worker_id='replacement').run_once()
     final = state(client, task)
     assert final['state'] == 'succeeded' and final['may_have_charged'] is False
@@ -138,10 +143,45 @@ def test_commit_crash_rolls_back_catalog_and_ack_loss_replays(d, enabled, schedu
     attempt = one(d,'SELECT * FROM task_attempts WHERE task_id=:id',id=task)
     assert attempt['provider'] is None and attempt['submitted_at'] is None and attempt['raw_output_ref'] is None
     assert one(d,'SELECT count(*) FROM provider_results WHERE attempt_id=:id',id=attempt['id'])['count'] == 0
+    assert one(d,'SELECT recovery_count FROM portable_slots WHERE id='
+                 '(SELECT slot_id FROM portable_task_bindings WHERE task_id=:id)',id=task)['recovery_count'] == 1
+
+    with d.pg.db.transaction(OwnerContext(d.uid)) as tx:
+        source = UUID(lineage['id_map']['segments']['S0001']['id'])
+        PgQaRepository(tx).revise_source(source,'Edited transcript')
+        review = PgReviewRepository(tx)
+        base = review.document(note)
+        review.write_personal(note,dict(base_revision=base['revision'],draft_id=str(uuid4()),
+            body_markdown='**Edited review**',personal_note='Copied annotation'),uuid4())
+    request = dict(scope='class_session',scope_id=final['result_id'],format='zip',
+                   include_audio=False,confirmed_audio_privacy=False,allow_missing=False)
+    export = response(client.post(BASE+'/exports',json=request,headers=write_headers(d)),202)
+    assert PortableTaskWorker(jobs,scheduler,worker_id='re-export').run_once()
+    again = state(client,export['id'])
+    assert again['state'] == 'succeeded', again
+    stream = client.post(f'{BASE}/media/{again["result_id"]}/access',json={},headers=write_headers(d))
+    path = response(stream,200)['download_path']
+    downloaded = client.get(path,headers={'range':'bytes=0-'})
+    assert downloaded.status_code == 206
+    with ZipFile(io.BytesIO(downloaded.content)) as archive:
+        index = json.loads(archive.read('aggregate.json'))
+        reexported = json.loads(archive.read(index['sessions'][0]+'/session.json'))
+    assert reexported['segments'][0]['text'] == 'Edited transcript'
+    assert reexported['review']['cards'][0]['evidence']['segments'][0]['text'] == 'Synthetic transcript'
+    assert reexported['web_notes'][0]['body'] == '**Edited review**'
+    assert reexported['web_notes'][0]['personal_note'] == 'Copied annotation'
+    roundtrip, _, _ = enqueue_import(d,client,downloaded.content)
+    assert PortableTaskWorker(jobs,scheduler,worker_id='roundtrip').run_once()
+    second = state(client,roundtrip)
+    assert second['state'] == 'succeeded', second
+    review_rows = rows(d,'SELECT body_markdown,personal_note FROM review_revisions WHERE class_session_id=:id',
+                       id=UUID(second['result_id']))
+    assert review_rows == [dict(body_markdown='**Edited review**',personal_note='Copied annotation')]
     delete(d,'class_session',UUID(final['result_id']))
     with d.pg.db.transaction(OwnerContext(d.uid)) as tx:
         assert tx.catalog.get_class_session(d.classroom.id).deleted_at is None
-        assert PortableLifecycle(tx).rows('SELECT * FROM portable_imported_classrooms').all() == []
+        assert PortableLifecycle(tx).rows('SELECT * FROM portable_imported_classrooms WHERE class_session_id=:id',
+                                           id=UUID(final['result_id'])).all() == []
 
 
 def row_states(d, task):
@@ -214,3 +254,43 @@ def test_maintenance_alerts_cleanup_and_no_partial_copy_on_cancel(d, enabled, sc
     assert one(d,'SELECT erased_at FROM portable_import_assets WHERE id=:id',id=staged['id'])['erased_at']
     assert not rows(d,'SELECT * FROM portable_imported_classrooms WHERE task_id=:id',id=task)
     assert one(d,'SELECT count(*) FROM class_sessions WHERE owner_id=:owner',owner=d.uid)['count'] == 1
+
+
+def test_json_missing_images_and_audio_are_reported_and_preserved(d,enabled,scheduler):
+    jobs, client = enabled
+    source = archive_room(d.classroom).session
+    source['slides'] = [dict(id='P0001',version=1,path='slides/'+'b'*32+'.png',sha256='c'*64,
+                             mime_type='image/png',start=0,end=None,width=2,height=3)]
+    source['audio'] = [dict(seq=1,path='audio/1.wav',start=0,duration=1)]
+    source['credentials'] = {'synthetic':True}
+    payload = json.dumps(source).encode()
+    preview = upload(d,client,payload,'application/json')
+    assert len(preview['warnings']) == 2 and preview['unsupported_fields'] == ['credentials']
+    body = dict(preview_id=preview['id'],archive_sha256=preview['archive_sha256'],
+                confirm_independent_copy=True,allow_missing=False)
+    first = response(client.post(BASE+'/imports/commit',json=body,headers=write_headers(d)),202)
+    assert PortableTaskWorker(jobs,scheduler,worker_id='reject-missing').run_once()
+    assert state(client,first['id'])['error_code'] == 'SOURCE_UNAVAILABLE'
+    preview = upload(d,client,payload,'application/json')
+    body.update(preview_id=preview['id'],allow_missing=True)
+    second = response(client.post(BASE+'/imports/commit',json=body,headers=write_headers(d)),202)
+    assert PortableTaskWorker(jobs,scheduler,worker_id='keep-missing').run_once()
+    outcome = state(client,second['id'])
+    assert outcome['state'] == 'succeeded'
+    saved = one(d,'SELECT snapshot FROM portable_imported_classrooms WHERE task_id=:id',id=UUID(second['id']))['snapshot']
+    assert {m['kind']:m['availability'] for m in saved['media']} == {'image':'not_included','audio':'not_included'}
+    assert 'credentials' not in saved['session']
+
+
+def test_preview_rejects_blank_title_with_typed_error(d,enabled):
+    jobs,_ = enabled
+    source = archive_room(d.classroom).session
+    source['title'] = '   '
+    payload = json.dumps(source).encode()
+    digest = hashlib.sha256(payload).hexdigest()
+    transfer = jobs.transfers.begin_upload(d.ctx,uuid4(),len(payload),digest,'application/json')
+    jobs.transfers.put_part(d.ctx,uuid4(),transfer['id'],0,0,len(payload),digest,io.BytesIO(payload))
+    jobs.transfers.seal(d.ctx,uuid4(),transfer['id'],digest)
+    with pytest.raises(AuthRejected) as error:
+        jobs.transfers.preview(d.ctx,uuid4(),transfer['id'],d.course.id)
+    assert error.value.code == 'VALIDATION_FAILED'
