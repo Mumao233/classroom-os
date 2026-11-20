@@ -2,9 +2,9 @@
 
 # Classroom OS 阶段进度
 
-**17 / 28 完成**　`████████████░░░░░░░░`　61%
+**18 / 28 完成**　`█████████████░░░░░░░`　64%
 
-🟢 完成 17　🟣 待验收 0　🔵 进行中 2　🟡 可开工 0　⚪ 未开始 9　🔴 受阻 0
+🟢 完成 18　🟣 待验收 0　🔵 进行中 1　🟡 可开工 1　⚪ 未开始 8　🔴 受阻 0
 
 图例：节点颜色＝状态（🟡 黄色粗框＝前置都完成、可以开工）；实线＝硬依赖，虚线＝完整联调，橙色粗线＝真实付费接入前置；**连线变绿＝这条前置已满足**。
 
@@ -129,11 +129,12 @@ flowchart TD
     classDef ready fill:#fef3c7,stroke:#d97706,color:#78350f,stroke-width:3px
     classDef blocked fill:#fecaca,stroke:#b91c1c,color:#7f1d1d,stroke-width:2px
     classDef todo fill:#f5f5f4,stroke:#a8a29e,color:#57534e
-    class P00,P01,P02A,P02B,P03A,P03B,P04A,P04B,P05A,P05B,P07A,P07B,P08A,P08B,P09A,P09B,P11A done
-    class P06A,P08C doing
-    class P06B,P06C,P10A,P10B,P11B,P11C,P12A,P12B,P12C todo
-    linkStyle 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,39,40,41,42,43,44,45,46,47,48,49,50,51,52,55,56,57,58,65,66,67,68,69 stroke:#16a34a,stroke-width:2px
-    linkStyle 35,36,37,38,53,54,59,60,61,62,63,64,70,71,72,73,74 stroke:#a8a29e,stroke-width:1.2px
+    class P00,P01,P02A,P02B,P03A,P03B,P04A,P04B,P05A,P05B,P06A,P07A,P07B,P08A,P08B,P09A,P09B,P11A done
+    class P08C doing
+    class P06B ready
+    class P06C,P10A,P10B,P11B,P11C,P12A,P12B,P12C todo
+    linkStyle 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,39,40,41,42,43,44,45,46,47,48,49,50,51,52,55,56,57,58,65,66,67,68,69 stroke:#16a34a,stroke-width:2px
+    linkStyle 36,37,38,53,54,59,60,61,62,63,64,70,71,72,73,74 stroke:#a8a29e,stroke-width:1.2px
     linkStyle 75,77,78 stroke:#16a34a,stroke-width:1.5px
     linkStyle 76 stroke:#78716c,stroke-width:1.2px
     linkStyle 79,80,81,82 stroke:#16a34a,stroke-width:3px
@@ -149,7 +150,7 @@ flowchart TD
 | 03 身份与权限 | 2/2 | 🟢 03a 🟢 03b |
 | 04 存储与删除 | 2/2 | 🟢 04a 🟢 04b |
 | 05 采集与恢复 | 2/2 | 🟢 05a 🟢 05b |
-| 06 ASR 语音识别 | 0/3 | 🔵 06a ⚪ 06b ⚪ 06c |
+| 06 ASR 语音识别 | 1/3 | 🟢 06a 🟡 06b ⚪ 06c |
 | 07 AI 问答与总结 | 2/2 | 🟢 07a 🟢 07b |
 | 08 离线与同步 | 2/3 | 🟢 08a 🟢 08b 🔵 08c |
 | 09 Web 界面 | 2/2 | 🟢 09a 🟢 09b |
@@ -159,36 +160,35 @@ flowchart TD
 
 ## 现在可以开工
 
-- 暂无
+- **06b 实时 ASR 与恢复**
 
 ## 关键路径
 
-剩余最长的硬依赖链有 **8** 个阶段，决定最快什么时候能全部做完：
+剩余最长的硬依赖链有 **7** 个阶段，决定最快什么时候能全部做完：
 
-06a ASR 协议与模拟 POC → 06b 实时 ASR 与恢复 → 10a Classroom 与课后页 → 10b Review、来源与采用 → 11b 运营后台 → 12a 集成、安全与恢复验收 → 12b 真机、质量与长时验证 → 12c 发布与回退材料
+06b 实时 ASR 与恢复 → 10a Classroom 与课后页 → 10b Review、来源与采用 → 11b 运营后台 → 12a 集成、安全与恢复验收 → 12b 真机、质量与长时验证 → 12c 发布与回退材料
 
 ## 瓶颈
 
 未完成阶段里，卡住下游最多的五个：
 
-- 06a ASR 协议与模拟 POC：卡住 9 个下游（🔵 进行中）
-- 06b 实时 ASR 与恢复：卡住 8 个下游（⚪ 未开始）
+- 06b 实时 ASR 与恢复：卡住 8 个下游（🟡 可开工）
 - 08c 导入导出兼容：卡住 6 个下游（🔵 进行中）
 - 10a Classroom 与课后页：卡住 6 个下游（⚪ 未开始）
 - 10b Review、来源与采用：卡住 5 个下游（⚪ 未开始）
+- 06c Filetrans 与候选采用：卡住 3 个下游（⚪ 未开始）
 
 ## 剩余并行波次
 
 同一波里的阶段互不依赖，可以并行；前一波完成后下一波才能全部开工。
 
-- 第 1 波：06a、08c
-- 第 2 波：06b
-- 第 3 波：06c、10a
-- 第 4 波：10b
-- 第 5 波：11b、11c
-- 第 6 波：12a
-- 第 7 波：12b
-- 第 8 波：12c
+- 第 1 波：06b、08c
+- 第 2 波：06c、10a
+- 第 3 波：10b
+- 第 4 波：11b、11c
+- 第 5 波：12a
+- 第 6 波：12b
+- 第 7 波：12c
 
 ## 全部阶段
 
@@ -204,8 +204,8 @@ flowchart TD
 | 04b 数据删除与备份恢复 | 🟢 完成 | 林珈诚 | [#16](https://github.com/Mumao233/classroom-os/pull/16) | — | — | 开始日期未记录 | 2026-11-16 | 2026-11-16 GitHub #16 合入 main（65dbcab）。已交付删除受理、撤权、独立删除账本、对象清除和备份恢复闸门。数据库正文清除待完成，相关请求保持 pending_delete。TBD-04、TBD-05 待签署。详见 docs/web-alpha/pr04b/HANDOFF-20261116.md。 |
 | 05a 缓存密钥安全 POC | 🟢 完成 | 林珈诚 | [#11](https://github.com/Mumao233/classroom-os/pull/11) | — | — | 开始日期未记录 | 2026-11-16 | 2026-11-16 按 Mumao233 合并 GitHub #11、并经 #10 进入 main 的记录同步已交付范围。Web Crypto/IndexedDB 安全 POC、03b 身份与 PostgreSQL 密钥解锁、同一有效设备恢复候选及增量安全复审完成。合流 VMware 回归包含真实缓存 TLS 浏览器验证。正式接入候选默认关闭，TBD-03、正式迁移与契约、录音同意及恢复产品策略仍待确认。证据见该 PR、docs/web-alpha/pr05a/FORMAL-INTEGRATION-20261115.md 与 outputs/integration-20261116/ci-repair/SUMMARY.md。 |
 | 05b 采集恢复与租约 | 🟢 完成 | 林珈诚 | [#18](https://github.com/Mumao233/classroom-os/pull/18) | — | — | 开始日期未记录 | 2026-11-17 | 2026-11-17 GitHub #18 合入 main（042d79f）。已交付采集状态机、租约与接管、分块幂等、持久化确认、断线恢复和 PR-04b 删除恢复兼容。采集恢复默认关闭，真实麦克风、录音持久化和生产启用待验收。 |
-| 06a ASR 协议与模拟 POC | 🔵 进行中 | 林珈诚 | [#3](https://github.com/Mumao233/classroom-os/pull/3) [#4](https://github.com/Mumao233/classroom-os/pull/4) [#19](https://github.com/Mumao233/classroom-os/pull/19) | — | — | 2026-11-06 | — | 模拟协议 POC 已验收并经 GitHub #4 合入 main，原模拟 PR 为 #3，模拟候选 24 项及可信断言 4 项通过。DashScope 单连接适配器边界修复为草稿 #19。PR-06a 的真实接口验证在本地 R2 候选 adf9f79 上尝试一次，于握手前连接失败。发送音频 0，未收到 usage，费用待对账。后续真实接口验证须遵循专项授权及付费门禁。 |
-| 06b 实时 ASR 与恢复 | ⚪ 未开始 | — | — | 06a | — | — | — |  |
+| 06a ASR 协议与模拟 POC | 🟢 完成 | 林珈诚 | [#3](https://github.com/Mumao233/classroom-os/pull/3) [#4](https://github.com/Mumao233/classroom-os/pull/4) [#19](https://github.com/Mumao233/classroom-os/pull/19) | — | — | 2026-11-06 | 2026-11-20 | 第四批正式 DashScope 最小 POC 在候选 a2a9a634 三例通过，发出 184,064 个确认采样。前序批次、独立调试、残余风险与账单待核见 docs/web-alpha/pr06a/REAL-POC-CLOSEOUT-20261119.md。四批各 ¥1 预留待林珈诚核对控制台。2026-11-20，GitHub #19 已合入 main（0718c85）。 |
+| 06b 实时 ASR 与恢复 | 🟡 可开工 | — | — | — | — | — | — |  |
 | 06c Filetrans 与候选采用 | ⚪ 未开始 | — | — | 06b | — | — | — |  |
 | 07a 问答与来源快照 | 🟢 完成 | 林珈诚 | [#14](https://github.com/Mumao233/classroom-os/pull/14) | — | — | 开始日期未记录 | 2026-11-16 | 2026-11-16 GitHub #14 合入 main（cf88260）。已交付授权问答、冻结来源快照与引用、不可变版本和任务恢复。QA composition 与 Worker 默认关闭。正式接线和删除恢复联调门禁见 docs/web-alpha/pr07a/VALIDATION.md。 |
 | 07b 总结卡片与版本 | 🟢 完成 | 林珈诚 | [#15](https://github.com/Mumao233/classroom-os/pull/15) | — | 完整联调还差 06b | 开始日期未记录 | 2026-11-16 | 2026-11-16 GitHub #15 合入 main（801bc5d）。已交付总结与四类复习卡片、不可变 AI/个人版本、CAS 冲突保稿、显式采用、多批任务及费用恢复。Review composition 与 Worker 默认关闭，生产启用、真实模型质量及删除恢复联调待验收。详见 docs/web-alpha/pr07b/VALIDATION.md。 |
