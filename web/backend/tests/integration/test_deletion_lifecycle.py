@@ -14,7 +14,7 @@ import pytest
 import sqlalchemy as sa
 
 from deletion_support import *  # noqa: F401,F403  (fixtures and helpers)
-from deletion_support import POLICY, StallProxy, build, ledger_store, object_store
+from deletion_support import POLICY, StallProxy, build, ledger_store, object_store, seed_legacy_package_upload
 from test_private_media import CONTENT, access, available, create, headers, put
 from classroom_web.application.deletion import DeletionWorker
 from classroom_web.domain.auth import AuthRejected
@@ -721,8 +721,11 @@ def test_account_erasure_port_seals_revokes_and_scrubs_identity(d):
     key = object_key(m, asset['id'])
     package = dict(purpose='import_package', class_session_id=None, mime_type='application/json', byte_length=2,
                    sha256=hashlib.sha256(b'{}').hexdigest(), filename='synthetic.json')
-    loose = m.client.post(BASE + '/media/uploads', json=package, headers=headers(m))
-    assert loose.status_code == 201, loose.text
+    loose = seed_legacy_package_upload(m, package)
+    stored_package = put(m, loose, b'{}')
+    assert stored_package.status_code == 200, stored_package.text
+    package_key = object_key(m, loose['asset_id'])
+    assert versions(m, package_key)
     # No HTTP route reaches account deletion in this package.
     assert m.client.post(BASE + '/me/delete', json={}, headers=headers(m)).status_code in (404, 405)
     assert m.client.get(BASE + '/me/deletion-preview').status_code in (404, 405)
@@ -765,6 +768,7 @@ def test_account_erasure_port_seals_revokes_and_scrubs_identity(d):
     assert erased['profile'] == {} and erased['preferences'] == {}
     assert settled(m, request_id)
     assert versions(m, key) == []
+    assert versions(m, package_key) == []
     assert m.deploy.queue.audit()['erasing_accounts'] == 0
 
 
