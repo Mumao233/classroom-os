@@ -13,8 +13,7 @@ from classroom_web.application.filetrans_worker import FiletransWorker
 from classroom_web.domain.filetrans import DESTINATION, SCHEMA, SyntheticFiletrans
 from classroom_web.entrypoints.http import create_app
 from classroom_web.infrastructure.qa_repository import PgQaRepository
-from classroom_web.infrastructure.sync_repository import PgSyncRepository
-from deletion_support import auth, pg, services, deploy, d, contract, as_user, new_user
+from deletion_support import auth, pg, services, deploy, d, contract
 from test_authentication import BASE
 from test_billing_integration import fee_control
 from test_capture_recovery import CONTENT, acquire, capture, command, headers, prepare, put
@@ -30,8 +29,9 @@ def filetrans(live):
         c.execute(sa.text("""INSERT INTO price_catalog(id,provider,model,region,revision,
             currency,rates,minimum_microyuan,synthetic,effective_at)
             VALUES(:id,:provider,:model,:region,:revision,'CNY',
-                '{"audio_duration_ms":{"microyuan":1,"units":1}}',0,true,'2020-01-01T00:00:00Z')"""),
-            {**DESTINATION, 'id': price, 'revision': str(price)})
+                CAST(:rates AS jsonb),0,true,'2020-01-01T00:00:00Z')"""),
+            {**DESTINATION, 'id': price, 'revision': str(price),
+                'rates': json.dumps({'audio_duration_ms': {'microyuan': 1, 'units': 1}})})
     switches(m, True)
     m.ftrans = FiletransService(m.capture, price_id=price, lifecycle=m.fees.lifecycle, enabled=True)
     app = create_app(auth=m.a.service, contract=contract(), origin='https://testserver', capture=m.capture,
