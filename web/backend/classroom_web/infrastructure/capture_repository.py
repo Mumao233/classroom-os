@@ -3,6 +3,7 @@ import json
 from uuid import uuid4
 
 from ..domain.auth import AuthRejected
+from ..domain.capture import DurableCaptureChunk
 from ..domain.data import Resource
 from .media_repository import PgMediaRepository
 
@@ -56,6 +57,41 @@ class PgCaptureRepository(PgMediaRepository):
         if row is None:
             raise AuthRejected('NOT_FOUND', 404)
         return row
+
+    def asr_submission(self, chunk_id):
+        state = self.execute("""SELECT CASE
+            WHEN bool_or(s.state='unknown' OR NOT d.handed_off) THEN 'unknown'
+            WHEN range_agg(int8range(d.start_sample,d.end_sample)) FILTER (WHERE s.state='succeeded')
+                @> int8range(min(c.start_sample),max(c.end_sample)) THEN 'completed'
+            WHEN count(d.id)>0 THEN 'submitted' ELSE 'not_submitted' END
+            FROM public.asr_dispatches d
+            JOIN public.asr_streams s ON (s.owner_id,s.id)=(d.owner_id,d.stream_id)
+            JOIN public.audio_chunks c ON (c.owner_id,c.id)=(d.owner_id,d.chunk_id)
+            WHERE d.owner_id=:owner AND d.chunk_id=:id""", id=chunk_id).scalar_one()
+        return state
+
+    def unknown_asr_sequences(self, epoch_id):
+        return self.execute("""SELECT DISTINCT c.seq FROM public.asr_dispatches d
+            JOIN public.asr_streams s ON (s.owner_id,s.id)=(d.owner_id,d.stream_id)
+            JOIN public.audio_chunks c ON (c.owner_id,c.id)=(d.owner_id,d.chunk_id)
+            WHERE d.owner_id=:owner AND d.capture_epoch_id=:epoch AND (s.state='unknown' OR NOT d.handed_off)
+            ORDER BY c.seq""", epoch=epoch_id).scalars().all()
+
+    def asr_source(self, chunk, epoch):
+        if (chunk['capture_epoch_id'], chunk['class_session_id']) != (epoch['id'], epoch['class_session_id']):
+            raise AuthRejected('NOT_FOUND', 404)
+        asset = self.asset(chunk['asset_id'], available=True)
+        if chunk['recovery_grant_id']:
+            grant = self.execute("""SELECT * FROM capture_recovery_grants
+                WHERE owner_id=:owner AND id=:id AND epoch_id=:epoch""",
+                id=chunk['recovery_grant_id'], epoch=epoch['id']).mappings().one_or_none()
+            if (grant is None or grant['manifest_sha256'] != epoch['manifest_sha256']
+                    or chunk['seq'] > grant['last_seq'] or chunk['end_sample'] > grant['last_sample']):
+                raise AuthRejected('SOURCE_UNAVAILABLE', 409)
+        source = DurableCaptureChunk(str(chunk['id']), str(epoch['class_session_id']), str(epoch['id']),
+            chunk['seq'], chunk['start_sample'], chunk['end_sample'], chunk['sha256'], str(chunk['asset_id']),
+            'recovery' if chunk['recovery_grant_id'] else chunk['ingest_mode'], str(chunk['receipt_id']))
+        return source, asset
 
     def event(self, event_type, epoch, data, aggregate_id):
         self.execute("""INSERT INTO owner_event_counters(id,owner_id,next_sequence) VALUES(:id,:owner,1)

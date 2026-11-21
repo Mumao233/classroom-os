@@ -130,6 +130,7 @@ class ReservationRequest:
     quota_root_id: UUID | None = None
     schema_version: str = '1'
     plan_id: UUID | None = None
+    parent_task_id: UUID | None = None
 
     def validate(self):
         if self.purpose not in PURPOSES or not isinstance(self.op_id, UUID) or self.op_id.version != 4:
@@ -143,11 +144,16 @@ class ReservationRequest:
             raise ValueError('ASR requires a bounded positive duration')
         if self.quota_root_id is not None and self.purpose != 'review_summary':
             raise ValueError('only summary children share the root operation quota')
-        if self.schema_version not in ('1', 'pr07a-1', 'pr07b-1', 'pr07b-batch-1'):
+        if self.schema_version not in ('1', 'pr07a-1', 'pr07b-1', 'pr07b-batch-1', 'pr06b-1'):
             raise ValueError('unsupported task schema version')
         if self.schema_version == 'pr07a-1' and (self.purpose != 'ai_question'
                 or self.plan_id is None or self.class_session_id is None):
             raise ValueError('question reservations require their generation plan')
+        if self.parent_task_id is not None and (self.schema_version != 'pr06b-1' or
+                not isinstance(self.parent_task_id, UUID) or self.parent_task_id.version != 4):
+            raise ValueError('only an ASR retry may name a parent task')
+        if self.schema_version == 'pr06b-1' and (self.purpose != 'asr_live' or self.plan_id or not self.class_session_id):
+            raise ValueError('ASR reservations require a classroom and no generation plan')
         if self.schema_version == '1' and self.plan_id is not None:
             raise ValueError('legacy reservations cannot reference question plans')
         if self.schema_version in ('pr07b-1', 'pr07b-batch-1') and (self.purpose != 'review_summary'

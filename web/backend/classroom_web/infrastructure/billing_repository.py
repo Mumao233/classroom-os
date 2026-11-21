@@ -149,6 +149,8 @@ class PgBillingRepository:
         request.validate()
         reference = input_reference(request.input_ref)
         canonical = asdict(request)
+        if request.parent_task_id is None:
+            canonical.pop('parent_task_id')
         if request.schema_version == '1':
             canonical.pop('schema_version')
             canonical.pop('plan_id')
@@ -179,7 +181,7 @@ class PgBillingRepository:
                 raise BillingBlocked('summary child requires the existing submitted root operation')
         task = self.tx.tasks.enqueue(request.purpose, reference, op_id=request.op_id,
             operation='enqueueBudgetTask', class_session_id=request.class_session_id,
-            parent_task_id=root['task_id'] if request.quota_root_id is not None else None,
+            parent_task_id=root['task_id'] if request.quota_root_id is not None else request.parent_task_id,
             schema_version=request.schema_version, plan_id=request.plan_id)
         identity = uuid4()
         self._rows('''INSERT INTO public.quota_reservations(id,owner_id,task_id,quota_root_id,period_start,
@@ -262,8 +264,13 @@ class PgBillingRepository:
         for prior in self._rows('SELECT quantities FROM public.billing_permits WHERE owner_id=:owner AND reservation_id=:id',id=reservation_id):
             for meter, quantity in prior['quantities'].items():
                 totals[meter] = totals.get(meter,0) + quantity
-        if set(quantities) - set(row['maximum_units']) or any(
-                totals.get(meter,0)+quantity > row['maximum_units'][meter] for meter,quantity in quantities.items()):
+        limits = row['maximum_units']
+        if set(quantities) == {'audio_samples'} and task.schema_version == 'pr06b-1' and row['purpose'] == 'asr_live':
+            # Frame permits use integral PCM samples so proper sub-ms tails do
+            # not consume an additional rounded millisecond for each fragment.
+            limits = {'audio_samples': limits['audio_duration_ms'] * 16}
+        if set(quantities) - set(limits) or any(
+                totals.get(meter,0)+quantity > limits[meter] for meter,quantity in quantities.items()):
             raise BillingBlocked('the window meter bound is exhausted')
         budget = self._budget(row['period_start'])
         if (budget['risk'] > budget['budget_microyuan'] - budget['safety_microyuan']
