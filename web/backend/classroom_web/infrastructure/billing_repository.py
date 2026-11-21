@@ -264,8 +264,13 @@ class PgBillingRepository:
         for prior in self._rows('SELECT quantities FROM public.billing_permits WHERE owner_id=:owner AND reservation_id=:id',id=reservation_id):
             for meter, quantity in prior['quantities'].items():
                 totals[meter] = totals.get(meter,0) + quantity
-        if set(quantities) - set(row['maximum_units']) or any(
-                totals.get(meter,0)+quantity > row['maximum_units'][meter] for meter,quantity in quantities.items()):
+        limits = row['maximum_units']
+        if set(quantities) == {'audio_samples'} and task.schema_version == 'pr06b-1' and row['purpose'] == 'asr_live':
+            # Frame permits use integral PCM samples so proper sub-ms tails do
+            # not consume an additional rounded millisecond for each fragment.
+            limits = {'audio_samples': limits['audio_duration_ms'] * 16}
+        if set(quantities) - set(limits) or any(
+                totals.get(meter,0)+quantity > limits[meter] for meter,quantity in quantities.items()):
             raise BillingBlocked('the window meter bound is exhausted')
         budget = self._budget(row['period_start'])
         if (budget['risk'] > budget['budget_microyuan'] - budget['safety_microyuan']

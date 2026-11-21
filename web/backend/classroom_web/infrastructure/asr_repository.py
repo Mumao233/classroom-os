@@ -3,8 +3,10 @@ from uuid import UUID, uuid4
 
 from ..domain.asr import Samples
 from ..domain.auth import AuthRejected
+from ..domain.qa import QaRejected
 from .billing_repository import json_value
 from .capture_repository import PgCaptureRepository
+from .qa_repository import PgQaRepository
 
 
 class PgAsrRepository(PgCaptureRepository):
@@ -82,7 +84,14 @@ class PgAsrRepository(PgCaptureRepository):
                     or lease['released_at'] is not None or lease['expires_at'] <= self.now()):
                 raise AuthRejected('STALE_FENCE', 409)
             return cutoff
-        if epoch['status'] not in ('paused', 'ended', 'retired'):
+        taken_over = self.execute("""SELECT EXISTS(SELECT FROM public.capture_gaps
+            WHERE owner_id=:owner AND capture_epoch_id=:epoch AND reason_code='takeover')""",
+            epoch=epoch['id']).scalar_one()
+        if taken_over or epoch['status'] not in ('paused', 'ended', 'retired'):
+            raise AuthRejected('STALE_FENCE', 409)
+        if epoch['status'] == 'paused' and (lease is None or lease['capture_epoch_id'] != epoch['id']
+                or lease['fence_token'] != stream['capture_fence'] or lease['expires_at'] <= self.now()
+                or lease['released_at'] is not None):
             raise AuthRejected('STALE_FENCE', 409)
         if epoch['status'] == 'retired' and epoch['end_sample'] is None:
             raise AuthRejected('STALE_FENCE', 409)
@@ -90,7 +99,8 @@ class PgAsrRepository(PgCaptureRepository):
         if epoch['status'] in ('paused', 'retired'):
             finished = self.execute("""SELECT max(wall_start) FROM public.capture_gaps
                 WHERE owner_id=:owner AND capture_epoch_id=:epoch AND kind='pause'
-                AND reason_code='paused'""", epoch=epoch['id']).scalar_one()
+                AND reason_code='paused' AND (:paused OR wall_end IS NOT NULL)""",
+                epoch=epoch['id'], paused=epoch['status']=='paused').scalar_one()
         if finished is None:
             raise AuthRejected('STALE_FENCE', 409)
         return min(cutoff, finished) if cutoff is not None else finished
@@ -131,7 +141,13 @@ class PgAsrRepository(PgCaptureRepository):
                 return None
             chunk = self.chunk(identity)
             source, asset = self.asr_source(chunk, epoch)
-            if sent >= 0 and source.start_sample > sent:
+            pending_predecessor = self.execute("""SELECT EXISTS(SELECT FROM public.audio_chunks earlier
+                JOIN public.media_assets earlier_asset ON (earlier_asset.owner_id,earlier_asset.id)=(earlier.owner_id,earlier.asset_id)
+                WHERE earlier.owner_id=:owner AND earlier.capture_epoch_id=:epoch
+                AND earlier.ingest_mode='live' AND earlier.start_sample < :first
+                AND earlier.end_sample > :frontier AND earlier_asset.status IN ('staging','verified'))""",
+                epoch=epoch['id'], first=source.start_sample, frontier=frontier).scalar_one()
+            if pending_predecessor or (sent >= 0 and source.start_sample > sent):
                 return None
             start, end = max(source.start_sample, frontier), source.end_sample
         if cutoff is not None and asset['confirmed_at'] > cutoff:
@@ -178,11 +194,23 @@ class PgAsrRepository(PgCaptureRepository):
                 raise AuthRejected('REVISION_CONFLICT', 409)
             return
         identity = uuid4()
+        text = data['text']
+        # The existing learning-source catalog has its own per-classroom and text
+        # limits. Realtime subtitles remain durable when that catalog is full.
+        if text.strip() and len(text.encode('utf8')) <= 32768:
+            try:
+                with self.tx.connection.begin_nested():
+                    PgQaRepository(self.tx).add_source(stream['class_session_id'],
+                        kind='transcript_segment', object_id=segment, text=text, start_ms=start_ms,
+                        end_ms=end_ms, origin='live_asr', asr_identity=(segment, identity))
+            except QaRejected as error:
+                if error.code != 'SOURCE_LIMIT':
+                    raise
         self.execute("""INSERT INTO public.asr_final_segments(id,owner_id,stream_id,segment_id,revision,
-            sequence,start_ms,end_ms,end_sample,source_chunk_ids,body,provider_request_id)
-            VALUES(:id,:owner,:stream,:segment,:revision,:sequence,:start_ms,:end_ms,:sample,:chunks,:body,:request)""",
+            sequence,start_ms,end_ms,start_sample,end_sample,source_chunk_ids,body,provider_request_id)
+            VALUES(:id,:owner,:stream,:segment,:revision,:sequence,:start_ms,:end_ms,:start,:sample,:chunks,:body,:request)""",
             id=identity, stream=stream['id'], segment=segment, revision=data['revision'], sequence=data['sequence'],
-            start_ms=start_ms, end_ms=end_ms, sample=samples.end, chunks=chunks,
+            start_ms=start_ms, end_ms=end_ms, start=samples.start, sample=samples.end, chunks=chunks,
             body=data['text'], request=data['provider_request_id'])
         self.event('transcript.final', None, {'segment_revision_id': str(identity)}, stream['class_session_id'])
 
@@ -197,6 +225,15 @@ class PgAsrRepository(PgCaptureRepository):
             transcript_version_id=str(row['version_id']), sequence=row['sequence'], audio_offset_ms=row['start_ms'],
             end_ms=row['end_ms'], status='final', text=row['body'], provider_request_id=row['provider_request_id'],
             revision=row['revision'], timestamp_source='provider_segment')
+
+    def dispatch_ranges(self, epoch_id, samples, *, ignore_attempt=None):
+        rows = self.execute("""SELECT d.start_sample,d.end_sample FROM public.asr_dispatches d
+            JOIN public.asr_streams s ON (s.owner_id,s.id)=(d.owner_id,d.stream_id)
+            WHERE d.owner_id=:owner AND d.capture_epoch_id=:epoch
+            AND d.start_sample<:end AND d.end_sample>:start
+            AND (cast(:ignored AS uuid) IS NULL OR s.attempt_id IS DISTINCT FROM :ignored)""",
+            epoch=epoch_id, start=samples.start, end=samples.end, ignored=ignore_attempt).mappings().all()
+        return [Samples(row['start_sample'], row['end_sample']) for row in rows]
 
     def view(self, stream):
         ends = self.execute("""SELECT

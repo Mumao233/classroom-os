@@ -99,6 +99,7 @@ task_attempts = sa.Table("task_attempts", metadata, *_base(owner=True),
     sa.Column("error_code", sa.Text),
     sa.Column("duplicate_billing_ack", sa.Boolean, nullable=False, server_default=sa.false()),
     sa.UniqueConstraint("owner_id", "task_id", "attempt_number", name="uq_attempt_number"),
+    sa.UniqueConstraint("owner_id", "task_id", "id", name="asr_attempt_exact_task"),
     _parent("task_attempts", "task_id", "tasks"),
     _parent("task_attempts", "raw_output_ref", "provider_results", deferred=True),
     sa.ForeignKeyConstraint(

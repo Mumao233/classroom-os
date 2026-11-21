@@ -23,6 +23,17 @@ class Samples:
     def contains(self, other):
         return self.start <= other.start and other.end <= self.end
 
+    def excluding(self, blocked):
+        cursor = self.start
+        for other in sorted(blocked):
+            if not self.overlaps(other):
+                continue
+            if other.start > cursor:
+                yield Samples(cursor, other.start)
+            cursor = max(cursor, min(other.end, self.end))
+        if cursor < self.end:
+            yield Samples(cursor, self.end)
+
     @property
     def count(self):
         return self.end - self.start

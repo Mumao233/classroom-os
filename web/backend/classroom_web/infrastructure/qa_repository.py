@@ -129,7 +129,7 @@ class PgQaRepository:
         return '\n'.join(part for part in (material.syllabus, glossary) if part)
 
     def add_source(self, class_session_id, *, kind, object_id, text, start_ms=None,
-                   end_ms=None, origin='manual'):
+                   end_ms=None, origin='manual', asr_identity=None):
         classroom = self._class(class_session_id)
         self._serialize()
         text = self._validate_text(text)
@@ -151,7 +151,9 @@ class PgQaRepository:
                            classroom=class_session_id).one()['n']
         if count >= 512:
             raise QaRejected('SOURCE_LIMIT', 429)
-        source_id, revision_id = uuid4(), uuid4()
+        if asr_identity is not None and (origin != 'live_asr' or kind != 'transcript_segment'):
+            raise QaRejected('VALIDATION_FAILED', 422)
+        source_id, revision_id = asr_identity if asr_identity is not None else (uuid4(), uuid4())
         self._rows('''INSERT INTO qa_sources(id,owner_id,class_session_id,kind,object_id,current_revision_id,origin,start_ms,end_ms)
             VALUES(:id,:owner,:classroom,:kind,:object,:version,:origin,:start,:end)''',
             id=source_id, classroom=class_session_id, kind=kind, object=object_id,

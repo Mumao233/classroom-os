@@ -58,14 +58,26 @@ def test_only_required_tables_and_contract_columns_exist(pg):
     }
     capture_tables = capture_contract_tables | set(capture_internal)
     from classroom_web.infrastructure.sync_repository import SYNC_TABLES
-    assert set(inspector.get_table_names()) == expected | set(task_tables) | set(identity_tables) | auth_tables | media_tables | set(QA_TABLES) | set(REVIEW_TABLES) | deletion_tables | cache_tables | capture_tables | set(SYNC_TABLES) | PORTABLE_TABLES | {"alembic_version"}
+    asr_tables = {'asr_streams', 'asr_dispatches', 'asr_final_segments'}
+    assert set(inspector.get_table_names()) == expected | set(task_tables) | set(identity_tables) | auth_tables | media_tables | set(QA_TABLES) | set(REVIEW_TABLES) | deletion_tables | cache_tables | capture_tables | set(SYNC_TABLES) | PORTABLE_TABLES | asr_tables | {"alembic_version"}
+    assert {column['name'] for column in inspector.get_columns('asr_streams')} == {
+        'id','owner_id','class_session_id','capture_epoch_id','task_id','attempt_id','originating_attempt_id',
+        'provider_task_id','provider_request_id','version_id','auth_session_id','device_id','security_epoch',
+        'auth_role','capture_fence','consent_version','mode','source_scope','state','requested_finish_at',
+        'created_at','updated_at'}
+    assert {column['name'] for column in inspector.get_columns('asr_dispatches')} == {
+        'id','owner_id','stream_id','chunk_id','capture_epoch_id','start_sample','end_sample','frame_sha256',
+        'handed_off','created_at'}
+    assert {column['name'] for column in inspector.get_columns('asr_final_segments')} == {
+        'id','owner_id','stream_id','segment_id','revision','sequence','start_ms','end_ms','start_sample',
+        'end_sample','source_chunk_ids','body','provider_request_id','created_at'}
     for table, columns in capture_internal.items():
         assert {column['name']:column['nullable'] for column in inspector.get_columns(table)} == columns
     with pg.admin.connect() as connection:
         owner_tables = connection.execute(sa.text('''SELECT relname,relrowsecurity,relforcerowsecurity
             FROM pg_class WHERE relnamespace='public'::regnamespace AND relname=ANY(:names)'''),
-            {'names': list(PORTABLE_TABLES)}).all()
-        assert {row.relname for row in owner_tables} == PORTABLE_TABLES
+            {'names': list(PORTABLE_TABLES | asr_tables)}).all()
+        assert {row.relname for row in owner_tables} == PORTABLE_TABLES | asr_tables
         assert all(row.relrowsecurity and row.relforcerowsecurity for row in owner_tables)
     cache_columns = {column['name']: column['nullable'] for column in inspector.get_columns('cache_keys')}
     assert cache_columns == {'id': False, 'created_at': False, 'owner_id': False, 'device_id': False,
@@ -87,7 +99,7 @@ def test_only_required_tables_and_contract_columns_exist(pg):
     with pg.admin.connect() as connection:
         # This original gate still compares every legacy metadata object.
         # SQL-managed objects have independent real-PG columns/constraints/ACL checks.
-        differences = compare_metadata(MigrationContext.configure(connection,opts={'include_object':lambda obj,name,kind,reflected,compare_to:not(kind=='table' and name in auth_tables|media_tables|deletion_tables|cache_tables|capture_tables|SYNC_TABLES|PORTABLE_TABLES)}), metadata)
+        differences = compare_metadata(MigrationContext.configure(connection,opts={'include_object':lambda obj,name,kind,reflected,compare_to:not(kind=='table' and name in auth_tables|media_tables|deletion_tables|cache_tables|capture_tables|SYNC_TABLES|PORTABLE_TABLES|asr_tables)}), metadata)
     assert differences == []
 
 

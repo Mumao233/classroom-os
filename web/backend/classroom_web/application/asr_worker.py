@@ -5,15 +5,18 @@ from uuid import UUID, uuid4
 import asyncio
 import json
 
+from sqlalchemy.exc import DBAPIError
+
 from ..asr_dashscope.adapter import DashScopeAdapter
 from ..asr_dashscope.billing import StreamIdentity, SyntheticRequestPermit
 from ..asr_dashscope.transport import FakeTransport
 from ..asr_sim.simulator import ProtocolError
 from ..domain.asr import source_frames
 from ..domain.auth import AuthRejected
-from ..domain.billing import BillingBlocked, Usage
+from ..domain.billing import BillingBlocked, Usage, UsageConflict
 from ..domain.data import Gone, InactiveOwner, NotFound, OwnerContext
 from ..domain.media import ObjectUnavailable
+from ..domain.qa import QaRejected
 from ..domain.tasks import StaleFence
 from ..infrastructure.asr_repository import PgAsrRepository
 from .media import stored
@@ -39,6 +42,7 @@ class AsrWorker:
                     task = tx.tasks.get(claim.id)
                     if task.schema_version != ASR_SCHEMA:
                         continue
+                    self._repo(tx, claim).window(task=claim.id)
                     tx.tasks.recover(claim.id, claim.lease_token)
             except (Gone, InactiveOwner, NotFound):
                 if not self.queue.recover_revoked(claim.id, claim.lease_token):
@@ -109,7 +113,7 @@ class AsrWorker:
                 permit_id=str(handshake['id']), identity=identity, maximum_units=units)
             return stream, identity, permit, reservation['expires_at']
 
-    def _mint_frame(self, claim, stream, frame, prior_samples):
+    def _mint_frame(self, claim, stream, frame):
         self.service.require_enabled()
         with self.database.transaction(OwnerContext(claim.owner_id)) as tx:
             repo = self._repo(tx, claim)
@@ -131,12 +135,7 @@ class AsrWorker:
                 raise AuthRejected('REVISION_CONFLICT', 409)
             reservation = tx.billing.for_task(claim.id)
             identity = uuid4()
-            sent_ms = (prior_samples + frame.samples.count + 15) // 16 - (prior_samples + 15) // 16
-            # Full provider frames have integral duration. An isolated sub-ms tail
-            # can land inside a millisecond already reserved by the prior slice.
-            if sent_ms == 0:
-                sent_ms = 1
-            tx.billing.consume_permit(reservation['id'], identity, {'audio_duration_ms': sent_ms},
+            tx.billing.consume_permit(reservation['id'], identity, {'audio_samples': frame.samples.count},
                 claim.lease_token, self.worker_id)
             repo.add_dispatch(current, frame, identity)
             return identity, reservation['expires_at']
@@ -147,41 +146,61 @@ class AsrWorker:
             repo = self._repo(tx, claim)
             repo.confirm_handoff(stream, submission)
 
-    def _events(self, claim, stream, epoch, adapter, sent_samples):
-        for event in adapter.events():
+    def _persist_product_event(self, claim, data, kind, epoch):
+        with self.database.transaction(OwnerContext(claim.owner_id)) as tx:
+            repo = self._repo(tx, claim)
+            stream = repo.window(task=claim.id)
+            tx.tasks._fenced(claim.id, claim.lease_token, self.worker_id)
+            request = data['provider_request_id']
+            if request is not None:
+                if stream['provider_request_id'] not in (None, request):
+                    raise ProtocolError('provider request identity changed')
+                repo.set_state(stream, stream['state'], request=request)
+            if kind in ('asr.final_candidate', 'asr.partial'):
+                repo.check_session(stream)
+            if kind == 'asr.final_candidate':
+                repo.record_final(stream, data, epoch['timeline_offset_ms'])
+        if kind == 'asr.partial':
+            self.on_partial(claim.owner_id, data, epoch['timeline_offset_ms'])
+
+    def _events(self, claim, stream, epoch, batch, sent_samples):
+        product_ok, billing_ok = True, True
+        for event in batch:
             data, kind = event['data'], event['type']
             if (data['task_id'], data['attempt_id'], data['stream_id']) != (
                     str(claim.id), str(stream['attempt_id']), str(stream['id'])):
-                raise ProtocolError('event does not belong to the original attempt')
+                product_ok = False
+                continue
             request = data['provider_request_id']
-            if kind == 'asr.usage' and request:
+            overrun = kind == 'asr.usage_anomaly' and data['reason'] == 'overrun'
+            if request and (kind == 'asr.usage' or overrun):
                 usage = Usage(provider_request_id=request, meter='asr', revision=data['revision'],
                     quantities={'audio_duration_ms': (sent_samples + 15) // 16,
-                                'input_tokens': data['input_tokens'], 'output_tokens': data['output_tokens']},
-                    final=data['final'])
-                self.lifecycle.late_usage(claim.owner_id, claim.id, usage)
+                                'input_tokens': data['observed_input_tokens'] if overrun else data['input_tokens'],
+                                'output_tokens': data['observed_output_tokens'] if overrun else data['output_tokens']},
+                    final=data['final'] and not overrun)
+                try:
+                    self._persist_with_retry(self.lifecycle.late_usage, claim.owner_id, claim.id, usage)
+                except (DBAPIError, UsageConflict, BillingBlocked):
+                    billing_ok = False
             if kind not in ('asr.final_candidate', 'asr.partial') and request is None:
                 continue
             try:
-                with self.database.transaction(OwnerContext(claim.owner_id)) as tx:
-                    repo = self._repo(tx, claim)
-                    tx.tasks._fenced(claim.id, claim.lease_token, self.worker_id)
-                    stored_stream = repo.window(task=claim.id)
-                    if request is not None:
-                        if stored_stream['provider_request_id'] not in (None, request):
-                            raise ProtocolError('provider request identity changed')
-                        repo.set_state(stored_stream, stored_stream['state'], request=request)
-                    if kind in ('asr.final_candidate', 'asr.partial'):
-                        repo.check_session(stored_stream)
-                    if kind == 'asr.final_candidate':
-                        repo.record_final(stored_stream, data, epoch['timeline_offset_ms'])
-                if kind == 'asr.partial' and self.on_partial is not None:
-                    self.on_partial(claim.owner_id, data, epoch['timeline_offset_ms'])
-            except (InactiveOwner, AuthRejected) as error:
-                if isinstance(error, AuthRejected) and error.code == 'REVISION_CONFLICT':
-                    raise
+                self._persist_with_retry(self._persist_product_event, claim, data, kind, epoch)
+            except (InactiveOwner, Gone, NotFound, AuthRejected, DBAPIError, StaleFence, ProtocolError, QaRejected):
+                if kind == 'asr.final_candidate':
+                    product_ok = False
+        return product_ok, billing_ok
 
-    def _complete(self, claim, adapter):
+    @staticmethod
+    def _persist_with_retry(operation, *args):
+        """Retry a local idempotent DB record, never an adapter operation."""
+        try:
+            return operation(*args)
+        except DBAPIError:
+            return operation(*args)
+
+    def _complete(self, claim, adapter, product_ok, billing_ok):
         with self.database.transaction(OwnerContext(claim.owner_id)) as tx:
             repo = self._repo(tx, claim)
             stream = repo.window(task=claim.id)
@@ -191,10 +210,13 @@ class AsrWorker:
                 tx.billing.release_unsent(reservation['id'])
                 repo.set_state(stream, 'failed')
                 return
-            if adapter is not None and adapter.state == 'failed':
+            unresolved_dispatch = repo.execute("""SELECT EXISTS(SELECT FROM public.asr_dispatches
+                WHERE owner_id=:owner AND stream_id=:stream AND NOT handed_off)""",
+                stream=stream['id']).scalar_one()
+            if adapter is not None and adapter.state == 'failed' and not unresolved_dispatch:
                 tx.tasks.fail_asr_attempt(claim.id, attempt, claim.lease_token, self.worker_id)
                 repo.set_state(stream, 'failed')
-            elif adapter is None or adapter.state != 'succeeded':
+            elif adapter is None or adapter.state != 'succeeded' or unresolved_dispatch or not product_ok:
                 if adapter is not None:
                     adapter.query({'stream_id': str(stream['id'])})
                 tx.tasks.mark_unknown(claim.id, attempt, claim.lease_token, self.worker_id)
@@ -203,7 +225,7 @@ class AsrWorker:
                 tx.tasks.store_result(claim.id, attempt, json.dumps({'stream_id': str(stream['id'])}))
                 tx.tasks.publish_result(claim.id, attempt, claim.lease_token, self.worker_id)
                 repo.set_state(stream, 'succeeded')
-        if adapter is None or adapter.billing_pending:
+        if adapter is None or adapter.billing_pending or not billing_ok:
             self.lifecycle.completed(claim.owner_id, claim.id, None)
 
     async def run_claim(self, claim):
@@ -211,6 +233,15 @@ class AsrWorker:
         deadline = monotonic() + 25
         adapter = None
         sent_samples = 0
+        product_ok, billing_ok = True, True
+
+        async def publish():
+            nonlocal product_ok, billing_ok
+            result_ok, fee_ok = await asyncio.to_thread(
+                self._events, claim, stream, epoch, adapter.events(), sent_samples)
+            product_ok = product_ok and result_ok
+            billing_ok = billing_ok and fee_ok
+
         try:
             while monotonic() < deadline:
                 if adapter is not None and adapter.state != 'streaming':
@@ -220,7 +251,7 @@ class AsrWorker:
                     if done:
                         break
                     if adapter is not None:
-                        self._events(claim, stream, epoch, adapter, sent_samples)
+                        await publish()
                     await asyncio.sleep(0.05)
                     continue
                 source, asset, selected = candidate
@@ -241,17 +272,17 @@ class AsrWorker:
                 for frame in frames:
                     if monotonic() >= deadline or adapter.state != 'streaming':
                         break
-                    submission, expires = await asyncio.to_thread(self._mint_frame, claim, stream, frame, sent_samples)
+                    submission, expires = await asyncio.to_thread(self._mint_frame, claim, stream, frame)
                     if datetime.now(timezone.utc) >= expires:
                         break
                     await adapter.send(frame.provider_value())
                     if (frame.samples.start, frame.samples.end) in adapter.sent_ranges:
-                        await asyncio.to_thread(self._handoff, claim, stream, submission)
                         sent_samples += frame.samples.count
-                    self._events(claim, stream, epoch, adapter, sent_samples)
+                        await asyncio.to_thread(self._persist_with_retry, self._handoff, claim, stream, submission)
+                    await publish()
                 if datetime.now(timezone.utc) >= expires:
                     break
-        except (AuthRejected, BillingBlocked, ObjectUnavailable, ProtocolError, ValueError, StaleFence):
+        except (AuthRejected, BillingBlocked, DBAPIError, ObjectUnavailable, ProtocolError, ValueError, StaleFence):
             pass
         finally:
             if adapter is not None:
@@ -261,14 +292,17 @@ class AsrWorker:
                             repo = self._repo(tx, claim)
                             current = repo.window(task=claim.id)
                             repo.set_state(current, 'draining')
-                    except (AuthRejected, InactiveOwner):
+                    except (AuthRejected, DBAPIError, InactiveOwner):
                         pass
-                    await adapter.finish()
+                    try:
+                        await adapter.finish()
+                    except ProtocolError:
+                        product_ok = False
                 try:
-                    self._events(claim, stream, epoch, adapter, sent_samples)
+                    await publish()
                 finally:
                     await adapter.aclose()
             try:
-                self._complete(claim, adapter)
-            except (AuthRejected, InactiveOwner, StaleFence):
+                await asyncio.to_thread(self._complete, claim, adapter, product_ok, billing_ok)
+            except (AuthRejected, Gone, InactiveOwner, NotFound, StaleFence):
                 self.lifecycle.synchronize(claim.owner_id, claim.id)

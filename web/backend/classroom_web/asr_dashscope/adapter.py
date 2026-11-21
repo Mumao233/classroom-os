@@ -450,7 +450,9 @@ class DashScopeAdapter:
                        revision=self._usage_revision, final=final)
 
     def _usage_anomaly(self, reason, observed=None, *, final):
-        self._emit('asr.usage_anomaly', reason=reason, final=final,
+        if reason == 'overrun':
+            self._usage_revision += 1
+        self._emit('asr.usage_anomaly', reason=reason, final=final, revision=self._usage_revision,
                    observed_input_tokens=observed.input_tokens if observed is not None else None,
                    observed_output_tokens=observed.output_tokens if observed is not None else None,
                    input_tokens_limit=self._permit.input_tokens_limit,

@@ -44,6 +44,22 @@ class AsrService:
             self.capture.active(repo, principal, epoch, body['fence_token'], recording=True)
         return epoch
 
+    @staticmethod
+    def _source_record(source, samples, epoch):
+        return dict(id=source.chunk_id, first=samples.start, end=samples.end,
+            receipt=source.receipt_id, sha256=source.sha256,
+            manifest=epoch['manifest_sha256'] if source.ingest_mode == 'recovery' else None)
+
+    @staticmethod
+    def _continuous(records):
+        records.sort(key=lambda row: row['first'])
+        if not records:
+            return records
+        stop = 1
+        while stop < len(records) and records[stop]['first'] == records[stop-1]['end']:
+            stop += 1
+        return records[:stop]
+
     def _scope(self, repo, epoch, body):
         chunk_ids = body['source_chunk_ids']
         if not chunk_ids and body['mode'] != 'live':
@@ -54,28 +70,25 @@ class AsrService:
             raise AuthRejected('CAPACITY_EXCEEDED', 422)
         records = []
         for item in chunk_ids:
-            chunk_id = identifier(item)
-            chunk = repo.chunk(chunk_id)
-            source, _ = repo.asr_source(chunk, epoch)
+            source, _ = repo.asr_source(repo.chunk(identifier(item)), epoch)
             if body['mode'] == 'live' and source.ingest_mode != 'live':
                 raise AuthRejected('FORBIDDEN', 403)
             samples = Samples(source.start_sample, source.end_sample)
-            if repo.sent_overlap(epoch['id'], samples):
-                raise AuthRejected('REVISION_CONFLICT', 409)
-            records.append(dict(id=item, first=samples.start, end=samples.end,
-                receipt=source.receipt_id, sha256=source.sha256,
-                manifest=epoch['manifest_sha256'] if source.ingest_mode == 'recovery' else None))
-        records.sort(key=lambda item: item['first'])
+            previous = repo.dispatch_ranges(epoch['id'], samples)
+            records.extend(self._source_record(source, free, epoch)
+                           for free in samples.excluding(previous))
+        if chunk_ids and not records:
+            raise AuthRejected('REVISION_CONFLICT', 409)
+        records = self._continuous(records)
         if records and records[-1]['end'] - records[0]['first'] > self.WINDOW_MS * 16:
             raise AuthRejected('CAPACITY_EXCEEDED', 422)
-        if any(left['end'] != right['first'] for left, right in zip(records, records[1:])):
-            raise AuthRejected('VALIDATION_FAILED', 422)
         return records
 
     def _reserve(self, repo, epoch, key, scope, *, parent=None):
         classroom = epoch['class_session_id']
         price = repo.tx.billing._price(self.price_id)
-        if (not price.synthetic or price.provider not in ('aliyun', 'mock')
+        if (not price.synthetic or (price.provider, price.model, price.region) !=
+                ('aliyun', 'qwen-audio-3.1-asr-flash-streaming', 'cn-beijing')
                 or set(price.rates) != {'audio_duration_ms','input_tokens','output_tokens'}):
             raise AuthRejected('BUDGET_BLOCKED', 409)
         duration = Samples(scope[0]['first'], scope[-1]['end']).duration_ms if scope else self.WINDOW_MS
@@ -156,22 +169,19 @@ class AsrService:
         rows = repo.execute("""SELECT chunk_id,min(start_sample) AS first,max(end_sample) AS last
             FROM public.asr_dispatches WHERE owner_id=:owner AND stream_id=:stream
             GROUP BY chunk_id ORDER BY min(start_sample)""", stream=original['id']).mappings().all()
-        confirmed = repo.view(original)['confirmed_end_sample']
+        finals = repo.execute("""SELECT start_sample,end_sample FROM public.asr_final_segments
+            WHERE owner_id=:owner AND stream_id=:stream""", stream=original['id']).mappings().all()
+        confirmed = [Samples(row['start_sample'], row['end_sample']) for row in finals]
         records = []
         for row in rows:
-            start = max(row['first'], confirmed)
-            if start >= row['last']:
-                continue
             source, _ = repo.asr_source(repo.chunk(row['chunk_id']), epoch)
-            samples = Samples(start, row['last'])
-            if repo.sent_overlap(epoch['id'], samples, ignore_attempt=original['attempt_id']):
-                raise AuthRejected('REVISION_CONFLICT', 409)
-            records.append(dict(id=source.chunk_id, first=samples.start, end=samples.end,
-                receipt=source.receipt_id, sha256=source.sha256,
-                manifest=epoch['manifest_sha256'] if source.ingest_mode == 'recovery' else None))
+            attempted = Samples(row['first'], row['last'])
+            already_retried = repo.dispatch_ranges(epoch['id'], attempted, ignore_attempt=original['attempt_id'])
+            records.extend(self._source_record(source, free, epoch)
+                           for free in attempted.excluding([*confirmed, *already_retried]))
         if not records:
             raise AuthRejected('SOURCE_UNAVAILABLE', 409)
-        return records
+        return self._continuous(records)
 
     def retry(self, ctx, task_id, key, body):
         self.require_enabled()
@@ -192,9 +202,6 @@ class AsrService:
             if previous is not None:
                 return self.task_view(repo, previous['resource_id'])
             if original['state'] != 'unknown':
-                raise AuthRejected('REVISION_CONFLICT', 409)
-            if repo.execute("""SELECT EXISTS(SELECT 1 FROM public.asr_streams WHERE owner_id=:owner
-                    AND originating_attempt_id=:attempt)""", attempt=original['attempt_id']).scalar_one():
                 raise AuthRejected('REVISION_CONFLICT', 409)
             repo.require_free_epoch(epoch['id'])
             scope = self._retry_scope(repo, original, epoch)
