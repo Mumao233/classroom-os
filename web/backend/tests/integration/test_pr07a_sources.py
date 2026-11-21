@@ -61,7 +61,8 @@ def prepared(pg, owner, tree, request=None):
 def test_qa_table_inventory_columns_and_force_rls(pg):
     inspector = sa.inspect(pg.admin)
     for name, columns in QA_COLUMNS.items():
-        assert {item['name'] for item in inspector.get_columns(name)} == set(columns)
+        extensions = {'audio_manifest', 'audio_manifest_sha256'} if name == 'generation_plans' else set()
+        assert {item['name'] for item in inspector.get_columns(name)} == set(columns) | extensions
     with pg.admin.connect() as connection:
         rows = connection.execute(sa.text('''SELECT relname,relrowsecurity,relforcerowsecurity FROM pg_class
             WHERE relname=ANY(:names)'''), {'names': list(QA_TABLES)}).all()

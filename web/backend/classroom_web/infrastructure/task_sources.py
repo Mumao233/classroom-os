@@ -54,7 +54,11 @@ class PgTaskSources:
         if any(row['semester_id'] != initial_courses[identity]['semester_id']
                for identity, row in courses.items()):
             raise RevisionConflict(max(row['revision'] for row in courses.values()))
-        locked_class = self._rows('class_sessions', [class_session_id], lock=True, write=write)[class_session_id]
+        if write:
+            locked = self._rows('class_sessions', [class_session_id], write=True)
+        else:
+            locked = self._rows('class_sessions', [class_session_id], lock=True)
+        locked_class = locked[class_session_id]
         if (locked_class['course_id'] != classroom['course_id']
                 or locked_class['course_material_version_id'] != material_id):
             raise RevisionConflict(locked_class['revision'])

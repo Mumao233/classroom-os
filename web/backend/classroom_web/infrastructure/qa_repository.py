@@ -235,9 +235,10 @@ class PgQaRepository:
         if count >= 12:
             raise QaRejected('RATE_LIMITED', 429)
         asked_at = self._now()
-        source_rows = self._rows('''SELECT id FROM qa_sources WHERE owner_id=:owner AND class_session_id=:classroom
-            AND classroom_web_current_transcript(owner_id,class_session_id,origin,id,:adopted)
-            ORDER BY id LIMIT 513 FOR SHARE''', classroom=class_session_id,
+        transcript_filter = self.transcript_filter(classroom)
+        source_rows = self._rows(f'''SELECT s.id FROM qa_sources s
+            WHERE s.owner_id=:owner AND s.class_session_id=:classroom AND {transcript_filter}
+            ORDER BY s.id LIMIT 513 FOR SHARE''', classroom=class_session_id,
             adopted=classroom.adopted_transcript_version_id).all()
         sources = [self._source(row['id']) for row in source_rows]
         if len(sources) > 512:
@@ -335,13 +336,21 @@ class PgQaRepository:
                     scope_complete=selection.scope_complete, missing_reasons=list(selection.reasons),
                     created_at=_stamp(row['created_at']), items=items)
 
+    @staticmethod
+    def transcript_filter(classroom):
+        # A null pointer keeps the existing source selection and also works
+        # during the historical PR-07a migration and rollback checks.
+        if classroom.adopted_transcript_version_id is None:
+            return "s.origin<>'retranscription'"
+        return 'classroom_web_current_transcript(s.owner_id,s.class_session_id,s.origin,s.id,:adopted)'
+
     def selection_changed(self, snapshot_id, class_id):
         classroom = self._class(class_id)
-        return self._rows('''SELECT EXISTS(SELECT FROM source_items i JOIN qa_sources s
+        transcript_filter = self.transcript_filter(classroom)
+        return self._rows(f'''SELECT EXISTS(SELECT FROM source_items i JOIN qa_sources s
             ON (s.owner_id,s.id)=(i.owner_id,i.source_id)
             WHERE i.owner_id=:owner AND i.snapshot_id=:snapshot
-              AND (i.revision_id<>s.current_revision_id OR NOT
-                   classroom_web_current_transcript(s.owner_id,s.class_session_id,s.origin,s.id,:adopted))) AS changed''',
+              AND (i.revision_id<>s.current_revision_id OR NOT ({transcript_filter}))) AS changed''',
             snapshot=snapshot_id, adopted=classroom.adopted_transcript_version_id).one()['changed']
 
     def plan(self, plan_id):

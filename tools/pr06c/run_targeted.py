@@ -63,7 +63,14 @@ def main():
         with psycopg.connect(host='127.0.0.1', port=port, user=admin, dbname='postgres', autocommit=True) as c:
             c.execute('CREATE DATABASE pr02a_control')
         junit = args.output / 'pytest.xml'
-        tests = ['tests/integration/test_filetrans.py', 'tests/integration/test_trusted_device_guard.py']
+        tests = [
+            'tests/integration/test_filetrans.py',
+            'tests/integration/test_trusted_device_guard.py',
+            'tests/integration/test_data_foundation.py::test_only_required_tables_and_contract_columns_exist',
+            'tests/integration/test_pr07a_sources.py::test_qa_table_inventory_columns_and_force_rls',
+            'tests/integration/test_pr07a_sources.py::test_failed_later_migration_and_refused_downgrade_preserve_qa_data',
+            'tests/integration/test_task_material_remediation.py::test_recovery_retries_source_discovery_conflict_without_calling_provider',
+        ]
         evidence['test_exit'] = call('pytest', [sys.executable, '-B','-c', GUARDED_PYTEST,args.guard,
             *tests,'-q','-p','no:cacheprovider','--basetemp='+str(work/'pytest'),'--junitxml='+str(junit)],
             cwd=ROOT/'web/backend', timeout=900)

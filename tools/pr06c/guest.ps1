@@ -1,7 +1,7 @@
 # Enter through the existing VMware broker. Validate the exact Git bundle.
 param(
     [Parameter(Mandatory)][ValidatePattern('^[a-f0-9]{40}$')][string]$Commit,
-    [Parameter(Mandatory)][ValidateSet('targeted','full')][string]$Mode,
+    [Parameter(Mandatory)][ValidateSet('targeted','full','legacy')][string]$Mode,
     [Parameter(Mandatory)][ValidatePattern('^[a-f0-9]{16}$')][string]$RunId,
     [Parameter(Mandatory)][ValidatePattern('^[A-Fa-f0-9]{64}$')][string]$BundleHash
 )
@@ -17,13 +17,14 @@ $python = "$media/work/pr04a/venv/Scripts/python.exe"
 $share = '\\vmware-host\Shared Folders\pr03b-src\work\pr03b\vmware-broker'
 $wheels = "$share\pr08c-media-gate-r0-0b289f8\validation-wheels"
 $legacyWheels = "$share\pr08c-closeout-head-legacy\legacy-wheels"
-$root = "J:/class-assistant/worktrees/pr06c-$RunId"
+$root = "C:/j/p06c/$RunId"
 $work = "$root/work/pr06c"
 $out = "$root/outputs/pr06c"
 $bundle = "$share\scripts\pr06c-$RunId.bundle"
 if (Test-Path -LiteralPath $root) { throw 'Run directory already exists' }
 if ((Get-FileHash -LiteralPath $bundle -Algorithm SHA256).Hash -ne $BundleHash) { throw 'Bundle hash mismatch' }
-& $git clone --quiet --branch feature/web-pr06c-filetrans --single-branch $bundle $root
+$null = New-Item -ItemType Directory -Path (Split-Path $root -Parent) -Force
+& $git -c core.autocrlf=false clone --quiet --branch feature/web-pr06c-filetrans --single-branch $bundle $root
 if ($LASTEXITCODE -or (& $git -C $root rev-parse HEAD) -ne $Commit -or (& $git -C $root status --porcelain)) {
     throw 'Source checkout does not match the requested clean commit'
 }
@@ -63,21 +64,23 @@ function Gate($name, [scriptblock]$run) {
     } finally { $ErrorActionPreference=$previous }
 }
 Set-Location -LiteralPath $root
-Gate 'offline-deps' { & $python -I -X utf8 -B -m pip install --disable-pip-version-check --no-index --find-links $wheels --target "$work/deps" -r automation/validation-requirements.txt Pillow==13.0.0 }
-Gate 'loopback-guard' { & $python -I -X utf8 -B tools/pr06c/write_guard.py "$work/guard/sitecustomize.py" }
-if ($report.steps['offline-deps'] -eq 0 -and $report.steps['loopback-guard'] -eq 0) {
-    if ($Mode -eq 'targeted') {
-        $env:PYTHONPATH = "$work/deps"
-        Gate 'targeted' { & $python -X utf8 -B tools/pr06c/run_targeted.py --deps "$work/deps" --guard "$work/guard/sitecustomize.py" --output "$out/targeted" }
-        Remove-Item Env:PYTHONPATH
-    } else {
-        $front = Join-Path $root 'web/frontend'
-        $null = New-Item -ItemType Junction -Path "$front/node_modules" -Target "$primary/web/frontend/node_modules"
-        Gate 'frozen-contracts' { & $python -I -X utf8 -B tools/overnight/check_contracts.py --deps "$work/deps" --output "$out/contracts.json" }
-        Gate 'web-backend-full' { & $python -I -X utf8 -B tools/pr07b/run_combined.py --root $root --deps "$work/deps" --auth-browser --pytest-loopback-guard "$work/guard/sitecustomize.py" --timeout 2100 }
-    }
-} else { Record $Mode 124 }
-if ($Mode -eq 'full') {
+if ($Mode -ne 'legacy') {
+    Gate 'offline-deps' { & $python -I -X utf8 -B -m pip install --disable-pip-version-check --no-index --find-links $wheels --target "$work/deps" -r automation/validation-requirements.txt Pillow==13.0.0 }
+    Gate 'loopback-guard' { & $python -I -X utf8 -B tools/pr06c/write_guard.py "$work/guard/sitecustomize.py" }
+    if ($report.steps['offline-deps'] -eq 0 -and $report.steps['loopback-guard'] -eq 0) {
+        if ($Mode -eq 'targeted') {
+            $env:PYTHONPATH = "$work/deps"
+            Gate 'targeted' { & $python -X utf8 -B tools/pr06c/run_targeted.py --deps "$work/deps" --guard "$work/guard/sitecustomize.py" --output "$out/targeted" }
+            Remove-Item Env:PYTHONPATH
+        } else {
+            $front = Join-Path $root 'web/frontend'
+            $null = New-Item -ItemType Junction -Path "$front/node_modules" -Target "$primary/web/frontend/node_modules"
+            Gate 'frozen-contracts' { & $python -I -X utf8 -B tools/overnight/check_contracts.py --deps "$work/deps" --output "$out/contracts.json" }
+            Gate 'web-backend-full' { & $python -I -X utf8 -B tools/pr07b/run_combined.py --root $root --deps "$work/deps" --auth-browser --pytest-loopback-guard "$work/guard/sitecustomize.py" --timeout 2100 }
+        }
+    } else { Record $Mode 124 }
+}
+if ($Mode -in ('full','legacy')) {
     Gate 'legacy-venv' { & $python -I -X utf8 -B -m venv --without-pip "$work/legacy" }
     $legacy = "$work/legacy/Scripts/python.exe"
     if ($report.steps['legacy-venv'] -eq 0) {
