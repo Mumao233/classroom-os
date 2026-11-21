@@ -100,8 +100,8 @@ def test_only_required_tables_and_contract_columns_exist(pg):
     with pg.admin.connect() as connection:
         # This original gate still compares every legacy metadata object.
         # SQL-managed objects have independent real-PG columns/constraints/ACL checks.
-        differences = compare_metadata(MigrationContext.configure(connection,opts={'include_object':lambda obj,name,kind,reflected,compare_to:not(kind=='table' and name in auth_tables|media_tables|deletion_tables|cache_tables|capture_tables|SYNC_TABLES|PORTABLE_TABLES|asr_tables)}), metadata)
-    assert differences == []
+        differences = compare_metadata(MigrationContext.configure(connection,opts={'include_object':lambda obj,name,kind,reflected,compare_to:not(kind=='table' and name in auth_tables|media_tables|deletion_tables|cache_tables|capture_tables|SYNC_TABLES|PORTABLE_TABLES|asr_tables|filetrans_tables)}), metadata)
+    assert not differences, repr(differences)
 
 
 def test_upgrade_is_repeatable_and_has_one_head(pg):

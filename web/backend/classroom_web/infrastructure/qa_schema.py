@@ -104,6 +104,8 @@ indices=[('ix_source_items_source', ['owner_id', 'source_id'])])
 generation_plans = _table('generation_plans', [
     sa.Column('class_session_id', UUID(as_uuid=True), nullable=False),
     sa.Column('snapshot_id', UUID(as_uuid=True)),
+    sa.Column('audio_manifest', JSONB),
+    sa.Column('audio_manifest_sha256', sa.CHAR(64)),
     sa.Column('kind', sa.Text, nullable=False),
     sa.Column('plan_hash', sa.CHAR(64), nullable=False),
     sa.Column('request', JSONB, nullable=False),
@@ -116,6 +118,8 @@ generation_plans = _table('generation_plans', [
            ('generation_plans_owner_id_consumed_task_id_key', ['owner_id', 'consumed_task_id'])],
 foreign=[(['owner_id', 'snapshot_id', 'class_session_id'],
           ['source_snapshots.owner_id', 'source_snapshots.id', 'source_snapshots.class_session_id'], {}),
+         (['owner_id', 'class_session_id'], ['class_sessions.owner_id', 'class_sessions.id'],
+          dict(name='generation_class_fk')),
          (['owner_id', 'consumed_task_id'], ['tasks.owner_id', 'tasks.id'],
           dict(deferrable=True, initially='DEFERRED', use_alter=True))],
 indices=[('ix_qa_plans_owner_created', ['owner_id', 'created_at'])])

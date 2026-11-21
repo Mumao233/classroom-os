@@ -421,6 +421,10 @@ def test_failed_later_migration_and_refused_downgrade_preserve_qa_data(previous_
             plan = repo.prepare(database.classroom_id, REQUEST, uuid4(), CONFIG)
             task = repo.execute(UUID(plan['id']), confirmation(plan), uuid4(), CONFIG)
         selected = catalog_tables | task_tables | {name: metadata.tables[name] for name in QA_TABLES}
+        # The rollback test is pinned before 0018. Snapshot the actual
+        # historical plan row, including every column that revision defines.
+        selected['generation_plans'] = sa.Table('generation_plans', sa.MetaData(),
+                                                 autoload_with=database.engine)
         before = database_snapshot(database, selected)
         scratch = ROOT / 'work/pr07a/migration-failure' / uuid4().hex
         scratch.parent.mkdir(parents=True, exist_ok=True)
