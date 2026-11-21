@@ -59,12 +59,12 @@
 | 学期与课程 | `/semesters`、`/courses`、`/courses/{id}/materials` | 同名允许；语言默认 `auto`；大纲/词表是版本化文本；更改默认不重跑历史模型 |
 | 实际课堂 | `/class-sessions`、`/{id}/capture/*` | 创建课堂不自动开麦/收费；改归属需同 owner 课程且 CAS，不改采集时间和历史快照 |
 | 音频/云 ASR | `audio-manifest`、`audio-chunks`、`asr-streams` | 文件持久确认、送供应商和转写 final 三个独立事实；仅 durable chunk 可送云 ASR |
-| 媒体/图片历史 | `/media/uploads`、`/media/{id}/access`、`content`、`/slides` | 私有 staging→校验→可用；旋转产生新版本；普通移除保历史依据；删除类操作按删除政策级联清除 |
+| 媒体/图片历史 | `/media/uploads`、`/media/{id}/access`、`content`、`/slides` | 私有 staging→校验→可用；旋转产生新版本；普通移除保历史依据；删除类操作按删除政策级联清除。`tbd06-v2` 单图 16,000,000 bytes，Alpha 不提供 PDF/PPT 文档上传 |
 | 转写与版本 | `/transcript-versions`、`/transcript-segments/{id}/corrections`、`adopt` | partial 不进证据；机器版本不可覆写；人工稿与重转写均独立；采用用 CAS |
 | 问答/总结/重转写 | `/{id}/generation-plans`、`/generation-plans/{id}/execute`、`/tasks`、`/questions` | 先冻结材料和目的地并展示，再确认派发；每个真实调用有 attempt/预算记录 |
 | 复习与标记 | `/review-documents`、`personal-revisions`、`revisions`、`adopt`、`/marks` | 三入口同 ID；AI 首稿也仅候选；已理解只由用户显式写入；卡片揭晓不调 AI |
 | 同步 | `/sync/bootstrap`、`operations`、`changes`、`conflicts`、`/operations` | 批次逐操作原子并分别收据；删后写拒绝；不自动生成 AI；cursor 过期走有界快照重同步 |
-| 可携带副本 | `/exports`、`/imports/preview`、`/imports/commit` | 默认导出不含音频；单独确认；导入新 UUID/本人归属/不恢复凭据和活跃任务；预览不自动提交 |
+| 可携带副本 | `/exports`、`/imports/preview`、`/imports/commit` | Alpha 拒绝 `include_audio=true`；导入新 UUID/本人归属/不恢复凭据和活跃任务；预览不自动提交。包上限、分片、Range 续传与生命周期见 [`tbd06-v2` 导入导出契约](../pr08c/TBD06-V21-TRANSFER-CONTRACT.md) |
 | 删除 | 各资源 `deletion-preview`、`delete`、`/deletions/{id}` | 短期确认 token 绑定对象版本/影响范围；课程移走或级联明确选择；注销立即撤会话 |
 | 搜索/通知/反馈 | `/search`、`/notifications`、`/feedback` | 搜索仅关键词；权限和墓碑过滤；已读不等于故障解决；反馈正文片段须显式确认 |
 | 运营 | `/admin/users`、`invitations`、`quota-adjustments`、`usage`、`health`、`switches`、`audit` | Admin+MFA+敏感再认证；记理由；没有学生录音/笔记读取和 impersonation 路由 |

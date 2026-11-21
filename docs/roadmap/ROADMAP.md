@@ -4,7 +4,7 @@
 
 **18 / 28 完成**　`█████████████░░░░░░░`　64%
 
-🟢 完成 18　🟣 待验收 0　🔵 进行中 0　🟡 可开工 2　⚪ 未开始 8　🔴 受阻 0
+🟢 完成 18　🟣 待验收 0　🔵 进行中 1　🟡 可开工 1　⚪ 未开始 8　🔴 受阻 0
 
 图例：节点颜色＝状态（🟡 黄色粗框＝前置都完成、可以开工）；实线＝硬依赖，虚线＝完整联调，橙色粗线＝真实付费接入前置；**连线变绿＝这条前置已满足**。
 
@@ -130,7 +130,8 @@ flowchart TD
     classDef blocked fill:#fecaca,stroke:#b91c1c,color:#7f1d1d,stroke-width:2px
     classDef todo fill:#f5f5f4,stroke:#a8a29e,color:#57534e
     class P00,P01,P02A,P02B,P03A,P03B,P04A,P04B,P05A,P05B,P06A,P07A,P07B,P08A,P08B,P09A,P09B,P11A done
-    class P06B,P08C ready
+    class P08C doing
+    class P06B ready
     class P06C,P10A,P10B,P11B,P11C,P12A,P12B,P12C todo
     linkStyle 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,39,40,41,42,43,44,45,46,47,48,49,50,51,52,55,56,57,58,65,66,67,68,69 stroke:#16a34a,stroke-width:2px
     linkStyle 36,37,38,53,54,59,60,61,62,63,64,70,71,72,73,74 stroke:#a8a29e,stroke-width:1.2px
@@ -151,7 +152,7 @@ flowchart TD
 | 05 采集与恢复 | 2/2 | 🟢 05a 🟢 05b |
 | 06 ASR 语音识别 | 1/3 | 🟢 06a 🟡 06b ⚪ 06c |
 | 07 AI 问答与总结 | 2/2 | 🟢 07a 🟢 07b |
-| 08 离线与同步 | 2/3 | 🟢 08a 🟢 08b 🟡 08c |
+| 08 离线与同步 | 2/3 | 🟢 08a 🟢 08b 🔵 08c |
 | 09 Web 界面 | 2/2 | 🟢 09a 🟢 09b |
 | 10 课堂与复习 | 0/2 | ⚪ 10a ⚪ 10b |
 | 11 运营与费用 | 1/3 | 🟢 11a ⚪ 11b ⚪ 11c |
@@ -160,7 +161,6 @@ flowchart TD
 ## 现在可以开工
 
 - **06b 实时 ASR 与恢复**
-- **08c 导入导出兼容**
 
 ## 关键路径
 
@@ -173,7 +173,7 @@ flowchart TD
 未完成阶段里，卡住下游最多的五个：
 
 - 06b 实时 ASR 与恢复：卡住 8 个下游（🟡 可开工）
-- 08c 导入导出兼容：卡住 6 个下游（🟡 可开工）
+- 08c 导入导出兼容：卡住 6 个下游（🔵 进行中）
 - 10a Classroom 与课后页：卡住 6 个下游（⚪ 未开始）
 - 10b Review、来源与采用：卡住 5 个下游（⚪ 未开始）
 - 06c Filetrans 与候选采用：卡住 3 个下游（⚪ 未开始）
@@ -211,7 +211,7 @@ flowchart TD
 | 07b 总结卡片与版本 | 🟢 完成 | 林珈诚 | [#15](https://github.com/Mumao233/classroom-os/pull/15) | — | 完整联调还差 06b | 开始日期未记录 | 2026-11-16 | 2026-11-16 GitHub #15 合入 main（801bc5d）。已交付总结与四类复习卡片、不可变 AI/个人版本、CAS 冲突保稿、显式采用、多批任务及费用恢复。Review composition 与 Worker 默认关闭，生产启用、真实模型质量及删除恢复联调待验收。详见 docs/web-alpha/pr07b/VALIDATION.md。 |
 | 08a 可信加密缓存 | 🟢 完成 | 林珈诚 | [#17](https://github.com/Mumao233/classroom-os/pull/17) | — | — | 开始日期未记录 | 2026-11-17 | 2026-11-17 GitHub #17 合入 main（8b1e44e）。已交付 Web Crypto/IndexedDB 加密缓存、可信设备与密钥生命周期、删除失效和离线同步缓存接口。0013 恢复可信设备约束，最终 VMware 缓存、采集组合回归和四项 CI 通过。合并提交 8b1e44e 是 PR-08b GitHub #20 的主线基线。 |
 | 08b 离线同步与冲突 | 🟢 完成 | 林珈诚 | [#20](https://github.com/Mumao233/classroom-os/pull/20) | — | — | 开始日期未记录 | 2026-11-18 | 2026-11-18 GitHub #20 合入 main（ec2beb9），主线基线为已合并 PR-08a 的 8b1e44e。已交付离线同步、加密 outbox、冲突保稿和恢复。0014 迁移、HTTP 0.2.1 加 pr07b-1 兼容及同步停用恢复三项人工验收已确认。同步默认关闭，PR-09b 消费者联调及认证会话锁等待 P2 专项验收仍待完成。 |
-| 08c 导入导出兼容 | 🟡 可开工 | — | — | — | — | — | — |  |
+| 08c 导入导出兼容 | 🔵 进行中 | 林珈诚 | [#22](https://github.com/Mumao233/classroom-os/pull/22) | — | — | 2026-11-18 | — |  |
 | 09a Aurora 与 Web 壳 | 🟢 完成 | 林珈诚 | — | — | — | 2026-10-28 | 2026-11-04 | Aurora 导航、主题、响应式 Web 壳与 Mock 工作台已获批准并整合到 main；仅 Mock 范围，跨课堂合成实体 ID P3 仍开放，不代表真实课堂、认证、音频或 ASR 联调完成。 |
 | 09b Dashboard、课程与设置 | 🟢 完成 | 林珈诚 | [#13](https://github.com/Mumao233/classroom-os/pull/13) [#21](https://github.com/Mumao233/classroom-os/pull/21) | — | — | 开始日期未记录 | 2026-11-16 | 2026-11-16 GitHub #13 将最终功能提交 3cf88bb 合入 main（5388316）。Dashboard、课程、设置 Mock 前端与账号切换旧请求保护已交付；合流 VMware 前端 274 项 Vitest、61 项 Chromium 用例通过。2026-11-18 GitHub #21 将只改验收文档的定向审查记录 d216f23 合入 main（9ccf5c0），记录两项低严重度遗留问题。生产入口仍为 AuthWorkbench，真实后端及 PR-08a/08b 消费者联调待完成。 |
 | 10a Classroom 与课后页 | ⚪ 未开始 | — | — | 06b | — | — | — |  |

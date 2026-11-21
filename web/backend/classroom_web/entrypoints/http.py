@@ -63,12 +63,12 @@ def request_context(request):
 
 def failure(error,request_id):
     return JSONResponse(status_code=error.status,content={'error':dict(code=error.code,message='Request could not be completed.',request_id=request_id,
-        retryable=error.status in (429,503) and error.code!='RESULT_UNKNOWN',retry_after_seconds=None,
+        retryable=error.status in (429,503) and error.code!='RESULT_UNKNOWN',retry_after_seconds=getattr(error,'retry_after_seconds',None),
         current_revision=getattr(error,'current_revision',None),conflict_id=getattr(error,'conflict_id',None),task_id=None)},
         headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'})
 
 
-def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admission=None,cache=None,media=None,media_spool_directory=None,billing=None,billing_admin=None,qa=None,review=None,deletion=None,capture=None,sync=None):
+def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admission=None,cache=None,media=None,media_spool_directory=None,billing=None,billing_admin=None,qa=None,review=None,deletion=None,capture=None,sync=None,portable=None,portable_transfers=None,portable_jobs=None):
     parsed=urlsplit(origin)
     if parsed.scheme!='https' or not parsed.netloc or parsed.path or parsed.query or parsed.fragment or parsed.username:raise ValueError('one exact HTTPS origin is required')
     if contract.get('info',{}).get('version') not in ('0.2.0','0.2.1'):raise ValueError('approved contract 0.2.0 or 0.2.1 required')
@@ -82,6 +82,17 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
         raise ValueError('Sync requires the existing PR-07b contract candidate for exact Review conflicts')
     if sync is not None and sync.enabled and (review is None or not review.config.get('enabled', False)):
         raise ValueError('Enabled Sync requires an enabled ReviewBrowser for exact source authorization')
+    if portable is not None and (media is None or portable.media is not media or deletion is None):
+        raise ValueError('portable preview requires shared media and deletion services')
+    portable_paths = frozenset()
+    if portable_jobs is not None:
+        from ..application.portable_jobs import PATHS as portable_paths
+        if portable_transfers is not None and portable_jobs.transfers is not portable_transfers:
+            raise ValueError('portable job and transfer services must share one lifecycle')
+        portable_transfers = portable_jobs.transfers
+    if portable_transfers is not None and (portable_transfers.media is not media
+            or deletion is None or portable_transfers.deletion is not deletion):
+        raise ValueError('portable transfers require shared media and deletion services')
     qa_paths = {
         '/class-sessions/{class_session_id}/generation-plans',
         '/generation-plans/{plan_id}', '/generation-plans/{plan_id}/execute',
@@ -152,6 +163,16 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
         from ..application.deletion import ROUTES as deletion_routes
 
     def dispatch(path,ctx,body,key,params,method,operation_id):
+        if path in portable_paths:
+            try:
+                return portable_jobs.dispatch(operation_id,ctx,body,key,params)
+            except AuthRejected as error:
+                shared = path in qa_paths or path in review_paths or (path == '/tasks/{task_id}/cancel' and billing)
+                legacy = path == '/imports/preview' and portable is not None
+                if error.code != 'NOT_FOUND' or not (shared or legacy):
+                    raise
+        if path == '/imports/preview' and portable is not None:
+            return portable.preview(ctx, key, body)
         if path in sync_paths:return sync.dispatch(operation_id,ctx,body,key,params)
         if path in deletion_routes:return deletion.handle(path,method,ctx,body,key,params)
         if path in review_paths:
@@ -215,6 +236,8 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
     selected.update(qa_paths)
     selected.update(review_paths)
     selected.update(sync_paths)
+    selected.update(portable_paths)
+    if portable is not None:selected.add('/imports/preview')
     if billing is not None:selected.update(('/me/quota','/tasks/{task_id}/cancel'))
     if billing_admin is not None:selected.update(('/admin/switches','/admin/usage','/admin/quota-adjustments','/admin/users/{user_id}/quota'))
     selected.update(deletion_routes)
@@ -228,7 +251,7 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
         schema=operation.get('requestBody',{}).get('content',{}).get('application/json',{}).get('schema')
         async def handle(request:Request):
             request_id=str(uuid4())
-            entered=time.monotonic();deadline=entered+5;deadline_token=DEADLINE.set(deadline);dispatched=False
+            entered=time.monotonic();deadline=entered+(120 if path == '/imports/preview' and portable_jobs is not None else 5);deadline_token=DEADLINE.set(deadline);dispatched=False
             try:
                 secure(request,write=method!='get');ctx=request_context(request);key=None;body={};params=dict(request.path_params)
                 if (path in review_paths or path in sync_paths) and method == 'get':
@@ -357,7 +380,12 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
     if media is not None:
         from .media_http import register_media
         register_media(app,media=media,contract=contract,secure=secure,request_context=request_context,
-                       check=check,body_for=body_for,failure=failure,spool_directory=media_spool_directory)
+                       check=check,body_for=body_for,failure=failure,spool_directory=media_spool_directory,portable=portable_transfers)
+
+    if portable_jobs is not None:
+        from .portable_http import register_portable
+        register_portable(app,service=portable_transfers,secure=secure,request_context=request_context,
+                          body_for=body_for,failure=failure)
 
     if capture is not None:
         from .capture_http import register_capture

@@ -53,3 +53,6 @@ starlette==1.10.0
 typing-inspection==0.4.5
 uvicorn==0.54.0
 websockets==17.4
+
+# PR-08c imported-image validation.
+Pillow==13.0.0
