@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 import pytest
 
+from classroom_web.application.media import MediaService
 from classroom_web.application.portable_commit import ImportCopy
 from classroom_web.application.portable_jobs import PortableJobs, PortableTaskWorker
 from classroom_web.application.portable_maintenance import PortableMaintenance
@@ -26,7 +27,8 @@ from classroom_web.infrastructure.portable_lifecycle import PortableLifecycle
 from classroom_web.infrastructure.qa_repository import PgQaRepository
 from classroom_web.infrastructure.review_repository import PgReviewRepository
 from classroom_web.entrypoints.worker import portable_worker
-from deletion_support import BASE, auth, contract, d, deploy, login, new_user, one, pg, rows, services, versions
+from deletion_support import (BASE, auth, contract, d, deploy, login, new_user, one, pg, rows,
+                              seed_legacy_package_upload, services, versions)
 from test_persistent_tasks import scheduler
 from test_deletion_lifecycle import delete
 from object_service import ACCESS, REGION, SECRET
@@ -339,10 +341,35 @@ def media_upload(d,client,data,*,mime,purpose,classroom):
         json={field:body[field] for field in ('sha256','byte_length')},headers=write_headers(d)),200)
 
 
-def test_standard_legacy_media_upload_without_asset_expiry_commits(d,enabled,scheduler):
+@pytest.mark.parametrize('expire_import_packages', [False, True])
+def test_import_package_reservations_require_explicit_portable_service(d, expire_import_packages):
+    media = MediaService(auth=d.a.service, database=d.pg.db, store=d.store,
+                         expire_import_packages=expire_import_packages)
+    app = create_app(auth=d.a.service, contract=contract(), origin='https://testserver',
+                     media=media, media_spool_directory=d.spool, deletion=d.deletion)
+    data = b'{}'
+    request_key = uuid4()
+    metadata = dict(purpose='import_package', class_session_id=None, mime_type='application/json',
+                    byte_length=len(data), sha256=hashlib.sha256(data).hexdigest(), filename='synthetic.json')
+    with TestClient(app, base_url='https://testserver', cookies=dict(d.client.cookies)) as client:
+        error = response(client.post(BASE + '/media/uploads', json=metadata, headers=write_headers(d, request_key)), 503)
+    assert error['error']['code'] == 'SERVICE_DISABLED'
+    assert rows(d, 'SELECT id FROM media_assets WHERE owner_id=:owner', owner=d.uid) == []
+    assert rows(d, 'SELECT id FROM media_uploads WHERE owner_id=:owner', owner=d.uid) == []
+    assert rows(d, 'SELECT id FROM operation_receipts WHERE owner_id=:owner AND operation=\'createMediaUpload\'',
+                owner=d.uid) == []
+
+
+def test_preexisting_legacy_media_upload_without_asset_expiry_commits(d,enabled,scheduler):
     jobs,client = enabled
     data = json.dumps(archive_room(d.classroom).session).encode()
-    upload,asset = media_upload(d,d.client,data,mime='application/json',purpose='import_package',classroom=None)
+    metadata = dict(purpose='import_package', class_session_id=None, mime_type='application/json',
+                    byte_length=len(data), sha256=hashlib.sha256(data).hexdigest(), filename='synthetic.json')
+    upload = seed_legacy_package_upload(d, metadata)
+    response(d.client.put(upload['upload_path'], content=data,
+                          headers=write_headers(d) | {'content-type': 'application/octet-stream'}), 200)
+    asset = response(d.client.post(BASE + f'/media/uploads/{upload["id"]}/complete',
+        json={key: metadata[key] for key in ('sha256', 'byte_length')}, headers=write_headers(d)), 200)
     assert asset['expires_at'] is None
     preview = response(client.post(BASE+'/imports/preview',headers=write_headers(d),json={
         'upload_id':upload['id'],'destination_course_id':str(d.course.id)}),201)

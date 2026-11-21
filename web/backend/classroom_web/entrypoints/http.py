@@ -380,7 +380,8 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
     if media is not None:
         from .media_http import register_media
         register_media(app,media=media,contract=contract,secure=secure,request_context=request_context,
-                       check=check,body_for=body_for,failure=failure,spool_directory=media_spool_directory,portable=portable_transfers)
+                       check=check,body_for=body_for,failure=failure,spool_directory=media_spool_directory,
+                       portable=portable_transfers,portable_preview=portable)
 
     if portable_jobs is not None:
         from .portable_http import register_portable

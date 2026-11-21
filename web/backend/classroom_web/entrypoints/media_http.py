@@ -66,7 +66,8 @@ class MediaRequestLifecycle:
                 self.slots.release()
 
 
-def register_media(app, *, media, contract, secure, request_context, check, body_for, failure, spool_directory, portable=None):
+def register_media(app, *, media, contract, secure, request_context, check, body_for, failure, spool_directory,
+                   portable=None, portable_preview=None):
     spool = Path(spool_directory)
     if not spool.is_absolute() or not spool.is_dir():
         raise ValueError('an explicit existing media spool directory is required')
@@ -164,8 +165,9 @@ def register_media(app, *, media, contract, secure, request_context, check, body
                                  'issueMediaAccess': (media.access, (ctx, key, params.get('asset_id')))}
                     function, args = functions[operation['operationId']]
                     versions = request.headers.getlist('x-asset-version')
-                    if operation['operationId'] == 'createMediaUpload' and portable is not None and body['purpose']=='import_package':
-                        result = await blocking(lambda: media.create(ctx,key,body,portable_imports=portable))
+                    if operation['operationId'] == 'createMediaUpload' and body['purpose'] == 'import_package':
+                        result = await blocking(lambda: media.create(
+                            ctx, key, body, portable_imports=portable, portable_preview=portable_preview))
                     elif operation['operationId'] == 'issueMediaAccess' and portable is not None:
                         from ..domain.portable import SHA, match
                         if len(versions) > 1 or (versions and not match(SHA, versions[0])):

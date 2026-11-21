@@ -22,7 +22,7 @@ from conftest import migrated_database
 from object_service import ACCESS, REGION, SECRET, ObjectService
 from test_authentication import BASE, PASSWORD, auth, login  # noqa: F401  (auth is a fixture)
 from classroom_web.application.deletion import DeletionService, DeletionWorker
-from classroom_web.application.media import MediaService
+from classroom_web.application.media import MediaService, fingerprint, upload_dto
 from classroom_web.domain.auth import BrowserContext
 from classroom_web.domain.data import OwnerContext
 from classroom_web.domain.deletion import DeletionPolicy
@@ -178,6 +178,13 @@ def build(a, deploy, spool, *, database=None, queue=None, ledger=None, store=Non
                      media_spool_directory=spool, deletion=deletion)
     worker = DeletionWorker(queue=queue or deploy.queue, store=store, policy=policy, worker_id='pr04b-' + uuid4().hex[:12])
     return SimpleNamespace(app=app, service=media, deletion=deletion, worker=worker, store=store)
+
+
+def seed_legacy_package_upload(m, body, key=None):
+    """Persist a reservation made before the default import-package gate."""
+    with m.service.transaction(m.ctx, write=True) as (repo, _):
+        upload, asset = repo.create(body, key or uuid4(), fingerprint(body), m.service.policy)
+    return upload_dto(upload, asset)
 
 
 def classroom(m, title='Synthetic classroom', course=None):

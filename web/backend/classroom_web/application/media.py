@@ -86,9 +86,10 @@ class MediaService:
         except ObjectUnavailable:
             raise AuthRejected('STORAGE_UNAVAILABLE', 503) from None
 
-    def create(self, ctx, key, body, *, portable_imports=None):
-        import_package = self.expire_import_packages and body['purpose'] == 'import_package'
-        if import_package and body['byte_length'] > self.IMPORT_PACKAGE_MAX_BYTES:
+    def create(self, ctx, key, body, *, portable_imports=None, portable_preview=None):
+        is_package = body['purpose'] == 'import_package'
+        expiring_package = is_package and self.expire_import_packages
+        if expiring_package and body['byte_length'] > self.IMPORT_PACKAGE_MAX_BYTES:
             raise AuthRejected('CAPACITY_EXCEEDED', 413)
         if body['byte_length'] > self.policy.max_bytes:
             raise AuthRejected('VALIDATION_FAILED', 422)
@@ -98,10 +99,13 @@ class MediaService:
         value = dict(body)
         value['class_session_id'] = identifier(body['class_session_id']) if body['class_session_id'] else None
         with self.transaction(ctx, write=True) as (repo, _):
+            if is_package and portable_imports is None and not (
+                    expiring_package and portable_preview is not None and portable_preview.media is self):
+                raise AuthRejected('SERVICE_DISABLED', 503)
             if portable_imports is not None:
                 portable_imports.lock_legacy_admission(repo)
             upload, asset = repo.create(value, identifier(key), fingerprint(body), self.policy,
-                                        max_import_assets=self.IMPORT_PACKAGE_MAX_ASSETS if import_package else None,
+                                        max_import_assets=self.IMPORT_PACKAGE_MAX_ASSETS if expiring_package else None,
                                         replay_lock=portable_imports is None)
             if portable_imports is not None:
                 portable_imports.register_legacy_upload(repo, upload, asset)
