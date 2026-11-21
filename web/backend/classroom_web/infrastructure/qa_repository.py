@@ -145,13 +145,15 @@ class PgQaRepository:
             if text != self.material_text(material):
                 raise QaRejected('SOURCE_UNAVAILABLE', 404)
             origin = 'material'
-        if origin not in ('manual', 'material', 'live_asr', 'import'):
+        if origin not in ('manual', 'material', 'live_asr', 'import', 'retranscription'):
             raise QaRejected('VALIDATION_FAILED', 422)
-        count = self._rows('SELECT count(*) AS n FROM qa_sources WHERE owner_id=:owner AND class_session_id=:classroom',
-                           classroom=class_session_id).one()['n']
-        if count >= 512:
-            raise QaRejected('SOURCE_LIMIT', 429)
-        if asr_identity is not None and (origin != 'live_asr' or kind != 'transcript_segment'):
+        if origin != 'retranscription':
+            count = self._rows('''SELECT count(*) AS n FROM qa_sources WHERE owner_id=:owner
+                AND class_session_id=:classroom AND origin<>'retranscription' ''',
+                classroom=class_session_id).one()['n']
+            if count >= 512:
+                raise QaRejected('SOURCE_LIMIT', 429)
+        if asr_identity is not None and (origin not in ('live_asr', 'retranscription') or kind != 'transcript_segment'):
             raise QaRejected('VALIDATION_FAILED', 422)
         source_id, revision_id = asr_identity if asr_identity is not None else (uuid4(), uuid4())
         self._rows('''INSERT INTO qa_sources(id,owner_id,class_session_id,kind,object_id,current_revision_id,origin,start_ms,end_ms)
@@ -234,7 +236,9 @@ class PgQaRepository:
             raise QaRejected('RATE_LIMITED', 429)
         asked_at = self._now()
         source_rows = self._rows('''SELECT id FROM qa_sources WHERE owner_id=:owner AND class_session_id=:classroom
-            ORDER BY id FOR SHARE''', classroom=class_session_id).all()
+            AND classroom_web_current_transcript(owner_id,class_session_id,origin,id,:adopted)
+            ORDER BY id LIMIT 513 FOR SHARE''', classroom=class_session_id,
+            adopted=classroom.adopted_transcript_version_id).all()
         sources = [self._source(row['id']) for row in source_rows]
         if len(sources) > 512:
             raise QaRejected('SOURCE_LIMIT', 429)

@@ -440,7 +440,7 @@ class PgSyncRepository:
         for table, kind, parent, adopted, live in (
             ('semesters','semester','NULL::uuid','NULL::uuid',"deleted_at IS NULL AND NOT classroom_web_tombstoned('semester',id)"),
             ('courses','course','semester_id','NULL::uuid',"deleted_at IS NULL AND NOT classroom_web_tombstoned('course',id) AND EXISTS(SELECT FROM semesters s WHERE s.owner_id=courses.owner_id AND s.id=semester_id AND s.deleted_at IS NULL AND NOT classroom_web_tombstoned('semester',s.id))"),
-            ('class_sessions','class_session','course_id','NULL::uuid','classroom_web_qa_class_live(id)'),
+            ('class_sessions','class_session','course_id','adopted_transcript_version_id','classroom_web_qa_class_live(id)'),
             ('review_documents','review_document','class_session_id','adopted_revision_id','true'),
             ('sync_marks','mark','class_session_id','NULL::uuid','true')):
             rows = self.rows(f'''SELECT id,revision,updated_at,{parent} AS parent,{adopted} AS adopted

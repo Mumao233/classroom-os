@@ -58,7 +58,7 @@ class Source:
             raise ValueError('invalid source identity')
         if self.fragment_id is not None and not isinstance(self.fragment_id, UUID):
             raise ValueError('invalid fragment identity')
-        if self.kind not in SOURCE_KINDS or self.origin not in ('manual', 'material', 'live_asr', 'import'):
+        if self.kind not in SOURCE_KINDS or self.origin not in ('manual', 'material', 'live_asr', 'import', 'retranscription'):
             raise ValueError('unsupported source origin')
         if not isinstance(self.text, str) or len(self.text.encode('utf-8')) > 1_000_000:
             raise ValueError('source text exceeds its bounded representation')

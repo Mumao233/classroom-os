@@ -103,7 +103,9 @@ indices=[('ix_source_items_source', ['owner_id', 'source_id'])])
 
 generation_plans = _table('generation_plans', [
     sa.Column('class_session_id', UUID(as_uuid=True), nullable=False),
-    sa.Column('snapshot_id', UUID(as_uuid=True), nullable=False),
+    sa.Column('snapshot_id', UUID(as_uuid=True)),
+    sa.Column('audio_manifest', JSONB),
+    sa.Column('audio_manifest_sha256', sa.CHAR(64)),
     sa.Column('kind', sa.Text, nullable=False),
     sa.Column('plan_hash', sa.CHAR(64), nullable=False),
     sa.Column('request', JSONB, nullable=False),

@@ -72,6 +72,7 @@ class Database:
                       'capture_policy','consent_records','capture_epochs','capture_leases','capture_gaps',
                       'audio_chunks','capture_epoch_state','capture_recovery_grants','audio_chunk_state',
                       'asr_streams','asr_dispatches','asr_final_segments',
+                      'filetrans_approvals','filetrans_runs','filetrans_versions','filetrans_segments',
                       'sync_operations','sync_conflicts','sync_resolutions','sync_preferences','sync_marks',
                       'portable_transfers','portable_transfer_media','portable_export_sources','portable_slots',
                       'portable_imported_classrooms','portable_import_assets','portable_task_bindings','portable_export_dependencies')

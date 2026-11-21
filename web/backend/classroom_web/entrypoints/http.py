@@ -62,13 +62,13 @@ def request_context(request):
 
 
 def failure(error,request_id):
-    return JSONResponse(status_code=error.status,content={'error':dict(code=error.code,message='Request could not be completed.',request_id=request_id,
+    return JSONResponse(status_code=error.status,content={'error':dict(code=error.code,message=getattr(error,'public_message','Request could not be completed.'),request_id=request_id,
         retryable=error.status in (429,503) and error.code!='RESULT_UNKNOWN',retry_after_seconds=getattr(error,'retry_after_seconds',None),
         current_revision=getattr(error,'current_revision',None),conflict_id=getattr(error,'conflict_id',None),task_id=None)},
         headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'})
 
 
-def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admission=None,cache=None,media=None,media_spool_directory=None,billing=None,billing_admin=None,qa=None,review=None,deletion=None,capture=None,sync=None,portable=None,portable_transfers=None,portable_jobs=None,asr=None,asr_worker=None):
+def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admission=None,cache=None,media=None,media_spool_directory=None,billing=None,billing_admin=None,qa=None,review=None,deletion=None,capture=None,sync=None,portable=None,portable_transfers=None,portable_jobs=None,asr=None,asr_worker=None,filetrans=None,filetrans_worker=None):
     parsed=urlsplit(origin)
     if parsed.scheme!='https' or not parsed.netloc or parsed.path or parsed.query or parsed.fragment or parsed.username:raise ValueError('one exact HTTPS origin is required')
     if contract.get('info',{}).get('version') not in ('0.2.0','0.2.1'):raise ValueError('approved contract 0.2.0 or 0.2.1 required')
@@ -76,6 +76,14 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
         raise ValueError('ASR requires the same capture and auth services')
     if asr_worker is not None and (asr is None or asr_worker.service is not asr or not asr.enabled):
         raise ValueError('ASR worker requires the explicitly enabled synthetic service')
+    from ..application.filetrans import PATHS as filetrans_routes
+    from ..infrastructure.filetrans_repository import OtherGeneration
+    filetrans_paths = filetrans_routes if filetrans is not None else frozenset()
+    if filetrans is not None and (capture is None or deletion is None or filetrans.capture is not capture
+            or filetrans.auth is not auth or capture.deletion is not deletion):
+        raise ValueError('Filetrans requires the shared capture, authentication and deletion gate')
+    if filetrans_worker is not None and (filetrans is None or filetrans_worker.service is not filetrans or not filetrans.enabled):
+        raise ValueError('Filetrans worker requires the explicitly enabled synthetic service')
     if billing_admin is not None and not contract.get('x-pr11a-candidate'):
         raise ValueError('billing administration requires its explicit contract candidate')
     if qa is not None and contract.get('x-pr07a-candidate') != 'pr07a-1':
@@ -120,14 +128,15 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
     @asynccontextmanager
     async def lifespan(app):
         stop_asr=asyncio.Event()
-        control=asyncio.create_task(asr_worker.serve(stop_asr,app.state.errors)) if asr_worker is not None else None
+        controls = [asyncio.create_task(worker.serve(stop_asr, app.state.errors))
+                    for worker in (asr_worker, filetrans_worker) if worker is not None]
         try:
             yield
         finally:
             try:
-                if control is not None:
+                if controls:
                     stop_asr.set()
-                    await control
+                    await asyncio.gather(*controls)
             finally:
                 workers.shutdown(wait=True,cancel_futures=False)
     app=FastAPI(docs_url=None,redoc_url=None,openapi_url=None,lifespan=lifespan);app.state.auth=auth;app.state.errors=deque(maxlen=32)
@@ -183,6 +192,14 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
     } if asr is not None else set()
 
     def dispatch(path,ctx,body,key,params,method,operation_id):
+        if path in filetrans_paths:
+            try:
+                return filetrans.dispatch(operation_id,ctx,body,key,params)
+            except OtherGeneration:
+                if (operation_id != 'prepareGeneration' and path not in asr_paths
+                        and path not in qa_paths and path not in portable_paths
+                        and not (operation_id == 'cancelTask' and billing is not None)):
+                    raise AuthRejected('NOT_FOUND', 404) from None
         if path in asr_paths:
             try:
                 return asr.dispatch(operation_id,ctx,body,key,params)
@@ -266,6 +283,7 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
     selected.update(sync_paths)
     selected.update(portable_paths)
     selected.update(asr_paths)
+    selected.update(filetrans_paths)
     if portable is not None:selected.add('/imports/preview')
     if billing is not None:selected.update(('/me/quota','/tasks/{task_id}/cancel'))
     if billing_admin is not None:selected.update(('/admin/switches','/admin/usage','/admin/quota-adjustments','/admin/users/{user_id}/quota'))
