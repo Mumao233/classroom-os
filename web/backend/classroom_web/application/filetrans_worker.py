@@ -33,24 +33,23 @@ class FiletransWorker:
         return repo, repo.get_plan(run['plan_id'])
 
     def _parts(self, owner, claim):
-        token = DEADLINE.set(monotonic() + 45)
+        token = DEADLINE.set(monotonic() + 600)
         try:
             with self.service.database.transaction(owner) as tx:
                 repo, plan = self._input(tx, claim.id)
                 sources = repo.verify(plan)
                 tx.billing._switches(KIND)
             parts = []
-            for start in range(0, len(sources), 16):
-                batch = sources[start:start+16]
+            for chunk, obj in sources:
                 self.service.require_ready(new=True)
                 with self.service.database.transaction(owner) as tx:
                     repo = PgFiletransRepository(tx)
                     run = repo.run(claim.id)
                     repo.check_session(run)
-                    repo.recheck_batch(run['class_session_id'], batch)
-                # Private reads never hold a classroom, capture or billing
-                # lock. The final send-intent transaction rechecks every part.
-                parts.extend(self._part(chunk, obj) for chunk, obj in batch)
+                    repo.recheck_part(run['class_session_id'], chunk, obj)
+                # Each new private read needs its own authorization, without
+                # holding classroom or billing locks over object-store I/O.
+                parts.append(self._part(chunk, obj))
             return tuple(parts)
         finally:
             DEADLINE.reset(token)
@@ -58,20 +57,18 @@ class FiletransWorker:
     def _part(self, chunk, obj):
         # Validate the complete immutable object but expose only the selected
         # PCM slice to the synthetic adapter via its digest and exact byte count.
-        original, selected = sha256(), sha256()
+        self.service.require_ready(new=True)
+        # PR-05b bounds each durable PCM chunk to 32,000 bytes, so the
+        # authorized object maps to exactly one pinned range read.
+        if not 1 <= obj.byte_length <= 32_000:
+            raise ObjectUnavailable('invalid Filetrans PCM chunk length')
+        block = self.service.capture.store.read(obj, 0, obj.byte_length - 1)
+        if len(block) != obj.byte_length or sha256(block).hexdigest() != chunk['sha256']:
+            raise ObjectUnavailable('filetrans PCM checksum mismatch')
         start = 2 * (chunk['first'] - chunk['source_first'])
         end = 2 * (chunk['last'] - chunk['source_first'])
-        for first in range(0, obj.byte_length, 64_000):
-            self.service.require_ready(new=True)
-            last = min(first + 64_000, obj.byte_length)
-            block = self.service.capture.store.read(obj, first, last - 1)
-            original.update(block)
-            a, b = max(first, start), min(last, end)
-            if a < b:
-                selected.update(block[a-first:b-first])
-        if original.hexdigest() != chunk['sha256']:
-            raise ObjectUnavailable('filetrans PCM checksum mismatch')
-        return FilePart(chunk, selected.hexdigest(), end - start)
+        selected = block[start:end]
+        return FilePart(chunk, sha256(selected).hexdigest(), len(selected))
 
     def _authorize(self, owner, claim, parts):
         with self.service.database.transaction(owner) as tx:
@@ -142,7 +139,7 @@ class FiletransWorker:
         except AuthRejected:
             return False
         self.recover_expired()
-        claims = self.queue.claim(self.worker_id, lease_seconds=90, schema_version=SCHEMA)
+        claims = self.queue.claim(self.worker_id, lease_seconds=660, schema_version=SCHEMA)
         if not claims:
             return False
         claim = claims[0]

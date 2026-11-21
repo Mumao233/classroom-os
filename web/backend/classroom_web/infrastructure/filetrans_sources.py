@@ -189,18 +189,16 @@ class PgFiletransSources(PgCaptureRepository):
                 raise FiletransRejected('SOURCE_CHANGED', 409, 'The frozen cloud audio is no longer available unchanged.')
         return [(row, stored(dict(rows[row['id']], byte_length=row['byte_length']))) for row in records]
 
-    def recheck_batch(self, class_id, sources):
+    def recheck_part(self, class_id, chunk, obj):
         self.classroom(class_id)
-        ids = [UUID(chunk['id']) for chunk, _ in sources]
-        rows = {str(row['chunk_id']): row for row in self.rows(class_id, ids)}
+        rows = self.rows(class_id, [UUID(chunk['id'])])
+        row = rows[0] if rows else None
         now = self.now()
-        for chunk, obj in sources:
-            row = rows.get(chunk['id'])
-            if (row is None or row['status'] != 'committed' or row['deleted_at'] or row['access_revoked_at']
-                    or datetime.fromisoformat(chunk['expires_at']) <= now
-                    or row['expires_at'] <= now or row['hard_expire_at'] <= now
-                    or stored(dict(row, byte_length=row['size_bytes'])) != obj):
-                raise AuthRejected('SOURCE_UNAVAILABLE', 409)
+        if (row is None or row['status'] != 'committed' or row['deleted_at'] or row['access_revoked_at']
+                or datetime.fromisoformat(chunk['expires_at']) <= now
+                or row['expires_at'] <= now or row['hard_expire_at'] <= now
+                or stored(dict(row, byte_length=row['size_bytes'])) != obj):
+            raise AuthRejected('SOURCE_UNAVAILABLE', 409)
 
     def publication(self, plan):
         self.classroom(plan['class_session_id'])

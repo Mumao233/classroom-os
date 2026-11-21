@@ -395,14 +395,18 @@ def test_frozen_all_plan_detects_new_epoch_and_keeps_original_chunks(filetrans):
 def test_delete_does_not_wait_for_private_object_read(filetrans, monkeypatch):
     m = filetrans
     lease, _ = source(m)
-    seal(m, lease)
+    other = prepare(m, lease, seq=1)
+    assert put(m, other).status_code == 200
+    seal(m, lease, sample=32000, seq=1)
     admitted = execute(m, plan(m).json())
     assert admitted.status_code == 202, admitted.text
     w = worker(m)
     started, release = Event(), Event()
     read = m.capture.store.read
+    reads = []
 
     def slow_read(*args):
+        reads.append(args[0].key)
         started.set()
         assert release.wait(10), 'private read was not released'
         return read(*args)
@@ -420,6 +424,7 @@ def test_delete_does_not_wait_for_private_object_read(filetrans, monkeypatch):
         finally:
             release.set()
         assert result.result(timeout=10)
+    assert len(reads) == 1
     assert accounting(m, admitted.json()['id'])['state'] == 'released'
     assert versions_for(m) == []
 
