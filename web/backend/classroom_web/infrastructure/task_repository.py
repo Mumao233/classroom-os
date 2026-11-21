@@ -133,7 +133,7 @@ class PgTaskRepository:
                 schema_version='1', plan_id=None):
         if kind not in KINDS or type(priority) is not int or not -100 <= priority <= 100:
             raise ValueError('invalid task kind or priority')
-        if schema_version not in ('1', 'pr07a-1', 'pr07b-1', 'pr07b-batch-1', 'pr08c-1'):
+        if schema_version not in ('1', 'pr07a-1', 'pr07b-1', 'pr07b-batch-1', 'pr08c-1', 'pr06b-1'):
             raise ValueError('unsupported task schema version')
         if schema_version == 'pr07a-1' and (kind != 'ai_question' or plan_id is None or class_session_id is None):
             raise ValueError('question tasks require their generation plan')
@@ -143,6 +143,8 @@ class PgTaskRepository:
             raise ValueError('review tasks require their generation plan')
         if schema_version == 'pr08c-1' and (kind not in ('import', 'export') or plan_id or class_session_id):
             raise ValueError('portable jobs use their own owner-scoped binding')
+        if schema_version == 'pr06b-1' and (kind != 'asr_live' or plan_id or not class_session_id):
+            raise ValueError('realtime ASR requires a classroom and no generation plan')
         reference = input_reference(input_ref)
         request = {'kind': kind, 'input_ref': reference,
             'class_session_id': str(class_session_id) if class_session_id else None,
@@ -373,6 +375,17 @@ class PgTaskRepository:
         if not old:
             self.receipts.store_task('reconcileTask', op_id, digest, task, response_status=200)
         return task
+
+    def fail_asr_attempt(self, task_id, attempt_id, lease_token, worker):
+        task = self._fenced(task_id, lease_token, worker)
+        attempt = self._attempt(task_id, lock=True)
+        if task.schema_version != 'pr06b-1' or attempt is None or attempt.id != attempt_id or attempt.submitted_at is None:
+            raise UnsafeRetry('known failure requires the original submitted ASR attempt')
+        self.connection.execute(tables['task_attempts'].update().where(
+            tables['task_attempts'].c.id == attempt_id, tables['task_attempts'].c.owner_id == self.owner_id
+        ).values(state='failed', provider_outcome='failed', error_code='PROVIDER_FAILED', finished_at=sa.func.clock_timestamp()))
+        return self._write(task, state='failed', error_code='PROVIDER_FAILED', completed_at=sa.func.clock_timestamp(),
+            leased_by=None, lease_expires_at=None, lease_token=task.lease_token + 1, may_have_charged=True)
 
     def mark_unknown(self, task_id, attempt_id, lease_token, worker):
         task = self._fenced(task_id, lease_token, worker)

@@ -68,10 +68,14 @@ def failure(error,request_id):
         headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'})
 
 
-def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admission=None,cache=None,media=None,media_spool_directory=None,billing=None,billing_admin=None,qa=None,review=None,deletion=None,capture=None,sync=None,portable=None,portable_transfers=None,portable_jobs=None):
+def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admission=None,cache=None,media=None,media_spool_directory=None,billing=None,billing_admin=None,qa=None,review=None,deletion=None,capture=None,sync=None,portable=None,portable_transfers=None,portable_jobs=None,asr=None,asr_worker=None):
     parsed=urlsplit(origin)
     if parsed.scheme!='https' or not parsed.netloc or parsed.path or parsed.query or parsed.fragment or parsed.username:raise ValueError('one exact HTTPS origin is required')
     if contract.get('info',{}).get('version') not in ('0.2.0','0.2.1'):raise ValueError('approved contract 0.2.0 or 0.2.1 required')
+    if asr is not None and (asr.capture is not capture or asr.auth is not auth):
+        raise ValueError('ASR requires the same capture and auth services')
+    if asr_worker is not None and (asr is None or asr_worker.service is not asr or not asr.enabled):
+        raise ValueError('ASR worker requires the explicitly enabled synthetic service')
     if billing_admin is not None and not contract.get('x-pr11a-candidate'):
         raise ValueError('billing administration requires its explicit contract candidate')
     if qa is not None and contract.get('x-pr07a-candidate') != 'pr07a-1':
@@ -114,9 +118,18 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
         auth.admin_reauth=billing_admin
     workers=ThreadPoolExecutor(max_workers=64,thread_name_prefix='auth-ingress');slots=threading.BoundedSemaphore(64)
     @asynccontextmanager
-    async def lifespan(_):
-        try:yield
-        finally:workers.shutdown(wait=True,cancel_futures=False)
+    async def lifespan(app):
+        stop_asr=asyncio.Event()
+        control=asyncio.create_task(asr_worker.serve(stop_asr,app.state.errors)) if asr_worker is not None else None
+        try:
+            yield
+        finally:
+            try:
+                if control is not None:
+                    stop_asr.set()
+                    await control
+            finally:
+                workers.shutdown(wait=True,cancel_futures=False)
     app=FastAPI(docs_url=None,redoc_url=None,openapi_url=None,lifespan=lifespan);app.state.auth=auth;app.state.errors=deque(maxlen=32)
     def validator(schema):
         root=dict(schema);root['components']=contract['components']
@@ -162,7 +175,22 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
     if deletion is not None:
         from ..application.deletion import ROUTES as deletion_routes
 
+    asr_paths = {
+        '/class-sessions/{class_session_id}/asr-streams', '/asr-streams/{stream_id}',
+        '/asr-streams/{stream_id}/finish', '/class-sessions/{class_session_id}/transcript-versions',
+        '/transcript-versions/{version_id}/segments', '/tasks/{task_id}/retry',
+        '/tasks/{task_id}', '/tasks/{task_id}/cancel',
+    } if asr is not None else set()
+
     def dispatch(path,ctx,body,key,params,method,operation_id):
+        if path in asr_paths:
+            try:
+                return asr.dispatch(operation_id,ctx,body,key,params)
+            except AuthRejected as error:
+                shared = operation_id in ('getTask', 'cancelTask') and (
+                    path in portable_paths or path in qa_paths or (operation_id == 'cancelTask' and billing is not None))
+                if error.code != 'NOT_FOUND' or not shared:
+                    raise
         if path in portable_paths:
             try:
                 return portable_jobs.dispatch(operation_id,ctx,body,key,params)
@@ -237,6 +265,7 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
     selected.update(review_paths)
     selected.update(sync_paths)
     selected.update(portable_paths)
+    selected.update(asr_paths)
     if portable is not None:selected.add('/imports/preview')
     if billing is not None:selected.update(('/me/quota','/tasks/{task_id}/cancel'))
     if billing_admin is not None:selected.update(('/admin/switches','/admin/usage','/admin/quota-adjustments','/admin/users/{user_id}/quota'))
@@ -254,7 +283,7 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
             entered=time.monotonic();deadline=entered+(120 if path == '/imports/preview' and portable_jobs is not None else 5);deadline_token=DEADLINE.set(deadline);dispatched=False
             try:
                 secure(request,write=method!='get');ctx=request_context(request);key=None;body={};params=dict(request.path_params)
-                if (path in review_paths or path in sync_paths) and method == 'get':
+                if (path in review_paths or path in sync_paths or path in asr_paths) and method == 'get':
                     query_schemas = {item['name']: item['schema'] for item in operation.get('parameters', [])
                                      if item.get('in') == 'query'}
                     pairs = list(request.query_params.multi_items())
@@ -420,14 +449,50 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
             await run_in_threadpool(auth.ws_authenticate,ctx,frame['ticket'],'events',first_deadline)
             if asyncio.get_running_loop().time()>=entered+auth.policy.ws_first_frame:raise AuthRejected()
             authenticated()
-            # No event body is accepted/published by this identity package.
-            # A consumer must supply the owner-scoped event adapter explicitly.
+            event_cursor, partial_cursor = (None, 0)
+            connection_sequence = 0
+            replay_pending = False
+            if asr is not None and asr.enabled:
+                event_cursor, partial_cursor = await run_in_threadpool(asr.events.watermark, ctx)
             while True:
                 try:
-                    message=await asyncio.wait_for(ws.receive_text(),timeout=1)
+                    message=await asyncio.wait_for(ws.receive_text(),timeout=0.25 if event_cursor is not None else 1)
                     if len(message.encode('utf8'))>4096:raise AuthRejected()
-                except asyncio.TimeoutError:pass
+                    if event_cursor is not None:
+                        frame=strict_json(message.encode('utf8'))
+                        if (not isinstance(frame,dict) or set(frame)!={'type','cursor'}
+                                or frame['type']!='resume.after' or not isinstance(frame['cursor'],str)
+                                or not 1 <= len(frame['cursor']) <= 512):
+                            raise AuthRejected()
+                        event_cursor=frame['cursor']
+                        replay_pending=True
+                except asyncio.TimeoutError:
+                    pass
                 await run_in_threadpool(auth.ws_current,ctx)
+                if event_cursor is not None:
+                    from ..domain.tasks import ResyncRequired
+                    try:
+                        event_cursor,partial_cursor,durable,partial,caught_up=await run_in_threadpool(
+                            asr.events.poll,ctx,event_cursor,partial_cursor)
+                    except ResyncRequired:
+                        connection_sequence+=1
+                        await ws.send_json({'protocol_version':1,'type':'resync.required',
+                            'sent_at':datetime.now(timezone.utc).isoformat(),'connection_seq':connection_sequence,
+                            'data':{'reason':'cursor_expired','snapshot_path':'/api/web/v1/sync/bootstrap'}})
+                        event_cursor,partial_cursor=await run_in_threadpool(asr.events.watermark,ctx)
+                        replay_pending=False
+                        continue
+                    for message in durable:
+                        await ws.send_json(message)
+                    for message in partial:
+                        connection_sequence+=1
+                        await ws.send_json({**message,'connection_seq':connection_sequence})
+                    if replay_pending and caught_up:
+                        replay_pending=False
+                        connection_sequence+=1
+                        await ws.send_json({'protocol_version':1,'type':'replay.complete',
+                            'sent_at':datetime.now(timezone.utc).isoformat(),'connection_seq':connection_sequence,
+                            'data':{'cursor':event_cursor}})
         except WebSocketDisconnect:pass
         except Exception as error:
             app.state.errors.append({'kind':type(error).__name__,'stage':'websocket','code':error.code if isinstance(error,AuthRejected) else None})

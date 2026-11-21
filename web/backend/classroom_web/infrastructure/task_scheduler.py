@@ -31,7 +31,7 @@ class PgTaskScheduler:
             raise ValueError('lease seconds must be 1..3600')
         if type(batch_size) is not int or not 1 <= batch_size <= 100:
             raise ValueError('batch size must be 1..100')
-        if schema_version not in ('1', 'pr07a-1', 'pr07b-1', 'pr07b-batch-1', 'pr08c-1'):
+        if schema_version not in ('1', 'pr07a-1', 'pr07b-1', 'pr07b-batch-1', 'pr08c-1', 'pr06b-1'):
             raise ValueError('unsupported task schema version')
         with self.engine.begin() as connection:
             self._check_identity(connection)

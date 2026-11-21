@@ -9,7 +9,7 @@ from uuid import uuid4
 import sqlalchemy as sa
 
 from ..domain.auth import AuthRejected
-from ..domain.capture import CaptureLeaseConflict, DurableCaptureChunk, MAX_CHUNK_BYTES, missing_ranges, sequence_ranges, validate_chunk
+from ..domain.capture import CaptureLeaseConflict, MAX_CHUNK_BYTES, missing_ranges, sequence_ranges, validate_chunk
 from ..domain.data import Gone, NotFound
 from ..domain.identity import AuthorizationDenied
 from ..domain.media import ObjectUnavailable
@@ -25,14 +25,14 @@ def lease_dto(lease, epoch, policy):
         timeline_offset_ms=epoch['timeline_offset_ms'], sample_rate=16000, channel_count=1, encoding='pcm_s16le')
 
 
-def chunk_dto(chunk, asset):
+def chunk_dto(chunk, asset, asr_submission='not_submitted'):
     durable = asset['status'] == 'committed'
     return dict(id=str(chunk['id']), descriptor=dict(class_session_id=str(chunk['class_session_id']),
         capture_epoch_id=str(chunk['capture_epoch_id']), seq=chunk['seq'], start_sample=chunk['start_sample'],
         end_sample=chunk['end_sample'], byte_length=asset['size_bytes'], sha256=chunk['sha256'],
         encoding='pcm_s16le', sample_rate=16000, channels=1), state='durable' if durable else 'pending',
         durable_at=asset['confirmed_at'].isoformat() if durable else None,
-        asr_submission='not_submitted', receipt_id=str(chunk['receipt_id']))
+        asr_submission=asr_submission, receipt_id=str(chunk['receipt_id']))
 
 
 class CaptureService:
@@ -231,7 +231,8 @@ class CaptureService:
         return dict(class_session_id=str(epoch['class_session_id']), capture_epoch_id=str(epoch['id']),
             sealed=epoch['manifest_sha256'] is not None, expected_last_seq=last,
             durable_ranges=sequence_ranges(rows), missing_ranges=missing_ranges(rows, last if last is not None else known),
-            unknown_provider_ranges=[], audio_expires_at=epoch['hard_expire_at'].isoformat())
+            unknown_provider_ranges=sequence_ranges(repo.unknown_asr_sequences(epoch['id'])),
+            audio_expires_at=epoch['hard_expire_at'].isoformat())
 
     def manifest(self, context, classroom, epoch_id):
         with self.transaction(context, classroom, write=False) as (repo, _, policy):
@@ -323,7 +324,7 @@ class CaptureService:
                 if receipt is None:
                     repo.remember('prepareAudioChunk', identifier(key), digest, 'media_asset', chunk['asset_id'],
                                   {'chunk_id':str(existing)}, 201)
-                return chunk_dto(repo.chunk(existing), repo.asset(chunk['asset_id']))
+                return chunk_dto(repo.chunk(existing), repo.asset(chunk['asset_id']), repo.asr_submission(existing))
             if receipt:
                 raise AuthRejected('RESULT_UNKNOWN', 503)
             conflict = repo.execute("""SELECT EXISTS(SELECT FROM audio_chunks WHERE owner_id=:owner AND capture_epoch_id=:epoch
@@ -402,7 +403,7 @@ class CaptureService:
                 repo.event('audio.chunk_durable', epoch, data, identifier(classroom))
             if receipt is None:
                 repo.remember('putAudioChunk', identifier(key), digest, 'media_asset', asset['id'], {'chunk_id':chunk_id}, 200)
-            return chunk_dto(chunk, repo.asset(asset['id'], available=True))
+            return chunk_dto(chunk, repo.asset(asset['id'], available=True), repo.asr_submission(chunk['id']))
 
     def durable_source(self, context, chunk_id):
         classroom = self.locate(context, chunk_id)
@@ -411,10 +412,8 @@ class CaptureService:
             epoch = repo.epoch(epoch_id, identifier(classroom))
             repo.consents(epoch, policy)
             chunk = repo.chunk(identifier(chunk_id))
-            repo.asset(chunk['asset_id'], available=True)
-            return DurableCaptureChunk(chunk_id, classroom, str(epoch_id), chunk['seq'], chunk['start_sample'],
-                chunk['end_sample'], chunk['sha256'], str(chunk['asset_id']),
-                'recovery' if chunk['recovery_grant_id'] else chunk['ingest_mode'], str(chunk['receipt_id']))
+            source, _ = repo.asr_source(chunk, epoch)
+            return source
 
     def ws_scope(self, context, scope):
         with self.transaction(context, scope['class_session_id'], write=False) as (repo,principal,policy):
