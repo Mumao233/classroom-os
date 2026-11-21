@@ -65,7 +65,7 @@ def main():
         junit = args.output / 'pytest.xml'
         tests = ['tests/integration/test_filetrans.py', 'tests/integration/test_trusted_device_guard.py']
         evidence['test_exit'] = call('pytest', [sys.executable, '-B','-c', GUARDED_PYTEST,args.guard,
-            *tests,'-x','-q','-p','no:cacheprovider','--basetemp='+str(work/'pytest'),'--junitxml='+str(junit)],
+            *tests,'-q','-p','no:cacheprovider','--basetemp='+str(work/'pytest'),'--junitxml='+str(junit)],
             cwd=ROOT/'web/backend', timeout=900)
         cases = list(ET.parse(junit).iter('testcase'))
         evidence['cases'] = len(cases)

@@ -1,4 +1,5 @@
 """One fenced, independently metered synthetic file job per claimed task."""
+from datetime import datetime
 from hashlib import sha256
 from time import monotonic
 
@@ -38,7 +39,19 @@ class FiletransWorker:
                 repo, plan = self._input(tx, claim.id)
                 sources = repo.verify(plan)
                 tx.billing._switches(KIND)
-                return tuple(self._part(chunk, obj) for chunk, obj in sources)
+            parts = []
+            for start in range(0, len(sources), 16):
+                batch = sources[start:start+16]
+                self.service.require_ready(new=True)
+                with self.service.database.transaction(owner) as tx:
+                    repo = PgFiletransRepository(tx)
+                    run = repo.run(claim.id)
+                    repo.check_session(run)
+                    repo.recheck_batch(run['class_session_id'], batch)
+                # Private reads never hold a classroom, capture or billing
+                # lock. The final send-intent transaction rechecks every part.
+                parts.extend(self._part(chunk, obj) for chunk, obj in batch)
+            return tuple(parts)
         finally:
             DEADLINE.reset(token)
 
@@ -76,7 +89,9 @@ class FiletransWorker:
             tx.billing._lock_existing(reservation['id'])
             attempt = tx.tasks.prepare_attempt(task.id, claim.lease_token, self.worker_id)
             self.service.lifecycle.before_submit(tx, task, attempt, claim, self.worker_id)
-            return attempt
+            expiry = min(reservation['expires_at'], claim.lease_expires_at,
+                min(datetime.fromisoformat(part.chunk['expires_at']) for part in parts))
+            return attempt, monotonic() + (expiry - repo.now()).total_seconds()
 
     def _fail_unsent(self, owner, claim):
         with self.service.database.transaction(owner) as tx:
@@ -135,15 +150,18 @@ class FiletransWorker:
         try:
             try:
                 parts = self._parts(owner, claim)
-                attempt = self._authorize(owner, claim, parts)
+                attempt, send_deadline = self._authorize(owner, claim, parts)
             except (AuthRejected, ObjectUnavailable, BillingBlocked):
                 self._fail_unsent(owner, claim)
                 return True
             try:
+                self.service.require_ready(new=True)
+                if monotonic() >= send_deadline:
+                    raise TimeoutError('committed Filetrans intent expired before handoff')
                 reply = self.provider.submit(attempt.id, parts)
                 if not isinstance(reply, FileReply):
                     raise ValueError('invalid Filetrans reply')
-            except (ConnectionError, TimeoutError, ValueError):
+            except (AuthRejected, ConnectionError, TimeoutError, ValueError):
                 self._unknown(owner, claim, attempt)
                 return True
             try:

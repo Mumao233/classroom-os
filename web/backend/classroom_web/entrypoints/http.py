@@ -301,7 +301,7 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
             entered=time.monotonic();deadline=entered+(120 if path == '/imports/preview' and portable_jobs is not None else 5);deadline_token=DEADLINE.set(deadline);dispatched=False
             try:
                 secure(request,write=method!='get');ctx=request_context(request);key=None;body={};params=dict(request.path_params)
-                if (path in review_paths or path in sync_paths or path in asr_paths) and method == 'get':
+                if (path in review_paths or path in sync_paths or path in asr_paths or path in filetrans_paths) and method == 'get':
                     query_schemas = {item['name']: item['schema'] for item in operation.get('parameters', [])
                                      if item.get('in') == 'query'}
                     pairs = list(request.query_params.multi_items())

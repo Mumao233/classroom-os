@@ -1,5 +1,5 @@
 """Freeze and reauthorize server-owned capture slices for offline Filetrans."""
-from datetime import timedelta
+from datetime import datetime, timedelta
 from uuid import UUID
 
 from ..application.media import stored
@@ -82,10 +82,10 @@ class PgFiletransSources(PgCaptureRepository):
             return None
         if (row['kind'] != 'audio_chunk' or row['sha256'] != row['chunk_sha256']
                 or row['size_bytes'] != 2 * (row['end_sample'] - row['start_sample'])
-                or row['confirmed_at'] is None):
+                or not row['start_sample'] <= first < last <= row['end_sample']):
             raise AuthRejected('SOURCE_UNAVAILABLE', 409)
         expiry = min(value for value in (row['expires_at'], row['hard_expire_at'],
-            epoch['hard_expire_at'], row['confirmed_at'] + timedelta(days=7)) if value is not None)
+            epoch['hard_expire_at'], row['first_cloud_received_at'] + timedelta(days=7)) if value is not None)
         if expiry <= now:
             raise FiletransRejected('GONE', 410, 'Cloud audio in the selection has expired.')
         if row['recovery_grant_id'] is not None or row['ingest_mode'] == 'recovery':
@@ -168,7 +168,8 @@ class PgFiletransSources(PgCaptureRepository):
         checked = set()
         for frozen in records:
             row, epoch = rows.get(frozen['id']), epochs.get(frozen['epoch'])
-            if row is None or epoch is None or epoch['id'] != row['capture_epoch_id']:
+            if (row is None or epoch is None or epoch['id'] != row['capture_epoch_id']
+                    or epoch['status'] not in ('ended', 'retired') or epoch['manifest_sha256'] is None):
                 raise AuthRejected('SOURCE_UNAVAILABLE', 409)
             if epoch['id'] not in checked:
                 self.consents(epoch, policy)
@@ -176,6 +177,19 @@ class PgFiletransSources(PgCaptureRepository):
             if self.record(row, epoch, frozen['first'], frozen['last'], now) != frozen:
                 raise FiletransRejected('SOURCE_CHANGED', 409, 'The frozen cloud audio is no longer available unchanged.')
         return [(row, stored(dict(rows[row['id']], byte_length=row['byte_length']))) for row in records]
+
+    def recheck_batch(self, class_id, sources):
+        self.classroom(class_id)
+        ids = [UUID(chunk['id']) for chunk, _ in sources]
+        rows = {str(row['chunk_id']): row for row in self.rows(class_id, ids)}
+        now = self.now()
+        for chunk, obj in sources:
+            row = rows.get(chunk['id'])
+            if (row is None or row['status'] != 'committed' or row['deleted_at'] or row['access_revoked_at']
+                    or datetime.fromisoformat(chunk['expires_at']) <= now
+                    or row['expires_at'] <= now or row['hard_expire_at'] <= now
+                    or stored(dict(row, byte_length=row['size_bytes'])) != obj):
+                raise AuthRejected('SOURCE_UNAVAILABLE', 409)
 
     def publication(self, plan):
         self.classroom(plan['class_session_id'])

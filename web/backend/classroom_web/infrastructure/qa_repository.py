@@ -335,12 +335,20 @@ class PgQaRepository:
                     scope_complete=selection.scope_complete, missing_reasons=list(selection.reasons),
                     created_at=_stamp(row['created_at']), items=items)
 
+    def selection_changed(self, snapshot_id, class_id):
+        classroom = self._class(class_id)
+        return self._rows('''SELECT EXISTS(SELECT FROM source_items i JOIN qa_sources s
+            ON (s.owner_id,s.id)=(i.owner_id,i.source_id)
+            WHERE i.owner_id=:owner AND i.snapshot_id=:snapshot
+              AND (i.revision_id<>s.current_revision_id OR NOT
+                   classroom_web_current_transcript(s.owner_id,s.class_session_id,s.origin,s.id,:adopted))) AS changed''',
+            snapshot=snapshot_id, adopted=classroom.adopted_transcript_version_id).one()['changed']
+
     def plan(self, plan_id):
         row = self._plan_row(plan_id)
         snapshot = self.snapshot(row['snapshot_id'])
         config = row['config']
-        changed = any(self._one('qa_sources', UUID(item['source_id']))['current_revision_id'] != UUID(item['revision_id'])
-                      for item in snapshot['items'])
+        changed = self.selection_changed(row['snapshot_id'], row['class_session_id'])
         return dict(id=str(plan_id), class_session_id=str(row['class_session_id']), kind=row['kind'],
             plan_sha256=row['plan_hash'], source_snapshot=snapshot, audio_manifest_sha256=None,
             audio_chunk_ids=[], destination=config['destination'], prompt_version=self.schema_version,

@@ -172,6 +172,8 @@ class PgBillingRepository:
         if maximum > request.task_max_microyuan:
             raise BillingBlocked('task maximum is below the conservative price bound')
         quotas = self._quota_rows(request, now, budget['stage'])
+        if request.schema_version == 'pr06c-1':
+            end = min(end, period(now, 'day')[1])
         if request.quota_root_id is not None:
             root = self._get(request.quota_root_id, lock=True)
             root_task = self.tx.tasks.get(root['task_id'])

@@ -145,6 +145,36 @@ BEGIN
 END
 $approval$;
 REVOKE ALL ON FUNCTION public.classroom_web_approve_filetrans(uuid,uuid,uuid,uuid,uuid,uuid,text,timestamptz) FROM PUBLIC;
+DO $billing_role$
+BEGIN
+    IF EXISTS (SELECT FROM pg_roles WHERE rolname='classroom_billing_operator') THEN
+        GRANT EXECUTE ON FUNCTION public.classroom_web_approve_filetrans(uuid,uuid,uuid,uuid,uuid,uuid,text,timestamptz)
+            TO classroom_billing_operator;
+    END IF;
+END
+$billing_role$;
+CREATE FUNCTION public.classroom_web_guard_filetrans_run() RETURNS trigger
+LANGUAGE plpgsql SET search_path=public,pg_temp AS $run$
+BEGIN
+    IF NOT EXISTS(SELECT FROM public.tasks t WHERE (t.owner_id,t.class_session_id,t.id,t.plan_id,t.schema_version)=
+                  (NEW.owner_id,NEW.class_session_id,NEW.task_id,NEW.plan_id,'pr06c-1')
+                  AND t.parent_task_id IS NOT DISTINCT FROM NEW.original_task_id)
+       OR (NEW.approval_id IS NOT NULL AND NOT EXISTS(SELECT FROM public.filetrans_approvals a
+                  WHERE a.owner_id=NEW.owner_id AND a.id=NEW.approval_id AND a.expires_at>clock_timestamp()
+                    AND a.original_task_id IS NOT DISTINCT FROM NEW.original_task_id))
+       OR (NEW.original_task_id IS NOT NULL AND NOT EXISTS(SELECT FROM public.filetrans_runs r
+                  JOIN public.tasks t ON (t.owner_id,t.id)=(r.owner_id,r.task_id)
+                  JOIN public.task_attempts a ON (a.owner_id,a.task_id)=(t.owner_id,t.id)
+                  WHERE r.owner_id=NEW.owner_id AND r.task_id=NEW.original_task_id AND r.plan_id=NEW.plan_id
+                    AND t.state='unknown' AND a.id=NEW.original_attempt_id AND a.provider_outcome='unknown')) THEN
+        RAISE EXCEPTION 'Filetrans operation lineage unavailable' USING ERRCODE='23514';
+    END IF;
+    RETURN NEW;
+END
+$run$;
+REVOKE ALL ON FUNCTION public.classroom_web_guard_filetrans_run() FROM PUBLIC;
+CREATE TRIGGER filetrans_run_lineage BEFORE INSERT ON public.filetrans_runs
+FOR EACH ROW EXECUTE FUNCTION public.classroom_web_guard_filetrans_run();
 
 ALTER TABLE public.class_sessions DROP CONSTRAINT ck_class_sessions_transcript_not_implemented;
 CREATE FUNCTION public.classroom_web_guard_transcript_pointer() RETURNS trigger

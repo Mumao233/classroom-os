@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from classroom_web.application.filetrans import FiletransService
 from classroom_web.application.filetrans_worker import FiletransWorker
 from classroom_web.domain.filetrans import DESTINATION, SCHEMA, SyntheticFiletrans
+from classroom_web.domain.qa import QaRejected
 from classroom_web.entrypoints.http import create_app
 from classroom_web.infrastructure.qa_repository import PgQaRepository
 from deletion_support import auth, pg, services, deploy, d, contract
@@ -162,7 +163,7 @@ def test_range_uses_durable_pcm_and_explicit_cas_adoption(filetrans, monkeypatch
     principal = m.a.service.principal(m.ctx)
     qa_config = dict(enabled=True, billing_required=False, price_id=None, price_version='test',
         maximum_cost_microyuan=0, input_token_budget=1024, max_output_tokens=128,
-        destination=dict(provider='synthetic', model='test', region='lab', configuration_revision='1'))
+        destination=dict(provider='fake', model='test', region='lab', configuration_revision='1'))
     question = dict(kind='ai_question', scope='all', question='合成问题', include_images=False,
                     accept_partial_scope=True, seen_sources=[])
     def question_plan():
@@ -179,8 +180,15 @@ def test_range_uses_durable_pcm_and_explicit_cas_adoption(filetrans, monkeypatch
     assert m.client.post(class_url+'/adopt-transcript', json=adoption, headers=headers(m)).status_code == 409
     assert m.client.get(class_url).json()['adopted_transcript_version_id'] == candidate
     assert {item['origin'] for item in question_plan()['source_snapshot']['items']} == {'retranscription'}
+    assert m.client.get(class_url, params={'revision': before['revision']}).status_code == 409
     with m.pg.db.authorized_transaction(principal) as tx:
-        assert PgQaRepository(tx).snapshot(UUID(old_qa['source_snapshot']['id'])) == old_qa['source_snapshot']
+        repo = PgQaRepository(tx)
+        assert repo.plan(UUID(old_qa['id']))['source_status'] == 'changed'
+        with pytest.raises(QaRejected, match='CONFIRMATION_REQUIRED'):
+            repo.execute(UUID(old_qa['id']), dict(plan_sha256=old_qa['plan_sha256'],
+                confirmed_destination_revision='1', confirm_send=True, confirm_images=False,
+                confirm_partial_scope=True, confirm_original_snapshot=False), uuid4(), qa_config)
+        assert repo.snapshot(UUID(old_qa['source_snapshot']['id'])) == old_qa['source_snapshot']
         changed = tx.connection.scalar(sa.text("""SELECT count(*) FROM outbox_events WHERE owner_id=:owner
             AND aggregate_id=:classroom AND aggregate_revision=:revision AND event_type='object.changed'"""),
             dict(owner=m.uid, classroom=m.classroom.id, revision=before['revision']+1))
@@ -352,7 +360,7 @@ def test_unready_deletion_gate_and_classroom_deletion_prevent_dispatch(filetrans
     monkeypatch.setattr(m.capture.store, 'read', forbidden)
     monkeypatch.setattr(w.provider, 'submit', forbidden)
     with monkeypatch.context() as guard:
-        guard.setattr(type(m.deletion), 'ready', property(lambda self: False))
+        guard.setattr(m.deletion, 'ready', False)
         assert not w.run_once()
     assert delete(m, 'class_session', m.classroom.id)
     w.run_once()

@@ -1,5 +1,5 @@
 """Plan, admission and candidates in the same authenticated PostgreSQL UoW."""
-from datetime import timedelta
+from datetime import datetime, timedelta
 from uuid import UUID, uuid4
 
 from ..domain.auth import AuthRejected
@@ -57,12 +57,18 @@ class PgFiletransRepository(PgFiletransSources):
             if error.code in ('GONE', 'SOURCE_UNAVAILABLE', 'SOURCE_CHANGED', 'CONSENT_REQUIRED', 'SERVICE_DISABLED'):
                 return 'unavailable'
             raise
-        # A complete selection cannot gain previously missing durable chunks.
-        if not row['audio_manifest']['complete']:
+        return 'changed' if self.source_changed(row) else 'unchanged'
+
+    def source_changed(self, row):
+        try:
             current = self.freeze(row['class_session_id'], row['request'])
-            if _hash(current) != row['audio_manifest_sha256']:
-                return 'changed'
-        return 'unchanged'
+        except AuthRejected as error:
+            # The original listed chunks have passed verify(). Newly available
+            # or newly inaccessible material can change the current selection.
+            if error.code in ('GONE', 'SOURCE_UNAVAILABLE', 'CONSENT_REQUIRED', 'CAPACITY_EXCEEDED'):
+                return True
+            raise
+        return _hash(current) != row['audio_manifest_sha256']
 
     def plan_view(self, row, *, check=True):
         manifest, config = row['audio_manifest'], row['config']
@@ -160,7 +166,7 @@ class PgFiletransRepository(PgFiletransSources):
                 raise AuthRejected('PLAN_EXPIRED', 409)
             if not row['audio_manifest']['complete'] and not body['confirm_partial_scope']:
                 raise FiletransRejected('VALIDATION_FAILED', 422, 'Confirm sending only the available portion of cloud audio.')
-            if self._sources_status(row) == 'changed' and not body['confirm_original_snapshot']:
+            if not body['confirm_original_snapshot'] and self.source_changed(row):
                 raise AuthRejected('SOURCE_CHANGED', 409)
             approval = self._approval(row)
             task = self._reserve(row, principal, price_id, approval, key=row['id'])
@@ -229,7 +235,6 @@ class PgFiletransRepository(PgFiletransSources):
 
 
 def min_epoch_expiry(parts):
-    from datetime import datetime
     return min(datetime.fromisoformat(part['expires_at']) for part in parts)
 
 
