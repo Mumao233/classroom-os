@@ -109,6 +109,13 @@ class PgFiletransSources(PgCaptureRepository):
         by_epoch = {}
         for row in rows:
             by_epoch.setdefault(row['capture_epoch_id'], []).append(row)
+        gaps = self.execute("""SELECT capture_epoch_id,start_sample,end_sample
+            FROM capture_gaps WHERE owner_id=:owner AND class_session_id=:classroom
+                AND kind IN ('known_missing','unknown','overlap')""",
+            classroom=class_id).mappings().all()
+        by_gap_epoch = {}
+        for gap in gaps:
+            by_gap_epoch.setdefault(gap['capture_epoch_id'], []).append(gap)
         now = self.now()
         records, windows = [], []
         complete = True
@@ -126,6 +133,10 @@ class PgFiletransSources(PgCaptureRepository):
                 complete = False
                 continue
             self.consents(epoch, policy)
+            for gap in by_gap_epoch.get(epoch['id'], []):
+                a, b = gap['start_sample'], gap['end_sample']
+                if (window is None or (a is not None and b is not None and a < last and first < b)):
+                    complete = False
             windows.append((first+offset, last+offset))
             frontier = first
             for row in sorted(by_epoch.get(epoch['id'], []), key=lambda row: row['start_sample']):

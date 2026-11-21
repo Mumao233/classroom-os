@@ -26,6 +26,11 @@ ALTER TABLE public.tasks ADD CONSTRAINT ck_tasks_schema_version
       (schema_version='pr06b-1' AND plan_id IS NULL AND class_session_id IS NOT NULL AND kind='asr_live') OR
       (schema_version='pr06c-1' AND plan_id IS NOT NULL AND class_session_id IS NOT NULL AND kind='asr_retranscribe'));
 ALTER TABLE public.tasks ADD CONSTRAINT filetrans_task_class_key UNIQUE(owner_id,class_session_id,id);
+-- An explicitly approved Filetrans retry uses the same immutable source plan.
+-- Preserve the one-task restriction for all existing task schemas and roots.
+ALTER TABLE public.tasks DROP CONSTRAINT uq_task_plan;
+CREATE UNIQUE INDEX uq_task_plan ON public.tasks(owner_id,plan_id)
+    WHERE schema_version<>'pr06c-1' OR parent_task_id IS NULL;
 CREATE OR REPLACE FUNCTION public.classroom_web_guard_qa_plan() RETURNS trigger
 LANGUAGE plpgsql SET search_path=public,pg_temp AS $fn$
 BEGIN

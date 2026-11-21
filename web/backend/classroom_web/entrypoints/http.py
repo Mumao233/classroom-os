@@ -82,8 +82,8 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
     if filetrans is not None and (capture is None or deletion is None or filetrans.capture is not capture
             or filetrans.auth is not auth or capture.deletion is not deletion):
         raise ValueError('Filetrans requires the shared capture, authentication and deletion gate')
-    if filetrans_worker is not None and (filetrans is None or filetrans_worker.service is not filetrans or not filetrans.enabled):
-        raise ValueError('Filetrans worker requires the explicitly enabled synthetic service')
+    if filetrans_worker is not None and (filetrans is None or filetrans_worker.service is not filetrans):
+        raise ValueError('Filetrans worker requires its explicit synthetic service')
     if billing_admin is not None and not contract.get('x-pr11a-candidate'):
         raise ValueError('billing administration requires its explicit contract candidate')
     if qa is not None and contract.get('x-pr07a-candidate') != 'pr07a-1':

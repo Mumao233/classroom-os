@@ -138,7 +138,7 @@ class FiletransWorker:
 
     def run_once(self):
         try:
-            self.service.require_ready(new=True)
+            self.service.require_ready()
         except AuthRejected:
             return False
         self.recover_expired()

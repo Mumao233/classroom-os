@@ -2,6 +2,7 @@
 import json
 from concurrent.futures import ThreadPoolExecutor
 from hashlib import sha256
+from threading import Event
 from uuid import UUID, uuid4
 
 import pytest
@@ -10,6 +11,8 @@ from fastapi.testclient import TestClient
 
 from classroom_web.application.filetrans import FiletransService
 from classroom_web.application.filetrans_worker import FiletransWorker
+from classroom_web.domain.billing import period
+from classroom_web.domain.data import OwnerContext
 from classroom_web.domain.filetrans import DESTINATION, SCHEMA, SyntheticFiletrans
 from classroom_web.domain.qa import QaRejected
 from classroom_web.entrypoints.http import create_app
@@ -108,7 +111,7 @@ def approval(m, prepared, original=None):
 
 def accounting(m, identity):
     with m.pg.admin.connect() as c:
-        return c.execute(sa.text("""SELECT r.state,r.pool,r.maximum_units,r.settled_microyuan,
+        return c.execute(sa.text("""SELECT r.state,r.pool,r.maximum_units,r.settled_microyuan,r.created_at,r.expires_at,
                 (SELECT count(*) FROM usage_receipts u WHERE u.reservation_id=r.id) AS receipts
             FROM quota_reservations r WHERE r.task_id=:id"""), {'id': UUID(identity)}).mappings().one()
 
@@ -149,7 +152,9 @@ def test_range_uses_durable_pcm_and_explicit_cas_adoption(filetrans, monkeypatch
     assert len(calls) == 1
     completed = task(m, identity)
     assert completed['state'] == 'succeeded' and completed['settled_cost_microyuan'] == '2'
-    assert accounting(m, identity)['pool'] == 'filetrans'
+    charge = accounting(m, identity)
+    assert charge['pool'] == 'filetrans'
+    assert charge['expires_at'] == min(period(charge['created_at'])[1], period(charge['created_at'], 'day')[1])
     candidate = completed['result_id']
     versions = {item['id']: item for item in versions_for(m)}
     assert set(versions) == {realtime['id'], candidate}
@@ -162,7 +167,7 @@ def test_range_uses_durable_pcm_and_explicit_cas_adoption(filetrans, monkeypatch
     before = m.client.get(class_url).json()
     principal = m.a.service.principal(m.ctx)
     qa_config = dict(enabled=True, billing_required=False, price_id=None, price_version='test',
-        maximum_cost_microyuan=0, input_token_budget=1024, max_output_tokens=128,
+        maximum_cost_microyuan=0, input_token_budget=8192, max_output_tokens=1024,
         destination=dict(provider='fake', model='test', region='lab', configuration_revision='1'))
     question = dict(kind='ai_question', scope='all', question='合成问题', include_images=False,
                     accept_partial_scope=True, seen_sources=[])
@@ -366,3 +371,78 @@ def test_unready_deletion_gate_and_classroom_deletion_prevent_dispatch(filetrans
     w.run_once()
     assert m.client.get(BASE + '/tasks/' + admitted.json()['id']).status_code in (404,410)
     assert m.client.get(BASE + f'/class-sessions/{m.classroom.id}/transcript-versions').status_code == 410
+
+
+def test_frozen_all_plan_detects_new_epoch_and_keeps_original_chunks(filetrans):
+    m = filetrans
+    first, chunk = source(m)
+    seal(m, first)
+    original = plan(m).json()
+    second, later = source(m)
+    seal(m, second)
+    revised = m.client.get(BASE + '/generation-plans/' + original['id']).json()
+    assert revised['source_status'] == 'changed' and revised['audio_chunk_ids'] == [chunk['id']]
+    assert later['id'] != chunk['id']
+    assert execute(m, original).status_code == 409
+    admitted = execute(m, original, confirm_original_snapshot=True)
+    assert admitted.status_code == 202, admitted.text
+    assert worker(m).run_once()
+    complete = task(m, admitted.json()['id'])
+    segment, = m.client.get(BASE + f'/transcript-versions/{complete["result_id"]}/segments').json()['items']
+    assert segment['source_chunk_ids'] == [chunk['id']]
+
+
+def test_delete_does_not_wait_for_private_object_read(filetrans, monkeypatch):
+    m = filetrans
+    lease, _ = source(m)
+    seal(m, lease)
+    admitted = execute(m, plan(m).json())
+    assert admitted.status_code == 202, admitted.text
+    w = worker(m)
+    started, release = Event(), Event()
+    read = m.capture.store.read
+
+    def slow_read(*args):
+        started.set()
+        assert release.wait(10), 'private read was not released'
+        return read(*args)
+
+    def no_file_job(*args):
+        pytest.fail('revoked audio was handed off')
+
+    monkeypatch.setattr(m.capture.store, 'read', slow_read)
+    monkeypatch.setattr(w.provider, 'submit', no_file_job)
+    with ThreadPoolExecutor(1) as pool:
+        result = pool.submit(w.run_once)
+        try:
+            assert started.wait(10)
+            assert delete(m, 'audio', m.classroom.id)
+        finally:
+            release.set()
+        assert result.result(timeout=10)
+    assert accounting(m, admitted.json()['id'])['state'] == 'released'
+    assert versions_for(m) == []
+
+
+def test_disabled_worker_recovers_committed_intent_without_submission(filetrans, monkeypatch):
+    m = filetrans
+    lease, _ = source(m)
+    seal(m, lease)
+    admitted = execute(m, plan(m).json())
+    assert admitted.status_code == 202, admitted.text
+    w = worker(m)
+    claim, = m.fees.scheduler.claim(w.worker_id, schema_version=SCHEMA)
+    owner = OwnerContext(m.uid)
+    attempt, _ = w._authorize(owner, claim, w._parts(owner, claim))
+    with m.pg.admin.begin() as c:
+        c.execute(sa.text("UPDATE tasks SET lease_expires_at=clock_timestamp()-interval '1 second' WHERE id=:id"),
+                  {'id': claim.id})
+    m.ftrans.enabled = False
+    def no_file_job(*args):
+        pytest.fail('rollback cannot resubmit the original attempt')
+    monkeypatch.setattr(w.provider, 'submit', no_file_job)
+    assert not w.run_once()
+    current = task(m, admitted.json()['id'])
+    assert current['state'] == 'unknown' and current['attempt_id'] == str(attempt.id)
+    assert accounting(m, current['id'])['state'] == 'unknown'
+    assert plan(m).status_code == 503
