@@ -3,7 +3,7 @@
   "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
   "info": {
     "title": "Classroom OS Web Alpha API",
-    "version": "0.2.1",
+    "version": "0.3.0",
     "description": "PR-03b S2 review candidate; not an implemented or approved service. API prefix remains /api/web/v1. S1 approves experimental inputs only; production parameters, implementation, real enrollment and deployment remain gated. Private and secret responses are no-store; business ownership, unknown-charge and existing idempotency/secret-replay semantics remain in force."
   },
   "servers": [
@@ -4517,7 +4517,7 @@
         "tags": [
           "class-sessions"
         ],
-        "description": "Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics.",
+        "description": "Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Exactly one capture_epoch_id UUID is required, including when only one epoch exists. Omitted, malformed, repeated or unknown query parameters return 422 VALIDATION_FAILED.",
         "responses": {
           "200": {
             "description": "Success",
@@ -4554,6 +4554,24 @@
                 }
               }
             }
+          },
+          "422": {
+            "description": "VALIDATION_FAILED. Supply exactly one valid capture_epoch_id.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            }
           }
         },
         "parameters": [
@@ -4569,7 +4587,7 @@
           {
             "name": "capture_epoch_id",
             "in": "query",
-            "required": false,
+            "required": true,
             "schema": {
               "type": "string",
               "format": "uuid"
@@ -6277,6 +6295,24 @@
                 }
               }
             }
+          },
+          "410": {
+            "description": "For asr_retranscribe, AUDIO_EXPIRED or AUDIO_DELETED for verified original-audio loss. GONE remains valid for a different resource. Check authorization before disclosing the cause.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            }
           }
         },
         "x-idempotency-scope": "authenticated owner + operationId + Idempotency-Key; auth public routes use preauth-session + operationId + key",
@@ -6397,6 +6433,42 @@
           },
           "default": {
             "description": "Typed failure; no private content in error messages.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "For asr_retranscribe, AUDIO_EXPIRED or AUDIO_DELETED for verified original-audio loss. GONE remains valid for a different resource. Check authorization before disclosing the cause.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "For asr_retranscribe admission, QUOTA_SESSION_EXCEEDED means another class operation needs approval. QUOTA_MONTH_EXCEEDED means insufficient monthly retranscription duration. Other conflicts and budget codes retain their existing meanings. Do not automatically resubmit.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6838,6 +6910,42 @@
           },
           "default": {
             "description": "Typed failure; no private content in error messages.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "For asr_retranscribe, AUDIO_EXPIRED or AUDIO_DELETED for verified original-audio loss. GONE remains valid for a different resource. Check authorization before disclosing the cause.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "For asr_retranscribe admission, QUOTA_SESSION_EXCEEDED means another class operation needs approval. QUOTA_MONTH_EXCEEDED means insufficient monthly retranscription duration. Other conflicts and budget codes retain their existing meanings. Do not automatically resubmit.",
             "content": {
               "application/json": {
                 "schema": {
@@ -9886,6 +9994,123 @@
           "cheap admission and local body budget before expensive verification"
         ]
       }
+    },
+    "/class-sessions/{class_session_id}/audio-manifests": {
+      "get": {
+        "operationId": "listAudioManifests",
+        "summary": "List audio manifests for a classroom",
+        "tags": [
+          "class-sessions"
+        ],
+        "description": "List every epoch of the authorized classroom, including recording, paused, retired and ended epochs, regardless of the requesting device or its lease. Order by immutable timeline_offset_ms, fence_token and epoch UUID ascending. Pagination fixes epoch membership at the first page, not the contents of a manifest. Each page rechecks access, consent, expiry and deletion as for getAudioManifest. If a requested page cannot disclose an epoch, fail the page without returning or silently skipping it. Empty classroom: items=[], next_cursor=null. A non-null cursor continues after the last emitted epoch. New epochs appear on a fresh traversal. Do not truncate ranges within a manifest.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AudioManifestPage"
+                }
+              }
+            },
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Typed failure; no private content in error messages.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "VALIDATION_FAILED. Unknown or repeated parameters, limit outside 1..100, malformed cursor, or cursor from another owner or classroom. Do not disclose the issuing scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "CURSOR_EXPIRED. Restart from the first page and replace the previous traversal.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            },
+            "headers": {
+              "Cache-Control": {
+                "schema": {
+                  "type": "string",
+                  "const": "no-store"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "class_session_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 512,
+              "minLength": 1
+            },
+            "description": "Opaque continuation bound to the owner, classroom and this ordered listing. Omit on the first request."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
+          }
+        ]
+      }
     }
   },
   "components": {
@@ -9995,8 +10220,13 @@
                   "MFA_REQUIRED",
                   "REAUTH_REQUIRED",
                   "INVITATION_UNAVAILABLE",
-                  "SECRET_ALREADY_ISSUED"
-                ]
+                  "SECRET_ALREADY_ISSUED",
+                  "AUDIO_EXPIRED",
+                  "AUDIO_DELETED",
+                  "QUOTA_SESSION_EXCEEDED",
+                  "QUOTA_MONTH_EXCEEDED"
+                ],
+                "description": "Clients branch on the code. The message is display text. Filetrans-specific codes apply only to a verified audio or quota cause in asr_retranscribe."
               },
               "message": {
                 "type": "string",
@@ -10091,7 +10321,7 @@
             "maxLength": 64
           },
           "contract_version": {
-            "const": "0.2.1"
+            "const": "0.3.0"
           },
           "server_time": {
             "type": "string",
@@ -17775,6 +18005,35 @@
         ],
         "additionalProperties": false,
         "description": "Non-secret completion fact only. Atomic factor replacement, old code-group invalidation, sole epoch increment and full derived-authorization revocation; no session, seed, codes or terminal-status capability. Clear recovery cookie. Full password plus new MFA login is required."
+      },
+      "AudioManifestPage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AudioManifest"
+            },
+            "maxItems": 100
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 512,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "additionalProperties": false
       }
     }
   },
