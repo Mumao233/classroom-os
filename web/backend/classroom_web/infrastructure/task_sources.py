@@ -14,7 +14,7 @@ class PgTaskSources:
     def __init__(self, connection, owner_id):
         self.connection, self.owner_id = connection, owner_id
 
-    def _rows(self, name, identities, *, lock=False):
+    def _rows(self, name, identities, *, lock=False, write=False):
         table = tables[name]
         fields = {
             'class_sessions': ('id', 'course_id', 'course_material_version_id', 'revision', 'deleted_at'),
@@ -24,14 +24,14 @@ class PgTaskSources:
         }[name]
         query = sa.select(*(table.c[field] for field in fields)).where(table.c.owner_id == self.owner_id,
             table.c.id.in_(identities)).order_by(table.c.id)
-        if lock:
-            query = query.with_for_update(read=True)
+        if lock or write:
+            query = query.with_for_update(read=not write)
         rows = self.connection.execute(query).mappings().all()
         if len(rows) != len(set(identities)):
             raise NotFound('task source not found')
         return {row['id']: row for row in rows}
 
-    def authorize(self, class_session_id, reference):
+    def authorize(self, class_session_id, reference, *, write=False):
         if class_session_id is None:
             if set(reference) - {'schema_version'}:
                 raise ValueError('source references require an explicit classroom')
@@ -54,7 +54,11 @@ class PgTaskSources:
         if any(row['semester_id'] != initial_courses[identity]['semester_id']
                for identity, row in courses.items()):
             raise RevisionConflict(max(row['revision'] for row in courses.values()))
-        locked_class = self._rows('class_sessions', [class_session_id], lock=True)[class_session_id]
+        if write:
+            locked = self._rows('class_sessions', [class_session_id], write=True)
+        else:
+            locked = self._rows('class_sessions', [class_session_id], lock=True)
+        locked_class = locked[class_session_id]
         if (locked_class['course_id'] != classroom['course_id']
                 or locked_class['course_material_version_id'] != material_id):
             raise RevisionConflict(locked_class['revision'])

@@ -68,7 +68,8 @@ class ExportSnapshot:
                 FROM qa_sources s JOIN qa_source_versions v
                   ON (s.owner_id,s.id,s.current_revision_id)=(v.owner_id,v.source_id,v.id)
                 WHERE s.owner_id=:owner AND s.class_session_id=:id AND s.kind='transcript_segment'
-                ORDER BY s.id LIMIT 513''', id=classroom_id).all()
+                AND classroom_web_current_transcript(s.owner_id,s.class_session_id,s.origin,s.id,:adopted)
+                ORDER BY s.id LIMIT 513''', id=classroom_id, adopted=clazz.adopted_transcript_version_id).all()
             images = life.rows('''SELECT id FROM media_assets
                 WHERE owner_id=:owner AND class_session_id=:id AND kind='slide' AND status='committed'
                 AND access_revoked_at IS NULL AND (expires_at IS NULL OR expires_at>clock_timestamp())

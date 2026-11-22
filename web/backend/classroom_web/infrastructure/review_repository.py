@@ -114,14 +114,14 @@ class PgReviewRepository:
         snapshot = self._rows('SELECT * FROM source_snapshots WHERE owner_id=:owner AND id=:id', id=snapshot_id).one_or_none()
         if snapshot is None:
             return 'unavailable'
-        changed = self._rows('''SELECT EXISTS(SELECT FROM source_items i JOIN qa_sources s
-            ON s.owner_id=i.owner_id AND s.id=i.source_id WHERE i.owner_id=:owner AND i.snapshot_id=:snapshot
-            AND i.revision_id<>s.current_revision_id) AS changed''', snapshot=snapshot_id).one()['changed']
-        if changed:
+        classroom = self.sources._class(row['class_session_id'])
+        if self.sources.selection_changed(snapshot_id, classroom.id):
             return 'changed'
         added = self._rows('''SELECT EXISTS(SELECT FROM qa_sources WHERE owner_id=:owner
-            AND class_session_id=:classroom AND NOT id=ANY(:sources)) AS added''',
-            classroom=row['class_session_id'], sources=snapshot['source_ids']).one()['added']
+            AND class_session_id=:classroom AND NOT id=ANY(:sources)
+            AND classroom_web_current_transcript(owner_id,class_session_id,origin,id,:adopted)) AS added''',
+            classroom=classroom.id, sources=snapshot['source_ids'],
+            adopted=classroom.adopted_transcript_version_id).one()['added']
         return 'new_material_not_included' if added else 'unchanged'
 
     def _document_dto(self, row):

@@ -213,61 +213,11 @@ class AsrService:
             return self.task_view(repo, reservation['task_id'])
 
     def transcripts(self, ctx, operation, params):
-        limit = params.get('limit', 100)
+        from .transcripts import read_transcripts
+
         principal = self.auth.principal(ctx)
         with self.database.authorized_transaction(principal) as tx:
-            repo = PgAsrRepository(tx, principal.user_id)
-            if operation == 'listTranscriptVersions':
-                target = identifier(params['class_session_id'])
-                tx.catalog._load(Resource.CLASS_SESSION, target, share=True)
-                after = self._pagination_cursor(tx, params.get('cursor'), target, 'version')
-                rows = repo.execute("""SELECT s.* FROM public.asr_streams s
-                    WHERE s.owner_id=:owner AND s.class_session_id=:target AND s.version_id>:after
-                    AND EXISTS(SELECT FROM public.asr_final_segments f WHERE (f.owner_id,f.stream_id)=(s.owner_id,s.id))
-                    ORDER BY s.version_id LIMIT :limit""", target=target, after=after, limit=limit+1).mappings().all()
-                items = [dict(id=str(row['version_id']), revision=1, created_at=row['created_at'].isoformat(),
-                    updated_at=row['updated_at'].isoformat(), class_session_id=str(target), kind='realtime',
-                    state='sealed' if row['state'] in ('failed','succeeded','unknown') else 'open',
-                    source_task_id=str(row['task_id']), adopted=False) for row in rows[:limit]]
-                last = rows[limit-1]['version_id'] if len(rows)>limit else None
-                key = 'version'
-            else:
-                target = identifier(params['version_id'])
-                stream = repo.execute("""SELECT * FROM public.asr_streams
-                    WHERE owner_id=:owner AND version_id=:id""", id=target).mappings().one_or_none()
-                if stream is None:
-                    raise AuthRejected('NOT_FOUND', 404)
-                after = self._pagination_cursor(tx, params.get('cursor'), target, 'segment')
-                rows = repo.execute("""SELECT * FROM public.asr_final_segments
-                    WHERE owner_id=:owner AND stream_id=:stream AND id>:after
-                    ORDER BY id LIMIT :limit""", stream=stream['id'], after=after, limit=limit+1).mappings().all()
-                items = [dict(id=str(row['segment_id']), revision=row['revision'], created_at=row['created_at'].isoformat(),
-                    updated_at=row['created_at'].isoformat(), class_session_id=str(stream['class_session_id']),
-                    transcript_version_id=str(target), stream_id=str(stream['id']), segment_revision_id=str(row['id']),
-                    kind='machine', origin='live_asr', status='final', text=row['body'], start_ms=row['start_ms'],
-                    end_ms=row['end_ms'], timestamp_source='provider_segment', provider_request_id=row['provider_request_id'],
-                    source_chunk_ids=[str(chunk) for chunk in row['source_chunk_ids']], adopted_revision_id=None)
-                    for row in rows[:limit]]
-                last = rows[limit-1]['id'] if len(rows)>limit else None
-                key = 'segment'
-            cursor = self._pagination_cursor(tx, None, target, key, last=last) if last is not None else None
-            return {'items': items, 'next_cursor': cursor}
-
-    @staticmethod
-    def _pagination_cursor(tx, cursor, target, kind, *, last=None):
-        import hmac
-        if cursor is None and last is None:
-            return UUID(int=0)
-        if tx.events.secret is None:
-            raise AuthRejected('SERVICE_DISABLED', 503)
-        value = last.hex if last is not None else cursor[:32]
-        proof = hmac.digest(tx.events.secret,
-            f'asr:{tx.catalog.owner_id}:{target}:{kind}:{value}'.encode('ascii'), 'sha256').hex()
-        if last is not None:
-            return value + proof
-        if len(cursor) != 96 or not cursor.isascii() or not hmac.compare_digest(cursor[32:], proof):
-            raise ResyncRequired('invalid transcript cursor')
-        return UUID(hex=value)
+            return read_transcripts(tx, operation, params)
 
     def dispatch(self, operation, ctx, body, key, params):
         try:

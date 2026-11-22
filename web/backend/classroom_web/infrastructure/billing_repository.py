@@ -141,7 +141,7 @@ class PgBillingRepository:
                 resource=resource, start=start).one()
             quantity = request.maximum_units['audio_duration_ms'] if resource.endswith('_ms') else 1
             if self._quota_used(row['id']) + quantity > row['limit_value']:
-                raise QuotaExceeded('QUOTA_EXCEEDED')
+                raise QuotaExceeded(resource=resource)
             rows.append((row, quantity))
         return rows
 
@@ -172,6 +172,8 @@ class PgBillingRepository:
         if maximum > request.task_max_microyuan:
             raise BillingBlocked('task maximum is below the conservative price bound')
         quotas = self._quota_rows(request, now, budget['stage'])
+        if request.schema_version == 'pr06c-1':
+            end = min(end, period(now, 'day')[1])
         if request.quota_root_id is not None:
             root = self._get(request.quota_root_id, lock=True)
             root_task = self.tx.tasks.get(root['task_id'])

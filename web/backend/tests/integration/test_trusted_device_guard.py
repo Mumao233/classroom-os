@@ -10,7 +10,8 @@ from test_task_migrations import previous_schema, upgrade, version
 
 def test_trust_guard_is_validated_and_session_writer_cannot_insert_or_update_true(pg, owners):
     scripts = ScriptDirectory.from_config(pg.config)
-    assert scripts.get_heads() == ['0017_realtime_asr']
+    assert scripts.get_heads() == ['0018_filetrans']
+    assert scripts.get_revision('0018_filetrans').down_revision == '0017_realtime_asr'
     assert scripts.get_revision('0017_realtime_asr').down_revision == '0016_portable_jobs'
     assert scripts.get_revision('0016_portable_jobs').down_revision == '0015_portable_lifecycle'
     assert scripts.get_revision('0015_portable_lifecycle').down_revision == '0014_offline_sync'

@@ -15,11 +15,11 @@ MANIFEST_CURSOR_LIFETIME = timedelta(minutes=15)
 
 
 class PgCaptureRepository(PgMediaRepository):
-    def scope(self, classroom):
+    def scope(self, classroom, *, audio_deleted_code='GONE'):
         self.tx.catalog._load(Resource.CLASS_SESSION, classroom, share=True)
         if self.execute("""SELECT EXISTS(SELECT FROM deletion_requests WHERE owner_id=:owner
                 AND scope_type='audio' AND scope_id=:classroom)""", classroom=classroom).scalar_one():
-            raise AuthRejected('GONE', 410)
+            raise AuthRejected(audio_deleted_code, 410)
         policy = self.execute("""SELECT p.*,r.max_lifetime,r.synthetic FROM capture_policy p
             LEFT JOIN retention_policies r ON r.version=p.retention_policy_version
             WHERE p.id FOR SHARE OF p""").mappings().one()

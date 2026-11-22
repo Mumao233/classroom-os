@@ -116,7 +116,6 @@ class_sessions = sa.Table("class_sessions", metadata, *_base(owner=True, mutable
     _parent("class_sessions", "course_material_version_id", "course_material_versions"),
     sa.CheckConstraint("scheduled_class_ref IS NULL", name="no_schedule"),
     # Removed only when the transcript-owning migration supplies its composite FK.
-    sa.CheckConstraint("adopted_transcript_version_id IS NULL", name="transcript_not_implemented"),
 )
 
 deletion_requests = sa.Table("deletion_requests", metadata, *_base(owner=True),

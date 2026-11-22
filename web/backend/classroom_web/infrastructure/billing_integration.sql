@@ -262,3 +262,14 @@ ALTER FUNCTION billing_api.threshold_messages(uuid) OWNER TO classroom_billing_c
 REVOKE ALL ON ALL FUNCTIONS IN SCHEMA billing_api FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION billing_api.execution_metadata(uuid),billing_api.pending_fee_tasks() TO classroom_billing_reconciler;
 GRANT EXECUTE ON FUNCTION billing_api.maintain_period(uuid),billing_api.threshold_messages(uuid) TO classroom_billing_operator;
+
+-- The approval lives on the optional Filetrans migration. Legacy synthetic
+-- billing databases can still install and use the independent billing seam.
+DO $filetrans$
+BEGIN
+    IF to_regprocedure('public.classroom_web_approve_filetrans(uuid,uuid,uuid,uuid,uuid,uuid,text,timestamptz)') IS NOT NULL THEN
+        GRANT EXECUTE ON FUNCTION public.classroom_web_approve_filetrans(uuid,uuid,uuid,uuid,uuid,uuid,text,timestamptz)
+            TO classroom_billing_operator;
+    END IF;
+END
+$filetrans$;
