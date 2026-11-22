@@ -1,0 +1,107 @@
+/* PR-10a classroom pages. Tokens come from styles/global.css; no new colours are introduced. */
+/* width:100% is required: in the shell column flexbox an auto margin would shrink the page to its content. */
+.page { width: 100%; box-sizing: border-box; max-width: 1440px; margin: 0 auto; padding: .75rem 3% 2rem; min-width: 0; }
+.page:focus { outline: none; }
+.header { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: .75rem; margin: .25rem 0 .9rem; }
+.header h1 { margin: .1rem 0; font-size: clamp(1.35rem, 2.2vw, 1.9rem); letter-spacing: -.03em; line-height: 1.3; overflow-wrap: anywhere; }
+.header h1:focus { outline: none; }
+.eyebrow { margin: 0; color: var(--color-text-secondary); font-size: .74rem; font-weight: 700; letter-spacing: .08em; }
+.muted { color: var(--color-text-secondary); }
+.small { font-size: .84rem; }
+.row { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+.stack { display: grid; gap: .75rem; }
+.panel { min-width: 0; padding: 1rem; background: var(--color-card); border: 1px solid var(--color-border); border-radius: var(--radius-card); box-shadow: var(--shadow-panel); }
+.panel h2, .panel h3 { margin: 0 0 .5rem; font-size: 1.02rem; }
+.button, .buttonSecondary, .buttonGhost, .buttonDanger { min-height: var(--button-height); display: inline-flex; align-items: center; justify-content: center; gap: .35rem; padding: .5rem .9rem; border-radius: var(--radius-control); font: inherit; font-weight: 650; cursor: pointer; text-decoration: none; }
+.button { border: 1px solid var(--color-primary); background: var(--color-primary); color: var(--color-on-primary); }
+.buttonSecondary { border: 1px solid var(--color-control-border); background: var(--color-surface); color: var(--color-text); }
+.buttonGhost { border: 1px solid transparent; background: transparent; color: var(--color-primary); }
+.buttonDanger { border: 1px solid var(--color-danger); background: var(--color-surface); color: var(--color-danger); }
+.button:disabled, .buttonSecondary:disabled, .buttonGhost:disabled, .buttonDanger:disabled { opacity: .55; cursor: not-allowed; }
+.button:focus-visible, .buttonSecondary:focus-visible, .buttonGhost:focus-visible, .buttonDanger:focus-visible, .separator:focus-visible, .tab:focus-visible { outline: 3px solid var(--color-focus); outline-offset: 2px; }
+.pressed { box-shadow: inset 0 0 0 2px var(--color-primary); }
+.banner { display: flex; gap: .55rem; align-items: flex-start; padding: .7rem .85rem; border-radius: var(--radius-control); border: 1px solid var(--color-border); background: var(--color-status-bg); }
+.bannerWarning { border-color: var(--color-warning); color: var(--color-text); }
+.bannerDanger { border-color: var(--color-danger); color: var(--color-text); }
+.bannerSuccess { border-color: var(--color-success); }
+.badge { display: inline-flex; align-items: center; gap: .25rem; padding: .18rem .5rem; border-radius: 999px; background: var(--color-surface-secondary); font-size: .76rem; font-weight: 650; }
+.toneSuccess { color: var(--color-success); }
+.toneWarning { color: var(--color-warning); }
+.toneDanger { color: var(--color-danger); }
+.toneInfo { color: var(--color-info); }
+.toneRecording { color: var(--color-recording); }
+
+/* Five flows, always named individually. */
+.flows { display: flex; flex-wrap: wrap; gap: .3rem; margin: 0; padding: 0; list-style: none; }
+.flows li { display: inline-flex; }
+
+/* Workspace and columns (container-width breakpoints are computed in domain/classroom.ts). */
+.workspace { position: relative; min-width: 0; }
+.columns { display: flex; align-items: stretch; min-width: 0; }
+.column { min-width: 0; display: flex; flex-direction: column; }
+/* Hidden panels stay mounted (drafts, requests) but must not render; author display rules would
+   otherwise override the hidden attribute. */
+.column[hidden], .panel[hidden] { display: none !important; }
+.separator { flex: 0 0 12px; display: flex; align-items: center; justify-content: center; cursor: col-resize; border-radius: 6px; background: transparent; border: 0; padding: 0; touch-action: none; }
+.separator::after { content: ''; width: 4px; height: 48px; border-radius: 4px; background: var(--color-border); }
+.separator:hover::after, .separator:focus-visible::after { background: var(--color-primary); }
+.panelHead { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .4rem; margin-bottom: .5rem; }
+.panelHead h2 { margin: 0; font-size: 1rem; }
+.tabs { display: flex; gap: .25rem; margin-bottom: .6rem; border-bottom: 1px solid var(--color-border); overflow-x: auto; }
+.tab { min-height: 44px; padding: .45rem .8rem; border: 0; border-bottom: 3px solid transparent; background: transparent; color: var(--color-text-secondary); font: inherit; font-weight: 650; cursor: pointer; white-space: nowrap; }
+.tabActive { color: var(--color-primary); border-bottom-color: var(--color-primary); }
+.collapsedRail { display: flex; flex-direction: column; gap: .4rem; }
+
+/* Transcript timeline: partial vs final differ by label, style and border, not colour alone. */
+.timeline { position: relative; max-height: min(62vh, 640px); min-height: 220px; overflow-y: auto; overflow-anchor: none; padding-right: .25rem; font-size: var(--classroom-font, 1.02rem); line-height: 1.7; }
+.timeline ol { margin: 0; padding: 0; list-style: none; display: grid; gap: .45rem; }
+.entry { display: grid; grid-template-columns: auto 1fr; gap: .55rem; padding: .35rem .5rem; border-radius: var(--radius-small); border: 1px solid transparent; overflow-wrap: anywhere; }
+.entryTime { font-variant-numeric: tabular-nums; color: var(--color-text-secondary); font-size: .82em; padding-top: .15em; white-space: nowrap; }
+.entryPartial { border-style: dashed; border-color: var(--color-control-border); font-style: italic; color: var(--color-text-secondary); }
+.entryLabel { display: inline-block; margin-right: .35rem; padding: 0 .35rem; border-radius: 6px; border: 1px solid currentColor; font-size: .72em; font-style: normal; font-weight: 700; }
+.jumpLatest { position: sticky; bottom: .4rem; margin: .4rem auto 0; display: flex; }
+.focusTranscript .timeline { max-height: min(72vh, 900px); }
+
+/* Toolbar stays reachable; it wraps rather than scrolling controls out of view. */
+/* Sticky above the fixed global mini status bar (bottom 1rem, ~60px tall) so neither covers the other. */
+.toolbar { position: sticky; bottom: calc(5.5rem + env(safe-area-inset-bottom)); z-index: 5; display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; margin-top: .8rem; padding: .5rem; background: var(--color-glass); border: 1px solid var(--color-control-border); border-radius: 18px; box-shadow: var(--shadow-panel); }
+.toolbarGroup { display: flex; flex-wrap: wrap; gap: .35rem; align-items: center; }
+.toolbarSpacer { flex: 1 1 auto; }
+
+.prepGrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: .75rem; }
+.checkList { margin: 0; padding: 0; list-style: none; display: grid; gap: .45rem; }
+.checkList li { display: flex; gap: .45rem; align-items: flex-start; }
+.meter { height: 10px; border-radius: 6px; background: var(--color-surface-secondary); overflow: hidden; }
+.meterFill { height: 100%; background: var(--color-success); transition: width var(--motion-control); }
+
+.field { display: grid; gap: .3rem; }
+.field label, .fieldLabel { font-weight: 650; font-size: .9rem; }
+.field input, .field select, .field textarea { min-height: 44px; padding: .5rem .65rem; border-radius: var(--radius-control); border: 1px solid var(--color-control-border); background: var(--color-surface); color: var(--color-text); font: inherit; min-width: 0; width: 100%; box-sizing: border-box; }
+.field textarea { min-height: 88px; resize: vertical; }
+.hint { color: var(--color-text-secondary); font-size: .82rem; }
+.error { color: var(--color-danger); font-size: .86rem; }
+.checkbox { display: flex; gap: .5rem; align-items: flex-start; }
+.checkbox input { width: 20px; height: 20px; margin-top: .15rem; flex: none; }
+
+.list { margin: 0; padding: 0; list-style: none; display: grid; gap: .5rem; }
+.listItem { display: flex; flex-wrap: wrap; justify-content: space-between; gap: .5rem; padding: .6rem .7rem; border: 1px solid var(--color-border); border-radius: var(--radius-control); background: var(--color-surface); overflow-wrap: anywhere; }
+.listItem > div { min-width: 0; flex: 1 1 14rem; }
+.dl { display: grid; grid-template-columns: max-content 1fr; gap: .3rem .8rem; margin: 0; }
+.dl dt { color: var(--color-text-secondary); }
+.dl dd { margin: 0; overflow-wrap: anywhere; }
+.slideThumb { width: 72px; height: 54px; border-radius: 8px; border: 1px solid var(--color-border); background: var(--color-surface-secondary); display: flex; align-items: center; justify-content: center; font-size: .7rem; color: var(--color-text-secondary); overflow: hidden; flex: none; }
+.slideThumb img { width: 100%; height: 100%; object-fit: contain; }
+.answer { white-space: pre-wrap; overflow-wrap: anywhere; }
+.processingGrid { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: .9rem; }
+.devNote { margin: .25rem 0 0; }
+
+@media (max-width: 900px) { .processingGrid { grid-template-columns: 1fr; } }
+@media (max-width: 767px) {
+  .page { padding: .6rem 5% 2rem; }
+  /* On phones the fixed mini status bar above the bottom navigation keeps 停止 visible;
+     the full toolbar flows with the page so the two never overlap the soft keyboard. */
+  .toolbar { position: static; border-radius: 14px; }
+  .timeline { max-height: 55vh; }
+  .dl { grid-template-columns: 1fr; }
+}
+@media (prefers-reduced-motion: reduce) { .meterFill { transition: none; } }

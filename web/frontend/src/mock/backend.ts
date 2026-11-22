@@ -1,9 +1,10 @@
 import type { components } from '../generated/openapi';
+import { advanceTask, ensureDemoClassroom, finishAsr, handleClassroom, persistFinal, projectTask, recordDurable, releaseAccountLeases, releaseLease, revokeClassroom, seedClassroom, type ClassroomHelpers, type ClassroomHost, type ClassroomStore, type TaskOutcome } from './classroom-backend';
 
 /**
  * Development-only, in-memory synthetic backend for endpoints that the real backend does not
  * implement yet (see PR09B-SCOPE-GAPS.md). Every response uses only fields of the approved
- * contract 0.2.0; tests validate the outputs against openapi.json. It never touches the
+ * contract (0.2.1); tests validate the outputs against openapi.json. It never touches the
  * network, disk or a real account, and it is excluded from production builds.
  */
 type S = components['schemas'];
@@ -142,6 +143,8 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
   let counter = 0;
   const newId = options.newId ?? (() => uuid('99999999', ++counter));
   const stores: Record<MockAccountKey, Store> = { A: seedA('seeded'), B: seedB() };
+  const seededClassroom = () => seedClassroom({ ended: uuid('c0000000', 1), uploadFailed: uuid('c0000000', 4), unknownAi: uuid('c0000000', 6) });
+  const classrooms: Record<MockAccountKey, ClassroomStore> = { A: seededClassroom(), B: seedClassroom(null) };
 
   const error = (status: number, code: ErrorCode, message: string, currentRevision: number | null = null): MockReply =>
     ({ status, body: { error: { code, message, request_id: newId(), retryable: false, retry_after_seconds: null, current_revision: currentRevision, conflict_id: null, task_id: null } } });
@@ -209,6 +212,25 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
     if (body.base_revision !== current.revision) return error(409, 'REVISION_CONFLICT', '内容已在其他地方更新', current.revision);
     if (body.mode !== 'cascade' && body.mode !== 'move_children') return error(400, 'VALIDATION_FAILED', '删除方式无效');
     return null;
+  }
+
+  function classroomHost(account: MockAccountKey): ClassroomHost {
+    const store = stores[account];
+    return {
+      sessions: () => store.sessions,
+      saveSession: next => { store.sessions = store.sessions.map(item => item.id === next.id ? next : item); },
+      addSession: next => { store.sessions = [...store.sessions, next]; },
+      courseExists: id => Boolean(findCourse(store, id)),
+      firstCourseId: () => liveCourses(store).find(course => !course.archived)?.id ?? null,
+      quota: () => store.quota,
+      addQuestion: question => { store.questions = [...store.questions, question]; },
+      updateQuestion: (taskId, change) => { store.questions = store.questions.map(item => item.task_id === taskId ? { ...item, ...change, revision: item.revision + 1, updated_at: now() } : item); },
+      addDocument: document => { store.documents = [...store.documents, document]; },
+      document: id => store.documents.find(item => item.id === id),
+    };
+  }
+  function classroomHelpers(account: MockAccountKey): ClassroomHelpers {
+    return { now, newId, error, idempotent: (key, scope, body, run) => idempotent(stores[account], key, scope, body, run) };
   }
 
   function handle(account: MockAccountKey, method: string, path: string, query: URLSearchParams, rawBody: unknown, key: string | null): MockReply | null {
@@ -408,13 +430,27 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
         return page(store.questions.filter(item => sessions.has(item.class_session_id) && (!sessionId || item.class_session_id === sessionId)));
       }
       case 'GET /notifications': return page(store.notifications);
-      default: return null;
+      default: return handleClassroom(classrooms[account], classroomHost(account), classroomHelpers(account), method, route, id, query, body, key);
     }
   }
 
   return {
     handle,
-    reset(account: MockAccountKey, dataset: MockDataset = 'seeded') { stores[account] = account === 'A' ? seedA(dataset) : seedB(); },
+    reset(account: MockAccountKey, dataset: MockDataset = 'seeded') {
+      stores[account] = account === 'A' ? seedA(dataset) : seedB();
+      classrooms[account] = account === 'A' && dataset === 'seeded' ? seededClassroom() : seedClassroom(null);
+    },
+    /** PR-10a development helpers; none of them is an HTTP route. */
+    advanceTask: (account: MockAccountKey, taskId: string, outcome: TaskOutcome) => advanceTask(classrooms[account], classroomHost(account), classroomHelpers(account), taskId, outcome),
+    finishAsr: (account: MockAccountKey, classId: string, state: 'succeeded' | 'failed' | 'unknown') => finishAsr(classroomHost(account), classroomHelpers(account), classId, state),
+    persistFinal: (account: MockAccountKey, input: Parameters<typeof persistFinal>[3]) => persistFinal(classrooms[account], classroomHost(account), classroomHelpers(account), input),
+    ensureDemoClassroom: (account: MockAccountKey, input: Parameters<typeof ensureDemoClassroom>[3]) => ensureDemoClassroom(classrooms[account], classroomHost(account), classroomHelpers(account), input),
+    setDurable: (account: MockAccountKey, classId: string, captureEpochId: string, seqs: number[]) => recordDurable(classrooms[account], classroomHost(account), classroomHelpers(account), classId, captureEpochId, seqs),
+    releaseLease: (account: MockAccountKey, classId: string) => releaseLease(classrooms[account], classroomHost(account), classroomHelpers(account), classId),
+    releaseAccountLeases: (account: MockAccountKey) => releaseAccountLeases(classrooms[account], classroomHost(account), classroomHelpers(account)),
+    projectTask: (account: MockAccountKey, input: Parameters<typeof projectTask>[3]) => projectTask(classrooms[account], classroomHost(account), classroomHelpers(account), input),
+    revokeClassroom: (account: MockAccountKey, classId: string) => revokeClassroom(classrooms[account], classroomHost(account), classroomHelpers(account), classId),
+    classroomStore: (account: MockAccountKey) => classrooms[account],
     /** Test helper: simulate a write by "another device" so CAS conflicts are reproducible. */
     bumpElsewhere(account: MockAccountKey, kind: 'semester' | 'course' | 'class_session' | 'preferences', id: string, change: Record<string, unknown> = {}) {
       const store = stores[account];
