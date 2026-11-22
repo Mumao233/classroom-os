@@ -76,7 +76,37 @@ export function createApiClient(scope: Scope, transportOrOptions: typeof fetch |
     if (!response.ok) throw new ApiClientError('http', response.status, parsed as ErrorBody);
     return parsed as T;
   }
+  /** Raw bytes to a server-issued same-origin upload path (media content). */
+  async function putBytes<T>(url: string, bytes: Uint8Array<ArrayBuffer>, digest: string, key: string): Promise<T> {
+    assertCurrent();
+    if (!url.startsWith(`${PREFIX}/`)) throw new ApiClientError('invalid_response');
+    let response: Response;
+    // The contract accepts only octet-stream bytes here; the image type travels in the upload descriptor.
+    const headers: Record<string, string> = { 'Content-Type': 'application/octet-stream', 'Content-Digest': `sha-256=:${digest}:`, 'Idempotency-Key': key };
+    const csrf = options.csrfToken?.();
+    if (csrf) headers['X-CSRF-Token'] = csrf;
+    try { response = await transport(url, { method: 'PUT', credentials: 'same-origin', cache: 'no-store', headers, body: bytes }); }
+    catch { assertCurrent(); throw new ApiClientError('network'); }
+    assertCurrent();
+    let parsed: unknown;
+    try { parsed = await response.json(); } catch { assertCurrent(); throw new ApiClientError(response.ok ? 'invalid_response' : 'http', response.status); }
+    assertCurrent();
+    if (!response.ok) throw new ApiClientError('http', response.status, parsed as ErrorBody);
+    return parsed as T;
+  }
   const get = <T>(path: string, query?: Query, signal?: AbortSignal) => request<T>('GET', withQuery(path, query), undefined, signal);
+  /** Every page of a cursor list, at the contract's maximum page size of 100. */
+  async function allPages<T>(path: string, signal?: AbortSignal, filter: Query = {}): Promise<{ items: T[]; next_cursor: null }> {
+    const items: T[] = [];
+    let cursor: string | null = null;
+    for (let pages = 0; pages < 1000; pages++) {
+      const page: { items: T[]; next_cursor: string | null } = await get(path, cursor ? { ...filter, limit: 100, cursor } : { ...filter, limit: 100 }, signal);
+      items.push(...page.items);
+      if (!page.next_cursor) return { items, next_cursor: null };
+      cursor = page.next_cursor;
+    }
+    throw new ApiClientError('invalid_response');
+  }
   const post = <T>(path: string, body: unknown, key?: string) => request<T>('POST', withQuery(path), body, undefined, key);
   const patch = <T>(path: string, body: unknown, key?: string) => request<T>('PATCH', withQuery(path), body, undefined, key);
 
@@ -115,6 +145,31 @@ export function createApiClient(scope: Scope, transportOrOptions: typeof fetch |
     reviewDocuments: (query: { course_id?: string; kind?: 'summary' | 'card' | 'note'; understood?: boolean }, signal?: AbortSignal) => get<S['ReviewDocumentPage']>('/review-documents', { ...query, limit: 100 }, signal),
     questions: (classSessionId: string, signal?: AbortSignal) => get<S['QuestionPage']>('/questions', { class_session_id: classSessionId, limit: 100 }, signal),
     notifications: (signal?: AbortSignal) => get<S['NotificationPage']>('/notifications', { limit: 50 }, signal),
+
+    // PR-10a classroom, capture and processing. Owner always comes from the server session.
+    classSession: (id: string, signal?: AbortSignal) => get<S['ClassSession']>(`/class-sessions/${segment(id)}`, undefined, signal),
+    createClassSession: (body: S['ClassSessionCreate'], key?: string) => post<S['ClassSession']>('/class-sessions', body, key),
+    acquireCapture: (id: string, body: S['CaptureAcquire'], key?: string) => post<S['CaptureLease']>(`/class-sessions/${segment(id)}/capture/acquire`, body, key),
+    captureCommand: (id: string, action: 'pause' | 'resume', body: S['CaptureCommand'], key?: string) => post<S['CaptureLease']>(`/class-sessions/${segment(id)}/capture/${action}`, body, key),
+    stopCapture: (id: string, body: S['CaptureStop'], key?: string) => post<S['AudioManifest']>(`/class-sessions/${segment(id)}/capture/stop`, body, key),
+    audioManifest: (id: string, captureEpochId: string | null, signal?: AbortSignal) => get<S['AudioManifest']>(`/class-sessions/${segment(id)}/audio-manifest`, captureEpochId ? { capture_epoch_id: captureEpochId } : undefined, signal),
+    transcriptVersions: (id: string, signal?: AbortSignal) => allPages<S['TranscriptVersion']>(`/class-sessions/${segment(id)}/transcript-versions`, signal),
+    transcriptSegments: (versionId: string, signal?: AbortSignal) => allPages<S['TranscriptSegment']>(`/transcript-versions/${segment(versionId)}/segments`, signal),
+    marks: (id: string, signal?: AbortSignal) => allPages<S['Mark']>(`/class-sessions/${segment(id)}/marks`, signal),
+    createMark: (id: string, body: S['MarkCreate'], key?: string) => post<S['Mark']>(`/class-sessions/${segment(id)}/marks`, body, key),
+    slides: (id: string, signal?: AbortSignal) => allPages<S['Slide']>(`/class-sessions/${segment(id)}/slides`, signal),
+    createMediaUpload: (body: S['MediaUploadCreate'], key?: string) => post<S['MediaUpload']>('/media/uploads', body, key),
+    putMediaContent: (upload: S['MediaUpload'], bytes: Uint8Array<ArrayBuffer>, digestBase64: string, key: string) => putBytes<S['MediaUpload']>(upload.upload_path, bytes, digestBase64, key),
+    completeMediaUpload: (uploadId: string, body: S['MediaVerify'], key?: string) => post<S['MediaAsset']>(`/media/uploads/${segment(uploadId)}/complete`, body, key),
+    createSlide: (id: string, body: S['SlideCreate'], key?: string) => post<S['Slide']>(`/class-sessions/${segment(id)}/slides`, body, key),
+    updateSlide: (slideId: string, body: S['SlidePatch'], key: string) => patch<S['Slide']>(`/slides/${segment(slideId)}`, body, key),
+    createPlan: (id: string, body: S['GenerationPlanRequest'], key?: string) => post<S['GenerationPlan']>(`/class-sessions/${segment(id)}/generation-plans`, body, key),
+    plan: (planId: string, signal?: AbortSignal) => get<S['GenerationPlan']>(`/generation-plans/${segment(planId)}`, undefined, signal),
+    executePlan: (planId: string, body: S['ExecutePlan'], key?: string) => post<S['Task']>(`/generation-plans/${segment(planId)}/execute`, body, key),
+    tasks: (classSessionId: string, signal?: AbortSignal) => allPages<S['Task']>('/tasks', signal, { class_session_id: classSessionId }),
+    task: (taskId: string, signal?: AbortSignal) => get<S['Task']>(`/tasks/${segment(taskId)}`, undefined, signal),
+    reconcileTask: (taskId: string, key?: string) => post<S['TaskReconcile']>(`/tasks/${segment(taskId)}/reconcile`, {}, key),
+    cancelTask: (taskId: string, key?: string) => post<S['Task']>(`/tasks/${segment(taskId)}/cancel`, {}, key),
   };
 }
 export type ApiClient = ReturnType<typeof createApiClient>;

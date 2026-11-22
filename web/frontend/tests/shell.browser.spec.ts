@@ -124,7 +124,8 @@ test('active class navigation retains upload failure; account switch clears disp
   await page.getByLabel('模拟场景').selectOption('04');
   await page.getByRole('navigation', { name: '主导航', exact: true }).getByRole('link', { name: '复习' }).click();
   await page.getByRole('navigation', { name: '主导航', exact: true }).getByRole('link', { name: '课堂' }).click();
-  await expect(page).toHaveURL(/classrooms\/mock\/live/);
+  // PR-10a: the global classroom entry returns to the bound classroom's own page.
+  await expect(page).toHaveURL(/classrooms\/22222222-2222-4222-8222-222222222222\/live/);
   await expect(page.getByRole('region', { name: '模拟课堂状态' })).toContainText('上传 · 失败');
   await page.getByRole('button', { name: '切换模拟账号 A' }).click();
   await expect(page.getByRole('heading', { name: /陈同学/ })).toBeVisible();
