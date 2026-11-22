@@ -110,6 +110,10 @@ describe('PR-10b retranscription helpers', () => {
     expect(Object.keys(retranscribeErrors).sort()).toEqual([...codes].sort());
     expect(new Set(codes.map(code => retranscribeErrors[code])).size).toBe(4);
   });
+  it('touching segments are not aligned as overlapping', () => {
+    const rows = alignTranscripts([segment(1, 0, 10_000, 'a'), segment(2, 10_000, 20_000, 'b')], [segment(11, 10_000, 20_000, 'b2')]);
+    expect(rows.map(row => [row.before?.text ?? null, row.after?.text ?? null])).toEqual([['a', null], ['b', 'b2']]);
+  });
   it('aligns two transcript versions by overlapping time and keeps unmatched segments', () => {
     const rows = alignTranscripts([segment(1, 0, 1000, 'a'), segment(2, 2000, 3000, 'b'), segment(3, null, null, 'u')], [segment(11, 100, 900, 'a2'), segment(12, 5000, 6000, 'c')]);
     expect(rows.map(row => [row.startMs, row.before?.text ?? null, row.after?.text ?? null])).toEqual([[0, 'a', 'a2'], [2000, 'b', null], [5000, null, 'c'], [null, 'u', null]]);
@@ -128,5 +132,24 @@ describe('PR-10b reading memory and markdown', () => {
   it('renders a safe subset as blocks of text only', () => {
     expect(markdownBlocks('## 标题\n段落一\n续行\n\n- 项一\n- 项二\n<script>x</script>')).toEqual([
       { type: 'heading', level: 2, text: '标题' }, { type: 'paragraph', text: '段落一 续行' }, { type: 'list', items: ['项一', '项二'] }, { type: 'paragraph', text: '<script>x</script>' }]);
+  });
+});
+
+describe('PR-10b classroom deletion evicts cached review projections', () => {
+  it('removes the classroom from lists, documents and revisions without a refetch', async () => {
+    const { QueryClient } = await import('@tanstack/react-query');
+    const { evictClassroomFromReview } = await import('../src/features/review');
+    const client = new QueryClient();
+    const gone = doc({ id: 'e0000000-0000-4000-8000-0000000000a1', class_session_id: 'c-gone' });
+    const kept = doc({ id: 'e0000000-0000-4000-8000-0000000000a2', class_session_id: 'c-kept' });
+    client.setQueryData(['account', 'A:1', 'review-library', {}], { items: [gone, kept], next_cursor: null });
+    client.setQueryData(['account', 'A:1', 'review-document', gone.id], gone);
+    client.setQueryData(['account', 'A:1', 'review-revisions', gone.id], { items: [], next_cursor: null });
+    client.setQueryData(['account', 'A:1', 'review-document', kept.id], kept);
+    evictClassroomFromReview(client, 'c-gone');
+    expect((client.getQueryData(['account', 'A:1', 'review-library', {}]) as { items: S['ReviewDocument'][] }).items.map(item => item.id)).toEqual([kept.id]);
+    expect(client.getQueryData(['account', 'A:1', 'review-document', gone.id])).toBeUndefined();
+    expect(client.getQueryData(['account', 'A:1', 'review-revisions', gone.id])).toBeUndefined();
+    expect(client.getQueryData(['account', 'A:1', 'review-document', kept.id])).toEqual(kept);
   });
 });

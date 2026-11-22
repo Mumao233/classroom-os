@@ -1,3 +1,5 @@
+import type { QueryClient } from '@tanstack/react-query';
+import type { components } from '../generated/openapi';
 import type { ReviewLibraryQuery } from '../api/client';
 import { parseReadingMemory, rememberReading, type ReadingMemory } from '../domain/review';
 import { useAccountQuery, useAppData } from './data';
@@ -19,6 +21,23 @@ export const useClassSegments = (classId: string | null) => useAccountQuery(['cl
   const pages = await Promise.all(versions.items.map(version => api.transcriptSegments(version.id, signal)));
   return pages.flatMap(page => page.items);
 }, classId !== null);
+
+/**
+ * A classroom deletion removes that classroom from every cached review projection at once (lists,
+ * documents, their revisions and snapshots), without waiting for a refetch that may fail offline.
+ */
+export function evictClassroomFromReview(client: QueryClient, classId: string) {
+  type Doc = components['schemas']['ReviewDocument'];
+  const revoked = new Set<string>();
+  for (const [key, data] of client.getQueriesData<{ items: Doc[]; next_cursor: null }>({ predicate: query => query.queryKey.includes('review-library') })) {
+    if (!data) continue;
+    for (const doc of data.items) if (doc.class_session_id === classId) revoked.add(doc.id);
+    client.setQueryData(key, { ...data, items: data.items.filter(doc => doc.class_session_id !== classId) });
+  }
+  for (const [key, data] of client.getQueriesData<Doc>({ predicate: query => query.queryKey.includes('review-document') })) if (data?.class_session_id === classId) { revoked.add(data.id); client.removeQueries({ queryKey: key, exact: true }); }
+  client.removeQueries({ predicate: query => (query.queryKey.includes('review-revisions') || query.queryKey.includes('review-document')) && query.queryKey.some(part => typeof part === 'string' && revoked.has(part)) });
+  client.removeQueries({ predicate: query => query.queryKey.includes('source-snapshot') && (query.state.data as { class_session_id?: string } | undefined)?.class_session_id === classId });
+}
 
 const STORAGE_KEY = 'classroom-os.review.reading.v1';
 function storageKey(accountKey: string) { return `${STORAGE_KEY}:${accountKey.split(':')[0]}`; }

@@ -171,7 +171,12 @@ export type AlignedRow = { startMs: number | null; before: S['TranscriptSegment'
 export function alignTranscripts(before: readonly S['TranscriptSegment'][], after: readonly S['TranscriptSegment'][]): AlignedRow[] {
   const sort = (list: readonly S['TranscriptSegment'][]) => [...list].sort((x, y) => (x.start_ms ?? Number.MAX_SAFE_INTEGER) - (y.start_ms ?? Number.MAX_SAFE_INTEGER) || x.id.localeCompare(y.id));
   const left = sort(before); const right = sort(after);
-  const overlaps = (x: S['TranscriptSegment'], y: S['TranscriptSegment']) => x.start_ms !== null && y.start_ms !== null && (x.end_ms ?? x.start_ms) >= y.start_ms && (y.end_ms ?? y.start_ms) >= x.start_ms;
+  // Half-open intervals: segments that only touch (0–10 s and 10–20 s) do not overlap; zero-length ones match at their point.
+  const overlaps = (x: S['TranscriptSegment'], y: S['TranscriptSegment']) => {
+    if (x.start_ms === null || y.start_ms === null) return false;
+    const xe = x.end_ms ?? x.start_ms; const ye = y.end_ms ?? y.start_ms;
+    return xe === x.start_ms || ye === y.start_ms ? x.start_ms <= ye && y.start_ms <= xe : x.start_ms < ye && y.start_ms < xe;
+  };
   const used = new Set<string>();
   const rows: AlignedRow[] = left.map(item => {
     const match = right.find(candidate => !used.has(candidate.id) && overlaps(item, candidate));

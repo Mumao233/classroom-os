@@ -108,6 +108,7 @@ function TranscriptVersions({ session }: { session: S['ClassSession'] }) {
   });
   const label = (version: S['TranscriptVersion']) => `${version.kind === 'realtime' ? '实时转写' : version.kind === 'retranscription' ? '重新转写' : '导入'} · ${version.created_at.slice(0, 16).replace('T', ' ')}`;
   const rows = alignTranscripts(left.data?.items ?? [], right.data?.items ?? []);
+  const compareUnread = left.isPending || right.isPending || left.isError || right.isError;
   return <section className={pages.panel} aria-labelledby="transcript-versions"><h2 id="transcript-versions">转写版本</h2>
     {versions.isError ? <QueryError error={versions.error} /> : versions.isPending ? <Loading label="正在读取转写版本…" /> : list.length === 0 ? <Empty title="还没有转写版本" description="课堂转写完成后会出现在这里。" /> : <>
       <ul className={styles.versions} data-testid="transcript-version-list">{list.map(version => { const current = version.id === adopted?.id; return <li key={version.id} className={styles.version} aria-current={current} data-version-id={version.id} data-adopted={String(current)}>
@@ -119,12 +120,13 @@ function TranscriptVersions({ session }: { session: S['ClassSession'] }) {
       {candidate && !adopted && <div style={{ marginTop: 12, overflowX: 'auto' }} data-testid="transcript-preview">
         <p className={pages.small}>这节课没有更早的转写可以对照，下面直接预览候选内容；预览不会改变采用状态。</p>
         <table className={styles.align}><caption className={pages.srOnly}>候选转写预览</caption><thead><tr><th scope="col">时间</th><th scope="col">候选（{label(candidate)}）</th></tr></thead>
-          <tbody>{(right.data?.items ?? []).map(item => <tr key={item.id}><td>{formatMs(item.start_ms)}</td><td>{item.text}</td></tr>)}</tbody></table>
+          <tbody>{right.isError ? <tr><td colSpan={2}><span role="alert">候选内容读取失败：{describeError(right.error)}</span></td></tr> : right.isPending ? <tr><td colSpan={2}>正在读取候选内容…</td></tr>
+            : right.data.items.length === 0 ? <tr><td colSpan={2}>候选版本没有片段。</td></tr> : right.data.items.map(item => <tr key={item.id}><td>{formatMs(item.start_ms)}</td><td>{item.text}</td></tr>)}</tbody></table>
       </div>}
       {candidate && adopted && candidate.id !== adopted.id && <div style={{ marginTop: 12, overflowX: 'auto' }}>
         <table className={styles.align} data-testid="transcript-compare"><caption className={pages.srOnly}>按时间对照两个转写版本</caption>
           <thead><tr><th scope="col">时间</th><th scope="col">当前采用（{label(adopted)}）</th><th scope="col">候选（{label(candidate)}）</th></tr></thead>
-          <tbody>{rows.map((row, index) => <tr key={index}><td>{formatMs(row.startMs)}</td><td>{row.before?.text ?? <span className={pages.muted}>（无对应片段）</span>}</td>
+          <tbody>{compareUnread ? <tr><td colSpan={3}>{left.isError || right.isError ? <span role="alert">转写内容读取失败，暂不能对照。</span> : '正在读取转写内容…'}</td></tr> : rows.map((row, index) => <tr key={index}><td>{formatMs(row.startMs)}</td><td>{row.before?.text ?? <span className={pages.muted}>（无对应片段）</span>}</td>
             <td className={row.before && row.after && row.before.text !== row.after.text ? styles.changed : undefined}>{row.after?.text ?? <span className={pages.muted}>（无对应片段）</span>}{row.after && row.after.timestamp_source === 'capture_mapping' && row.after.stream_id === null ? <span className={pages.srOnly}>（时间按采集位置映射）</span> : null}</td></tr>)}</tbody>
         </table>
         <p className={`${pages.small} ${pages.muted}`}>候选的时间按采集位置映射；对照不会改变采用状态。</p>
@@ -220,6 +222,7 @@ function Retranscribe({ session }: { session: S['ClassSession'] }) {
           <dt>原音清单</dt><dd>已冻结（摘要 {plan.audio_manifest_sha256?.slice(0, 12)}…，{plan.audio_chunk_ids.length} 个分片）</dd>
           <dt>计量时长</dt><dd>{formatMs(plan.quota_units)}（计入本月重新转写时长）</dd>
           <dt>最高费用</dt><dd>{formatYuan(plan.maximum_cost_microyuan)}</dd>
+          <dt>发送到</dt><dd data-testid="plan-destination">{plan.destination.provider} · {plan.destination.model} · {plan.destination.region}（配置 {plan.destination.configuration_revision}）</dd>
           <dt>有效期至</dt><dd>{plan.expires_at.slice(0, 16).replace('T', ' ')}</dd>
           {prepared!.request.accept_partial_scope && <><dt>缺失分片</dt><dd className={pages.warning}>已同意按已有部分重新转写</dd></>}
         </dl>
@@ -228,10 +231,11 @@ function Retranscribe({ session }: { session: S['ClassSession'] }) {
           <div><button type="button" className={pages.buttonSecondary} disabled={!app.online || execute.isPending} onClick={() => execute.mutate({ current: prepared!, original: executeKey.current?.intent.endsWith(':true') ?? false })}>用同一操作再确认</button></div></div></div>
           : sourceChanged ? <div className={`${pages.banner} ${pages.bannerWarning}`} role="alert" data-testid="retranscribe-source-changed"><div className={pages.stack}>
           <span>原音在准备后有变化（例如又有分片上传完成）。可以重新准备，或明确选择按准备时冻结的原音提交。</span>
-          <div className={pages.row}><button type="button" className={pages.buttonSecondary} onClick={() => prepare.mutate()}>重新准备</button>
+          <div className={pages.row}><button type="button" className={pages.buttonSecondary} disabled={execute.isPending} onClick={() => prepare.mutate()}>重新准备</button>
             <button type="button" className={pages.buttonSecondary} disabled={!app.online || execute.isPending} onClick={() => execute.mutate({ current: prepared!, original: true })}>按准备时的原音提交</button></div></div></div>
           : <div className={pages.row}><button type="button" className={pages.button} disabled={!app.online || execute.isPending} onClick={() => execute.mutate({ current: prepared!, original: false })} data-testid="retranscribe-confirm">确认并提交</button>
-            <button type="button" className={pages.buttonGhost} onClick={() => setPrepared(null)}>取消</button></div>}
+            {/* The submitted plan, body and key stay until a definitive reply: no cancel while it is pending. */}
+            <button type="button" className={pages.buttonGhost} disabled={execute.isPending} onClick={() => setPrepared(null)}>取消</button></div>}
       </div>
     </div>}
     <h3 style={{ marginTop: 16 }}>重新转写任务</h3>

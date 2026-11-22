@@ -187,8 +187,9 @@ export function handleReview(store: ReviewStore, host: ReviewHost, h: ReviewHelp
       const revision: S['ReviewRevision'] = { id: h.newId(), revision: 1, created_at: created, updated_at: created, document_id: id, kind: 'personal', parent_revision_id: parent?.id ?? null,
         source_snapshot_id: parent?.source_snapshot_id ?? null, raw_output_ref: null, body_markdown: body.body_markdown, structured_content: null, personal_note: body.personal_note };
       store.revisions.push(revision);
-      // On a stale base the submitted branch is kept (listed, never made active); pointers stay unchanged.
-      if (body.base_revision !== doc.revision) return conflict(doc);
+      // On a stale base the submitted branch is kept (listed, never made active); pointers stay unchanged,
+      // but the document's CAS clock advances so a later write based on the pre-branch revision is refused too.
+      if (body.base_revision !== doc.revision) return conflict(save(doc, {}));
       // A personal revision never replaces the adopted version or any candidate.
       save(doc, { latest_personal_revision_id: revision.id });
       return ok(revision, 201);

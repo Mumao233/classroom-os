@@ -112,11 +112,13 @@ describe('PR-10b mock review: Astra r0 findings', () => {
   it('a stale personal save keeps the submitted branch without moving any pointer; a derived revision keeps the parent snapshot', () => {
     const { call } = harness();
     const stale = call('A', 'POST', `/review-documents/${SUMMARY}/personal-revisions`, { base_revision: 7, base_content_revision_id: ADOPTED, draft_id: '5a000000-0000-4000-8000-000000000011', body_markdown: '分支（合成）', personal_note: '' });
-    expect(err(stale)).toMatchObject({ code: 'REVISION_CONFLICT', current_revision: 1 });
+    // The branch is stored and the document's CAS clock advances (pointers unchanged).
+    expect(err(stale)).toMatchObject({ code: 'REVISION_CONFLICT', current_revision: 2 });
     const revisions = items<S['ReviewRevision']>(call('A', 'GET', `/review-documents/${SUMMARY}/revisions`));
     const branch = revisions.find(item => item.body_markdown === '分支（合成）')!;
     expect(branch).toMatchObject({ kind: 'personal', parent_revision_id: ADOPTED, source_snapshot_id: 'e2000000-0000-4000-8000-000000000001' });
-    expect(call('A', 'GET', `/review-documents/${SUMMARY}`).body).toMatchObject({ revision: 1, latest_personal_revision_id: null, adopted_revision_id: ADOPTED });
+    expect(call('A', 'GET', `/review-documents/${SUMMARY}`).body).toMatchObject({ revision: 2, latest_personal_revision_id: null, adopted_revision_id: ADOPTED });
+    expect(err(call('A', 'PATCH', `/review-documents/${SUMMARY}`, { base_revision: 1, understood: true })).code).toBe('REVISION_CONFLICT');
   });
   it('lists are paged at the requested limit with a continuation cursor', () => {
     const { call } = harness();
@@ -179,8 +181,8 @@ describe('PR-10b mock retranscription (PR-06c handoff)', () => {
     expect(err(call('A', 'POST', `/class-sessions/${ENDED}/generation-plans`, retranscribe({ scope: 'recent30' }))).code).toBe('VALIDATION_FAILED');
     expect(err(call('A', 'POST', `/class-sessions/${ENDED}/generation-plans`, retranscribe({ include_images: true }))).code).toBe('VALIDATION_FAILED');
     const plan = call('A', 'POST', `/class-sessions/${ENDED}/generation-plans`, retranscribe({ scope: 'range', start_ms: 0, end_ms: 30_000 })).body as S['GenerationPlan'];
-    // 285 chunks over 95 minutes: 20 s each; 0–30 s overlaps chunks 0 and 1, which are what is frozen and metered.
-    expect(plan).toMatchObject({ kind: 'asr_retranscribe', source_snapshot: null, quota_units: 40_000, maximum_cost_microyuan: '2000', contains_images: false });
+    // 285 chunks over 95 minutes: 20 s each; 0–30 s freezes chunks 0 and 1 and meters only the selected 30 s.
+    expect(plan).toMatchObject({ kind: 'asr_retranscribe', source_snapshot: null, quota_units: 30_000, maximum_cost_microyuan: '1500', contains_images: false });
     expect(plan.audio_manifest_sha256).toMatch(/^[a-f0-9]{64}$/);
     expect(plan.audio_chunk_ids).toHaveLength(2);
     const task = call('A', 'POST', `/generation-plans/${plan.id}/execute`, execute(plan)).body as S['Task'];
@@ -321,5 +323,49 @@ describe('PR-10b mock: Astra r1 findings', () => {
     const { call } = harness();
     expect(call('A', 'GET', `/review-documents/${SUMMARY}`, undefined, 'revision=1').status).toBe(200);
     expect(err(call('A', 'GET', `/review-documents/${SUMMARY}`, undefined, 'revision=2'))).toMatchObject({ code: 'REVISION_CONFLICT', current_revision: 1 });
+  });
+});
+
+describe('PR-10b mock: Astra r2 findings', () => {
+  const EPOCH = '74000000-0000-4000-8000-000000000001';
+  it('a window reaching past the recording needs partial consent at prepare and execute', () => {
+    const { call } = harness();
+    // The seeded class records 95 minutes (5 700 s).
+    expect(err(call('A', 'POST', `/class-sessions/${ENDED}/generation-plans`, retranscribe({ scope: 'range', start_ms: 5_690_000, end_ms: 5_800_000 }))).code).toBe('SOURCE_UNAVAILABLE');
+    const plan = call('A', 'POST', `/class-sessions/${ENDED}/generation-plans`, retranscribe({ scope: 'range', start_ms: 5_690_000, end_ms: 5_800_000, accept_partial_scope: true })).body as S['GenerationPlan'];
+    expect(err(call('A', 'POST', `/generation-plans/${plan.id}/execute`, execute(plan))).code).toBe('VALIDATION_FAILED');
+    expect(call('A', 'POST', `/generation-plans/${plan.id}/execute`, execute(plan, { confirm_partial_scope: true })).status).toBe(202);
+  });
+  it('the panel shortcut issues exactly one approval', () => {
+    const { backend, call } = harness();
+    const first = call('A', 'POST', `/class-sessions/${ENDED}/generation-plans`, retranscribe({ scope: 'range', start_ms: 0, end_ms: 20_000 })).body as S['GenerationPlan'];
+    const task = call('A', 'POST', `/generation-plans/${first.id}/execute`, execute(first)).body as S['Task'];
+    backend.advanceTask('A', task.id, 'unknown');
+    const second = call('A', 'POST', `/class-sessions/${ENDED}/generation-plans`, retranscribe({ scope: 'range', start_ms: 0, end_ms: 20_000 })).body as S['GenerationPlan'];
+    expect(backend.setRetranscribeDev('A', { classId: ENDED, approve: true }).approvals).toEqual([`plan:${second.id}`]);
+    expect(call('A', 'POST', `/generation-plans/${second.id}/execute`, execute(second)).status).toBe(202);
+    expect(err(call('A', 'POST', `/tasks/${task.id}/retry`, { reason: 'x', confirm_duplicate_billing: true, original_attempt_id: task.attempt_id })).code).toBe('QUOTA_SESSION_EXCEEDED');
+  });
+  it('a candidate is not published after its classroom was deleted, but is published after natural audio expiry', () => {
+    const { backend, call } = harness();
+    const plan = call('A', 'POST', `/class-sessions/${ENDED}/generation-plans`, retranscribe()).body as S['GenerationPlan'];
+    const task = call('A', 'POST', `/generation-plans/${plan.id}/execute`, execute(plan)).body as S['Task'];
+    backend.revokeClassroom('A', ENDED);
+    expect(backend.advanceTask('A', task.id, 'succeeded')).toMatchObject({ state: 'failed', provider_outcome: 'succeeded', error_code: 'AUDIO_DELETED', result_id: null });
+    expect(backend.classroomStore('A').versions.some(item => item.source_task_id === task.id)).toBe(false);
+    const other = harness();
+    const plan2 = other.call('A', 'POST', `/class-sessions/${ENDED}/generation-plans`, retranscribe()).body as S['GenerationPlan'];
+    const task2 = other.call('A', 'POST', `/generation-plans/${plan2.id}/execute`, execute(plan2)).body as S['Task'];
+    // The epoch's own deadline passes after the authorised submission.
+    other.backend.classroomStore('A').epochOrder.set(EPOCH, { ...(other.backend.classroomStore('A').epochOrder.get(EPOCH) ?? { offset: 0, fence: 1, samples: 0 }), expires: '2026-10-01T00:00:00Z' });
+    expect(other.backend.advanceTask('A', task2.id, 'succeeded')).toMatchObject({ state: 'succeeded' });
+  });
+  it('a matching approval admits a run even in the forced session-quota scenario', () => {
+    const { backend, call } = harness();
+    backend.setRetranscribeDev('A', { quota: 'session' });
+    const plan = call('A', 'POST', `/class-sessions/${ENDED}/generation-plans`, retranscribe()).body as S['GenerationPlan'];
+    expect(err(call('A', 'POST', `/generation-plans/${plan.id}/execute`, execute(plan))).code).toBe('QUOTA_SESSION_EXCEEDED');
+    backend.setRetranscribeDev('A', { approvePlan: plan.id });
+    expect(call('A', 'POST', `/generation-plans/${plan.id}/execute`, execute(plan)).status).toBe(202);
   });
 });

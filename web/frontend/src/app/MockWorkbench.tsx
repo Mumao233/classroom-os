@@ -23,6 +23,7 @@ import { ClassroomLive } from '../pages/classroom/ClassroomLive';
 import { ClassroomProcessing } from '../pages/classroom/ClassroomProcessing';
 import { ClassroomRecord } from '../pages/classroom/ClassroomRecord';
 import { ReviewHub } from '../pages/review/ReviewHub';
+import { evictClassroomFromReview } from '../features/review';
 import { ReviewReader } from '../pages/review/ReviewReader';
 import { ClassReview } from '../pages/review/ClassReview';
 import type { ClassroomOSWebV1EventEnvelope } from '../generated/events';
@@ -194,6 +195,8 @@ function MockWorkbenchContent({ runtime }: { runtime: ReturnType<typeof useMockR
     classroomShell.pendingStops.set(deletedClassId, null);
     classroomShell.pendingCommands.set(deletedClassId, null);
     void queryClient.resetQueries(classQueries(new Set([deletedClassId])));
+    // Review lists and documents carry the classroom inside their data, not their keys: evict them now.
+    evictClassroomFromReview(queryClient, deletedClassId);
     // Lists (course classrooms, entry, dashboard, review lists) may also project it: refetch them all.
     void queryClient.invalidateQueries();
   }, [deletedClassId, queryClient, classroomShell]);

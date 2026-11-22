@@ -298,7 +298,8 @@ function Compare({ revisions, doc }: { revisions: Revision[]; doc: Doc }) {
   </div>;
 }
 
-type DraftBase = { content: string | null; revision: number; draft: string };
+/** The draft's pinned base, and the operation key of a save whose reply may have been lost (kept with the draft). */
+type DraftBase = { content: string | null; revision: number; draft: string; key?: { fingerprint: string; key: string } };
 function parseMeta(raw: string): DraftBase | null {
   try {
     const value = JSON.parse(raw) as Partial<DraftBase>;
@@ -325,14 +326,17 @@ function PersonalEditor({ doc, basis, onSaved, onConflict }: { doc: Doc; basis: 
       if (!meta) setMetaRaw(JSON.stringify(pinned));
       const payload: S['PersonalRevisionWrite'] = { base_revision: pinned.revision, base_content_revision_id: pinned.content, draft_id: pinned.draft, body_markdown: body, personal_note: note };
       const fingerprint = JSON.stringify(payload);
+      keyRef.current ??= pinned.key ?? null;
       if (!keyRef.current || keyRef.current.fingerprint !== fingerprint) keyRef.current = { fingerprint, key: crypto.randomUUID() };
+      // The key travels with the draft, so a retry after leaving and returning replays the same intent.
+      setMetaRaw(JSON.stringify({ ...pinned, key: keyRef.current }));
       return app.api.writePersonalRevision(doc.id, payload, keyRef.current.key);
     },
     onSuccess: revision => { keyRef.current = null; setBody(''); setNote(''); setMetaRaw(''); setConflicted(false); setOpen(false); void invalidate(); onSaved(revision); },
-    onError: error => { if (answered(error)) keyRef.current = null; if (isConflict(error)) { setConflicted(true); onConflict(); } },
+    onError: error => { if (answered(error)) { keyRef.current = null; if (meta) setMetaRaw(JSON.stringify({ ...meta, key: undefined })); } if (isConflict(error)) { setConflicted(true); onConflict(); } },
   });
   const start = () => {
-    if (!body && basis) setBody(basis.body_markdown);
+    if (!body && basis) { setBody(basis.body_markdown); if (!note) setNote(basis.personal_note); }
     if (!meta) setMetaRaw(JSON.stringify({ content: basis?.id ?? null, revision: doc.revision, draft: crypto.randomUUID() }));
     setOpen(true);
   };

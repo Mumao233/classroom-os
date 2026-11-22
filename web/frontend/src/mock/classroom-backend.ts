@@ -648,23 +648,31 @@ export type AudioSlice = { epochId: string; seqs: number[]; missing: number[]; c
  */
 function selectAudio(store: ClassroomStore, session: S['ClassSession'], from: number, to: number, now: string) {
   const slices: AudioSlice[] = [];
+  // Any part of the requested window without readable durable audio makes the selection partial.
+  let uncovered = false;
+  let timelineEnd = 0;
+  let ms = 0;
   for (const epoch of audioEpochs(store, session.id, now)) {
-    if (epoch.revoked || epoch.expired) continue;
     const durable = new Set(epoch.manifest.durable_ranges.flatMap(range => Array.from({ length: range.last_seq - range.first_seq + 1 }, (_, i) => range.first_seq + i)));
-    if (!durable.size) continue;
-    const count = epoch.manifest.expected_last_seq !== null ? epoch.manifest.expected_last_seq + 1 : Math.max(...durable) + 1;
     const duration = epoch.order.samples > 0 ? epoch.order.samples / 16 : session.effective_capture_ms;
+    const epochEnd = epoch.order.offset + duration;
+    timelineEnd = Math.max(timelineEnd, epochEnd);
+    if (epochEnd <= from || epoch.order.offset >= to) continue;
+    if (epoch.revoked || epoch.expired || !durable.size) { uncovered = true; continue; }
+    const count = epoch.manifest.expected_last_seq !== null ? epoch.manifest.expected_last_seq + 1 : Math.max(...durable) + 1;
     const chunkMs = Math.max(1, duration / count);
     const slice: AudioSlice = { epochId: epoch.epochId, seqs: [], missing: [], chunkMs };
     for (let seq = 0; seq < count; seq++) {
       const start = epoch.order.offset + seq * chunkMs; const end = start + chunkMs;
       if (end <= from || start >= to) continue;
-      (durable.has(seq) ? slice.seqs : slice.missing).push(seq);
+      if (durable.has(seq)) { slice.seqs.push(seq); ms += Math.min(end, to) - Math.max(start, from); } else slice.missing.push(seq);
     }
     if (slice.seqs.length || slice.missing.length) slices.push(slice);
   }
+  // A window reaching past the end of every recording is not covered there (a whole-class window ends with the recording).
+  if (to !== Number.MAX_SAFE_INTEGER && to > timelineEnd) uncovered = true;
   const frozen = slices.map(slice => ({ epochId: slice.epochId, seqs: slice.seqs }));
-  return { slices, digest: sha256Hex(JSON.stringify(frozen)), ms: Math.round(slices.reduce((sum, slice) => sum + slice.seqs.length * slice.chunkMs, 0)) };
+  return { slices, uncovered, digest: sha256Hex(JSON.stringify(frozen)), ms: Math.round(ms) };
 }
 
 /** Original-audio refusals of 06c, distinguished only by error code (HTTP 0.3.0); a frozen selection is rechecked chunk epoch by epoch. */
@@ -686,7 +694,7 @@ function quotaRefusal(store: ClassroomStore, host: ClassroomHost, h: ClassroomHe
   const bucket = host.quota().buckets.find(item => item.kind === 'retranscribe_month_ms');
   if (store.retranscribeDev.quota === 'month' || (bucket && bucket.remaining < units)) return h.error(409, 'QUOTA_MONTH_EXCEEDED', '本月重新转写时长不足');
   const admitted = store.tasks.filter(item => item.class_session_id === classId && item.kind === 'asr_retranscribe').length;
-  if (store.retranscribeDev.quota === 'session' || (admitted >= 1 && !store.retranscribeDev.approvals.has(approval))) return h.error(409, 'QUOTA_SESSION_EXCEEDED', '本节课追加重新转写需要审批');
+  if ((store.retranscribeDev.quota === 'session' || admitted >= 1) && !store.retranscribeDev.approvals.has(approval)) return h.error(409, 'QUOTA_SESSION_EXCEEDED', '本节课追加重新转写需要审批');
   return null;
 }
 /** Consumes the matching approval and reserves the frozen units for the new task (moved once with its outcome). */
@@ -717,7 +725,7 @@ function retranscribePlan(store: ClassroomStore, h: ClassroomHelpers, session: S
   const selection = selectAudio(store, session, from, to, h.now());
   const chunks = selection.slices.reduce((sum, slice) => sum + slice.seqs.length, 0);
   if (chunks === 0) return h.error(409, 'SOURCE_UNAVAILABLE', '所选范围没有已持久保存的原音，无法重新转写');
-  const partial = selection.slices.some(slice => slice.missing.length > 0);
+  const partial = selection.uncovered || selection.slices.some(slice => slice.missing.length > 0);
   if (partial && body.accept_partial_scope !== true) return h.error(409, 'SOURCE_UNAVAILABLE', '所选范围内有分片缺失。可以等待上传完成，或明确选择按已有部分重新转写。');
   const created = h.now();
   const serial = store.plans.size + 1;
@@ -735,12 +743,16 @@ function retranscribePlan(store: ClassroomStore, h: ClassroomHelpers, session: S
  * A succeeded retranscription yields a new, unadopted transcript version (a candidate) and returns its ID.
  * When the frozen audio was revoked or expired meanwhile, nothing is published (null).
  */
-function retranscribed(store: ClassroomStore, h: ClassroomHelpers, source: S['Task']): string | null {
+function retranscribed(store: ClassroomStore, host: ClassroomHost, h: ClassroomHelpers, source: S['Task']): string | null {
   const classId = source.class_session_id!;
   const record = originPlan(store, source);
   const epochs = audioEpochs(store, classId, h.now());
   const frozen = record?.audio ?? [];
-  if (store.retranscribeDev.audio.get(classId) === 'deleted' || frozen.some(slice => slice.seqs.length > 0 && epochs.some(item => item.epochId === slice.epochId && (item.revoked || item.expired)))) return null;
+  // Publication reauthorises the classroom and its course, and suppresses on explicit deletion or revocation
+  // of the frozen audio. Natural expiry after an authorised submission does not suppress (06c publication).
+  const session = host.sessions().find(item => item.id === classId);
+  const authorised = !!session && session.deleted_at === null && host.courseExists(session.course_id);
+  if (!authorised || store.retranscribeDev.audio.get(classId) === 'deleted' || frozen.some(slice => slice.seqs.length > 0 && epochs.some(item => item.epochId === slice.epochId && item.revoked))) return null;
   const created = h.now();
   const versionId = h.newId();
   const request = record?.request as unknown as { start_ms: number; end_ms: number } | undefined;
@@ -829,11 +841,11 @@ export function setRetranscribeDev(store: ClassroomStore, value: { classId?: str
   if (value.approvePlan) store.retranscribeDev.approvals.add(`plan:${value.approvePlan}`);
   if (value.approveTask) store.retranscribeDev.approvals.add(`task:${value.approveTask}`);
   if (value.classId && value.approve) {
-    // Panel shortcut: approve the newest unexecuted plan and the newest retryable unknown attempt of the class.
+    // Panel shortcut: exactly one approval — the newest unexecuted plan, else the newest retryable unknown attempt.
     const plan = [...store.plans.values()].filter(record => record.plan.class_session_id === value.classId && record.plan.kind === 'asr_retranscribe' && !record.taskId).at(-1);
-    if (plan) store.retranscribeDev.approvals.add(`plan:${plan.plan.id}`);
     const pending = store.tasks.filter(item => item.class_session_id === value.classId && item.kind === 'asr_retranscribe' && item.state === 'unknown' && !store.tasks.some(other => other.parent_task_id === item.id)).at(-1);
-    if (pending) store.retranscribeDev.approvals.add(`task:${pending.id}`);
+    if (plan) store.retranscribeDev.approvals.add(`plan:${plan.plan.id}`);
+    else if (pending) store.retranscribeDev.approvals.add(`task:${pending.id}`);
   }
   return { audio: Object.fromEntries(store.retranscribeDev.audio), quota: store.retranscribeDev.quota, approvals: [...store.retranscribeDev.approvals] };
 }
@@ -850,7 +862,7 @@ export function advanceTask(store: ClassroomStore, host: ClassroomHost, h: Class
     settled_cost_microyuan: outcome === 'succeeded' ? (found.kind === 'asr_retranscribe' ? found.maximum_cost_microyuan : '9000') : found.settled_cost_microyuan,
     error_code: outcome === 'failed' ? 'PROVIDER_FAILED' : null, result_id: outcome === 'succeeded' && found.kind !== 'asr_retranscribe' ? h.newId() : null };
   if (found.kind === 'asr_retranscribe' && outcome === 'succeeded') {
-    const versionId = retranscribed(store, h, found);
+    const versionId = retranscribed(store, host, h, found);
     // Audio revoked or expired before completion: the provider work and its charge stay recorded, no text is published.
     if (versionId) next.result_id = versionId; else Object.assign(next, { state: 'failed', provider_outcome: 'succeeded', error_code: 'AUDIO_DELETED' });
   }
