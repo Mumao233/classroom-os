@@ -138,7 +138,10 @@ export type ProcessingTone = 'success' | 'info' | 'warning' | 'danger';
 export type ProcessingItem = { key: string; tone: ProcessingTone; title: string; detail: string };
 export type ProcessingInput = {
   session: S['ClassSession'];
-  manifest: S['AudioManifest'] | null;
+  /** Every capture epoch's manifest, read to the last page; null while not (fully) read or after a failure. */
+  manifests: readonly S['AudioManifest'][] | null;
+  /** The read failed because some epoch's audio expired or was deleted (GONE): no refresh brings it back. */
+  manifestsUnavailable?: boolean;
   /** Stop confirmed by the server (capture_ended_at set) versus only stopped in this page. */
   localStopPending: boolean;
   /** Chunks this device still holds that the server has not durably acknowledged. */
@@ -160,7 +163,7 @@ export type ProcessingAssessment = {
 const countRanges = (ranges: ReadonlyArray<{ first_seq: number; last_seq: number }>) => ranges.reduce((n, range) => n + range.last_seq - range.first_seq + 1, 0);
 
 export function assessProcessing(input: ProcessingInput): ProcessingAssessment {
-  const { session, manifest } = input;
+  const { session, manifests } = input;
   const items: ProcessingItem[] = [];
   const missing: string[] = [];
   const stopped = session.capture_ended_at !== null;
@@ -174,18 +177,40 @@ export function assessProcessing(input: ProcessingInput): ProcessingAssessment {
     items.push({ key: 'local', tone: 'danger', title: `本机仍有 ${input.localPendingChunks} 个音频分片待上传`, detail: '这些音频只在本机，服务器尚未接收。关闭浏览器不会继续上传，请保持页面打开直到确认。' });
     missing.push(`本机 ${input.localPendingChunks} 个分片待上传`);
   }
-  if (manifest) {
-    const missingChunks = countRanges(manifest.missing_ranges);
-    if (missingChunks > 0) { items.push({ key: 'manifest', tone: 'warning', title: `服务端记录缺少 ${missingChunks} 个分片`, detail: '缺失范围的原音尚未持久确认，相关内容不会进入完整总结。' }); missing.push(`原音缺少 ${missingChunks} 个分片`); }
-    else if (manifest.sealed) items.push({ key: 'manifest', tone: 'success', title: '服务端已确认全部原音分片', detail: manifest.audio_expires_at ? `原音保留至 ${manifest.audio_expires_at.slice(0, 10)}，到期后不能再播放或重新识别。` : '原音已持久保存。' });
-    if (manifest.unknown_provider_ranges.length) items.push({ key: 'provider', tone: 'warning', title: '部分音频送达转写服务的结果不明', detail: '这部分不会自动重发，以免重复计费。' });
-  } else if (stopped) {
-    items.push({ key: 'manifest', tone: 'info', title: '暂未取得服务端音频清单', detail: '稍后刷新查看。' });
+  // Chunk numbers restart in every capture epoch, so gaps are counted and named per epoch. Without
+  // the whole list (not read, failed, or empty) the audio is never reported complete.
+  const gaps = (manifests ?? []).map((item, index) => ({ index, count: countRanges(item.missing_ranges), ranges: item.missing_ranges })).filter(item => item.count > 0);
+  const interval = (range: { first_seq: number; last_seq: number }) => range.first_seq === range.last_seq ? `${range.first_seq}` : `${range.first_seq}–${range.last_seq}`;
+  const missingChunks = gaps.reduce((n, item) => n + item.count, 0);
+  const audioListed = manifests !== null && manifests.length > 0;
+  if (manifests === null) {
+    if (stopped && input.manifestsUnavailable) { items.push({ key: 'manifest', tone: 'warning', title: '部分原音已过保留期限或已删除', detail: '这部分原音无法再读取，刷新也不能恢复。相关内容只能按部分范围生成总结。' }); missing.push('部分原音已不可读取'); }
+    else if (stopped) { items.push({ key: 'manifest', tone: 'info', title: '暂未取得服务端音频清单', detail: '稍后刷新查看。读取完整前不会标记原音完整。' }); missing.push('服务端音频清单尚未读取'); }
+  } else if (manifests.length === 0) {
+    if (stopped) { items.push({ key: 'manifest', tone: 'warning', title: '服务端没有这节课的原音记录', detail: '没有可确认的原音分片，相关内容不会进入完整总结。' }); missing.push('服务端没有原音记录'); }
+  } else if (missingChunks > 0) {
+    // Sequence numbers restart in every epoch, so each interval is shown with its own epoch.
+    const where = gaps.map(item => `${manifests.length > 1 ? `第 ${item.index + 1} 段采集` : ''}缺分片 ${item.ranges.map(interval).join('、')}（${item.count} 个）`).join('；');
+    items.push({ key: 'manifest', tone: 'warning', title: `服务端记录缺少 ${missingChunks} 个分片`, detail: `${where}。缺失范围的原音尚未持久确认，相关内容不会进入完整总结。` });
+    missing.push(`原音缺少 ${missingChunks} 个分片`);
+  } else if (session.flows.upload === 'durable') {
+    // One class-wide verdict: every epoch read without a gap and the server's upload flow durable
+    // (an epoch's seal is a separate fact; a resumed-over epoch may stay unsealed).
+    const known = manifests.map(item => item.audio_expires_at === null ? NaN : Date.parse(item.audio_expires_at)).filter(value => !Number.isNaN(value));
+    const unknown = known.length < manifests.length;
+    const earliest = known.length ? new Date(Math.min(...known)).toISOString().slice(0, 10) : null;
+    // One shared, fully known deadline is stated as such; otherwise only the earliest known one, with no
+    // promise about the others.
+    const uniform = !unknown && new Set(known).size === 1;
+    const detail = earliest === null ? '原音已持久保存，保留期限未知。'
+      : uniform ? `原音保留至 ${earliest}，到期后不能再播放或重新识别。`
+        : `已知最早到期的原音保留至 ${earliest}；${unknown ? '部分段落的保留期限未知；' : ''}到期的部分不能再播放或重新识别。`;
+    items.push({ key: 'manifest', tone: 'success', title: manifests.length > 1 ? `服务端已确认全部 ${manifests.length} 段采集的原音分片` : '服务端已确认全部原音分片', detail });
   }
-  // The manifest covers one capture epoch; the class-wide upload flow also covers earlier epochs
-  // (before a pause), so it decides completeness when the epoch's own manifest looks complete.
-  if (stopped && !input.localStopPending && input.localPendingChunks === 0 && session.flows.upload !== 'durable' && (!manifest || countRanges(manifest.missing_ranges) === 0)) {
-    items.push({ key: 'upload', tone: 'warning', title: '服务端仍有原音未持久确认', detail: '可能来自暂停前的采集段。这部分尚未确认前，只能按部分范围生成总结。' });
+  if (manifests?.some(item => item.unknown_provider_ranges.length > 0)) items.push({ key: 'provider', tone: 'warning', title: '部分音频送达转写服务的结果不明', detail: '这部分不会自动重发，以免重复计费。' });
+  // The class-wide upload flow is the server's own verdict: until it is durable the material stays partial.
+  if (stopped && !input.localStopPending && input.localPendingChunks === 0 && session.flows.upload !== 'durable' && audioListed && missingChunks === 0) {
+    items.push({ key: 'upload', tone: 'warning', title: '服务端仍有原音未持久确认', detail: '服务端的上传状态尚未变为已确认。确认前只能按部分范围生成总结。' });
     missing.push('部分原音尚未持久确认');
   }
   const asr = session.flows.asr;
@@ -201,7 +226,7 @@ export function assessProcessing(input: ProcessingInput): ProcessingAssessment {
   // All five flows (AI included) plus every task: a queued, running, failed or unknown task is unfinished work.
   const unfinishedTasks = input.tasks.filter(task => task.state === 'queued' || task.state === 'running' || task.state === 'failed' || task.state === 'unknown' || task.state === 'cancel_requested');
   const complete = stopped && !input.localStopPending && input.localPendingChunks === 0 && isClassComplete(session.flows)
-    && unfinishedTasks.length === 0 && !(manifest && manifest.missing_ranges.length);
+    && unfinishedTasks.length === 0 && audioListed && missingChunks === 0;
   const canLeaveSafely = stopped && !input.localStopPending && input.localPendingChunks === 0;
   const leaveWarning = input.localPendingChunks > 0 ? `本机仍有 ${input.localPendingChunks} 个音频分片未上传，离开或关闭页面可能丢失。`
     : input.localStopPending ? '停止范围尚未被服务端确认，离开前请先重试确认。' : null;

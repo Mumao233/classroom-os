@@ -456,4 +456,56 @@ test.describe('PR-10a classroom', () => {
     await expect(page.getByText('停止范围尚未被服务端确认')).toHaveCount(0);
     await startClass(page);
   });
+
+  test('the processing page reads every epoch from the server without a local binding (contract 0.3.0)', async ({ page }) => {
+    await ready(page);
+    const id = await createClass(page, '跨轮次清单');
+    await startClass(page);
+    const toolbar = page.getByRole('toolbar', { name: '课堂工具栏' });
+    await toolbar.getByRole('button', { name: '暂停' }).click();
+    await expect(page.getByTestId('capture-phase')).toHaveText('已暂停');
+    await toolbar.getByRole('button', { name: '继续' }).click();
+    await expect(page.getByTestId('capture-phase')).toHaveText('采集中');
+    await toolbar.getByRole('button', { name: '结束课堂' }).click();
+    await expect(page).toHaveURL(`${BASE}/classrooms/${id}/processing`);
+    // A new account epoch drops every local binding, like another device; the server list remains.
+    await page.getByRole('button', { name: '切换模拟账号 A' }).click();
+    await page.getByRole('button', { name: '切换模拟账号 B' }).click();
+    await expect(page.getByText('Mock API 已连接')).toBeVisible();
+    await spa(page, `/classrooms/${id}/processing`);
+    const item = page.getByTestId('processing-items').locator('[data-key="manifest"]');
+    await expect(item).toBeVisible();
+    await expect(item).not.toContainText('暂未取得服务端音频清单');
+    await expect(item).toContainText('第 1 段采集');
+  });
+
+  test('a gap on a later page is shown and a failed refresh never keeps a complete verdict (contract 0.3.0, review r2)', async ({ page }) => {
+    await ready(page);
+    const id = await createClass(page, '分页清单');
+    await startClass(page);
+    const firstEpoch = await currentEpoch(page);
+    const toolbar = page.getByRole('toolbar', { name: '课堂工具栏' });
+    await toolbar.getByRole('button', { name: '暂停' }).click();
+    await expect(page.getByTestId('capture-phase')).toHaveText('已暂停');
+    await toolbar.getByRole('button', { name: '继续' }).click();
+    await expect(page.getByTestId('capture-phase')).toHaveText('采集中');
+    await toolbar.getByRole('button', { name: '结束课堂' }).click();
+    await expect(page).toHaveURL(`${BASE}/classrooms/${id}/processing`);
+    // The first epoch's chunk becomes durable late; the second epoch's chunk is still missing.
+    await page.getByRole('region', { name: '模拟上传历史' }).locator(`li[data-capture-epoch="${firstEpoch}"]`).getByRole('button', { name: '模拟迟到持久回执' }).click();
+    // One epoch per page: the gap is only on the second page.
+    await page.evaluate(() => (globalThis as unknown as { __classroomMock: { manifestDev: (value: object) => unknown } }).__classroomMock.manifestDev({ pageSize: 1 }));
+    await page.getByRole('button', { name: '转写收尾完成' }).click();
+    const item = page.getByTestId('processing-items').locator('[data-key="manifest"]');
+    await expect(item).toContainText('第 2 段采集缺分片 0（1 个）');
+    // The second epoch's chunk becomes durable: both pages are complete.
+    await page.getByLabel('模拟事件脚本').selectOption('upload');
+    await page.getByRole('button', { name: '运行模拟事件' }).click();
+    await expect(item).toContainText('服务端已确认全部 2 段采集的原音分片');
+    // A refresh whose continuation fails withholds the cached complete verdict.
+    await page.evaluate(() => (globalThis as unknown as { __classroomMock: { manifestDev: (value: object) => unknown } }).__classroomMock.manifestDev({ failContinuations: true }));
+    await page.getByRole('button', { name: '转写收尾完成' }).click();
+    await expect(item).toContainText('暂未取得服务端音频清单');
+    await expect(item).not.toContainText('已确认全部');
+  });
 });

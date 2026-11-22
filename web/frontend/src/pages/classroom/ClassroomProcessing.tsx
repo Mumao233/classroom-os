@@ -3,7 +3,7 @@ import { Link, useLocation, useParams } from 'react-router';
 import type { components } from '../../generated/openapi';
 import { describeError, useAppData, useInvalidateAccount } from '../../features/data';
 import { ApiClientError } from '../../api/client';
-import { confirmStop, useAudioManifest, useClassSession, useClassroomShell, useTasks } from '../../features/classroom';
+import { confirmStop, useAudioManifests, useClassSession, useClassroomShell, useTasks } from '../../features/classroom';
 import { assessProcessing, TASK_STATE_LABEL } from '../../domain/classroom';
 import { DataSourceNote } from '../common';
 import { PlanDialog } from './PlanDialog';
@@ -27,8 +27,9 @@ export function ClassroomProcessing() {
   const invalidate = useInvalidateAccount();
   const session = useClassSession(classId);
   const stopped = session.data?.capture_ended_at != null;
-  const bound = shell.capture.bound();
-  const manifest = useAudioManifest(classId, bound?.classId === classId ? bound.captureEpochId : null, stopped);
+  // Every epoch from the server, independent of this device: refresh or another device still sees them all.
+  // Only a finished, successful read is evidence: a refresh still traversing (or paused offline) may hold a gap.
+  const manifests = useAudioManifests(classId, stopped);
   const tasks = useTasks(classId);
   const [retrying, setRetrying] = useState(false);
   const [stopError, setStopError] = useState<string | null>((location.state as { stopError?: string } | null)?.stopError ?? null);
@@ -41,7 +42,7 @@ export function ClassroomProcessing() {
 
   const pendingStop = shell.pendingStops.get(classId);
   const localPending = shell.capture.pendingChunks(classId);
-  const assessment = session.data ? assessProcessing({ session: session.data, manifest: manifest.data ?? null, localStopPending: pendingStop !== null, localPendingChunks: localPending, tasks: tasks.data?.items ?? [] }) : null;
+  const assessment = session.data ? assessProcessing({ session: session.data, manifests: manifests.isSuccess && manifests.fetchStatus === 'idle' ? manifests.data.items : null, manifestsUnavailable: manifests.error instanceof ApiClientError && manifests.error.code === 'GONE', localStopPending: pendingStop !== null, localPendingChunks: localPending, tasks: tasks.data?.items ?? [] }) : null;
   const unsafe = assessment !== null && !assessment.canLeaveSafely;
   // Closing the tab cannot continue an upload; the browser asks before discarding local-only audio.
   useEffect(() => {

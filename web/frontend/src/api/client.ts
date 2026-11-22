@@ -6,6 +6,20 @@ type ErrorBody = S['Error'];
 const PREFIX = '/api/web/v1';
 
 /** Errors from transport, HTTP responses and invalidated account scopes share one boundary. */
+const index = (value: unknown, minimum = 0): value is number => Number.isSafeInteger(value) && (value as number) >= minimum;
+/** Sequence intervals: non-negative safe integers with first <= last (an inverted interval is malformed, not empty). */
+const seqRanges = (value: unknown) => Array.isArray(value) && value.every(range => typeof range === 'object' && range !== null
+  && index((range as { first_seq?: unknown }).first_seq) && index((range as { last_seq?: unknown }).last_seq) && (range as { first_seq: number }).first_seq <= (range as { last_seq: number }).last_seq);
+/** Shape check of one AudioManifest before it can count as evidence (a malformed member fails the read). */
+function isAudioManifest(value: unknown): value is S['AudioManifest'] {
+  if (typeof value !== 'object' || value === null) return false;
+  const item = value as Record<string, unknown>;
+  return typeof item.class_session_id === 'string' && typeof item.capture_epoch_id === 'string' && typeof item.sealed === 'boolean'
+    && (item.expected_last_seq === null || index(item.expected_last_seq)) && seqRanges(item.durable_ranges) && seqRanges(item.missing_ranges)
+    && Array.isArray(item.unknown_provider_ranges) && item.unknown_provider_ranges.every(range => typeof range === 'object' && range !== null && index((range as { start_sample?: unknown }).start_sample) && index((range as { end_sample?: unknown }).end_sample, 1) && (range as { start_sample: number }).start_sample < (range as { end_sample: number }).end_sample)
+    && (item.audio_expires_at === null || typeof item.audio_expires_at === 'string');
+}
+
 export class ApiClientError extends Error {
   constructor(readonly kind: 'stale' | 'network' | 'http' | 'invalid_response', readonly status?: number, readonly detail?: ErrorBody) {
     super(`API request failed: ${kind}`);
@@ -152,7 +166,33 @@ export function createApiClient(scope: Scope, transportOrOptions: typeof fetch |
     acquireCapture: (id: string, body: S['CaptureAcquire'], key?: string) => post<S['CaptureLease']>(`/class-sessions/${segment(id)}/capture/acquire`, body, key),
     captureCommand: (id: string, action: 'pause' | 'resume', body: S['CaptureCommand'], key?: string) => post<S['CaptureLease']>(`/class-sessions/${segment(id)}/capture/${action}`, body, key),
     stopCapture: (id: string, body: S['CaptureStop'], key?: string) => post<S['AudioManifest']>(`/class-sessions/${segment(id)}/capture/stop`, body, key),
-    audioManifest: (id: string, captureEpochId: string | null, signal?: AbortSignal) => get<S['AudioManifest']>(`/class-sessions/${segment(id)}/audio-manifest`, captureEpochId ? { capture_epoch_id: captureEpochId } : undefined, signal),
+    /** One capture epoch's manifest (0.3.0: the epoch is required). Without a known epoch, use audioManifests. */
+    audioManifest: (id: string, captureEpochId: string, signal?: AbortSignal) => get<S['AudioManifest']>(`/class-sessions/${segment(id)}/audio-manifest`, { capture_epoch_id: captureEpochId }, signal),
+    /**
+     * Every capture epoch of the classroom (retired ones included), read to the last page. An expired
+     * cursor discards the traversal and starts again from the first page.
+     */
+    audioManifests: async (id: string, signal?: AbortSignal) => {
+      const path = `/class-sessions/${segment(id)}/audio-manifests`;
+      // Only an explicit null ends the traversal; a missing or empty cursor is a malformed page, never "done".
+      const traverse = async () => {
+        const items: S['AudioManifest'][] = [];
+        let cursor: string | null = null;
+        for (let pages = 0; pages < 1000; pages++) {
+          const page: S['AudioManifestPage'] = await get(path, cursor ? { limit: 100, cursor } : { limit: 100 }, signal);
+          const next: unknown = (page as { next_cursor?: unknown }).next_cursor;
+          if (!Array.isArray(page.items) || !page.items.every(isAudioManifest) || !(next === null || (typeof next === 'string' && next.length >= 1 && next.length <= 512))) throw new ApiClientError('invalid_response');
+          items.push(...page.items);
+          if (next === null) return { items, next_cursor: null };
+          cursor = next as string;
+        }
+        throw new ApiClientError('invalid_response');
+      };
+      for (let attempt = 0; ; attempt++) {
+        try { return await traverse(); }
+        catch (error) { if (attempt < 2 && error instanceof ApiClientError && error.code === 'CURSOR_EXPIRED') continue; throw error; }
+      }
+    },
     transcriptVersions: (id: string, signal?: AbortSignal) => allPages<S['TranscriptVersion']>(`/class-sessions/${segment(id)}/transcript-versions`, signal),
     transcriptSegments: (versionId: string, signal?: AbortSignal) => allPages<S['TranscriptSegment']>(`/transcript-versions/${segment(versionId)}/segments`, signal),
     marks: (id: string, signal?: AbortSignal) => allPages<S['Mark']>(`/class-sessions/${segment(id)}/marks`, signal),

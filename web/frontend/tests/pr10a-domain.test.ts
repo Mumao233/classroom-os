@@ -99,12 +99,12 @@ describe('processing assessment (UI-CLASS-10/11, FE-05/09)', () => {
   const task = (state: S['Task']['state']): S['Task'] => ({ id: `t-${state}`, revision: 1, created_at: '2026-10-28T08:00:00Z', updated_at: '2026-10-28T08:00:00Z', class_session_id: CLASS, kind: 'review_summary', state, attempt_id: null, parent_task_id: null, completed_units: 0, total_units: 1, error_code: null, result_id: null, source_snapshot_id: null, provider_outcome: 'unknown', maximum_cost_microyuan: '1', settled_cost_microyuan: null, may_have_charged: state === 'unknown' });
 
   it('everything finished is complete and safe to leave', () => {
-    const result = assessProcessing({ session: session(), manifest: manifest(), localStopPending: false, localPendingChunks: 0, tasks: [] });
+    const result = assessProcessing({ session: session(), manifests: [manifest()], localStopPending: false, localPendingChunks: 0, tasks: [] });
     expect(result).toMatchObject({ complete: true, canLeaveSafely: true, leaveWarning: null, missing: [] });
   });
 
   it('local-only audio blocks a safe leave and is never folded into a complete state', () => {
-    const result = assessProcessing({ session: session(), manifest: manifest(), localStopPending: false, localPendingChunks: 2, tasks: [] });
+    const result = assessProcessing({ session: session(), manifests: [manifest()], localStopPending: false, localPendingChunks: 2, tasks: [] });
     expect(result.complete).toBe(false);
     expect(result.canLeaveSafely).toBe(false);
     expect(result.leaveWarning).toContain('2 个音频分片');
@@ -112,9 +112,9 @@ describe('processing assessment (UI-CLASS-10/11, FE-05/09)', () => {
   });
 
   it('an unconfirmed stop, missing chunks or unfinished ASR each make the material partial', () => {
-    expect(assessProcessing({ session: session({ capture_ended_at: null }, { capture: 'ended' }), manifest: null, localStopPending: true, localPendingChunks: 0, tasks: [] }).missing).toContain('停止范围尚未确认');
-    expect(assessProcessing({ session: session(), manifest: manifest([{ first_seq: 4, last_seq: 6 }]), localStopPending: false, localPendingChunks: 0, tasks: [] }).missing).toContain('原音缺少 3 个分片');
-    const draining = assessProcessing({ session: session({}, { asr: 'draining' }), manifest: manifest(), localStopPending: false, localPendingChunks: 0, tasks: [] });
+    expect(assessProcessing({ session: session({ capture_ended_at: null }, { capture: 'ended' }), manifests: null, localStopPending: true, localPendingChunks: 0, tasks: [] }).missing).toContain('停止范围尚未确认');
+    expect(assessProcessing({ session: session(), manifests: [manifest([{ first_seq: 4, last_seq: 6 }])], localStopPending: false, localPendingChunks: 0, tasks: [] }).missing).toContain('原音缺少 3 个分片');
+    const draining = assessProcessing({ session: session({}, { asr: 'draining' }), manifests: [manifest()], localStopPending: false, localPendingChunks: 0, tasks: [] });
     expect(draining.complete).toBe(false);
     expect(draining.canLeaveSafely).toBe(true);
     expect(draining.missing).toContain('转写仍在处理');
@@ -122,20 +122,63 @@ describe('processing assessment (UI-CLASS-10/11, FE-05/09)', () => {
 
   it('unfinished, failed or running AI work keeps the class from being complete (review r0)', () => {
     for (const state of ['queued', 'running', 'failed', 'cancel_requested'] as const) {
-      expect(assessProcessing({ session: session(), manifest: manifest(), localStopPending: false, localPendingChunks: 0, tasks: [task(state)] }).complete).toBe(false);
+      expect(assessProcessing({ session: session(), manifests: [manifest()], localStopPending: false, localPendingChunks: 0, tasks: [task(state)] }).complete).toBe(false);
     }
-    expect(assessProcessing({ session: session({}, { ai: 'running' }), manifest: manifest(), localStopPending: false, localPendingChunks: 0, tasks: [] }).complete).toBe(false);
-    expect(assessProcessing({ session: session({}, { ai: 'succeeded' }), manifest: manifest(), localStopPending: false, localPendingChunks: 0, tasks: [task('succeeded')] }).complete).toBe(true);
+    expect(assessProcessing({ session: session({}, { ai: 'running' }), manifests: [manifest()], localStopPending: false, localPendingChunks: 0, tasks: [] }).complete).toBe(false);
+    expect(assessProcessing({ session: session({}, { ai: 'succeeded' }), manifests: [manifest()], localStopPending: false, localPendingChunks: 0, tasks: [task('succeeded')] }).complete).toBe(true);
   });
 
   it('upload failure with an ended capture is not complete; unknown tasks are listed for reconciliation', () => {
-    const result = assessProcessing({ session: session({}, { upload: 'failed' }), manifest: manifest(), localStopPending: false, localPendingChunks: 0, tasks: [task('unknown'), task('succeeded')] });
+    const result = assessProcessing({ session: session({}, { upload: 'failed' }), manifests: [manifest()], localStopPending: false, localPendingChunks: 0, tasks: [task('unknown'), task('succeeded')] });
     expect(result.complete).toBe(false);
     expect(result.unknownTasks.map(item => item.id)).toEqual(['t-unknown']);
   });
 
+  it('gaps are counted per capture epoch; an unread or empty list never counts as complete (0.3.0)', () => {
+    const retired = { ...manifest([{ first_seq: 2, last_seq: 3 }]), capture_epoch_id: 'e0' };
+    const result = assessProcessing({ session: session(), manifests: [retired, manifest()], localStopPending: false, localPendingChunks: 0, tasks: [] });
+    expect(result.complete).toBe(false);
+    expect(result.missing).toContain('原音缺少 2 个分片');
+    expect(result.items.find(item => item.key === 'manifest')?.detail).toContain('第 1 段采集缺分片 2–3（2 个）');
+    expect(assessProcessing({ session: session(), manifests: null, localStopPending: false, localPendingChunks: 0, tasks: [] }).complete).toBe(false);
+    expect(assessProcessing({ session: session(), manifests: [], localStopPending: false, localPendingChunks: 0, tasks: [] }).missing).toContain('服务端没有原音记录');
+    expect(assessProcessing({ session: session(), manifests: [manifest(), manifest()], localStopPending: false, localPendingChunks: 0, tasks: [] }).complete).toBe(true);
+  });
+
+  it('the audio verdict is class-wide: seal state is separate, upload must be durable, intervals stay per epoch (review r0)', () => {
+    const unsealed = { ...manifest(), sealed: false, capture_epoch_id: 'e0' };
+    const durable = assessProcessing({ session: session(), manifests: [unsealed, manifest()], localStopPending: false, localPendingChunks: 0, tasks: [] });
+    expect(durable.complete).toBe(true);
+    expect(durable.items.find(item => item.key === 'manifest')?.tone).toBe('success');
+    const pending = assessProcessing({ session: session({}, { upload: 'pending' }), manifests: [manifest()], localStopPending: false, localPendingChunks: 0, tasks: [] });
+    expect(pending.items.find(item => item.key === 'manifest')).toBeUndefined();
+    expect(pending.items.find(item => item.key === 'upload')?.tone).toBe('warning');
+    const disjoint = assessProcessing({ session: session(), manifests: [manifest([{ first_seq: 2, last_seq: 3 }, { first_seq: 8, last_seq: 9 }])], localStopPending: false, localPendingChunks: 0, tasks: [] });
+    expect(disjoint.items.find(item => item.key === 'manifest')?.detail).toContain('缺分片 2–3、8–9（4 个）');
+  });
+
+  it('different retention deadlines name the earliest as partial (review r1)', () => {
+    const early = { ...manifest(), capture_epoch_id: 'e0', audio_expires_at: '2026-11-02T08:00:00+08:00' };
+    const late = { ...manifest(), audio_expires_at: '2026-11-03T00:00:00Z' };
+    const detail = assessProcessing({ session: session(), manifests: [late, early], localStopPending: false, localPendingChunks: 0, tasks: [] }).items.find(item => item.key === 'manifest')?.detail;
+    expect(detail).toContain('已知最早到期的原音保留至 2026-11-02');
+    const shared = assessProcessing({ session: session(), manifests: [early, early, late], localStopPending: false, localPendingChunks: 0, tasks: [] }).items.find(item => item.key === 'manifest')?.detail;
+    expect(shared).toContain('已知最早到期的原音保留至 2026-11-02');
+    expect(shared).not.toContain('其余');
+    const partlyUnknown = assessProcessing({ session: session(), manifests: [late, manifest()], localStopPending: false, localPendingChunks: 0, tasks: [] }).items.find(item => item.key === 'manifest')?.detail;
+    expect(partlyUnknown).toContain('部分段落的保留期限未知');
+  });
+
+  it('unavailable audio is not told to refresh; a pending read is (review r2)', () => {
+    const gone = assessProcessing({ session: session(), manifests: null, manifestsUnavailable: true, localStopPending: false, localPendingChunks: 0, tasks: [] });
+    expect(gone.complete).toBe(false);
+    expect(gone.items.find(item => item.key === 'manifest')?.title).toBe('部分原音已过保留期限或已删除');
+    expect(gone.missing).toContain('部分原音已不可读取');
+    expect(assessProcessing({ session: session(), manifests: null, localStopPending: false, localPendingChunks: 0, tasks: [] }).items.find(item => item.key === 'manifest')?.detail).toContain('稍后刷新');
+  });
+
   it('a class-wide pending upload keeps the material partial although the final epoch is complete (review r3)', () => {
-    const result = assessProcessing({ session: session({}, { upload: 'pending' }), manifest: manifest(), localStopPending: false, localPendingChunks: 0, tasks: [] });
+    const result = assessProcessing({ session: session({}, { upload: 'pending' }), manifests: [manifest()], localStopPending: false, localPendingChunks: 0, tasks: [] });
     expect(result.complete).toBe(false);
     expect(result.missing).toContain('部分原音尚未持久确认');
     expect(result.items.find(item => item.key === 'upload')?.tone).toBe('warning');
