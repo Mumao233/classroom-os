@@ -75,6 +75,8 @@ export type ClassroomStore = {
   retranscribeDev: { audio: Map<string, 'expired' | 'deleted'>; quota: 'ok' | 'session' | 'month'; approvals: Set<string> };
   /** Retranscription plans that cover only part of the audio (missing chunks): execution needs an explicit confirmation. */
   partialPlans: Set<string>;
+  /** Capture gaps reported at stop, per epoch (sample intervals); used for retranscription completeness. */
+  knownGaps: Map<string, Array<{ start_sample: number; end_sample: number; reason: string }>>;
 };
 
 const DAY = 86_400_000;
@@ -109,7 +111,7 @@ const CAPTURE_KEYS = ['capture_epoch_id', 'fence_token', 'last_local_seq', 'last
 
 /** Synthetic records for seeded, already ended classes (record page and processing page demos). */
 export function seedClassroom(sessionIds: { ended: string; uploadFailed: string; unknownAi: string } | null): ClassroomStore {
-  const store: ClassroomStore = { versions: [], segments: [], marks: [], slides: [], uploads: new Map(), assets: [], manifests: new Map(), leases: new Map(), plans: new Map(), tasks: [], durable: new Map(), captured: new Map(), slideHistory: [], segmentHistory: [], epochs: new Map(), retired: new Map(), epochManifests: new Map(), epochOrder: new Map(), manifestCursors: new Map(), revokedAudio: new Set(), manifestDev: { pageSize: null, failContinuations: false }, reservations: new Map(), retranscribeDev: { audio: new Map(), quota: 'ok', approvals: new Set() }, partialPlans: new Set() };
+  const store: ClassroomStore = { versions: [], segments: [], marks: [], slides: [], uploads: new Map(), assets: [], manifests: new Map(), leases: new Map(), plans: new Map(), tasks: [], durable: new Map(), captured: new Map(), slideHistory: [], segmentHistory: [], epochs: new Map(), retired: new Map(), epochManifests: new Map(), epochOrder: new Map(), manifestCursors: new Map(), revokedAudio: new Set(), manifestDev: { pageSize: null, failContinuations: false }, reservations: new Map(), retranscribeDev: { audio: new Map(), quota: 'ok', approvals: new Set() }, partialPlans: new Set(), knownGaps: new Map() };
   if (!sessionIds) return store;
   const created = '2026-10-27T06:00:00Z';
   const version = (n: number, classId: string): S['TranscriptVersion'] => ({ id: uuid('71000000', n), revision: 1, created_at: created, updated_at: created, class_session_id: classId, kind: 'realtime', state: 'sealed', source_task_id: uuid('72000000', n), adopted: true });
@@ -373,6 +375,7 @@ export function handleClassroom(store: ClassroomStore, host: ClassroomHost, h: C
       observe(lease.capture_epoch_id, body.last_sample as number);
       const manifest = sealEpoch(store, id, lease.capture_epoch_id, expected, expires);
       store.manifests.set(id, manifest);
+      store.knownGaps.set(lease.capture_epoch_id, body.known_gaps as Array<{ start_sample: number; end_sample: number; reason: string }>);
       store.leases.delete(id);
       // Effective duration comes from captured samples across epochs (16 kHz), never from wall time.
       const samples = (store.captured.get(id) ?? 0) + (body.last_sample as number);
@@ -662,6 +665,8 @@ function selectAudio(store: ClassroomStore, session: S['ClassSession'], from: nu
     if (epochEnd <= from || epoch.order.offset >= to) continue;
     // Only sealed epochs can be frozen; an unsealed (retired or still open) epoch leaves its part uncovered.
     if (epoch.revoked || epoch.expired || !epoch.manifest.sealed || !durable.size) { uncovered = true; continue; }
+    // A reported capture gap (other than a deliberate pause) inside the window is audio that does not exist.
+    if ((store.knownGaps.get(epoch.epochId) ?? []).some(gap => gap.reason !== 'paused' && epoch.order.offset + gap.end_sample / 16 > from && epoch.order.offset + gap.start_sample / 16 < to)) uncovered = true;
     const count = epoch.manifest.expected_last_seq !== null ? epoch.manifest.expected_last_seq + 1 : Math.max(...durable) + 1;
     const chunkMs = Math.max(1, duration / count);
     const slice: AudioSlice = { epochId: epoch.epochId, seqs: [], missing: [], chunkMs };
@@ -678,13 +683,25 @@ function selectAudio(store: ClassroomStore, session: S['ClassSession'], from: nu
   return { slices, uncovered, digest: sha256Hex(JSON.stringify(frozen)), ms: Math.round(ms) };
 }
 
+/** Whether every frozen epoch still exists and still holds each frozen chunk as durable. */
+function frozenStillPresent(epochs: ReturnType<typeof audioEpochs>, frozen: AudioSlice[]) {
+  return frozen.every(slice => {
+    if (!slice.seqs.length) return true;
+    const epoch = epochs.find(item => item.epochId === slice.epochId);
+    if (!epoch) return false;
+    return slice.seqs.every(seq => epoch.manifest.durable_ranges.some(range => seq >= range.first_seq && seq <= range.last_seq));
+  });
+}
+
 /** Original-audio refusals of 06c, distinguished only by error code (HTTP 0.3.0); a frozen selection is rechecked chunk epoch by epoch. */
 function audioRefusal(store: ClassroomStore, h: ClassroomHelpers, session: S['ClassSession'], frozen?: AudioSlice[]): ClassroomReply | null {
   const dev = store.retranscribeDev.audio.get(session.id);
   const epochs = audioEpochs(store, session.id, h.now());
   const usable = epochs.filter(item => !item.revoked && !item.expired);
   const used = frozen ? epochs.filter(item => frozen.some(slice => slice.epochId === item.epochId && slice.seqs.length > 0)) : [];
-  if (dev === 'deleted' || used.some(item => item.revoked) || (epochs.length > 0 && usable.length === 0 && epochs.some(item => item.revoked))) return h.error(410, 'AUDIO_DELETED', '原音已删除或访问已撤销');
+  // Fail closed: every frozen epoch and chunk must still be identifiable and durable.
+  const vanished = frozen ? !frozenStillPresent(epochs, frozen) : false;
+  if (dev === 'deleted' || vanished || used.some(item => item.revoked) || (epochs.length > 0 && usable.length === 0 && epochs.some(item => item.revoked))) return h.error(410, 'AUDIO_DELETED', '原音已删除或访问已撤销');
   if (dev === 'expired' || used.some(item => item.expired) || (session.audio_expires_at !== null && Date.parse(session.audio_expires_at) <= Date.parse(h.now())) || (epochs.length > 0 && usable.length === 0)) return h.error(410, 'AUDIO_EXPIRED', '原音已到期');
   return null;
 }
@@ -755,7 +772,7 @@ function retranscribed(store: ClassroomStore, host: ClassroomHost, h: ClassroomH
   // of the frozen audio. Natural expiry after an authorised submission does not suppress (06c publication).
   const session = host.sessions().find(item => item.id === classId);
   const authorised = !!session && session.deleted_at === null && host.courseExists(session.course_id);
-  if (!authorised || store.retranscribeDev.audio.get(classId) === 'deleted' || frozen.some(slice => slice.seqs.length > 0 && epochs.some(item => item.epochId === slice.epochId && item.revoked))) return null;
+  if (!authorised || store.retranscribeDev.audio.get(classId) === 'deleted' || !frozenStillPresent(epochs, frozen) || frozen.some(slice => slice.seqs.length > 0 && epochs.some(item => item.epochId === slice.epochId && item.revoked))) return null;
   const created = h.now();
   const versionId = h.newId();
   const request = record?.request as unknown as { start_ms: number; end_ms: number } | undefined;

@@ -391,3 +391,33 @@ describe('PR-10b mock: third-round review findings', () => {
     expect(call('A', 'POST', `/generation-plans/${summary.id}/execute`, execute(summary, { confirm_original_snapshot: true })).status).toBe(202);
   });
 });
+
+describe('PR-10b mock: fourth-round review findings', () => {
+  const acquire = { device_id: 'a2000000-0000-4000-8000-000000000001', microphone_consent_version: 'm', recovery_consent_version: 'r', asr_consent_version: 'a', confirm_takeover: false, expected_lease_id: null };
+  function stoppedClass(gaps: Array<{ start_sample: number; end_sample: number; reason: string }>) {
+    const { backend, call } = harness();
+    const created = call('A', 'POST', '/class-sessions', { course_id: mockIds.la, title: '缺口检查', language: 'auto' }).body as S['ClassSession'];
+    const lease = call('A', 'POST', `/class-sessions/${created.id}/capture/acquire`, acquire).body as S['CaptureLease'];
+    backend.setDurable('A', created.id, lease.capture_epoch_id, [0, 1, 2]);
+    const stop = call('A', 'POST', `/class-sessions/${created.id}/capture/stop`, { capture_epoch_id: lease.capture_epoch_id, fence_token: lease.fence_token, last_local_seq: 2, last_sample: 48_000, client_monotonic_ms: 1, manifest_sha256: 'a'.repeat(64), known_gaps: gaps });
+    expect(stop.status).toBe(200);
+    return { call, classId: created.id };
+  }
+  it('a reported capture gap needs partial consent; a deliberate pause does not', () => {
+    const lost = stoppedClass([{ start_sample: 16_000, end_sample: 24_000, reason: 'device_lost' }]);
+    expect(err(lost.call('A', 'POST', `/class-sessions/${lost.classId}/generation-plans`, retranscribe())).code).toBe('SOURCE_UNAVAILABLE');
+    expect(lost.call('A', 'POST', `/class-sessions/${lost.classId}/generation-plans`, retranscribe({ accept_partial_scope: true })).status).toBe(201);
+    const paused = stoppedClass([{ start_sample: 16_000, end_sample: 24_000, reason: 'paused' }]);
+    expect(paused.call('A', 'POST', `/class-sessions/${paused.classId}/generation-plans`, retranscribe()).status).toBe(201);
+  });
+  it('a frozen epoch that no longer exists is refused at execution and never published', () => {
+    const { backend, call } = harness();
+    const plan = call('A', 'POST', `/class-sessions/${ENDED}/generation-plans`, retranscribe()).body as S['GenerationPlan'];
+    const task = call('A', 'POST', `/generation-plans/${plan.id}/execute`, execute(plan)).body as S['Task'];
+    const second = call('A', 'POST', `/class-sessions/${ENDED}/generation-plans`, retranscribe({ scope: 'range', start_ms: 0, end_ms: 20_000 })).body as S['GenerationPlan'];
+    backend.classroomStore('A').manifests.delete(ENDED);
+    backend.setRetranscribeDev('A', { approvePlan: second.id });
+    expect(err(call('A', 'POST', `/generation-plans/${second.id}/execute`, execute(second, { confirm_original_snapshot: true }))).code).toBe('AUDIO_DELETED');
+    expect(backend.advanceTask('A', task.id, 'succeeded')).toMatchObject({ state: 'failed', error_code: 'AUDIO_DELETED', result_id: null });
+  });
+});

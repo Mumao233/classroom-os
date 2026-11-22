@@ -166,3 +166,18 @@ describe('PR-10b cascade deletion evicts contained classrooms', () => {
     expect((client.getQueryData(['account', 'A:1', 'review-library', {}]) as { items: S['ReviewDocument'][] }).items.map(item => item.id)).toEqual(['d2']);
   });
 });
+
+describe('PR-10b cascade deletion also drops classroom rows and their questions', () => {
+  it('removes deleted classrooms from cached lists and every query keyed by them', async () => {
+    const { QueryClient } = await import('@tanstack/react-query');
+    const { evictScopeFromReview } = await import('../src/features/review');
+    const client = new QueryClient();
+    client.setQueryData(['account', 'A:1', 'class-sessions', null], { items: [{ id: 'c1', course_id: 'k1' }, { id: 'c2', course_id: 'k2' }], next_cursor: null });
+    client.setQueryData(['account', 'A:1', 'questions', 'c1'], { items: [{ id: 'q1', class_session_id: 'c1' }], next_cursor: null });
+    client.setQueryData(['account', 'A:1', 'questions', 'c2'], { items: [], next_cursor: null });
+    evictScopeFromReview(client, { kind: 'course', id: 'k1' });
+    expect((client.getQueryData(['account', 'A:1', 'class-sessions', null]) as { items: Array<{ id: string }> }).items.map(item => item.id)).toEqual(['c2']);
+    expect(client.getQueryData(['account', 'A:1', 'questions', 'c1'])).toBeUndefined();
+    expect(client.getQueryData(['account', 'A:1', 'questions', 'c2'])).toBeDefined();
+  });
+});

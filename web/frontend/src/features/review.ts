@@ -55,6 +55,14 @@ export function evictScopeFromReview(client: QueryClient, scope: { kind: 'course
   for (const [, data] of client.getQueriesData<{ items: Session[] }>({ predicate: query => query.queryKey.includes('class-sessions') })) for (const session of data?.items ?? []) if (courseIds.has(session.course_id)) classIds.add(session.id);
   for (const [, data] of client.getQueriesData<Session>({ predicate: query => query.queryKey.includes('class-session') })) if (data && courseIds.has(data.course_id)) classIds.add(data.id);
   for (const classId of classIds) evictClassroomFromReview(client, classId);
+  // The classrooms themselves and everything keyed by them (questions, transcripts, tasks…) leave the cache too,
+  // so nothing of a deleted course is rendered from cache while a refetch cannot succeed (offline).
+  for (const [key, data] of client.getQueriesData<{ items: Session[] }>({ predicate: query => query.queryKey.includes('class-sessions') })) {
+    if (data) client.setQueryData(key, { ...data, items: data.items.filter(session => !classIds.has(session.id) && !courseIds.has(session.course_id)) });
+  }
+  // The classroom detail entry is kept: the account shell relies on its failed refetch (NOT_FOUND) to
+  // revoke a capture still bound to that classroom. Everything else keyed by the classroom is dropped.
+  client.removeQueries({ predicate: query => !query.queryKey.includes('class-session') && query.queryKey.some(part => typeof part === 'string' && classIds.has(part)) });
   return classIds;
 }
 
