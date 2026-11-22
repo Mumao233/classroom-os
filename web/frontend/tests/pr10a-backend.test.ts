@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { ApiClientError, createApiClient, type ApiClient } from '../src/api/client';
 import { commandCapture, confirmStop, reconcileCommand, startCapture, stopCapture, type CaptureBinding, type ClassroomShell, type PendingCommand, type PendingStop } from '../src/features/classroom';
 import { sha256Hex } from '../src/mock/sha256';
+import { createMockRuntime } from '../src/mock/runtime';
 import type { components } from '../src/generated/openapi';
 import { createMockBackend, mockIds, type MockAccountKey } from '../src/mock/backend';
 import { MOCK_DESTINATION } from '../src/mock/classroom-backend';
@@ -160,7 +161,7 @@ describe('PR-10a review round 0 regressions', () => {
     const sealed = call('A', 'POST', `/class-sessions/${created.id}/capture/stop`, stopBody(lease, 1)).body as S['AudioManifest'];
     expect(sealed.missing_ranges).toEqual([{ first_seq: 1, last_seq: 1 }]);
     backend.setDurable('A', created.id, lease.capture_epoch_id, [1]);
-    expect(call('A', 'GET', `/class-sessions/${created.id}/audio-manifest`).body).toMatchObject({ durable_ranges: [{ first_seq: 0, last_seq: 1 }], missing_ranges: [] });
+    expect(call('A', 'GET', `/class-sessions/${created.id}/audio-manifest`, undefined, `capture_epoch_id=${lease.capture_epoch_id}`).body).toMatchObject({ durable_ranges: [{ first_seq: 0, last_seq: 1 }], missing_ranges: [] });
     expect((call('A', 'GET', `/class-sessions/${created.id}`).body as S['ClassSession']).flows.upload).toBe('durable');
   });
 
@@ -245,7 +246,7 @@ describe('PR-10a review round 1 regressions', () => {
     const sealed = call('A', 'POST', `/class-sessions/${created.id}/capture/stop`, { capture_epoch_id: resumed.capture_epoch_id, fence_token: resumed.fence_token, last_local_seq: 0, last_sample: 16000, client_monotonic_ms: 2, manifest_sha256: SHA, known_gaps: [] }).body as S['AudioManifest'];
     expect(sealed.missing_ranges).toEqual([{ first_seq: 0, last_seq: 0 }]);
     backend.setDurable('A', created.id, lease.capture_epoch_id, [0]);
-    expect((call('A', 'GET', `/class-sessions/${created.id}/audio-manifest`).body as S['AudioManifest']).missing_ranges).toEqual([{ first_seq: 0, last_seq: 0 }]);
+    expect((call('A', 'GET', `/class-sessions/${created.id}/audio-manifest`, undefined, `capture_epoch_id=${resumed.capture_epoch_id}`).body as S['AudioManifest']).missing_ranges).toEqual([{ first_seq: 0, last_seq: 0 }]);
   });
 
   it('only one capture lease per account unless takeover is confirmed against the current lease', () => {
@@ -393,13 +394,11 @@ describe('PR-10a review round 2 regressions', () => {
     expect(call('A', 'GET', `/class-sessions/${ENDED}`).body).toMatchObject({ flows: { ai: 'unknown' } });
   });
 
-  it('the manifest client sends the capture epoch when it is known', async () => {
+  it('the single manifest client always sends the capture epoch (0.3.0)', async () => {
     const transport = vi.fn(async () => new Response(JSON.stringify({}), { status: 200 }));
     const client = createApiClient({ epoch: 1, isCurrent: () => true }, transport as typeof fetch);
     await client.audioManifest(ENDED, '74000000-0000-4000-8000-000000000001');
-    await client.audioManifest(ENDED, null);
     expect(transport).toHaveBeenNthCalledWith(1, `/api/web/v1/class-sessions/${ENDED}/audio-manifest?capture_epoch_id=74000000-0000-4000-8000-000000000001`, expect.anything());
-    expect(transport).toHaveBeenNthCalledWith(2, `/api/web/v1/class-sessions/${ENDED}/audio-manifest`, expect.anything());
   });
 });
 
@@ -576,5 +575,198 @@ describe('PR-10a review round 3 regressions', () => {
     await client.updateSlide(ENDED, { base_revision: 1, rotate: 'left' }, '93000000-0000-4000-8000-000000000001');
     const init = (transport.mock.calls[0] as unknown as [string, RequestInit])[1];
     expect(new Headers(init.headers).get('Idempotency-Key')).toBe('93000000-0000-4000-8000-000000000001');
+  });
+});
+
+describe('PR-10a audio manifest list (contract 0.3.0)', () => {
+  const command = (lease: S['CaptureLease'], sample = 16000) => ({ capture_epoch_id: lease.capture_epoch_id, fence_token: lease.fence_token, last_local_seq: 0, last_sample: sample, client_monotonic_ms: 1 });
+  const list = (call: ReturnType<typeof harness>['call'], classId: string, query = '') => call('A', 'GET', `/class-sessions/${classId}/audio-manifests`, undefined, query);
+
+  it('lists every epoch in timeline order, retired ones included, without needing an epoch or lease', () => {
+    const { backend, call, newClass, start } = harness();
+    const created = newClass();
+    expect(list(call, created.id).body).toEqual({ items: [], next_cursor: null });
+    const first = start(created.id);
+    call('A', 'POST', `/class-sessions/${created.id}/capture/pause`, command(first));
+    const second = call('A', 'POST', `/class-sessions/${created.id}/capture/resume`, command(first)).body as S['CaptureLease'];
+    backend.setDurable('A', created.id, second.capture_epoch_id, [0]);
+    call('A', 'POST', `/class-sessions/${created.id}/capture/stop`, { ...command(second), manifest_sha256: SHA, known_gaps: [] });
+    const page = list(call, created.id).body as S['AudioManifestPage'];
+    expect(page.next_cursor).toBeNull();
+    expect(page.items.map(item => item.capture_epoch_id)).toEqual([first.capture_epoch_id, second.capture_epoch_id]);
+    // A resumed-over epoch keeps its range but stays unsealed (only a stop carries the digest).
+    expect(page.items[0]).toMatchObject({ sealed: false, expected_last_seq: 0, missing_ranges: [{ first_seq: 0, last_seq: 0 }] });
+    expect(page.items[1]).toMatchObject({ sealed: true, missing_ranges: [] });
+    // The same epoch reads the same through the single endpoint.
+    expect(call('A', 'GET', `/class-sessions/${created.id}/audio-manifest`, undefined, `capture_epoch_id=${first.capture_epoch_id}`).body).toEqual(page.items[0]);
+  });
+
+  it('pages with a cursor whose membership is fixed at the first page; bad paging is rejected', () => {
+    const { call, newClass, start } = harness();
+    const created = newClass();
+    const first = start(created.id);
+    call('A', 'POST', `/class-sessions/${created.id}/capture/pause`, command(first));
+    const second = call('A', 'POST', `/class-sessions/${created.id}/capture/resume`, command(first)).body as S['CaptureLease'];
+    const one = list(call, created.id, 'limit=1').body as S['AudioManifestPage'];
+    expect(one.items.map(item => item.capture_epoch_id)).toEqual([first.capture_epoch_id]);
+    expect(one.next_cursor).not.toBeNull();
+    // A third epoch created between pages belongs to the next traversal, not this one.
+    call('A', 'POST', `/class-sessions/${created.id}/capture/pause`, command(second));
+    const third = call('A', 'POST', `/class-sessions/${created.id}/capture/resume`, command(second)).body as S['CaptureLease'];
+    const rest = list(call, created.id, `limit=1&cursor=${one.next_cursor}`).body as S['AudioManifestPage'];
+    expect(rest).toMatchObject({ next_cursor: null });
+    expect(rest.items.map(item => item.capture_epoch_id)).toEqual([second.capture_epoch_id]);
+    expect((list(call, created.id).body as S['AudioManifestPage']).items.at(-1)).toMatchObject({ capture_epoch_id: third.capture_epoch_id, sealed: false });
+    for (const query of ['limit=0', 'limit=101', 'cursor=zzz', 'cursor=m9.1']) expect(err(list(call, created.id, query)).code).toBe('VALIDATION_FAILED');
+  });
+
+  it('the single manifest needs exactly one valid epoch; access is checked first', () => {
+    const { backend, call } = harness();
+    for (const query of ['', 'capture_epoch_id=x', 'capture_epoch_id=74000000-0000-4000-8000-000000000001&capture_epoch_id=74000000-0000-4000-8000-000000000001']) {
+      expect(err(call('A', 'GET', `/class-sessions/${ENDED}/audio-manifest`, undefined, query)).code).toBe('VALIDATION_FAILED');
+    }
+    expect(call('A', 'GET', `/class-sessions/${ENDED}/audio-manifest`, undefined, 'capture_epoch_id=74000000-0000-4000-8000-000000000001').status).toBe(200);
+    backend.revokeClassroom('A', ENDED);
+    expect(err(call('A', 'GET', `/class-sessions/${ENDED}/audio-manifests`)).code).toBe('NOT_FOUND');
+  });
+
+  it('the list client follows every cursor and restarts after an expired cursor', async () => {
+    const m = (epoch: string) => ({ class_session_id: ENDED, capture_epoch_id: epoch, sealed: true, expected_last_seq: 0, durable_ranges: [{ first_seq: 0, last_seq: 0 }], missing_ranges: [], unknown_provider_ranges: [], audio_expires_at: null });
+    const pages: Array<[number, unknown]> = [
+      [200, { items: [m('a')], next_cursor: 'c1' }],
+      [409, { error: { code: 'CURSOR_EXPIRED', message: 'x', request_id: 'r', retryable: true } }],
+      [200, { items: [m('a')], next_cursor: 'c1' }],
+      [200, { items: [m('b')], next_cursor: null }],
+    ];
+    const urls: string[] = [];
+    const transport = vi.fn(async (url: string) => { urls.push(url); const [status, body] = pages.shift()!; return new Response(JSON.stringify(body), { status }); });
+    const client = createApiClient({ epoch: 1, isCurrent: () => true }, transport as unknown as typeof fetch);
+    const result = await client.audioManifests(ENDED);
+    expect(result.items.map(item => item.capture_epoch_id)).toEqual(['a', 'b']);
+    expect(urls[0]).toBe(`/api/web/v1/class-sessions/${ENDED}/audio-manifests?limit=100`);
+    expect(urls[2]).toBe(urls[0]);
+    expect(urls[3]).toContain('cursor=c1');
+  });
+
+  it('cursors are bound to their classroom and first-page epochs, and can expire (review r0)', () => {
+    const { backend, call, newClass, start } = harness();
+    const created = newClass();
+    const first = start(created.id);
+    call('A', 'POST', `/class-sessions/${created.id}/capture/pause`, command(first));
+    call('A', 'POST', `/class-sessions/${created.id}/capture/resume`, command(first));
+    const one = list(call, created.id, 'limit=1').body as S['AudioManifestPage'];
+    expect(err(list(call, ENDED, `cursor=${one.next_cursor}`)).code).toBe('VALIDATION_FAILED');
+    backend.expireManifestCursors('A');
+    expect(err(list(call, created.id, `cursor=${one.next_cursor}`)).code).toBe('CURSOR_EXPIRED');
+    for (const query of [`capture_epoch_id=${first.capture_epoch_id}`, 'limit=1&limit=2']) expect(err(list(call, created.id, query)).code).toBe('VALIDATION_FAILED');
+  });
+
+  it('an open epoch reports holes up to the highest chunk seen; unreadable audio fails the read (review r0)', () => {
+    const { backend, call, newClass, start } = harness();
+    const created = newClass();
+    const lease = start(created.id);
+    backend.setDurable('A', created.id, lease.capture_epoch_id, [0, 2]);
+    expect((list(call, created.id).body as S['AudioManifestPage']).items[0]).toMatchObject({ sealed: false, durable_ranges: [{ first_seq: 0, last_seq: 0 }, { first_seq: 2, last_seq: 2 }], missing_ranges: [{ first_seq: 1, last_seq: 1 }] });
+    const seeded = backend.classroomStore('A').manifests.get(ENDED)!;
+    backend.classroomStore('A').manifests.set(ENDED, { ...seeded, audio_expires_at: '2026-10-01T00:00:00Z' });
+    expect(err(list(call, ENDED)).code).toBe('GONE');
+    expect(err(call('A', 'GET', `/class-sessions/${ENDED}/audio-manifest`, undefined, `capture_epoch_id=${seeded.capture_epoch_id}`)).code).toBe('GONE');
+  });
+
+  it('the list client accepts only an explicit null as the last page (review r0)', async () => {
+    const inverted = { class_session_id: ENDED, capture_epoch_id: 'a', sealed: true, expected_last_seq: 3, durable_ranges: [], missing_ranges: [{ first_seq: 2, last_seq: 1 }], unknown_provider_ranges: [], audio_expires_at: null };
+    for (const body of [{ items: [] }, { items: [], next_cursor: '' }, { items: [{ capture_epoch_id: 'a' }], next_cursor: null }, { items: [inverted], next_cursor: null }]) {
+      const transport = vi.fn(async () => new Response(JSON.stringify(body), { status: 200 }));
+      const client = createApiClient({ epoch: 1, isCurrent: () => true }, transport as unknown as typeof fetch);
+      await expect(client.audioManifests(ENDED)).rejects.toMatchObject({ kind: 'invalid_response' });
+    }
+  });
+
+  it('a takeover keeps timeline order and its earlier gaps count for upload and summary scope (review r1)', () => {
+    const { backend, call, newClass, start, acquire } = harness();
+    const created = newClass();
+    const a = start(created.id);
+    backend.setDurable('A', created.id, a.capture_epoch_id, [0, 2]);
+    call('A', 'POST', `/class-sessions/${created.id}/capture/pause`, { ...command(a, 48000), last_local_seq: 2 });
+    const b = call('A', 'POST', `/class-sessions/${created.id}/capture/resume`, { ...command(a, 48000), last_local_seq: 2 }).body as S['CaptureLease'];
+    const c = call('A', 'POST', `/class-sessions/${created.id}/capture/acquire`, { ...acquire, confirm_takeover: true, expected_lease_id: b.id }).body as S['CaptureLease'];
+    expect(c.timeline_offset_ms).toBeGreaterThanOrEqual(b.timeline_offset_ms);
+    expect((list(call, created.id).body as S['AudioManifestPage']).items.map(item => item.capture_epoch_id)).toEqual([a.capture_epoch_id, b.capture_epoch_id, c.capture_epoch_id]);
+    backend.setDurable('A', created.id, c.capture_epoch_id, [0]);
+    call('A', 'POST', `/class-sessions/${created.id}/capture/stop`, { ...command(c), manifest_sha256: SHA, known_gaps: [] });
+    expect((call('A', 'GET', `/class-sessions/${created.id}`).body as S['ClassSession']).flows.upload).toBe('pending');
+    backend.persistFinal('A', { classId: created.id, streamId: '5e000000-0000-4000-8000-000000000051', segmentId: '5e000000-0000-4000-8000-000000000052', segmentRevisionId: '5e000000-0000-4000-8000-000000000053', versionId: '5e000000-0000-4000-8000-000000000054', text: '合成', startMs: 0, endMs: 4000, revision: 1 });
+    backend.finishAsr('A', created.id, 'succeeded');
+    const plan = call('A', 'POST', `/class-sessions/${created.id}/generation-plans`, { kind: 'review_summary', scope: 'all', seen_sources: [], include_images: false, accept_partial_scope: true }).body as S['GenerationPlan'];
+    expect(plan.source_snapshot!.scope_complete).toBe(false);
+  });
+
+  it('every epoch carries a retention deadline; deleted audio is not readable (review r1)', () => {
+    const { backend, call, newClass, start } = harness();
+    const created = newClass();
+    const first = start(created.id);
+    call('A', 'POST', `/class-sessions/${created.id}/capture/pause`, command(first));
+    const second = call('A', 'POST', `/class-sessions/${created.id}/capture/resume`, command(first)).body as S['CaptureLease'];
+    const items = (list(call, created.id).body as S['AudioManifestPage']).items;
+    expect(items.every(item => item.audio_expires_at !== null)).toBe(true);
+    const order = backend.classroomStore('A').epochOrder;
+    order.set(first.capture_epoch_id, { ...order.get(first.capture_epoch_id)!, expires: '2026-10-01T00:00:00Z' });
+    expect(err(call('A', 'GET', `/class-sessions/${created.id}/audio-manifest`, undefined, `capture_epoch_id=${first.capture_epoch_id}`)).code).toBe('GONE');
+    expect(err(list(call, created.id)).code).toBe('GONE');
+    expect(backend.revokeAudio('A', created.id, second.capture_epoch_id)).toBe(true);
+    expect(err(call('A', 'GET', `/class-sessions/${created.id}/audio-manifest`, undefined, `capture_epoch_id=${second.capture_epoch_id}`)).code).toBe('GONE');
+  });
+
+  it('historical classrooms with retained audio list their recorded epoch (review r1)', () => {
+    const { call } = harness();
+    const page = list(call, 'c0000000-0000-4000-8000-000000000002').body as S['AudioManifestPage'];
+    expect(page.items).toHaveLength(1);
+    expect(page.items[0]).toMatchObject({ sealed: true, missing_ranges: [], audio_expires_at: '2026-10-29T07:30:00Z' });
+  });
+
+  it('a stop keeps the epoch deadline and its receipt is rechecked on replay (review r2)', () => {
+    const { backend, call, newClass, start } = harness();
+    const created = newClass();
+    const lease = start(created.id);
+    const issued = backend.classroomStore('A').epochOrder.get(lease.capture_epoch_id)!.expires;
+    const key = '94000000-0000-4000-8000-000000000001';
+    const body = { ...command(lease), manifest_sha256: SHA, known_gaps: [] };
+    const stopped = call('A', 'POST', `/class-sessions/${created.id}/capture/stop`, body, '', key).body as S['AudioManifest'];
+    expect(stopped.audio_expires_at).toBe(issued);
+    backend.revokeAudio('A', created.id, lease.capture_epoch_id);
+    expect(err(call('A', 'POST', `/class-sessions/${created.id}/capture/stop`, body, '', key)).code).toBe('GONE');
+  });
+
+  it('a takeover after a pause starts after its samples; a late receipt for the taken-over epoch completes the upload (review r2)', () => {
+    const { backend, call, newClass, start, acquire } = harness();
+    const created = newClass();
+    const a = start(created.id);
+    backend.setDurable('A', created.id, a.capture_epoch_id, [0, 2]);
+    call('A', 'POST', `/class-sessions/${created.id}/capture/pause`, { ...command(a, 48000), last_local_seq: 2 });
+    const b = call('A', 'POST', `/class-sessions/${created.id}/capture/acquire`, { ...acquire, confirm_takeover: true, expected_lease_id: a.id }).body as S['CaptureLease'];
+    expect(b.timeline_offset_ms).toBe(3000);
+    backend.setDurable('A', created.id, b.capture_epoch_id, [0]);
+    call('A', 'POST', `/class-sessions/${created.id}/capture/stop`, { ...command(b), manifest_sha256: SHA, known_gaps: [] });
+    expect((call('A', 'GET', `/class-sessions/${created.id}`).body as S['ClassSession']).flows.upload).toBe('pending');
+    backend.setDurable('A', created.id, a.capture_epoch_id, [1]);
+    expect((call('A', 'GET', `/class-sessions/${created.id}`).body as S['ClassSession']).flows.upload).toBe('durable');
+  });
+
+  it('a historical epoch past its deadline stays listed and fails the read, unlike a classroom that never captured (review r2)', () => {
+    const { call, newClass } = harness();
+    expect(err(list(call, 'c0000000-0000-4000-8000-000000000003')).code).toBe('GONE');
+    expect(list(call, newClass().id).body).toEqual({ items: [], next_cursor: null });
+  });
+
+  it('a deleted chunk marks only the epoch that recorded it (review r2)', () => {
+    const runtime = createMockRuntime();
+    expect(runtime.start()).toBe(true);
+    const first = runtime.getState().captureScope!;
+    runtime.runEventScript('deletion');
+    expect(runtime.pause()).toBe(true);
+    expect(runtime.rebindMockLease({ captureEpochId: '95000000-0000-4000-8000-000000000001', fenceToken: 9 })).toBe(true);
+    const history = runtime.getState().uploadHistory;
+    expect(history.find(item => item.chunkId === first.chunkId)).toMatchObject({ captureEpochId: first.captureEpochId, audioDeleted: true });
+    expect(history.find(item => item.captureEpochId === '95000000-0000-4000-8000-000000000001')).toMatchObject({ audioDeleted: false });
   });
 });

@@ -35,7 +35,9 @@ describe('PR-10a classroom mock responses conform to contract 0.2.1', () => {
     ok('Mark', call('POST', `/class-sessions/${id}/marks`, { kind: 'important', anchor: { kind: 'timepoint', capture_epoch_id: lease.capture_epoch_id, sample_offset: 0 }, note: '' }));
     backend.persistFinal('A', { classId: id, streamId: '5e000000-0000-4000-8000-000000000001', segmentId: '5e000000-0000-4000-8000-000000000002', segmentRevisionId: '5e000000-0000-4000-8000-000000000003', versionId: '5e000000-0000-4000-8000-000000000004', text: '合成', startMs: 0, endMs: 4000, revision: 1 });
     ok('AudioManifest', call('POST', `/class-sessions/${id}/capture/stop`, { ...current, manifest_sha256: SHA, known_gaps: [] }));
-    ok('AudioManifest', call('GET', `/class-sessions/${id}/audio-manifest`));
+    ok('AudioManifest', call('GET', `/class-sessions/${id}/audio-manifest`, undefined, `capture_epoch_id=${current.capture_epoch_id}`));
+    const listed = ok('AudioManifestPage', call('GET', `/class-sessions/${id}/audio-manifests`));
+    expect((listed.items as unknown[]).length).toBe(2);
     ok('ClassSession', call('GET', `/class-sessions/${id}`));
 
     for (const classId of [id, ENDED]) {
@@ -45,7 +47,8 @@ describe('PR-10a classroom mock responses conform to contract 0.2.1', () => {
       ok('SlidePage', call('GET', `/class-sessions/${classId}/slides`));
       ok('TaskPage', call('GET', '/tasks', undefined, `class_session_id=${classId}`));
     }
-    ok('AudioManifest', call('GET', `/class-sessions/${ENDED}/audio-manifest`));
+    ok('AudioManifest', call('GET', `/class-sessions/${ENDED}/audio-manifest`, undefined, 'capture_epoch_id=74000000-0000-4000-8000-000000000001'));
+    ok('AudioManifestPage', call('GET', `/class-sessions/${ENDED}/audio-manifests`, undefined, 'limit=1'));
 
     const upload = ok('MediaUpload', call('POST', '/media/uploads', { purpose: 'slide', class_session_id: ENDED, mime_type: 'image/webp', byte_length: 42, sha256: SHA, filename: 'board.webp' }));
     ok('MediaUpload', call('PUT', `/media/uploads/${upload.id as string}/content`, { byte_length: 42, sha256: SHA, signature: '52494646000000005745425056503820' }));

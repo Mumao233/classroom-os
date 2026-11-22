@@ -36,9 +36,13 @@ export function releaseMockAccountLeases(account: 'A' | 'B') { return backend.re
 
 export function projectMockTask(input: Parameters<typeof backend.projectTask>[1]) { return mockAccount ? backend.projectTask(mockAccount, input) : false; }
 
+export function revokeMockAudio(classId: string, captureEpochId: string) { return mockAccount ? backend.revokeAudio(mockAccount, classId, captureEpochId) : false; }
+
 export function revokeMockClassroom(classId: string) { return mockAccount ? backend.revokeClassroom(mockAccount, classId) : false; }
 // Development/test hook only (this module never ships in production builds).
-(globalThis as { __classroomMock?: unknown }).__classroomMock = { bump: bumpMockRecord, advanceTask: advanceMockTask, finishAsr: finishMockAsr };
+export function setMockManifestDev(value: { pageSize?: number | null; failContinuations?: boolean }) { return mockAccount ? backend.setManifestDev(mockAccount, value) : null; }
+
+(globalThis as { __classroomMock?: unknown }).__classroomMock = { bump: bumpMockRecord, advanceTask: advanceMockTask, finishAsr: finishMockAsr, manifestDev: setMockManifestDev };
 function viteAsset(request: Request) {
   const url = new URL(request.url);
   return url.origin === location.origin && request.method === 'GET' &&

@@ -58,6 +58,14 @@ export type ClassroomStore = {
   retired: Map<string, Array<{ epochId: string; expected: number | null }>>;
   /** Sealed manifest of every epoch, retired or stopped. */
   epochManifests: Map<string, S['AudioManifest']>;
+  /** Immutable timeline position of each epoch (list order: timeline offset, fence, epoch ID). */
+  epochOrder: Map<string, { offset: number; fence: number; expires: string | null; samples: number }>;
+  /** Development controls for the manifest list (browser tests): a page-size cap and failing continuations. */
+  manifestDev: { pageSize: number | null; failContinuations: boolean };
+  /** Epochs whose original audio was deleted or revoked: reads of them fail. */
+  revokedAudio: Set<string>;
+  /** Issued manifest-list cursors: opaque IDs bound to the classroom and the first page's epoch IDs. */
+  manifestCursors: Map<string, { classId: string; ids: string[]; next: number; expired: boolean }>;
   /** Synthetic quota units reserved by each executed task, moved once as the task progresses. */
   reservations: Map<string, { bucket: S['QuotaBucket']['kind']; units: number; phase: 'reserved' | 'submitted' | 'done' }>;
 };
@@ -94,7 +102,7 @@ const CAPTURE_KEYS = ['capture_epoch_id', 'fence_token', 'last_local_seq', 'last
 
 /** Synthetic records for seeded, already ended classes (record page and processing page demos). */
 export function seedClassroom(sessionIds: { ended: string; uploadFailed: string; unknownAi: string } | null): ClassroomStore {
-  const store: ClassroomStore = { versions: [], segments: [], marks: [], slides: [], uploads: new Map(), assets: [], manifests: new Map(), leases: new Map(), plans: new Map(), tasks: [], durable: new Map(), captured: new Map(), slideHistory: [], segmentHistory: [], epochs: new Map(), retired: new Map(), epochManifests: new Map(), reservations: new Map() };
+  const store: ClassroomStore = { versions: [], segments: [], marks: [], slides: [], uploads: new Map(), assets: [], manifests: new Map(), leases: new Map(), plans: new Map(), tasks: [], durable: new Map(), captured: new Map(), slideHistory: [], segmentHistory: [], epochs: new Map(), retired: new Map(), epochManifests: new Map(), epochOrder: new Map(), manifestCursors: new Map(), revokedAudio: new Set(), manifestDev: { pageSize: null, failContinuations: false }, reservations: new Map() };
   if (!sessionIds) return store;
   const created = '2026-10-27T06:00:00Z';
   const version = (n: number, classId: string): S['TranscriptVersion'] => ({ id: uuid('71000000', n), revision: 1, created_at: created, updated_at: created, class_session_id: classId, kind: 'realtime', state: 'sealed', source_task_id: uuid('72000000', n), adopted: true });
@@ -175,17 +183,62 @@ function missingOf(store: ClassroomStore, epochId: string, expected: number | nu
 
 /** Outstanding chunks across every epoch of the classroom: a later epoch's receipt never covers earlier audio. */
 function outstandingChunks(store: ClassroomStore, classId: string): number {
-  const ranges = (store.retired.get(classId) ?? []).flatMap(item => missingOf(store, item.epochId, item.expected));
-  const current = store.manifests.get(classId);
-  if (current && !(store.retired.get(classId) ?? []).some(item => item.epochId === current.capture_epoch_id)) ranges.push(...current.missing_ranges);
-  return ranges.reduce((n, range) => n + range.last_seq - range.first_seq + 1, 0);
+  // The same per-epoch gaps the manifest list reports (resumed-over, taken-over and final epochs alike).
+  return epochIdsOf(store, classId).map(epochId => manifestOf(store, classId, epochId)).flatMap(item => item.missing_ranges).reduce((n, range) => n + range.last_seq - range.first_seq + 1, 0);
 }
 
-function sealEpoch(store: ClassroomStore, classId: string, epochId: string, expected: number | null, expires: string | null): S['AudioManifest'] {
+/**
+ * Records an epoch's expected range. Only a stop seals it (it carries the manifest digest); an epoch
+ * retired by resume keeps its range but stays unsealed, like the capture service.
+ */
+function sealEpoch(store: ClassroomStore, classId: string, epochId: string, expected: number | null, expires: string | null, sealed = true): S['AudioManifest'] {
   const durable = expected === null ? [] : (store.durable.get(epochId) ?? []).filter(seq => seq <= expected);
-  const manifest: S['AudioManifest'] = { class_session_id: classId, capture_epoch_id: epochId, sealed: true, expected_last_seq: expected, durable_ranges: contiguous(durable), missing_ranges: missingOf(store, epochId, expected), unknown_provider_ranges: [], audio_expires_at: expires };
+  const manifest: S['AudioManifest'] = { class_session_id: classId, capture_epoch_id: epochId, sealed, expected_last_seq: expected, durable_ranges: contiguous(durable), missing_ranges: missingOf(store, epochId, expected), unknown_provider_ranges: [], audio_expires_at: expires };
   store.epochManifests.set(epochId, manifest);
   return manifest;
+}
+
+/**
+ * Every capture epoch of a classroom in list order: sealed epochs as sealed, the open (recording or
+ * paused) epoch with its durable chunks so far. Seeded classrooms contribute their stored manifest.
+ */
+function epochIdsOf(store: ClassroomStore, classId: string): string[] {
+  const ids = new Set([...store.epochs].filter(([, owner]) => owner === classId).map(([epochId]) => epochId));
+  const seeded = store.manifests.get(classId);
+  if (seeded) ids.add(seeded.capture_epoch_id);
+  const order = (epochId: string) => store.epochOrder.get(epochId) ?? { offset: 0, fence: 1, expires: null, samples: 0 };
+  return [...ids].sort((a, b) => order(a).offset - order(b).offset || order(a).fence - order(b).fence || a.localeCompare(b));
+}
+
+/**
+ * One epoch's manifest: a recorded (stopped or resumed-over) epoch as recorded; an open epoch with
+ * its durable chunks and the holes up to the highest chunk seen, never a guessed tail beyond it.
+ * Every epoch carries its retention deadline.
+ */
+function manifestOf(store: ClassroomStore, classId: string, epochId: string): S['AudioManifest'] {
+  const seeded = store.manifests.get(classId);
+  const recorded = store.epochManifests.get(epochId) ?? (seeded?.capture_epoch_id === epochId ? seeded : undefined);
+  const expires = store.epochOrder.get(epochId)?.expires ?? null;
+  // The epoch's own deadline wins (a stop moves it to the stop's retention deadline).
+  if (recorded) return expires !== null && recorded.audio_expires_at !== expires ? { ...recorded, audio_expires_at: expires } : recorded;
+  const durable = contiguous(store.durable.get(epochId) ?? []);
+  const holes = durable.map((range, index) => ({ first_seq: index === 0 ? 0 : durable[index - 1]!.last_seq + 1, last_seq: range.first_seq - 1 })).filter(range => range.last_seq >= range.first_seq);
+  return { class_session_id: classId, capture_epoch_id: epochId, sealed: false, expected_last_seq: null, durable_ranges: durable, missing_ranges: holes, unknown_provider_ranges: [], audio_expires_at: expires };
+}
+
+/** Development fixture: historical classrooms with retained audio get one recorded epoch each. */
+export function seedHistoricalManifests(store: ClassroomStore, sessions: readonly S['ClassSession'][]) {
+  for (const session of sessions) {
+    // Membership does not depend on whether the audio is still readable: an epoch past its deadline
+    // stays listed and its read fails, unlike a classroom that never captured.
+    if (session.deleted_at !== null || session.capture_ended_at === null || session.effective_capture_ms <= 0 || store.manifests.has(session.id)) continue;
+    const last = Math.ceil(session.effective_capture_ms / 1000) - 1;
+    const durable = session.flows.upload === 'durable';
+    const deadline = session.audio_expires_at ?? iso(Date.parse(session.capture_ended_at) + 7 * DAY);
+    store.manifests.set(session.id, { class_session_id: session.id, capture_epoch_id: `7e${session.id.slice(2)}`, sealed: true, expected_last_seq: last,
+      durable_ranges: durable ? [{ first_seq: 0, last_seq: last }] : [], missing_ranges: durable ? [] : [{ first_seq: 0, last_seq: last }], unknown_provider_ranges: [], audio_expires_at: deadline });
+  }
+  return store;
 }
 
 function contiguous(seqs: number[]): Array<{ first_seq: number; last_seq: number }> {
@@ -212,6 +265,15 @@ export function handleClassroom(store: ClassroomStore, host: ClassroomHost, h: C
   const findSession = (classId: string) => host.sessions().find(item => item.id === classId && item.deleted_at === null && host.courseExists(item.course_id));
   const touchSession = (session: S['ClassSession'], change: Partial<S['ClassSession']>) => { const next = { ...session, ...change, revision: session.revision + 1, updated_at: h.now() }; host.saveSession(next); return next; };
   const notFound = () => h.error(404, 'NOT_FOUND', '课堂不存在');
+  // A stop receipt names an epoch's manifest: its current readability is rechecked, also on replay.
+  const stopChecked = (reply: ClassroomReply) => reply.status === 200 && unreadable(manifestOf(store, id, (reply.body as S['AudioManifest']).capture_epoch_id)) ? h.error(410, 'GONE', '这次采集的原音已过保留期限或已删除') : reply;
+  const unreadable = (manifest: S['AudioManifest']) => store.revokedAudio.has(manifest.capture_epoch_id) || (manifest.audio_expires_at !== null && Date.parse(manifest.audio_expires_at) <= Date.parse(h.now()));
+  // A new epoch starts at the end of the classroom's capture timeline (also after a takeover).
+  const timelineEnd = (classId: string, session: S['ClassSession']) => Math.max(session.effective_capture_ms, Math.floor((store.captured.get(classId) ?? 0) / 16),
+    ...epochIdsOf(store, classId).map(epochId => { const order = store.epochOrder.get(epochId); return order ? order.offset + Math.floor(order.samples / 16) : 0; }));
+  /** Records the last sample observed for an epoch (pause, resume, stop): the next epoch starts after it. */
+  const observe = (epochId: string, sample: number) => { const order = store.epochOrder.get(epochId); if (order && sample > order.samples) store.epochOrder.set(epochId, { ...order, samples: sample }); };
+  const epochDeadline = () => iso(Date.parse(h.now()) + 7 * DAY);
   void method;
   // Access is rechecked before any route or idempotent replay runs: a revoked classroom never
   // returns an earlier receipt, also for resources reached through a plan, upload, slide or task ID.
@@ -253,9 +315,10 @@ export function handleClassroom(store: ClassroomStore, host: ClassroomHost, h: C
       }
       const previous = holder?.class_session_id === id ? holder : undefined;
       const lease: S['CaptureLease'] = { id: h.newId(), class_session_id: id, capture_epoch_id: h.newId(), fence_token: (previous?.fence_token ?? 0) + 1,
-        expires_at: iso(Date.parse(h.now()) + 30_000), renew_after_seconds: 10, timeline_offset_ms: session.effective_capture_ms, sample_rate: 16000, channel_count: 1, encoding: 'pcm_s16le' };
+        expires_at: iso(Date.parse(h.now()) + 30_000), renew_after_seconds: 10, timeline_offset_ms: timelineEnd(id, session), sample_rate: 16000, channel_count: 1, encoding: 'pcm_s16le' };
       store.leases.set(id, lease);
       store.epochs.set(lease.capture_epoch_id, id);
+      store.epochOrder.set(lease.capture_epoch_id, { offset: lease.timeline_offset_ms, fence: lease.fence_token, expires: epochDeadline(), samples: 0 });
       touchSession(session, { started_at: session.started_at ?? h.now(), flows: { ...session.flows, capture: 'recording' } });
       return ok(lease, 201);
     });
@@ -269,19 +332,21 @@ export function handleClassroom(store: ClassroomStore, host: ClassroomHost, h: C
       const paused = route.endsWith('/pause');
       if (paused !== (session.flows.capture === 'recording')) return h.error(409, 'LEASE_CONFLICT', paused ? '采集未在进行' : '采集未暂停');
       touchSession(session, { flows: { ...session.flows, capture: paused ? 'paused' : 'recording' } });
+      observe(lease.capture_epoch_id, body.last_sample as number);
       if (paused) return ok(lease);
       // Same as the capture service: resuming retires the paused epoch and issues a new epoch and fence.
       store.captured.set(id, (store.captured.get(id) ?? 0) + (body.last_sample as number));
       const retiredExpected = (body.last_sample as number) > 0 ? body.last_local_seq as number : null;
       store.retired.set(id, [...(store.retired.get(id) ?? []), { epochId: lease.capture_epoch_id, expected: retiredExpected }]);
-      sealEpoch(store, id, lease.capture_epoch_id, retiredExpected, null);
+      sealEpoch(store, id, lease.capture_epoch_id, retiredExpected, store.epochOrder.get(lease.capture_epoch_id)?.expires ?? null, false);
       const next: S['CaptureLease'] = { ...lease, id: h.newId(), capture_epoch_id: h.newId(), fence_token: lease.fence_token + 1, timeline_offset_ms: Math.floor((store.captured.get(id) ?? 0) / 16) };
       store.leases.set(id, next);
       store.epochs.set(next.capture_epoch_id, id);
+      store.epochOrder.set(next.capture_epoch_id, { offset: next.timeline_offset_ms, fence: next.fence_token, expires: epochDeadline(), samples: 0 });
       return ok(next);
     });
 
-    case 'POST /class-sessions/:id/capture/stop': return h.idempotent(key, `stop:${id}`, body, () => {
+    case 'POST /class-sessions/:id/capture/stop': return stopChecked(h.idempotent(key, `stop:${id}`, body, () => {
       const session = findSession(id); if (!session) return notFound();
       const lease = store.leases.get(id);
       if (!only(body, [...CAPTURE_KEYS, 'manifest_sha256', 'known_gaps']) || !isUuid(body.capture_epoch_id) || !CAPTURE_KEYS.slice(1).every(name => nonNegative(body[name]))
@@ -290,7 +355,9 @@ export function handleClassroom(store: ClassroomStore, host: ClassroomHost, h: C
       // Like the capture service, an epoch without samples has no expected last chunk.
       const expected = (body.last_sample as number) > 0 ? body.last_local_seq as number : null;
       const ended = h.now();
-      const expires = iso(Date.parse(ended) + 7 * DAY);
+      // The epoch keeps the hard deadline it was issued with; a stop never extends retention.
+      const expires = store.epochOrder.get(lease.capture_epoch_id)?.expires ?? iso(Date.parse(ended) + 7 * DAY);
+      observe(lease.capture_epoch_id, body.last_sample as number);
       const manifest = sealEpoch(store, id, lease.capture_epoch_id, expected, expires);
       store.manifests.set(id, manifest);
       store.leases.delete(id);
@@ -299,16 +366,41 @@ export function handleClassroom(store: ClassroomStore, host: ClassroomHost, h: C
       touchSession(session, { capture_ended_at: ended, audio_expires_at: expires, effective_capture_ms: Math.floor(samples / 16),
         known_gap_count: (body.known_gaps as unknown[]).length, flows: { ...session.flows, capture: 'ended', upload: outstandingChunks(store, id) ? 'pending' : 'durable', asr: session.flows.asr === 'streaming' ? 'draining' : session.flows.asr } });
       return ok(manifest);
-    });
+    }));
 
     case 'GET /class-sessions/:id/audio-manifest': {
       if (!findSession(id)) return notFound();
-      // The contract makes capture_epoch_id optional; with it, the requested epoch is resolved.
-      const epochId = query.get('capture_epoch_id');
-      if (epochId !== null && !isUuid(epochId)) return h.error(400, 'VALIDATION_FAILED', 'capture_epoch_id 无效');
-      const manifest = epochId === null ? store.manifests.get(id)
-        : store.epochs.get(epochId) === id || store.manifests.get(id)?.capture_epoch_id === epochId ? store.epochManifests.get(epochId) ?? (store.manifests.get(id)?.capture_epoch_id === epochId ? store.manifests.get(id) : undefined) : undefined;
-      return manifest ? ok(manifest) : h.error(404, 'NOT_FOUND', '该课堂还没有采集记录');
+      // 0.3.0: exactly one valid capture_epoch_id; a caller without one reads the list instead.
+      const epochIds = query.getAll('capture_epoch_id');
+      if (epochIds.length !== 1 || [...query.keys()].some(name => name !== 'capture_epoch_id') || !isUuid(epochIds[0])) return h.error(422, 'VALIDATION_FAILED', '需要且只能提供一个有效的 capture_epoch_id');
+      if (!epochIdsOf(store, id).includes(epochIds[0]!)) return h.error(404, 'NOT_FOUND', '该课堂没有这次采集记录');
+      const manifest = manifestOf(store, id, epochIds[0]!);
+      return unreadable(manifest) ? h.error(410, 'GONE', '这次采集的原音已过保留期限或已删除') : ok(manifest);
+    }
+    case 'GET /class-sessions/:id/audio-manifests': {
+      if (!findSession(id)) return notFound();
+      // Only limit and cursor, each at most once.
+      if ([...query.keys()].some(name => name !== 'limit' && name !== 'cursor') || query.getAll('limit').length > 1 || query.getAll('cursor').length > 1) return h.error(422, 'VALIDATION_FAILED', '分页参数无效');
+      const requested = query.has('limit') ? Number(query.get('limit')) : 20;
+      const cursor = query.get('cursor');
+      if (!Number.isInteger(requested) || requested < 1 || requested > 100 || (cursor !== null && (cursor.length < 1 || cursor.length > 512))) return h.error(422, 'VALIDATION_FAILED', '分页参数无效');
+      // Development controls (browser tests): a smaller page size and failing continuations.
+      const limit = Math.min(requested, store.manifestDev.pageSize ?? requested);
+      if (cursor !== null && store.manifestDev.failContinuations) return h.error(503, 'STORAGE_UNAVAILABLE', '模拟的续页读取失败');
+      // Membership is fixed at the first page: the cursor names those epoch IDs; contents are read per page.
+      const issued = cursor === null ? null : store.manifestCursors.get(cursor);
+      if (cursor !== null && (!issued || issued.classId !== id)) return h.error(422, 'VALIDATION_FAILED', '分页游标无效');
+      if (issued?.expired) return h.error(409, 'CURSOR_EXPIRED', '分页游标已过期，请从第一页重新读取');
+      const known = epochIdsOf(store, id);
+      const ids = issued ? issued.ids : known;
+      const start = issued ? issued.next : 0;
+      const members = ids.slice(start, start + limit).map(epochId => known.includes(epochId) ? manifestOf(store, id, epochId) : undefined);
+      // A member that can no longer be disclosed fails the whole page; nothing is skipped silently.
+      if (members.some(item => item === undefined || unreadable(item))) return h.error(410, 'GONE', '部分采集的原音已不可读取');
+      const end = start + members.length;
+      let next: string | null = null;
+      if (end < ids.length) { next = h.newId(); store.manifestCursors.set(next, { classId: id, ids, next: end, expired: false }); }
+      return ok({ items: members as S['AudioManifest'][], next_cursor: next } satisfies S['AudioManifestPage']);
     }
 
     case 'GET /class-sessions/:id/transcript-versions': return findSession(id) ? page(store.versions.filter(item => item.class_session_id === id)) : notFound();
@@ -588,6 +680,7 @@ export function ensureDemoClassroom(store: ClassroomStore, host: ClassroomHost, 
     // Demo fixture only: each PR-09a quick start is a new demo run on the same synthetic classroom.
     if (store.manifests.get(input.classId)?.capture_epoch_id === input.captureEpochId) return false;
     store.manifests.delete(input.classId);
+    for (const [epochId, classId] of [...store.epochs]) if (classId === input.classId) { store.epochs.delete(epochId); store.epochManifests.delete(epochId); store.epochOrder.delete(epochId); }
     store.captured.delete(input.classId);
     store.retired.delete(input.classId);
     session = { ...session, revision: session.revision + 1, updated_at: h.now(), capture_ended_at: null, audio_expires_at: null, effective_capture_ms: 0, flows: { ...session.flows, capture: 'recording', upload: 'pending', asr: 'idle' } };
@@ -595,6 +688,7 @@ export function ensureDemoClassroom(store: ClassroomStore, host: ClassroomHost, 
   }
   const lease = store.leases.get(input.classId);
   store.epochs.set(input.captureEpochId, input.classId);
+  if (!store.epochOrder.has(input.captureEpochId)) store.epochOrder.set(input.captureEpochId, { offset: session.effective_capture_ms, fence: Math.max(1, input.fenceToken), expires: iso(Date.parse(h.now()) + 7 * DAY), samples: 0 });
   if (session.flows.capture !== 'recording' && session.flows.capture !== 'paused') {
     session = { ...session, revision: session.revision + 1, updated_at: h.now(), flows: { ...session.flows, capture: 'recording' } };
     host.saveSession(session);
@@ -614,10 +708,13 @@ export function recordDurable(store: ClassroomStore, host: ClassroomHost, h: Cla
   // Receipts are scoped to their capture epoch: chunk numbers restart in every epoch.
   const durable = [...new Set([...(store.durable.get(captureEpochId) ?? []), ...seqs])].sort((a, b) => a - b);
   store.durable.set(captureEpochId, durable);
+  if (store.epochs.get(captureEpochId) !== classId && store.manifests.get(classId)?.capture_epoch_id !== captureEpochId) return;
+  // A recorded epoch's range is refreshed; an open or taken-over epoch reads its durable set directly.
   const sealed = store.epochManifests.get(captureEpochId);
-  if (!sealed || sealed.class_session_id !== classId) return;
-  const next = sealEpoch(store, classId, captureEpochId, sealed.expected_last_seq, sealed.audio_expires_at);
-  if (store.manifests.get(classId)?.capture_epoch_id === captureEpochId) store.manifests.set(classId, next);
+  if (sealed && sealed.class_session_id === classId) {
+    const next = sealEpoch(store, classId, captureEpochId, sealed.expected_last_seq, sealed.audio_expires_at, sealed.sealed);
+    if (store.manifests.get(classId)?.capture_epoch_id === captureEpochId) store.manifests.set(classId, next);
+  }
   const session = host.sessions().find(item => item.id === classId);
   if (session && session.capture_ended_at !== null && !outstandingChunks(store, classId) && session.flows.upload !== 'durable') {
     host.saveSession({ ...session, flows: { ...session.flows, upload: 'durable' }, revision: session.revision + 1, updated_at: h.now() });
@@ -637,6 +734,19 @@ export function releaseLease(store: ClassroomStore, host: ClassroomHost, h: Clas
   }
   return released;
 }
+
+/** Development bridge: an audio deletion event revokes reads of that epoch's original audio. */
+export function revokeAudio(store: ClassroomStore, classId: string, captureEpochId: string) {
+  if (store.epochs.get(captureEpochId) !== classId && store.manifests.get(classId)?.capture_epoch_id !== captureEpochId) return false;
+  store.revokedAudio.add(captureEpochId);
+  return true;
+}
+
+/** Development control (browser tests): cap the manifest page size and/or fail every continuation. */
+export function setManifestDev(store: ClassroomStore, value: Partial<ClassroomStore['manifestDev']>) { store.manifestDev = { ...store.manifestDev, ...value }; return store.manifestDev; }
+
+/** Test helper: every issued manifest-list cursor expires (the next continuation gets CURSOR_EXPIRED). */
+export function expireManifestCursors(store: ClassroomStore) { for (const cursor of store.manifestCursors.values()) cursor.expired = true; }
 
 /** Development bridge: an account teardown retires every capture lease that account still holds. */
 export function releaseAccountLeases(store: ClassroomStore, host: ClassroomHost, h: ClassroomHelpers) {

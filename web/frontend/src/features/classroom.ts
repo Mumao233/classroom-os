@@ -91,8 +91,8 @@ export function useDraft(classId: string, field: string): [string, (value: strin
 // --------------------------------------------------------------------------- data hooks
 
 export const useClassSession = (id: string) => useAccountQuery(['class-session', id], (api, signal) => api.classSession(id, signal));
-/** The epoch's manifest when the capture epoch is known; the contract allows omitting it otherwise. */
-export const useAudioManifest = (id: string, epochId: string | null, enabled = true) => useAccountQuery(['audio-manifest', id, epochId], (api, signal) => api.audioManifest(id, epochId, signal), enabled);
+/** Manifests of every capture epoch of the classroom, read to the last page (works on any device). */
+export const useAudioManifests = (id: string, enabled = true) => useAccountQuery(['audio-manifests', id], (api, signal) => api.audioManifests(id, signal), enabled);
 export const useMarks = (id: string) => useAccountQuery(['marks', id], (api, signal) => api.marks(id, signal));
 export const useSlides = (id: string, enabled = true) => useAccountQuery(['slides', id], (api, signal) => api.slides(id, signal), enabled);
 export const useTasks = (id: string) => useAccountQuery(['tasks', id], (api, signal) => api.tasks(id, signal));

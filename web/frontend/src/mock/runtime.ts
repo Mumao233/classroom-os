@@ -17,7 +17,7 @@ type CaptureScope = { classSessionId: string; captureEpochId: string; fenceToken
 type Task = { classroomId: string | null; revision: number; state: Ai; mayHaveCharged: boolean; order: number };
 type LocalWriteResult = 'none' | 'stored' | 'write_failed' | 'locked' | 'quota' | 'reconciled';
 type DurableUpload = { classSessionId: string; captureEpochId: string; chunkId: string; seq: number; receiptId: string };
-type UploadHistoryEntry = { classSessionId: string; captureEpochId: string; chunkId: string; seq: number; frameReceived: boolean; status: 'pending' | 'durable'; receiptId: string | null; eventId: string | null; canAccept: boolean };
+type UploadHistoryEntry = { classSessionId: string; captureEpochId: string; chunkId: string; seq: number; frameReceived: boolean; status: 'pending' | 'durable'; receiptId: string | null; eventId: string | null; canAccept: boolean; audioDeleted?: boolean };
 type HistoricalUpload = { entry: UploadHistoryEntry; port: MockUploadPort; canAccept: boolean };
 type LocalRecordSync = 'none' | 'pending' | 'reconciled';
 type LocalRecord = { recordId: string; captureEpochId: string | null; vaultKey: string; sync: 'pending' | 'reconciled' };
@@ -76,7 +76,7 @@ export function createMockRuntime(options: { createVault?: () => MemoryVault } =
     ...[...finalSegments.values()].map(item => ({ ...item, status: 'final' as const })),
     ...[...partialSegments.values()].map(item => ({ ...item, status: 'partial' as const, endMs: null, segmentRevisionId: null, versionId: null })),
   ];
-  const update = (next: State) => { state = { ...next, uploadHistory: [...uploadRecords.values()].map(record => ({ ...record.entry, canAccept: record.canAccept })), liveSegments: liveSegments() }; listeners.forEach(listener => listener()); };
+  const update = (next: State) => { state = { ...next, uploadHistory: [...uploadRecords.values()].map(record => ({ ...record.entry, canAccept: record.canAccept, audioDeleted: deletedAudioIds.has(record.entry.chunkId) })), liveSegments: liveSegments() }; listeners.forEach(listener => listener()); };
   const taskProjection = (classroomId: string, source = tasks) => {
     const matching = [...source.values()].filter(task => task.classroomId === classroomId);
     // Preserve an unresolved unknown as the primary state, even if a later task succeeds.

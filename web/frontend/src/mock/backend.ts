@@ -1,5 +1,5 @@
 import type { components } from '../generated/openapi';
-import { advanceTask, ensureDemoClassroom, finishAsr, handleClassroom, persistFinal, projectTask, recordDurable, releaseAccountLeases, releaseLease, revokeClassroom, seedClassroom, type ClassroomHelpers, type ClassroomHost, type ClassroomStore, type TaskOutcome } from './classroom-backend';
+import { advanceTask, ensureDemoClassroom, finishAsr, handleClassroom, expireManifestCursors, persistFinal, projectTask, recordDurable, releaseAccountLeases, releaseLease, revokeAudio, revokeClassroom, seedClassroom, seedHistoricalManifests, setManifestDev, type ClassroomHelpers, type ClassroomHost, type ClassroomStore, type TaskOutcome } from './classroom-backend';
 
 /**
  * Development-only, in-memory synthetic backend for endpoints that the real backend does not
@@ -144,7 +144,9 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
   const newId = options.newId ?? (() => uuid('99999999', ++counter));
   const stores: Record<MockAccountKey, Store> = { A: seedA('seeded'), B: seedB() };
   const seededClassroom = () => seedClassroom({ ended: uuid('c0000000', 1), uploadFailed: uuid('c0000000', 4), unknownAi: uuid('c0000000', 6) });
-  const classrooms: Record<MockAccountKey, ClassroomStore> = { A: seededClassroom(), B: seedClassroom(null) };
+  // Historical classrooms with retained audio also have their recorded epoch.
+  const withHistory = (account: MockAccountKey, store: ClassroomStore) => seedHistoricalManifests(store, stores[account].sessions);
+  const classrooms: Record<MockAccountKey, ClassroomStore> = { A: withHistory('A', seededClassroom()), B: withHistory('B', seedClassroom(null)) };
 
   const error = (status: number, code: ErrorCode, message: string, currentRevision: number | null = null): MockReply =>
     ({ status, body: { error: { code, message, request_id: newId(), retryable: false, retry_after_seconds: null, current_revision: currentRevision, conflict_id: null, task_id: null } } });
@@ -438,7 +440,7 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
     handle,
     reset(account: MockAccountKey, dataset: MockDataset = 'seeded') {
       stores[account] = account === 'A' ? seedA(dataset) : seedB();
-      classrooms[account] = account === 'A' && dataset === 'seeded' ? seededClassroom() : seedClassroom(null);
+      classrooms[account] = withHistory(account, account === 'A' && dataset === 'seeded' ? seededClassroom() : seedClassroom(null));
     },
     /** PR-10a development helpers; none of them is an HTTP route. */
     advanceTask: (account: MockAccountKey, taskId: string, outcome: TaskOutcome) => advanceTask(classrooms[account], classroomHost(account), classroomHelpers(account), taskId, outcome),
@@ -451,6 +453,9 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
     projectTask: (account: MockAccountKey, input: Parameters<typeof projectTask>[3]) => projectTask(classrooms[account], classroomHost(account), classroomHelpers(account), input),
     revokeClassroom: (account: MockAccountKey, classId: string) => revokeClassroom(classrooms[account], classroomHost(account), classroomHelpers(account), classId),
     classroomStore: (account: MockAccountKey) => classrooms[account],
+    expireManifestCursors: (account: MockAccountKey) => expireManifestCursors(classrooms[account]),
+    setManifestDev: (account: MockAccountKey, value: Parameters<typeof setManifestDev>[1]) => setManifestDev(classrooms[account], value),
+    revokeAudio: (account: MockAccountKey, classId: string, captureEpochId: string) => revokeAudio(classrooms[account], classId, captureEpochId),
     /** Test helper: simulate a write by "another device" so CAS conflicts are reproducible. */
     bumpElsewhere(account: MockAccountKey, kind: 'semester' | 'course' | 'class_session' | 'preferences', id: string, change: Record<string, unknown> = {}) {
       const store = stores[account];

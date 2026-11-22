@@ -14,7 +14,7 @@ import { Catalog } from '../ui';
 import { useMockRuntime } from '../mock/runtime';
 import { createMockClassroomShell } from '../mock/classroom-shell';
 import { createTranscriptFeed } from '../mock/classroom-feed';
-import { advanceMockTask, finishMockAsr, persistMockFinal, projectMockTask, releaseMockAccountLeases, releaseMockLease, revokeMockClassroom, setMockDurable } from '../mock/start';
+import { advanceMockTask, finishMockAsr, persistMockFinal, projectMockTask, releaseMockAccountLeases, releaseMockLease, revokeMockAudio, revokeMockClassroom, setMockDurable } from '../mock/start';
 import { ApiClientError } from '../api/client';
 import { formatClock } from '../domain/classroom';
 import { stopCapture } from '../features/classroom';
@@ -173,6 +173,15 @@ function MockWorkbenchContent({ runtime }: { runtime: ReturnType<typeof useMockR
       persistMockFinal({ classId: item.classroomId, streamId: item.streamId, segmentId: item.segmentId, segmentRevisionId: item.segmentRevisionId, versionId: item.versionId, text: item.text, startMs: item.startMs, endMs: item.endMs, revision: item.revision });
     }
   }, [liveSegments]);
+  // An audio deletion event revokes the server's reads of the epoch that recorded the deleted chunk
+  // (the deleted object, never whatever capture happens to be bound now).
+  const deletedAudioKey = [...new Set(runtime.state.uploadHistory.filter(item => item.audioDeleted).map(item => `${item.classSessionId}:${item.captureEpochId}`))].sort().join('|');
+  useEffect(() => {
+    if (!deletedAudioKey) return;
+    const touched = new Set<string>();
+    for (const pair of deletedAudioKey.split('|')) { const [classId = '', epochId = ''] = pair.split(':'); if (revokeMockAudio(classId, epochId)) touched.add(classId); }
+    if (touched.size) void queryClient.invalidateQueries(classQueries(touched));
+  }, [deletedAudioKey, queryClient]);
   // A classroom deletion event revokes server access, then drops that classroom's cached data.
   const deletedClassId = runtime.state.eventProjection.classroomDeleted ? runtime.state.currentClassroomId : null;
   useEffect(() => {
