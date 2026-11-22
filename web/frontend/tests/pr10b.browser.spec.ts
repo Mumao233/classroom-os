@@ -70,7 +70,8 @@ test.describe('PR-10b review', () => {
   test('the reader opens the adopted version; sources are frozen; a changed source is never swapped (UI-REVIEW-04/07)', async ({ page }) => {
     await ready(page, `/review/items/${SUMMARY}`);
     await expect(versionRow(page, ADOPTED)).toHaveAttribute('aria-current', 'true');
-    await expect(page.getByTestId('source-status')).toContainText('仍按生成时的来源');
+    // The adopted version's sources are all current: no source-status warning.
+    await expect(page.getByTestId('source-status')).toHaveCount(0);
     await page.getByTestId('toggle-sources').click();
     await expect(page.getByTestId('audio-trace')).toContainText('开发预览不提供播放');
     await expect(page.getByTestId('source-item').filter({ hasText: '今天讨论特征值' })).toHaveAttribute('data-source-state', 'current');
@@ -97,6 +98,8 @@ test.describe('PR-10b review', () => {
     await expect(page.getByTestId('review-notice')).toContainText('已采用所选版本');
     await expect(versionRow(page, CANDIDATE)).toHaveAttribute('data-role', 'adopted');
     await expect(versionRow(page, ADOPTED)).toHaveAttribute('data-role', 'candidate');
+    // The newly adopted version was frozen before a source correction: the server projects the change.
+    await expect(page.getByTestId('source-status')).toContainText('仍按生成时的来源');
     await page.getByTestId(`adopt-${ADOPTED}`).click();
     await expect(versionRow(page, ADOPTED)).toHaveAttribute('data-role', 'adopted');
     await shot(page, 'reader-compare');
@@ -135,6 +138,22 @@ test.describe('PR-10b review', () => {
     await expect(page.getByTestId('reader')).toContainText('草稿内容（合成）');
   });
 
+  test('a draft stays pinned to its base; a save after another device changed the document keeps the branch and rebases only on request', async ({ page }) => {
+    await ready(page, `/review/items/${NOTE}`);
+    await page.getByTestId('edit-personal').click();
+    await page.locator('#personal-body').fill('冲突中的草稿（合成）');
+    expect(await writeElsewhere(page, `/review-documents/${NOTE}`, 'PATCH', { base_revision: 1, title: '另一台设备的标题' })).toBe(200);
+    await page.getByRole('button', { name: '保存为个人稿' }).click();
+    await expect(page.getByTestId('draft-conflict')).toBeVisible();
+    await expect(page.locator('#personal-body')).toHaveValue('冲突中的草稿（合成）');
+    // The submitted branch is listed as an earlier personal revision; the active personal pointer did not move.
+    await expect(page.getByTestId('version-list').locator('li[data-role="personal_earlier"]')).toHaveCount(1);
+    await page.getByRole('button', { name: '基于最新版本继续编辑' }).click();
+    await page.getByRole('button', { name: '保存为个人稿' }).click();
+    await expect(page.getByTestId('review-notice')).toContainText('个人稿已保存为新版本');
+    await expect(page.getByTestId('version-list').locator('li[data-role="personal_latest"]')).toHaveCount(1);
+  });
+
   test('cards: one at a time, reveal, previous/next, never padded; revealing never marks understood (UI-REVIEW-05/06)', async ({ page }) => {
     await ready(page, `/review/items/${CARDS}`);
     const deck = page.getByTestId('card-deck');
@@ -150,6 +169,11 @@ test.describe('PR-10b review', () => {
     await expect(deck).toContainText('缺失：课堂未讨论复数特征值的情形');
     await deck.getByRole('button', { name: '标记没懂' }).click();
     await expect(deck.getByRole('button', { name: '已标记为没懂' })).toBeDisabled();
+    // Marks are per card: the previous card is still unmarked, and the marked card stays marked.
+    await deck.getByRole('button', { name: '上一张' }).click();
+    await expect(deck.getByRole('button', { name: '标记没懂' })).toBeEnabled();
+    await deck.getByRole('button', { name: '下一张' }).click();
+    await expect(deck.getByRole('button', { name: '已标记为没懂' })).toBeDisabled();
     await expect(page.getByTestId('document-state')).toContainText('尚未理解');
     await shot(page, 'reader-cards');
   });
@@ -159,6 +183,13 @@ test.describe('PR-10b review', () => {
     await page.getByRole('button', { name: '准备重新转写' }).click();
     const plan = page.getByTestId('retranscribe-plan');
     await expect(plan).toContainText('已冻结');
+    await expect(page.getByTestId('plan-scope')).toHaveText('整节课');
+    // Changing any input invalidates the prepared plan; the confirmation always shows the frozen range.
+    await page.getByLabel('时间范围').check();
+    await expect(plan).toHaveCount(0);
+    await page.getByLabel('整节课').check();
+    await page.getByRole('button', { name: '准备重新转写' }).click();
+    await expect(page.getByTestId('plan-scope')).toHaveText('整节课');
     await expect(plan).toContainText('最高费用');
     await expect(page.getByTestId('retranscribe-tasks')).toHaveCount(0);
     await page.getByTestId('retranscribe-confirm').click();
@@ -212,6 +243,10 @@ test.describe('PR-10b review', () => {
     await original.getByRole('button', { name: '核对状态' }).click();
     await expect(original).toContainText('没有重新提交');
     await original.getByLabel(/可能重复计费/).check();
+    await original.getByRole('button', { name: '重试' }).click();
+    // A retry is an additional run of the class: without an approval it stays pending approval.
+    await expect(original).toContainText('需要审批');
+    await page.getByRole('button', { name: '批准追加一次' }).click();
     await original.getByRole('button', { name: '重试' }).click();
     await expect(page.getByTestId('retranscribe-tasks').locator('li[data-state="queued"]')).toContainText('重试');
     await expect(original).toHaveAttribute('data-state', 'unknown');

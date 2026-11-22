@@ -92,7 +92,7 @@ function seedA(dataset: MockDataset): Store {
       material(uuid('d0000000', 4), ids.laSpring, '2026-02-24T08:00:00Z'), material(uuid('d0000000', 5), ids.writing, '2026-09-03T08:00:00Z'),
     ],
     documents: [
-      { ...base(uuid('e0000000', 1), '2026-10-27T08:00:00Z'), class_session_id: s(1), kind: 'summary', title: '特征值与特征向量 · 课堂总结', adopted_revision_id: uuid('e1000000', 1), latest_personal_revision_id: null, candidate_revision_ids: [uuid('e1000000', 5)], understood: false, source_status: 'changed' },
+      { ...base(uuid('e0000000', 1), '2026-10-27T08:00:00Z'), class_session_id: s(1), kind: 'summary', title: '特征值与特征向量 · 课堂总结', adopted_revision_id: uuid('e1000000', 1), latest_personal_revision_id: null, candidate_revision_ids: [uuid('e1000000', 5)], understood: false, source_status: 'unchanged' },
       { ...base(uuid('e0000000', 2), '2026-10-27T08:10:00Z'), class_session_id: s(1), kind: 'card', title: '特征多项式', adopted_revision_id: uuid('e1000000', 2), latest_personal_revision_id: null, candidate_revision_ids: [], understood: false, source_status: 'unchanged' },
       { ...base(uuid('e0000000', 3), '2026-10-23T12:00:00Z'), class_session_id: s(2), kind: 'note', title: '矩阵对角化 · 个人补充', adopted_revision_id: null, latest_personal_revision_id: uuid('e1000000', 3), candidate_revision_ids: [], understood: true, source_status: 'unchanged' },
       { ...base(uuid('e0000000', 4), '2026-10-25T05:00:00Z'), class_session_id: s(4), kind: 'summary', title: '红黑树的插入 · 候选总结', adopted_revision_id: null, latest_personal_revision_id: null, candidate_revision_ids: [uuid('e1000000', 4)], understood: false, source_status: 'new_material_not_included' },
@@ -243,6 +243,12 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
       visibleSessions: () => liveSessions(store).flatMap(session => { const course = findCourse(store, session.course_id); return course ? [{ session, courseId: course.id, semesterId: course.semester_id }] : []; }),
       questions: () => store.questions,
       saveQuestion: next => { store.questions = store.questions.map(item => item.id === next.id ? next : item); },
+      sourceState: ref => {
+        const room = classrooms[account];
+        if (ref.kind === 'transcript_segment') { const segment = room.segments.find(item => item.id === ref.id); return !segment ? 'missing' : segment.segment_revision_id === ref.revision_id ? 'current' : 'changed'; }
+        if (ref.kind === 'slide_version') { const slide = room.slides.find(item => item.id === ref.id); return !slide || slide.removed ? 'missing' : slide.version_id === ref.revision_id ? 'current' : 'changed'; }
+        return room.marks.some(item => item.id === ref.id) ? 'current' : 'missing';
+      },
     };
   }
   function reviewHelpers(account: MockAccountKey): ReviewHelpers {

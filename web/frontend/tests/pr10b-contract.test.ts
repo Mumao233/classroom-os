@@ -55,6 +55,7 @@ describe('PR-10b review mock responses conform to contract 0.3.0', () => {
     const unknown = backend.advanceTask('A', task.id as string, 'unknown')!;
     check('Task', unknown);
     ok('TaskReconcile', call('POST', `/tasks/${task.id as string}/reconcile`, {}));
+    backend.setRetranscribeDev('A', { classId: ENDED, approve: true });
     const retry = ok('Task', call('POST', `/tasks/${task.id as string}/retry`, { reason: '合成重试', confirm_duplicate_billing: true, original_attempt_id: unknown.attempt_id }));
     const succeeded = backend.advanceTask('A', retry.id as string, 'succeeded')!;
     check('Task', succeeded);

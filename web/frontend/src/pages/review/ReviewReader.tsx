@@ -4,19 +4,19 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { components } from '../../generated/openapi';
 import { ApiClientError } from '../../api/client';
 import {
-  audioState, formatMs, kindLabel, lineDiff, markdownBlocks, newestFirst, readingRevision, resolveSource, revisionRole, roleLabel, sourceStatusText,
+  audioState, formatMs, kindLabel, lineDiff, markdownBlocks, newestFirst, readingRevision, resolveSource, revisionRole, revisionText, roleLabel, sourceStatusText,
   type Block, type Doc, type Revision,
 } from '../../domain/review';
 import { describeError, isConflict, useAppData, useCourse, useInvalidateAccount, usePreferences } from '../../features/data';
-import { useClassSession, useDraft, useMarks, useSlides } from '../../features/classroom';
+import { isDefinitiveRejection, useClassSession, useDraft, useMarks, useSlides } from '../../features/classroom';
 import { useClassSegments, useReadingMemory, useReviewDocument, useReviewRevisions, useSourceSnapshot } from '../../features/review';
 import { DataSourceNote, OfflineBanner } from '../common';
 import pages from '../pages.module.css';
 import styles from './review.module.css';
 
 type S = components['schemas'];
-/** A definite server reply ends an intent: the next attempt gets a new key. Only a lost reply is replayed with the same key. */
-const answered = (error: unknown) => error instanceof ApiClientError && error.kind === 'http';
+/** A definitive rejection ends an intent: the next attempt gets a new key. A lost or ambiguous reply is replayed with the same key. */
+const answered = isDefinitiveRejection;
 
 /**
  * UI-REVIEW-04…09: one reading page for every entry (global, course, class). The reader opens the
@@ -48,10 +48,16 @@ export function ReviewReader() {
   const shown = list.find(item => item.id === selectedId) ?? opening?.revision ?? null;
   const back = (location.state as { from?: string } | null)?.from;
 
+  const understoodKey = useRef<{ fingerprint: string; key: string } | null>(null);
   const understood = useMutation({
-    mutationFn: (next: boolean) => app.api.updateReviewDocument(documentId, { base_revision: doc!.revision, understood: next }),
-    onSuccess: updated => { client.setQueryData(['account', app.accountKey, 'review-document', documentId], updated); void invalidate(); setNotice({ tone: 'success', text: updated.understood ? '已标记为已理解。' : '已改回尚未理解。' }); },
-    onError: error => { if (isConflict(error)) void document.refetch(); setNotice({ tone: 'warning', text: isConflict(error) ? '这份资料已在其他设备更新，理解状态未改动。请核对后再切换。' : describeError(error) }); },
+    mutationFn: (next: boolean) => {
+      const body = { base_revision: doc!.revision, understood: next };
+      const fingerprint = JSON.stringify(body);
+      if (!understoodKey.current || understoodKey.current.fingerprint !== fingerprint) understoodKey.current = { fingerprint, key: crypto.randomUUID() };
+      return app.api.updateReviewDocument(documentId, body, understoodKey.current.key);
+    },
+    onSuccess: updated => { understoodKey.current = null; client.setQueryData(['account', app.accountKey, 'review-document', documentId], updated); void invalidate(); setNotice({ tone: 'success', text: updated.understood ? '已标记为已理解。' : '已改回尚未理解。' }); },
+    onError: error => { if (answered(error)) understoodKey.current = null; if (isConflict(error)) void document.refetch(); setNotice({ tone: 'warning', text: isConflict(error) ? '这份资料已在其他设备更新，理解状态未改动。请核对后再切换。' : describeError(error) }); },
   });
   const adoptKey = useRef<{ target: string; base: number; key: string } | null>(null);
   const adopt = useMutation({
@@ -112,7 +118,7 @@ export function ReviewReader() {
       : <div className={pages.empty}><h3>还没有可阅读的版本</h3><p>生成的候选或保存的个人稿会出现在这里。</p></div>}
 
     <PersonalEditor doc={doc} basis={shown} onSaved={revision => { setSelectedId(revision.id); setNotice({ tone: 'success', text: '个人稿已保存为新版本；采用版本和 AI 候选保持不变。' }); }}
-      onConflict={() => { void document.refetch(); void revisions.refetch(); setNotice({ tone: 'warning', text: '这份资料已在其他地方更新，你的个人稿仍保留在编辑框里。请看过最新版本后再保存。' }); }} />
+      onConflict={() => { void document.refetch(); void revisions.refetch(); setNotice({ tone: 'warning', text: '这份资料已在其他地方更新。你提交的内容已另存为未生效的个人稿（见版本列表），编辑框里的草稿也保留；看过最新版本后，可以选择基于最新版本再保存。' }); }} />
   </main>;
 }
 
@@ -126,6 +132,7 @@ function ReadingArea({ doc, revision, role, showSources, setShowSources, memory,
   const font = preferences.data?.reading_font_px ?? 17;
   const reader = useRef<HTMLDivElement>(null);
   const timer = useRef<number | null>(null);
+  const lastOffset = useRef<number | null>(null);
   useEffect(() => {
     const offset = memory.read().positions[doc.id];
     if (reader.current && offset) reader.current.scrollTop = offset;
@@ -133,9 +140,13 @@ function ReadingArea({ doc, revision, role, showSources, setShowSources, memory,
     // Restore once per opened revision; the memory object is recreated on every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [doc.id, revision.id]);
-  useEffect(() => () => { if (timer.current) window.clearTimeout(timer.current); }, []);
+  // Leaving the reader flushes the latest offset (a pending debounced write would otherwise be lost).
+  useEffect(() => () => { if (timer.current) window.clearTimeout(timer.current); if (lastOffset.current !== null) memory.remember(doc.id, lastOffset.current); },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    []);
   const onScroll = (event: UIEvent<HTMLDivElement>) => {
     const top = event.currentTarget.scrollTop;
+    lastOffset.current = top;
     if (timer.current) window.clearTimeout(timer.current);
     timer.current = window.setTimeout(() => memory.remember(doc.id, top), 250);
   };
@@ -196,14 +207,18 @@ function CardDeck({ doc, revision, cards }: { doc: Doc; revision: Revision; card
   const [revealed, setRevealed] = useState(false);
   const marks = useMarks(doc.class_session_id);
   const card = cards[Math.min(index, cards.length - 1)];
+  const noteOf = (item: S['ReviewCard']) => `复习卡片：${item.title}`;
+  // Marked state is per card of this revision: restored from existing marks, updated only for the card marked.
+  const [marked, setMarked] = useState<ReadonlySet<string>>(new Set());
+  const markedHere = marked.has(noteOf(card)) || (marks.data?.items ?? []).some(item => item.kind === 'unclear' && item.anchor.kind === 'review_revision' && item.anchor.revision_id === revision.id && item.note === noteOf(card));
   const typeLabel: Record<S['ReviewCard']['type'], string> = { concept: '概念', derivation: '推导', example: '例题', pitfall: '易错点' };
   const mark = useMutation({
     mutationFn: async () => {
       const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(revision.body_markdown)));
       const content = [...digest].map(byte => byte.toString(16).padStart(2, '0')).join('');
-      return app.api.createMark(doc.class_session_id, { kind: 'unclear', note: `复习卡片：${card.title}`, anchor: { kind: 'review_revision', document_id: doc.id, revision_id: revision.id, content_sha256: content } });
+      return app.api.createMark(doc.class_session_id, { kind: 'unclear', note: noteOf(card), anchor: { kind: 'review_revision', document_id: doc.id, revision_id: revision.id, content_sha256: content } });
     },
-    onSuccess: () => { void invalidate(); void marks.refetch(); },
+    onSuccess: mark => { setMarked(previous => new Set([...previous, mark.note])); void invalidate(); void marks.refetch(); },
   });
   const go = (next: number) => { setIndex(next); setRevealed(false); };
   return <section className={pages.panel} aria-labelledby="cards-heading" data-testid="card-deck">
@@ -219,7 +234,7 @@ function CardDeck({ doc, revision, cards }: { doc: Doc; revision: Revision; card
     <div className={pages.row} style={{ marginTop: 10 }}>
       <button type="button" className={pages.buttonSecondary} disabled={index === 0} onClick={() => go(index - 1)}>上一张</button>
       <button type="button" className={pages.buttonSecondary} disabled={index >= cards.length - 1} onClick={() => go(index + 1)}>下一张</button>
-      <button type="button" className={pages.buttonGhost} disabled={!app.online || mark.isPending || mark.isSuccess} onClick={() => mark.mutate()}>{mark.isSuccess ? '已标记为没懂' : '标记没懂'}</button>
+      <button type="button" className={pages.buttonGhost} disabled={!app.online || mark.isPending || markedHere} onClick={() => mark.mutate()}>{markedHere ? '已标记为没懂' : '标记没懂'}</button>
     </div>
     {mark.isError && <p role="alert" className={pages.error}>{describeError(mark.error)}</p>}
     <p className={`${pages.small} ${pages.muted}`}>卡片数量按生成结果显示，不会为凑数补卡；揭晓答案不会自动标记为已理解。</p>
@@ -246,11 +261,11 @@ function SourcePanel({ revision, session, classId }: { revision: Revision; sessi
             {snapshot.data.missing_reasons.length > 0 && <p className={`${pages.small} ${pages.warning}`}>未纳入：{snapshot.data.missing_reasons.join('；')}</p>}
             <p className={`${pages.small} ${pages.muted}`}>正文里的来源标签（S…/P…）与下面的引用还没有正式对应关系，这里列出整份快照。</p>
             {snapshot.data.source_refs.map((ref, index) => {
-              const resolved = resolveSource(ref, { segments: segments.data ?? [], slides: slides.data?.items ?? [], marks: marks.data?.items ?? [] });
+              const resolved = resolveSource(ref, { segments: segments.data ?? [], slides: slides.data?.items ?? [], marks: marks.data?.items ?? [] }, snapshot.data.created_at);
               return <div key={`${ref.kind}-${ref.id}-${index}`} className={`${styles.sourceItem} ${resolved.state !== 'current' ? styles.changed : ''}`} data-source-state={resolved.state} data-testid="source-item">
                 <p style={{ margin: 0 }}><span className={styles.sourceTag}>{resolved.label}</span>{resolved.startMs !== null && <span className={pages.small}>{formatMs(resolved.startMs)}</span>}</p>
                 {resolved.state === 'current' ? <p style={{ margin: '4px 0 0' }}>{resolved.text}</p>
-                  : resolved.state === 'changed' ? <p className={pages.warning} style={{ margin: '4px 0 0' }}>来源已更新，生成时使用的原版本暂不可读；不会用新版本代替。</p>
+                  : resolved.state === 'changed' ? <p className={pages.warning} style={{ margin: '4px 0 0' }}>{ref.kind === 'mark' ? '标记在生成后被修改过，生成时的内容暂不可读；不会用修改后的内容代替。' : '来源已更新，生成时使用的原版本暂不可读；不会用新版本代替。'}</p>
                     : <p className={pages.warning} style={{ margin: '4px 0 0' }}>{ref.kind === 'slide_version' ? '课件图片当前不可用（已移除或离线缺失）。' : '来源当前不可用。'}</p>}
               </div>;
             })}
@@ -264,16 +279,25 @@ function Compare({ revisions, doc }: { revisions: Revision[]; doc: Doc }) {
   const [right, setRight] = useState(() => revisions.find(item => item.id !== left)?.id ?? '');
   const a = revisions.find(item => item.id === left); const b = revisions.find(item => item.id === right);
   const label = (item: Revision) => `${roleLabel[revisionRole(doc, item)]} · ${item.created_at.slice(0, 16).replace('T', ' ')}`;
-  const diff = a && b ? lineDiff(a.body_markdown, b.body_markdown) : [];
+  const diff = a && b ? lineDiff(revisionText(a), revisionText(b)) : [];
   return <div className={pages.stack} style={{ marginTop: 12 }} data-testid="compare">
     <div className={pages.toolbar}>
       <div className={pages.field}><label htmlFor="compare-left">旧版本</label><select id="compare-left" value={left} onChange={event => setLeft(event.target.value)}>{revisions.map(item => <option key={item.id} value={item.id}>{label(item)}</option>)}</select></div>
       <div className={pages.field}><label htmlFor="compare-right">新版本</label><select id="compare-right" value={right} onChange={event => setRight(event.target.value)}>{revisions.map(item => <option key={item.id} value={item.id}>{label(item)}</option>)}</select></div>
     </div>
     {a && b && a.source_snapshot_id !== b.source_snapshot_id && <p className={`${pages.small} ${pages.warning}`}>两个版本基于不同的来源快照生成。</p>}
+    <p className={`${pages.small} ${pages.muted}`}>比较的是阅读时显示的全部内容：正文、结构化小节、卡片和备注。</p>
     <pre className={styles.diff} aria-label="逐行比较结果">{diff.map((line, index) => <span key={index} className={line.type === 'added' ? styles.diffAdded : line.type === 'removed' ? styles.diffRemoved : styles.diffSame}>
       <span className={pages.srOnly}>{line.type === 'added' ? '新增：' : line.type === 'removed' ? '删除：' : ''}</span>{line.type === 'added' ? '+ ' : line.type === 'removed' ? '− ' : '  '}{line.text || ' '}</span>)}</pre>
   </div>;
+}
+
+type DraftBase = { content: string | null; revision: number; draft: string };
+function parseMeta(raw: string): DraftBase | null {
+  try {
+    const value = JSON.parse(raw) as Partial<DraftBase>;
+    return Number.isSafeInteger(value.revision) && typeof value.draft === 'string' && (value.content === null || typeof value.content === 'string') ? value as DraftBase : null;
+  } catch { return null; }
 }
 
 /** Personal revision editor: the draft survives navigation; saving never overwrites other versions. */
@@ -283,26 +307,40 @@ function PersonalEditor({ doc, basis, onSaved, onConflict }: { doc: Doc; basis: 
   const [open, setOpen] = useState(false);
   const [body, setBody] = useDraft(doc.class_session_id, `review:${doc.id}:body`);
   const [note, setNote] = useDraft(doc.class_session_id, `review:${doc.id}:note`);
-  const [draftId, setDraftId] = useState(() => crypto.randomUUID());
+  // The draft is pinned to the version and document revision it was started from; only an explicit
+  // choice after a conflict moves its base. Kept with the draft text, so it survives navigation too.
+  const [metaRaw, setMetaRaw] = useDraft(doc.class_session_id, `review:${doc.id}:base`);
+  const meta = parseMeta(metaRaw);
+  const [conflicted, setConflicted] = useState(false);
   const keyRef = useRef<{ fingerprint: string; key: string } | null>(null);
   const save = useMutation({
     mutationFn: () => {
-      const payload: S['PersonalRevisionWrite'] = { base_revision: doc.revision, base_content_revision_id: basis?.id ?? null, draft_id: draftId, body_markdown: body, personal_note: note };
+      const pinned = meta ?? { content: basis?.id ?? null, revision: doc.revision, draft: crypto.randomUUID() };
+      if (!meta) setMetaRaw(JSON.stringify(pinned));
+      const payload: S['PersonalRevisionWrite'] = { base_revision: pinned.revision, base_content_revision_id: pinned.content, draft_id: pinned.draft, body_markdown: body, personal_note: note };
       const fingerprint = JSON.stringify(payload);
       if (!keyRef.current || keyRef.current.fingerprint !== fingerprint) keyRef.current = { fingerprint, key: crypto.randomUUID() };
       return app.api.writePersonalRevision(doc.id, payload, keyRef.current.key);
     },
-    onSuccess: revision => { keyRef.current = null; setBody(''); setNote(''); setDraftId(crypto.randomUUID()); setOpen(false); void invalidate(); onSaved(revision); },
-    onError: error => { if (answered(error)) keyRef.current = null; if (isConflict(error)) onConflict(); },
+    onSuccess: revision => { keyRef.current = null; setBody(''); setNote(''); setMetaRaw(''); setConflicted(false); setOpen(false); void invalidate(); onSaved(revision); },
+    onError: error => { if (answered(error)) keyRef.current = null; if (isConflict(error)) { setConflicted(true); onConflict(); } },
   });
-  const start = () => { if (!body && basis) setBody(basis.body_markdown); setOpen(true); };
+  const start = () => {
+    if (!body && basis) setBody(basis.body_markdown);
+    if (!meta) setMetaRaw(JSON.stringify({ content: basis?.id ?? null, revision: doc.revision, draft: crypto.randomUUID() }));
+    setOpen(true);
+  };
+  /** Explicit conflict resolution: keep the draft text, base it on the latest document revision and the version shown now. */
+  const rebase = () => { setMetaRaw(JSON.stringify({ content: basis?.id ?? null, revision: doc.revision, draft: crypto.randomUUID() })); setConflicted(false); keyRef.current = null; };
   return <section className={pages.panel} aria-labelledby="personal-heading">
     <div className={pages.sectionHead}><h2 id="personal-heading">个人稿</h2>
       {!open && <button type="button" className={pages.buttonSecondary} onClick={start} disabled={!app.online} data-testid="edit-personal">{body ? '继续编辑草稿' : '基于当前版本写个人稿'}</button>}</div>
     {open && <form className={pages.form} style={{ maxWidth: 'none' }} onSubmit={event => { event.preventDefault(); save.mutate(); }}>
       <div className={pages.field}><label htmlFor="personal-body">正文</label><textarea id="personal-body" value={body} maxLength={120000} onChange={event => setBody(event.target.value)} /></div>
       <div className={pages.field}><label htmlFor="personal-note">备注（可选）</label><textarea id="personal-note" value={note} maxLength={12000} style={{ minHeight: 60 }} onChange={event => setNote(event.target.value)} /></div>
-      <p className={`${pages.small} ${pages.muted}`}>草稿只保存在本页面会话中，离开页面再回来仍在；保存后成为新的个人版本，不覆盖采用版本和 AI 候选。</p>
+      <p className={`${pages.small} ${pages.muted}`} data-testid="draft-base">草稿基于：{meta?.content ? '开始编辑时查看的版本' : '空白'}（资料版本 {meta?.revision ?? doc.revision}）。草稿只保存在本页面会话中，离开页面再回来仍在；保存后成为新的个人版本，不覆盖采用版本和 AI 候选。</p>
+      {conflicted && <div className={`${pages.banner} ${pages.bannerWarning}`} role="alert" data-testid="draft-conflict"><div className={pages.stack}><span>保存时资料已在其他地方更新，这次没有生效；提交的内容已另存在版本列表中。</span>
+        <div><button type="button" className={pages.buttonSecondary} onClick={rebase}>基于最新版本继续编辑</button></div></div></div>}
       {save.isError && !isConflict(save.error) && <p role="alert" className={pages.error}>{save.error instanceof ApiClientError && save.error.kind === 'network' ? '无法连接服务，草稿仍保留，联网后再保存。' : describeError(save.error)}</p>}
       <div className={pages.row}><button type="submit" className={pages.button} disabled={!app.online || save.isPending || !body.trim()}>{save.isPending ? '正在保存…' : '保存为个人稿'}</button>
         <button type="button" className={pages.buttonGhost} onClick={() => setOpen(false)}>收起（保留草稿）</button></div>

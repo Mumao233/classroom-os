@@ -97,6 +97,15 @@ export function narrowFilters(current: LibraryFilters, change: Partial<LibraryFi
   return next;
 }
 
+/** Everything the reader displays for a revision, as deterministic text for comparison (body, sections, cards, note). */
+export function revisionText(revision: Revision): string {
+  const parts = [revision.body_markdown];
+  for (const section of revision.structured_content?.notes ?? []) parts.push(`【小节】${section.title}`, section.body, ...(section.supplement ? [`补充：${section.supplement}`] : []), ...(section.missing.length ? [`缺失：${section.missing.join('；')}`] : []));
+  for (const card of revision.structured_content?.cards ?? []) parts.push(`【卡片·${card.type}】${card.title}`, `问：${card.front}`, `答：${card.back}`, ...(card.supplement ? [`补充：${card.supplement}`] : []), ...(card.missing.length ? [`缺失：${card.missing.join('；')}`] : []));
+  if (revision.personal_note) parts.push(`【备注】${revision.personal_note}`);
+  return parts.join('\n');
+}
+
 /** Line comparison of two revisions (longest common subsequence over lines). */
 export type DiffLine = { type: 'same' | 'added' | 'removed'; text: string };
 export function lineDiff(before: string, after: string): DiffLine[] {
@@ -121,7 +130,7 @@ export function lineDiff(before: string, after: string): DiffLine[] {
 export type ResolvedSource =
   | { kind: S['SourceRef']['kind']; state: 'current'; label: string; text: string; startMs: number | null; endMs: number | null }
   | { kind: S['SourceRef']['kind']; state: 'changed' | 'missing'; label: string; text: null; startMs: number | null; endMs: number | null };
-export function resolveSource(ref: S['SourceRef'], current: { segments: readonly S['TranscriptSegment'][]; slides: readonly S['Slide'][]; marks: readonly S['Mark'][] }): ResolvedSource {
+export function resolveSource(ref: S['SourceRef'], current: { segments: readonly S['TranscriptSegment'][]; slides: readonly S['Slide'][]; marks: readonly S['Mark'][] }, frozenAt: string): ResolvedSource {
   if (ref.kind === 'transcript_segment') {
     const segment = current.segments.find(item => item.id === ref.id);
     if (!segment) return { kind: ref.kind, state: 'missing', label: '转写片段', text: null, startMs: null, endMs: null };
@@ -137,7 +146,10 @@ export function resolveSource(ref: S['SourceRef'], current: { segments: readonly
   }
   const mark = current.marks.find(item => item.id === ref.id);
   if (!mark) return { kind: ref.kind, state: 'missing', label: '标记', text: null, startMs: null, endMs: null };
-  return { kind: ref.kind, state: 'current', label: mark.kind === 'unclear' ? '没懂标记' : '重点标记', text: mark.note || '（无备注）', startMs: null, endMs: null };
+  const label = mark.kind === 'unclear' ? '没懂标记' : '重点标记';
+  // A mark edited after the freeze cannot be verified against the frozen content: never show the newer note.
+  if (Date.parse(mark.updated_at) > Date.parse(frozenAt)) return { kind: ref.kind, state: 'changed', label, text: null, startMs: null, endMs: null };
+  return { kind: ref.kind, state: 'current', label, text: mark.note || '（无备注）', startMs: null, endMs: null };
 }
 
 /** Original audio availability for tracing: time positions stay, playback is never offered (gap §3.3). */

@@ -96,7 +96,84 @@ describe('PR-10b mock review documents', () => {
   });
 });
 
+describe('PR-10b mock review: Astra r0 findings', () => {
+  it('a revoked classroom never replays an earlier review receipt', () => {
+    const { backend, call } = harness();
+    const body = { base_revision: 1, base_content_revision_id: ADOPTED, draft_id: '5a000000-0000-4000-8000-000000000010', body_markdown: '合成', personal_note: '' };
+    expect(call('A', 'POST', `/review-documents/${SUMMARY}/personal-revisions`, body, '', 'k-revoked').status).toBe(201);
+    backend.revokeClassroom('A', ENDED);
+    expect(err(call('A', 'POST', `/review-documents/${SUMMARY}/personal-revisions`, body, '', 'k-revoked')).code).toBe('NOT_FOUND');
+  });
+  it('an understood patch replayed with the same key returns its receipt instead of a conflict', () => {
+    const { call } = harness();
+    const first = call('A', 'PATCH', `/review-documents/${SUMMARY}`, { base_revision: 1, understood: true }, '', 'k-patch');
+    expect(call('A', 'PATCH', `/review-documents/${SUMMARY}`, { base_revision: 1, understood: true }, '', 'k-patch')).toEqual(first);
+  });
+  it('a stale personal save keeps the submitted branch without moving any pointer; a derived revision keeps the parent snapshot', () => {
+    const { call } = harness();
+    const stale = call('A', 'POST', `/review-documents/${SUMMARY}/personal-revisions`, { base_revision: 7, base_content_revision_id: ADOPTED, draft_id: '5a000000-0000-4000-8000-000000000011', body_markdown: '分支（合成）', personal_note: '' });
+    expect(err(stale)).toMatchObject({ code: 'REVISION_CONFLICT', current_revision: 1 });
+    const revisions = items<S['ReviewRevision']>(call('A', 'GET', `/review-documents/${SUMMARY}/revisions`));
+    const branch = revisions.find(item => item.body_markdown === '分支（合成）')!;
+    expect(branch).toMatchObject({ kind: 'personal', parent_revision_id: ADOPTED, source_snapshot_id: 'e2000000-0000-4000-8000-000000000001' });
+    expect(call('A', 'GET', `/review-documents/${SUMMARY}`).body).toMatchObject({ revision: 1, latest_personal_revision_id: null, adopted_revision_id: ADOPTED });
+  });
+  it('lists are paged at the requested limit with a continuation cursor', () => {
+    const { call } = harness();
+    const first = call('A', 'GET', '/review-documents', undefined, 'limit=3').body as { items: unknown[]; next_cursor: string | null };
+    expect(first.items).toHaveLength(3);
+    const second = call('A', 'GET', '/review-documents', undefined, `limit=3&cursor=${first.next_cursor}`).body as { items: unknown[]; next_cursor: string | null };
+    expect([second.items.length, second.next_cursor]).toEqual([1, null]);
+    expect(err(call('A', 'GET', '/review-documents', undefined, 'limit=101')).code).toBe('VALIDATION_FAILED');
+  });
+  it('source_status is projected from the active revision against current sources', () => {
+    const { backend, call } = harness();
+    expect(call('A', 'GET', `/review-documents/${SUMMARY}`).body).toMatchObject({ source_status: 'unchanged' });
+    call('A', 'POST', `/review-documents/${SUMMARY}/adopt`, { base_revision: 1, revision_id: CANDIDATE });
+    expect(call('A', 'GET', `/review-documents/${SUMMARY}`).body).toMatchObject({ source_status: 'changed' });
+    call('A', 'POST', `/review-documents/${SUMMARY}/adopt`, { base_revision: 2, revision_id: ADOPTED });
+    backend.classroomStore('A').slides = backend.classroomStore('A').slides.map(item => ({ ...item, removed: true }));
+    expect(call('A', 'GET', `/review-documents/${SUMMARY}`).body).toMatchObject({ source_status: 'unavailable' });
+  });
+});
+
 describe('PR-10b mock retranscription (PR-06c handoff)', () => {
+  it('generation reads only the adopted transcript; an unadopted retranscription is never a source', () => {
+    const { backend, call } = harness();
+    const plan = call('A', 'POST', `/class-sessions/${ENDED}/generation-plans`, retranscribe()).body as S['GenerationPlan'];
+    const task = call('A', 'POST', `/generation-plans/${plan.id}/execute`, execute(plan)).body as S['Task'];
+    const versionId = backend.advanceTask('A', task.id, 'succeeded')!.result_id!;
+    const candidateIds = new Set(items<S['TranscriptSegment']>(call('A', 'GET', `/transcript-versions/${versionId}/segments`)).map(item => item.id));
+    const summary = call('A', 'POST', `/class-sessions/${ENDED}/generation-plans`, { kind: 'review_summary', scope: 'all', seen_sources: [], include_images: false, accept_partial_scope: false }).body as S['GenerationPlan'];
+    expect(summary.source_snapshot!.source_refs.some(ref => candidateIds.has(ref.id))).toBe(false);
+    expect(summary.source_snapshot!.source_refs).toHaveLength(3);
+    const session = call('A', 'GET', `/class-sessions/${ENDED}`).body as S['ClassSession'];
+    call('A', 'POST', `/class-sessions/${ENDED}/adopt-transcript`, { base_revision: session.revision, transcript_version_id: versionId });
+    const after = call('A', 'POST', `/class-sessions/${ENDED}/generation-plans`, { kind: 'review_summary', scope: 'all', seen_sources: [], include_images: false, accept_partial_scope: false }).body as S['GenerationPlan'];
+    expect(after.source_snapshot!.source_refs.every(ref => candidateIds.has(ref.id))).toBe(true);
+  });
+  it('per-epoch retention and empty ranges are refused; further runs of a class need an approval', () => {
+    const { backend, call } = harness();
+    // Class 3 has only a historical capture whose own deadline has passed (the session field is null).
+    expect(err(call('A', 'POST', '/class-sessions/c0000000-0000-4000-8000-000000000003/generation-plans', retranscribe())).code).toBe('AUDIO_EXPIRED');
+    expect(err(call('A', 'POST', `/class-sessions/${ENDED}/generation-plans`, retranscribe({ scope: 'range', start_ms: 9_000_000, end_ms: 9_100_000 }))).code).toBe('SOURCE_UNAVAILABLE');
+    const first = call('A', 'POST', `/class-sessions/${ENDED}/generation-plans`, retranscribe()).body as S['GenerationPlan'];
+    expect(call('A', 'POST', `/generation-plans/${first.id}/execute`, execute(first)).status).toBe(202);
+    const second = call('A', 'POST', `/class-sessions/${ENDED}/generation-plans`, retranscribe()).body as S['GenerationPlan'];
+    expect(err(call('A', 'POST', `/generation-plans/${second.id}/execute`, execute(second))).code).toBe('QUOTA_SESSION_EXCEEDED');
+    backend.setRetranscribeDev('A', { classId: ENDED, approve: true });
+    expect(call('A', 'POST', `/generation-plans/${second.id}/execute`, execute(second)).status).toBe(202);
+  });
+  it('an audio selection that changed after preparation needs a new plan or an explicit original-snapshot confirmation', () => {
+    const { backend, call } = harness();
+    const plan = call('A', 'POST', `/class-sessions/${UPLOAD_FAILED}/generation-plans`, retranscribe({ accept_partial_scope: true })).body as S['GenerationPlan'];
+    const manifest = backend.classroomStore('A').manifests.get(UPLOAD_FAILED)!;
+    backend.classroomStore('A').manifests.set(UPLOAD_FAILED, { ...manifest, durable_ranges: [{ first_seq: 0, last_seq: 299 }], missing_ranges: [] });
+    expect(call('A', 'GET', `/generation-plans/${plan.id}`).body).toMatchObject({ source_status: 'changed' });
+    expect(err(call('A', 'POST', `/generation-plans/${plan.id}/execute`, execute(plan, { confirm_partial_scope: true }))).code).toBe('SOURCE_CHANGED');
+    expect(call('A', 'POST', `/generation-plans/${plan.id}/execute`, execute(plan, { confirm_partial_scope: true, confirm_original_snapshot: true })).status).toBe(202);
+  });
+
   it('prepare freezes the audio manifest; execute queues a task; success yields an unadopted retranscription version', () => {
     const { backend, call } = harness();
     expect(err(call('A', 'POST', `/class-sessions/${ENDED}/generation-plans`, retranscribe({ scope: 'recent30' }))).code).toBe('VALIDATION_FAILED');
@@ -154,8 +231,13 @@ describe('PR-10b mock retranscription (PR-06c handoff)', () => {
     expect(call('A', 'POST', `/tasks/${task.id}/reconcile`, {}).body).toMatchObject({ provider_query_supported: false, new_submission: false });
     expect(err(call('A', 'POST', `/tasks/${task.id}/retry`, { reason: 'x', confirm_duplicate_billing: false, original_attempt_id: unknown.attempt_id })).code).toBe('VALIDATION_FAILED');
     expect(err(call('A', 'POST', `/tasks/${task.id}/retry`, { reason: 'x', confirm_duplicate_billing: true, original_attempt_id: '5a000000-0000-4000-8000-0000000000ff' })).code).toBe('VALIDATION_FAILED');
+    // A retry is an additional run of the class: it needs an approval (synthetic, internal only).
+    expect(err(call('A', 'POST', `/tasks/${task.id}/retry`, { reason: 'x', confirm_duplicate_billing: true, original_attempt_id: unknown.attempt_id })).code).toBe('QUOTA_SESSION_EXCEEDED');
+    backend.setRetranscribeDev('A', { classId: ENDED, approve: true });
     const retry = call('A', 'POST', `/tasks/${task.id}/retry`, { reason: 'x', confirm_duplicate_billing: true, original_attempt_id: unknown.attempt_id });
     expect(retry.status).toBe(202);
+    backend.setRetranscribeDev('A', { classId: ENDED, approve: true });
+    expect(err(call('A', 'POST', `/tasks/${task.id}/retry`, { reason: 'y', confirm_duplicate_billing: true, original_attempt_id: unknown.attempt_id })).code).toBe('VALIDATION_FAILED');
     expect(retry.body).toMatchObject({ kind: 'asr_retranscribe', parent_task_id: task.id, state: 'queued' });
     expect((retry.body as S['Task']).attempt_id).not.toBe(unknown.attempt_id);
     expect(call('A', 'GET', `/tasks/${task.id}`).body).toMatchObject({ state: 'unknown', attempt_id: unknown.attempt_id, may_have_charged: true });

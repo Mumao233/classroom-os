@@ -71,7 +71,7 @@ export type ClassroomStore = {
   /** Synthetic quota units reserved by each executed task, moved once as the task progresses. */
   reservations: Map<string, { bucket: S['QuotaBucket']['kind']; units: number; phase: 'reserved' | 'submitted' | 'done' }>;
   /** PR-10b development controls for retranscription refusals (original audio state, session and month quota). */
-  retranscribeDev: { audio: Map<string, 'expired' | 'deleted'>; quota: 'ok' | 'session' | 'month' };
+  retranscribeDev: { audio: Map<string, 'expired' | 'deleted'>; quota: 'ok' | 'session' | 'month'; approvals: Map<string, number> };
   /** Retranscription plans that cover only part of the audio (missing chunks): execution needs an explicit confirmation. */
   partialPlans: Set<string>;
 };
@@ -108,7 +108,7 @@ const CAPTURE_KEYS = ['capture_epoch_id', 'fence_token', 'last_local_seq', 'last
 
 /** Synthetic records for seeded, already ended classes (record page and processing page demos). */
 export function seedClassroom(sessionIds: { ended: string; uploadFailed: string; unknownAi: string } | null): ClassroomStore {
-  const store: ClassroomStore = { versions: [], segments: [], marks: [], slides: [], uploads: new Map(), assets: [], manifests: new Map(), leases: new Map(), plans: new Map(), tasks: [], durable: new Map(), captured: new Map(), slideHistory: [], segmentHistory: [], epochs: new Map(), retired: new Map(), epochManifests: new Map(), epochOrder: new Map(), manifestCursors: new Map(), revokedAudio: new Set(), manifestDev: { pageSize: null, failContinuations: false }, reservations: new Map(), retranscribeDev: { audio: new Map(), quota: 'ok' }, partialPlans: new Set() };
+  const store: ClassroomStore = { versions: [], segments: [], marks: [], slides: [], uploads: new Map(), assets: [], manifests: new Map(), leases: new Map(), plans: new Map(), tasks: [], durable: new Map(), captured: new Map(), slideHistory: [], segmentHistory: [], epochs: new Map(), retired: new Map(), epochManifests: new Map(), epochOrder: new Map(), manifestCursors: new Map(), revokedAudio: new Set(), manifestDev: { pageSize: null, failContinuations: false }, reservations: new Map(), retranscribeDev: { audio: new Map(), quota: 'ok', approvals: new Map() }, partialPlans: new Set() };
   if (!sessionIds) return store;
   const created = '2026-10-27T06:00:00Z';
   const version = (n: number, classId: string): S['TranscriptVersion'] => ({ id: uuid('71000000', n), revision: 1, created_at: created, updated_at: created, class_session_id: classId, kind: 'realtime', state: 'sealed', source_task_id: uuid('72000000', n), adopted: true });
@@ -158,7 +158,8 @@ const SIGNATURES: Record<string, (hex: string) => boolean> = {
  * A changed source is still resolvable through the retained immutable revision; a removed or lost
  * one is unavailable.
  */
-function sourceStatus(store: ClassroomStore, plan: S['GenerationPlan']): S['GenerationPlan']['source_status'] {
+function sourceStatus(store: ClassroomStore, plan: S['GenerationPlan'], now: string): S['GenerationPlan']['source_status'] {
+  if (plan.kind === 'asr_retranscribe') return audioSelection(store, plan.class_session_id, now).digest === plan.audio_manifest_sha256 ? 'unchanged' : 'changed';
   let status: S['GenerationPlan']['source_status'] = 'unchanged';
   for (const ref of plan.source_snapshot?.source_refs ?? []) {
     if (ref.kind === 'slide_version') {
@@ -505,7 +506,7 @@ export function handleClassroom(store: ClassroomStore, host: ClassroomHost, h: C
     });
 
     case 'POST /class-sessions/:id/generation-plans': return h.idempotent(key, `plan:${id}`, body, () => planFor(store, host, h, id, body));
-    case 'GET /generation-plans/:id': { const record = store.plans.get(id); return record && findSession(record.plan.class_session_id) ? ok({ ...record.plan, source_status: sourceStatus(store, record.plan) }) : h.error(404, 'NOT_FOUND', '计划不存在'); }
+    case 'GET /generation-plans/:id': { const record = store.plans.get(id); return record && findSession(record.plan.class_session_id) ? ok({ ...record.plan, source_status: sourceStatus(store, record.plan, h.now()) }) : h.error(404, 'NOT_FOUND', '计划不存在'); }
     case 'POST /generation-plans/:id/execute': return h.idempotent(key, `execute:${id}`, body, () => {
       const record = store.plans.get(id);
       if (!record || !findSession(record.plan.class_session_id)) return h.error(404, 'NOT_FOUND', '计划不存在');
@@ -518,9 +519,11 @@ export function handleClassroom(store: ClassroomStore, host: ClassroomHost, h: C
       if (body.plan_sha256 !== plan.plan_sha256 || body.confirmed_destination_revision !== plan.destination.configuration_revision) return h.error(409, 'PLAN_EXPIRED', '计划内容或目的地已变化，请重新准备');
       if (plan.kind === 'asr_retranscribe') {
         const session = findSession(plan.class_session_id)!;
-        const refusal = audioRefusal(store, h, session) ?? quotaRefusal(store, h);
+        const refusal = audioRefusal(store, h, session) ?? quotaRefusal(store, h, session.id);
         if (refusal) return refusal;
         if (store.partialPlans.has(plan.id) && body.confirm_partial_scope !== true) return h.error(400, 'VALIDATION_FAILED', '原音不完整，需要确认按已有部分重新转写');
+        if (audioSelection(store, session.id, h.now()).digest !== plan.audio_manifest_sha256 && body.confirm_original_snapshot !== true) return h.error(409, 'SOURCE_CHANGED', '原音在准备后有变化，可以重新准备，或明确选择按准备时冻结的原音提交');
+        admit(store, session.id);
         const next = task({ id: h.newId(), classId: plan.class_session_id, kind: 'asr_retranscribe', state: 'queued', created: h.now(), snapshotId: null, attemptId: h.newId(), maximum: plan.maximum_cost_microyuan });
         store.tasks.push(next);
         record.taskId = next.id;
@@ -528,7 +531,7 @@ export function handleClassroom(store: ClassroomStore, host: ClassroomHost, h: C
       }
       if (plan.contains_images && body.confirm_images !== true) return h.error(400, 'VALIDATION_FAILED', '计划包含图片，需要确认发送图片');
       if (plan.source_snapshot && !plan.source_snapshot.scope_complete && body.confirm_partial_scope !== true) return h.error(400, 'VALIDATION_FAILED', '材料不完整，需要确认按部分范围生成');
-      const status = sourceStatus(store, plan);
+      const status = sourceStatus(store, plan, h.now());
       if (status === 'unavailable') return h.error(409, 'SOURCE_UNAVAILABLE', '部分来源已不可用，请重新准备');
       if (status === 'changed' && body.confirm_original_snapshot !== true) return h.error(409, 'SOURCE_CHANGED', '来源在准备后已更新，需要明确选择按原版本发送或重新准备');
       // Synthetic units are rechecked and reserved on first execution (a replay returned the task above).
@@ -554,13 +557,15 @@ export function handleClassroom(store: ClassroomStore, host: ClassroomHost, h: C
       if (!found) return h.error(404, 'NOT_FOUND', '任务不存在');
       if (!only(body, ['reason', 'confirm_duplicate_billing', 'original_attempt_id']) || typeof body.reason !== 'string' || body.reason.trim().length === 0 || body.reason.length > 500
         || typeof body.confirm_duplicate_billing !== 'boolean' || !isUuid(body.original_attempt_id)) return h.error(400, 'VALIDATION_FAILED', '重试请求无效');
-      if (found.kind !== 'asr_retranscribe' || !['failed', 'unknown'].includes(found.state)) return h.error(409, 'VALIDATION_FAILED', '只有失败或结果未知的重新转写可以重试');
+      if (found.kind !== 'asr_retranscribe' || found.state !== 'unknown' || found.provider_outcome !== 'unknown') return h.error(409, 'VALIDATION_FAILED', '只有结果未知的重新转写可以重试');
+      if (store.tasks.some(item => item.parent_task_id === found.id)) return h.error(409, 'VALIDATION_FAILED', '这次尝试已经有重试任务');
       if (found.attempt_id !== body.original_attempt_id) return h.error(409, 'VALIDATION_FAILED', '重试必须指明原尝试');
       if (found.may_have_charged && body.confirm_duplicate_billing !== true) return h.error(409, 'VALIDATION_FAILED', '原尝试可能已收费，重试需要确认可能重复计费');
       const session = found.class_session_id ? findSession(found.class_session_id) : undefined;
       if (!session) return notFound();
-      const refusal = audioRefusal(store, h, session) ?? quotaRefusal(store, h);
+      const refusal = audioRefusal(store, h, session) ?? quotaRefusal(store, h, session.id);
       if (refusal) return refusal;
+      admit(store, session.id);
       // The original attempt is immutable; the retry is a new linked task with its own attempt.
       const next: S['Task'] = { ...task({ id: h.newId(), classId: session.id, kind: 'asr_retranscribe', state: 'queued', created: h.now(), snapshotId: null, attemptId: h.newId(), maximum: found.maximum_cost_microyuan }), parent_task_id: found.id };
       store.tasks.push(next);
@@ -612,42 +617,76 @@ function syncAi(store: ClassroomStore, host: ClassroomHost, h: ClassroomHelpers,
   if (session.flows.ai !== ai) host.saveSession({ ...session, revision: session.revision + 1, updated_at: h.now(), flows: { ...session.flows, ai } });
 }
 
+/** Transcript versions generation reads: the adopted one, else every realtime/imported version (never an unadopted retranscription). */
+function activeVersionIds(store: ClassroomStore, session: S['ClassSession']): Set<string | null> {
+  const versions = store.versions.filter(item => item.class_session_id === session.id);
+  const adopted = session.adopted_transcript_version_id ?? versions.find(item => item.adopted)?.id ?? null;
+  return new Set(adopted ? [adopted] : versions.filter(item => item.kind !== 'retranscription').map(item => item.id));
+}
+
+/** Every capture epoch's manifest of a class with its own readability (deadline and revocation). */
+function audioEpochs(store: ClassroomStore, classId: string, now: string) {
+  return epochIdsOf(store, classId).map(epochId => {
+    const manifest = manifestOf(store, classId, epochId);
+    const revoked = store.revokedAudio.has(epochId);
+    const expired = manifest.audio_expires_at !== null && Date.parse(manifest.audio_expires_at) <= Date.parse(now);
+    return { epochId, manifest, revoked, expired, order: store.epochOrder.get(epochId) ?? { offset: 0, fence: 1, expires: null, samples: 0 } };
+  });
+}
+/** The readable audio a retranscription can use, and the digest the plan freezes. */
+function audioSelection(store: ClassroomStore, classId: string, now: string) {
+  const readable = audioEpochs(store, classId, now).filter(item => !item.revoked && !item.expired);
+  return { readable, digest: sha256Hex(JSON.stringify(readable.map(item => item.manifest))) };
+}
+
 /** Original-audio refusals of 06c, distinguished only by error code (HTTP 0.3.0). */
 function audioRefusal(store: ClassroomStore, h: ClassroomHelpers, session: S['ClassSession']): ClassroomReply | null {
   const dev = store.retranscribeDev.audio.get(session.id);
-  const revoked = [...store.revokedAudio].some(epoch => store.epochs.get(epoch) === session.id);
-  if (dev === 'deleted' || revoked) return h.error(410, 'AUDIO_DELETED', '原音已删除或访问已撤销');
-  if (dev === 'expired' || (session.audio_expires_at !== null && Date.parse(session.audio_expires_at) <= Date.parse(h.now()))) return h.error(410, 'AUDIO_EXPIRED', '原音已到期');
+  const epochs = audioEpochs(store, session.id, h.now());
+  const usable = epochs.filter(item => !item.revoked && !item.expired);
+  if (dev === 'deleted' || (epochs.length > 0 && usable.length === 0 && epochs.some(item => item.revoked))) return h.error(410, 'AUDIO_DELETED', '原音已删除或访问已撤销');
+  if (dev === 'expired' || (session.audio_expires_at !== null && Date.parse(session.audio_expires_at) <= Date.parse(h.now())) || (epochs.length > 0 && usable.length === 0)) return h.error(410, 'AUDIO_EXPIRED', '原音已到期');
   return null;
 }
-function quotaRefusal(store: ClassroomStore, h: ClassroomHelpers): ClassroomReply | null {
-  if (store.retranscribeDev.quota === 'session') return h.error(409, 'QUOTA_SESSION_EXCEEDED', '本节课追加重新转写需要审批');
+/** The first retranscription of a class is admitted; every further run (a retry included) needs one approval. */
+function quotaRefusal(store: ClassroomStore, h: ClassroomHelpers, classId: string): ClassroomReply | null {
   if (store.retranscribeDev.quota === 'month') return h.error(409, 'QUOTA_MONTH_EXCEEDED', '本月重新转写时长不足');
+  const admitted = store.tasks.filter(item => item.class_session_id === classId && item.kind === 'asr_retranscribe').length;
+  if (store.retranscribeDev.quota === 'session' || (admitted >= 1 && (store.retranscribeDev.approvals.get(classId) ?? 0) < 1)) return h.error(409, 'QUOTA_SESSION_EXCEEDED', '本节课追加重新转写需要审批');
   return null;
+}
+/** Consumes the approval of an additional run (the first run needs none). */
+function admit(store: ClassroomStore, classId: string) {
+  const admitted = store.tasks.filter(item => item.class_session_id === classId && item.kind === 'asr_retranscribe').length;
+  if (admitted >= 1) store.retranscribeDev.approvals.set(classId, (store.retranscribeDev.approvals.get(classId) ?? 1) - 1);
 }
 
-/** A frozen retranscription plan: original-audio manifest digest, chunk IDs, metered duration and maximum cost. */
+/** A frozen retranscription plan: the requested window intersected with readable recorded audio. */
 function retranscribePlan(store: ClassroomStore, h: ClassroomHelpers, session: S['ClassSession'], body: Record<string, unknown>): ClassroomReply {
   if (!['all', 'range'].includes(String(body.scope)) || (Array.isArray(body.seen_sources) && body.seen_sources.length > 0) || body.include_images !== false) return h.error(400, 'VALIDATION_FAILED', '重新转写只能选择整节或时间范围，且不发送图片');
   if (body.scope === 'range' && !(nonNegative(body.start_ms) && nonNegative(body.end_ms) && (body.end_ms as number) > (body.start_ms as number))) return h.error(400, 'VALIDATION_FAILED', '范围需要起止时间');
   if (session.capture_ended_at === null) return h.error(409, 'SOURCE_UNAVAILABLE', '课堂仍在采集，结束后才能重新转写');
   const refusal = audioRefusal(store, h, session);
   if (refusal) return refusal;
-  const manifest = store.manifests.get(session.id);
-  if (!manifest || manifest.durable_ranges.length === 0) return h.error(409, 'SOURCE_UNAVAILABLE', '没有已持久保存的原音，无法重新转写');
-  const partial = manifest.missing_ranges.length > 0;
+  const { readable, digest } = audioSelection(store, session.id, h.now());
+  // Each readable epoch covers [offset, offset + its recorded duration) on the class timeline.
+  const total = Math.max(session.effective_capture_ms, ...readable.map(item => item.order.offset + Math.floor(item.order.samples / 16)));
+  const from = body.scope === 'range' ? body.start_ms as number : 0;
+  const to = body.scope === 'range' ? Math.min(body.end_ms as number, total) : total;
+  const selected = readable.filter(item => item.manifest.durable_ranges.length > 0);
+  if (!selected.length || to <= from) return h.error(409, 'SOURCE_UNAVAILABLE', '所选范围没有已持久保存的原音，无法重新转写');
+  const partial = selected.some(item => item.manifest.missing_ranges.length > 0 || item.manifest.expected_last_seq === null);
   if (partial && body.accept_partial_scope !== true) return h.error(409, 'SOURCE_UNAVAILABLE', '原音有分片缺失。可以等待上传完成，或明确选择按已有部分重新转写。');
-  const durableCount = manifest.durable_ranges.reduce((sum, range) => sum + range.last_seq - range.first_seq + 1, 0);
-  const total = Math.max(60_000, session.effective_capture_ms);
-  const ms = body.scope === 'range' ? Math.min(total, (body.end_ms as number) - (body.start_ms as number)) : total;
-  const chunkCount = Math.max(1, Math.min(durableCount, Math.ceil(ms / 20_000)));
+  const durable = selected.reduce((sum, item) => sum + item.manifest.durable_ranges.reduce((n, range) => n + range.last_seq - range.first_seq + 1, 0), 0);
+  const ms = to - from;
+  const chunkCount = Math.max(1, Math.min(durable, Math.round(durable * ms / Math.max(1, total))));
   const created = h.now();
   const serial = store.plans.size + 1;
-  const plan: S['GenerationPlan'] = { id: h.newId(), class_session_id: session.id, kind: 'asr_retranscribe', plan_sha256: sha256Hex(`retranscribe:${session.id}:${serial}`), source_snapshot: null,
-    audio_manifest_sha256: sha256Hex(JSON.stringify(manifest)), audio_chunk_ids: Array.from({ length: chunkCount }, (_, index) => uuid('7a000000', serial * 1000 + index + 1)),
+  const plan: S['GenerationPlan'] = { id: h.newId(), class_session_id: session.id, kind: 'asr_retranscribe', plan_sha256: sha256Hex(`retranscribe:${session.id}:${serial}:${from}:${to}`), source_snapshot: null,
+    audio_manifest_sha256: digest, audio_chunk_ids: Array.from({ length: chunkCount }, (_, index) => uuid('7a000000', serial * 100000 + index + 1)),
     destination: MOCK_DESTINATION, prompt_version: 'mock-filetrans-1', output_schema_version: 'mock-transcript-1', price_version: 'mock-price-1', estimated_batches: 1,
     maximum_cost_microyuan: String(Math.ceil(ms / 1000) * 50), quota_units: Math.max(1, ms), expires_at: iso(Date.parse(created) + 10 * 60_000), source_status: 'unchanged', contains_images: false };
-  store.plans.set(plan.id, { plan, request: body as unknown as S['GenerationPlanRequest'], taskId: null });
+  store.plans.set(plan.id, { plan, request: { ...body, start_ms: from, end_ms: to } as unknown as S['GenerationPlanRequest'], taskId: null });
   if (partial) store.partialPlans.add(plan.id);
   return { status: 201, body: plan };
 }
@@ -657,16 +696,21 @@ function retranscribed(store: ClassroomStore, h: ClassroomHelpers, source: S['Ta
   const classId = source.class_session_id!;
   const created = h.now();
   const versionId = h.newId();
-  const plan = [...store.plans.values()].find(record => record.taskId === source.id || (source.parent_task_id !== null && record.taskId === source.parent_task_id));
-  const request = plan?.request as unknown as Record<string, unknown> | undefined;
-  const inRange = (item: S['TranscriptSegment']) => request?.scope !== 'range' || (item.start_ms !== null && item.start_ms >= (request.start_ms as number) && (item.end_ms ?? item.start_ms) <= (request.end_ms as number));
-  const adopted = store.versions.find(item => item.class_session_id === classId && item.adopted && item.kind !== 'retranscription') ?? store.versions.find(item => item.class_session_id === classId && item.adopted);
-  const basis = store.segments.filter(item => item.class_session_id === classId && item.kind === 'machine' && item.status === 'final' && (!adopted || item.transcript_version_id === adopted.id) && inRange(item));
+  // Every attempt resolves to its original frozen plan, also through a chain of retries.
+  let origin: S['Task'] | undefined = source;
+  while (origin?.parent_task_id) origin = store.tasks.find(item => item.id === origin!.parent_task_id);
+  const plan = [...store.plans.values()].find(record => record.taskId === (origin ?? source).id);
+  const request = plan?.request as unknown as { start_ms: number; end_ms: number } | undefined;
+  const from = request?.start_ms ?? 0; const to = request?.end_ms ?? Number.MAX_SAFE_INTEGER;
+  // Synthetic recognition of the frozen audio: realtime finals inside the window stand in for the audio content.
+  const realtime = new Set(store.versions.filter(item => item.class_session_id === classId && item.kind !== 'retranscription').map(item => item.id));
+  const basis = store.segments.filter(item => item.class_session_id === classId && item.kind === 'machine' && item.status === 'final' && realtime.has(item.transcript_version_id)
+    && item.start_ms !== null && item.start_ms >= from && (item.end_ms ?? item.start_ms) <= to);
   store.versions.push({ id: versionId, revision: 1, created_at: created, updated_at: created, class_session_id: classId, kind: 'retranscription', state: 'sealed', source_task_id: source.id, adopted: false });
-  for (const item of basis) {
-    store.segments.push({ ...item, id: h.newId(), revision: 1, created_at: created, updated_at: created, transcript_version_id: versionId, stream_id: null, segment_revision_id: h.newId(),
-      origin: 'retranscription', text: item.text.replace('（合成）', '（合成·重新转写）'), timestamp_source: 'capture_mapping', provider_request_id: null, adopted_revision_id: null });
-  }
+  const base = (item: Partial<S['TranscriptSegment']>): S['TranscriptSegment'] => ({ id: h.newId(), revision: 1, created_at: created, updated_at: created, class_session_id: classId, transcript_version_id: versionId, stream_id: null,
+    segment_revision_id: h.newId(), kind: 'machine', origin: 'retranscription', status: 'final', text: '', start_ms: null, end_ms: null, timestamp_source: 'capture_mapping', provider_request_id: null, source_chunk_ids: [], adopted_revision_id: null, ...item });
+  if (basis.length) for (const item of basis) store.segments.push(base({ text: item.text.replace('（合成）', '（合成·重新转写）'), start_ms: item.start_ms, end_ms: item.end_ms }));
+  else store.segments.push(base({ text: '（合成·重新转写）这段原音没有实时转写对照。', start_ms: from, end_ms: Math.min(to, from + 20_000) }));
   return versionId;
 }
 
@@ -688,7 +732,8 @@ function planFor(store: ClassroomStore, host: ClassroomHost, h: ClassroomHelpers
   if (bucket && bucket.remaining < 1) return h.error(409, 'QUOTA_EXCEEDED', '本月额度已用完');
 
   // Whole-class scopes include finals without a time position; time scopes need wholly contained times.
-  const allFinals = store.segments.filter(item => item.class_session_id === classId && item.kind === 'machine' && item.status === 'final');
+  const active = activeVersionIds(store, session);
+  const allFinals = store.segments.filter(item => item.class_session_id === classId && item.kind === 'machine' && item.status === 'final' && active.has(item.transcript_version_id));
   const finals = allFinals.filter(item => item.start_ms !== null);
   const latestEnd = Math.max(0, ...finals.map(item => item.end_ms ?? item.start_ms ?? 0));
   const window = body.scope === 'recent30' ? 30_000 : body.scope === 'recent120' ? 120_000 : body.scope === 'thought_group' ? 45_000 : null;
@@ -734,10 +779,12 @@ function planFor(store: ClassroomStore, host: ClassroomHost, h: ClassroomHelpers
 }
 
 /** PR-10b development panel: original audio state and quota refusals for retranscription. */
-export function setRetranscribeDev(store: ClassroomStore, value: { classId?: string; audio?: 'ok' | 'expired' | 'deleted'; quota?: 'ok' | 'session' | 'month' }) {
+export function setRetranscribeDev(store: ClassroomStore, value: { classId?: string; audio?: 'ok' | 'expired' | 'deleted'; quota?: 'ok' | 'session' | 'month'; approve?: boolean }) {
   if (value.classId && value.audio) { if (value.audio === 'ok') store.retranscribeDev.audio.delete(value.classId); else store.retranscribeDev.audio.set(value.classId, value.audio); }
   if (value.quota) store.retranscribeDev.quota = value.quota;
-  return { audio: Object.fromEntries(store.retranscribeDev.audio), quota: store.retranscribeDev.quota };
+  // Synthetic internal approval of one additional run for a class (the browser has no approval entry).
+  if (value.classId && value.approve) store.retranscribeDev.approvals.set(value.classId, (store.retranscribeDev.approvals.get(value.classId) ?? 0) + 1);
+  return { audio: Object.fromEntries(store.retranscribeDev.audio), quota: store.retranscribeDev.quota, approvals: Object.fromEntries(store.retranscribeDev.approvals) };
 }
 
 /** Development-panel helper: move a task to a later state the way a worker would report it. */

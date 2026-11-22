@@ -25,17 +25,20 @@ export function ReviewHub() {
   const library = useReviewLibrary(filters);
   const semesters = useSemesters();
   const courses = useCourses({});
+  const archived = useCourses({ archived: true });
   const sessions = useClassSessions();
   const memory = useReadingMemory();
   const sessionList = useMemo(() => sessions.data?.items ?? [], [sessions.data]);
   const questions = useQuestionsFor(sessionList.map(item => item.id));
   const sessionById = useMemo(() => new Map(sessionList.map(item => [item.id, item])), [sessionList]);
-  const courseById = useMemo(() => new Map((courses.data?.items ?? []).map(item => [item.id, item])), [courses.data]);
+  // Archived courses keep their documents: they stay in the filters and labels.
+  const allCourses = useMemo(() => [...(courses.data?.items ?? []), ...(archived.data?.items ?? [])].filter((item, index, list) => list.findIndex(other => other.id === item.id) === index), [courses.data, archived.data]);
+  const courseById = useMemo(() => new Map(allCourses.map(item => [item.id, item])), [allCourses]);
   const where = (classId: string) => { const session = sessionById.get(classId); const course = session ? courseById.get(session.course_id) : undefined; return `${course?.name ?? '课程'} · ${session?.title || '课堂'}`; };
   const tasks = taskFirst(all.data?.items ?? [], questions.items, memory.read().last);
   const from = `${location.pathname}${location.search}`;
   const set = (change: Partial<LibraryFilters>) => setParams(filtersToParams(narrowFilters(filters, change)), { replace: true });
-  const visibleCourses = (courses.data?.items ?? []).filter(item => !filters.semester_id || item.semester_id === filters.semester_id);
+  const visibleCourses = allCourses.filter(item => !filters.semester_id || item.semester_id === filters.semester_id);
   const visibleSessions = sessionList.filter(item => (!filters.course_id || item.course_id === filters.course_id) && (!filters.semester_id || courseById.get(item.course_id)?.semester_id === filters.semester_id));
 
   return <main id="main-content" className={styles.page}>
@@ -70,7 +73,7 @@ export function ReviewHub() {
     <section className={pages.panel} aria-labelledby="hub-library"><h2 id="hub-library">资料库</h2>
       <div className={pages.toolbar} role="group" aria-label="资料库筛选">
         <div className={pages.field}><label htmlFor="lib-semester">学期</label><select id="lib-semester" value={filters.semester_id ?? ''} onChange={event => set({ semester_id: event.target.value || undefined })}><option value="">全部学期</option>{(semesters.data?.items ?? []).map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></div>
-        <div className={pages.field}><label htmlFor="lib-course">课程</label><select id="lib-course" value={filters.course_id ?? ''} onChange={event => set({ course_id: event.target.value || undefined })}><option value="">全部课程</option>{visibleCourses.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></div>
+        <div className={pages.field}><label htmlFor="lib-course">课程</label><select id="lib-course" value={filters.course_id ?? ''} onChange={event => set({ course_id: event.target.value || undefined })}><option value="">全部课程</option>{visibleCourses.map(item => <option key={item.id} value={item.id}>{item.name}{item.archived ? '（已归档）' : ''}</option>)}</select></div>
         <div className={pages.field}><label htmlFor="lib-class">课堂</label><select id="lib-class" value={filters.class_session_id ?? ''} onChange={event => set({ class_session_id: event.target.value || undefined })}><option value="">全部课堂</option>{visibleSessions.map(item => <option key={item.id} value={item.id}>{item.title || '未命名课堂'}</option>)}</select></div>
         <div className={pages.field}><label htmlFor="lib-kind">类型</label><select id="lib-kind" value={filters.kind ?? ''} onChange={event => set({ kind: (event.target.value || undefined) as LibraryFilters['kind'] })}><option value="">全部</option><option value="summary">课堂总结</option><option value="card">复习卡片</option><option value="note">个人笔记</option></select></div>
         <div className={pages.field}><label htmlFor="lib-understood">理解状态</label><select id="lib-understood" value={filters.understood === undefined ? '' : String(filters.understood)} onChange={event => set({ understood: event.target.value === '' ? undefined : event.target.value === 'true' })}><option value="">全部</option><option value="false">尚未理解</option><option value="true">已理解</option></select></div>
@@ -93,6 +96,6 @@ function QuestionRow({ question, where }: { question: S['Question']; where: stri
     <div><strong>{question.question}</strong><p>疑问 · {where}</p>{question.answer_markdown && <p>{question.answer_markdown}</p>}
       {toggle.isError && <p role="alert" className={pages.error}>{isConflict(toggle.error) ? '这条疑问已在其他地方更新，请刷新后再标记。' : describeError(toggle.error)}</p>}</div>
     <button type="button" className={pages.buttonGhost} disabled={!app.online || toggle.isPending} onClick={() => toggle.mutate()}>标记已理解</button>
-    <Link to={`/classrooms/${question.class_session_id}/review`}>定位</Link>
+    <Link to={`/classrooms/${question.class_session_id}/record`} aria-label={`在课堂记录中查看疑问：${question.question}`}>查看</Link>
   </li>;
 }

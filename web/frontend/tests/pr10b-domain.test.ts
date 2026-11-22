@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { components } from '../src/generated/openapi';
 import {
   alignTranscripts, audioState, filtersToParams, lineDiff, markdownBlocks, narrowFilters, parseFilters, parseReadingMemory, readingRevision, rememberReading,
-  resolveSource, retranscribeErrors, revisionRole, taskFirst, undecidedCandidates,
+  resolveSource, retranscribeErrors, revisionRole, revisionText, taskFirst, undecidedCandidates,
 } from '../src/domain/review';
 
 type S = components['schemas'];
@@ -66,6 +66,12 @@ describe('PR-10b library filters', () => {
 });
 
 describe('PR-10b line comparison', () => {
+  it('compares everything the reader displays, not only the Markdown body', () => {
+    const base = rev(1, 'ai_candidate', 'a', '同一正文');
+    const withSections = { ...base, structured_content: { schema_version: 1 as const, cards: [], notes: [{ section: 'slides' as const, title: '板书', body: '板书内容', supplement: '', source_ids: [], missing: [] }] }, personal_note: '备注' };
+    const diff = lineDiff(revisionText(base), revisionText(withSections));
+    expect(diff.filter(line => line.type === 'added').map(line => line.text)).toEqual(['【小节】板书', '板书内容', '【备注】备注']);
+  });
   it('marks added and removed lines around common ones', () => {
     expect(lineDiff('a\nb\nc', 'a\nx\nc\nd')).toEqual([{ type: 'same', text: 'a' }, { type: 'removed', text: 'b' }, { type: 'added', text: 'x' }, { type: 'same', text: 'c' }, { type: 'added', text: 'd' }]);
     expect(lineDiff('same', 'same')).toEqual([{ type: 'same', text: 'same' }]);
@@ -74,14 +80,21 @@ describe('PR-10b line comparison', () => {
 
 describe('PR-10b frozen source resolution', () => {
   const sha = 'a'.repeat(64);
+  const FROZEN = '2026-10-27T07:40:00Z';
+  it('a mark is shown only if it was not edited after the freeze', () => {
+    const mark = (updated: string) => ({ id: 'm1', revision: 1, created_at: '2026-10-27T06:00:00Z', updated_at: updated, class_session_id: 'c', kind: 'unclear', note: '新备注', understood: false, anchor: { kind: 'timepoint', capture_epoch_id: 'e', sample_offset: 0 } }) as S['Mark'];
+    const ref = { kind: 'mark' as const, id: 'm1', revision_id: 'r', content_sha256: sha };
+    expect(resolveSource(ref, { segments: [], slides: [], marks: [mark('2026-10-27T06:00:00Z')] }, FROZEN)).toMatchObject({ state: 'current', text: '新备注' });
+    expect(resolveSource(ref, { segments: [], slides: [], marks: [mark('2026-10-28T06:00:00Z')] }, FROZEN)).toMatchObject({ state: 'changed', text: null });
+  });
   const current = { segments: [segment(1, 0, 1000, '当前文本')], slides: [{ id: 's1', revision: 2, created_at: 'a', updated_at: 'a', class_session_id: 'c', asset_id: 'x', version_id: 'v2', title: '板书', start_ms: 5, end_ms: null, rotation: '0', removed: false }] as S['Slide'][], marks: [] as S['Mark'][] };
   it('shows only the frozen revision; a newer revision is reported as changed, never substituted', () => {
-    expect(resolveSource({ kind: 'transcript_segment', id: segment(1, 0, 0, '').id, revision_id: segment(1, 0, 0, '').segment_revision_id, content_sha256: sha }, current)).toMatchObject({ state: 'current', text: '当前文本' });
-    const changed = resolveSource({ kind: 'transcript_segment', id: segment(1, 0, 0, '').id, revision_id: 'old', content_sha256: sha }, current);
+    expect(resolveSource({ kind: 'transcript_segment', id: segment(1, 0, 0, '').id, revision_id: segment(1, 0, 0, '').segment_revision_id, content_sha256: sha }, current, FROZEN)).toMatchObject({ state: 'current', text: '当前文本' });
+    const changed = resolveSource({ kind: 'transcript_segment', id: segment(1, 0, 0, '').id, revision_id: 'old', content_sha256: sha }, current, FROZEN);
     expect(changed).toMatchObject({ state: 'changed', text: null, startMs: 0 });
-    expect(resolveSource({ kind: 'slide_version', id: 's1', revision_id: 'v1', content_sha256: sha }, current)).toMatchObject({ state: 'changed', text: null });
-    expect(resolveSource({ kind: 'slide_version', id: 'gone', revision_id: 'v1', content_sha256: sha }, current)).toMatchObject({ state: 'missing' });
-    expect(resolveSource({ kind: 'mark', id: 'gone', revision_id: 'v1', content_sha256: sha }, current)).toMatchObject({ state: 'missing' });
+    expect(resolveSource({ kind: 'slide_version', id: 's1', revision_id: 'v1', content_sha256: sha }, current, FROZEN)).toMatchObject({ state: 'changed', text: null });
+    expect(resolveSource({ kind: 'slide_version', id: 'gone', revision_id: 'v1', content_sha256: sha }, current, FROZEN)).toMatchObject({ state: 'missing' });
+    expect(resolveSource({ kind: 'mark', id: 'gone', revision_id: 'v1', content_sha256: sha }, current, FROZEN)).toMatchObject({ state: 'missing' });
   });
   it('original audio keeps time positions only; expiry is judged on the given clock', () => {
     const now = Date.parse('2026-10-28T08:00:00Z');

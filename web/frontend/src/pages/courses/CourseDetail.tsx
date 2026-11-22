@@ -10,6 +10,7 @@ import { describeError, isConflict, useAppData, useClassSessions, useCourse, use
 import { Dialog } from '../../ui';
 import { Badge, CourseGlyph, coverClass, DataSourceNote, Empty, FlowSummaryView, Loading, OfflineBanner, PageHeading, QueryError } from '../common';
 import { DeleteDialog } from './DeleteDialog';
+import { useReviewLibrary } from '../../features/review';
 import shell from '../../app/Shell.module.css';
 import styles from '../pages.module.css';
 
@@ -237,7 +238,8 @@ function ReviewTab({ course }: { course: S['Course'] }) {
   const [params, setParams] = useSearchParams();
   const kind = (['summary', 'card', 'note'] as const).find(value => value === params.get('kind'));
   const understood = params.get('understood') === 'true' ? true : params.get('understood') === 'false' ? false : undefined;
-  const documents = useReviewDocuments({ course_id: course.id, kind, understood });
+  // Same paginated library read as the global and class entries (UI-REVIEW-03).
+  const documents = useReviewLibrary({ course_id: course.id, kind, understood });
   const sessions = useClassSessions(course.id);
   const sessionTitle = new Map((sessions.data?.items ?? []).map(item => [item.id, item.title || '未命名课堂']));
   const set = (key: string, value: string) => { const next = new URLSearchParams(params); if (value) next.set(key, value); else next.delete(key); setParams(next, { replace: true, state: location.state }); };

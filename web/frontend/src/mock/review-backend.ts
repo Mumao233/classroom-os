@@ -25,6 +25,8 @@ export type ReviewHost = {
   visibleSessions: () => Array<{ session: S['ClassSession']; courseId: string; semesterId: string }>;
   questions: () => S['Question'][];
   saveQuestion: (next: S['Question']) => void;
+  /** Whether a frozen source reference is still readable in its frozen revision (projection of source_status). */
+  sourceState?: (ref: S['SourceRef']) => 'current' | 'changed' | 'missing';
 };
 export type ReviewHelpers = {
   now: () => string;
@@ -97,12 +99,36 @@ export function addCandidate(store: ReviewStore, input: { revisionId: string; do
 export function handleReview(store: ReviewStore, host: ReviewHost, h: ReviewHelpers, method: string, route: string, id: string, query: URLSearchParams, body: Record<string, unknown>, key: string | null): ReviewReply | null {
   void method;
   const ok = (value: unknown, status = 200): ReviewReply => ({ status, body: value });
-  const page = <T>(items: T[]): ReviewReply => ok({ items, next_cursor: null });
+  // Cursor pages at the contract's page size (1-100); the cursor is an opaque offset token.
+  const page = <T>(items: T[]): ReviewReply => {
+    const limit = query.has('limit') ? Number(query.get('limit')) : 50;
+    const cursor = query.get('cursor');
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100 || (cursor !== null && !/^r[0-9]{1,9}$/.test(cursor))) return h.error(400, 'VALIDATION_FAILED', '分页参数无效');
+    const start = cursor ? Number(cursor.slice(1)) : 0;
+    const end = start + limit;
+    return ok({ items: items.slice(start, end), next_cursor: end < items.length ? `r${end}` : null });
+  };
   const visible = () => new Map(host.visibleSessions().map(item => [item.session.id, item]));
   const findDocument = (documentId: string) => { const doc = host.documents().find(item => item.id === documentId); return doc && visible().has(doc.class_session_id) ? doc : undefined; };
   const notFound = () => h.error(404, 'NOT_FOUND', '复习资料不存在');
   const conflict = (current: { revision: number }) => h.error(409, 'REVISION_CONFLICT', '内容已在其他地方更新', current.revision);
   const save = (doc: S['ReviewDocument'], change: Partial<S['ReviewDocument']>) => { const next = { ...doc, ...change, revision: doc.revision + 1, updated_at: h.now() }; host.saveDocument(next); return next; };
+  /** source_status is projected on every read from the active revision's frozen snapshot (the snapshot itself never changes). */
+  const project = (doc: S['ReviewDocument']): S['ReviewDocument'] => {
+    const activeId = doc.adopted_revision_id ?? doc.latest_personal_revision_id ?? [...doc.candidate_revision_ids].pop() ?? null;
+    const snapshotId = store.revisions.find(item => item.id === activeId)?.source_snapshot_id;
+    const snapshot = snapshotId ? store.snapshots.find(item => item.id === snapshotId) : undefined;
+    if (!snapshot || !host.sourceState) return doc;
+    const states = snapshot.source_refs.map(ref => host.sourceState!(ref));
+    const status: S['ReviewDocument']['source_status'] = states.includes('missing') ? 'unavailable' : states.includes('changed') ? 'changed'
+      : doc.source_status === 'new_material_not_included' ? 'new_material_not_included' : 'unchanged';
+    return status === doc.source_status ? doc : { ...doc, source_status: status };
+  };
+  // Access is rechecked before any idempotent replay: a revoked classroom never returns an earlier receipt.
+  const writeTarget = route === 'POST /review-documents' ? (isUuid(body.class_session_id) && visible().has(body.class_session_id) ? 'ok' : 'denied')
+    : route.startsWith('POST /review-documents/:id') || route === 'PATCH /review-documents/:id' ? (findDocument(id) ? 'ok' : 'denied')
+      : route === 'PATCH /questions/:id' ? (host.questions().some(item => item.id === id && visible().has(item.class_session_id)) ? 'ok' : 'denied') : 'ok';
+  if (writeTarget === 'denied') return route === 'PATCH /questions/:id' ? h.error(404, 'NOT_FOUND', '疑问不存在') : route === 'POST /review-documents' ? h.error(404, 'NOT_FOUND', '课堂不存在') : notFound();
 
   switch (route) {
     case 'GET /review-documents': {
@@ -114,12 +140,11 @@ export function handleReview(store: ReviewStore, host: ReviewHost, h: ReviewHelp
         return owner && (!course || owner.courseId === course) && (!semester || owner.semesterId === semester) && (!classId || item.class_session_id === classId)
           && (!kind || item.kind === kind) && (understood === null || String(item.understood) === understood);
       });
-      return page([...items].sort((a, b) => b.updated_at.localeCompare(a.updated_at) || b.id.localeCompare(a.id)));
+      return page([...items].sort((a, b) => b.updated_at.localeCompare(a.updated_at) || b.id.localeCompare(a.id)).map(project));
     }
     case 'POST /review-documents': return h.idempotent(key, 'review-note', body, () => {
       if (!only(body, ['class_session_id', 'title', 'body_markdown', 'draft_id']) || !isUuid(body.class_session_id) || !isUuid(body.draft_id)
         || typeof body.title !== 'string' || body.title.length > 200 || typeof body.body_markdown !== 'string' || body.body_markdown.length > 120000) return h.error(400, 'VALIDATION_FAILED', '笔记内容无效');
-      if (!visible().has(body.class_session_id)) return h.error(404, 'NOT_FOUND', '课堂不存在');
       const created = h.now();
       const documentId = h.newId(); const revisionId = h.newId();
       store.revisions.push({ id: revisionId, revision: 1, created_at: created, updated_at: created, document_id: documentId, kind: 'personal', parent_revision_id: null, source_snapshot_id: null, raw_output_ref: null, body_markdown: body.body_markdown, structured_content: null, personal_note: '' });
@@ -128,14 +153,14 @@ export function handleReview(store: ReviewStore, host: ReviewHost, h: ReviewHelp
       host.addDocument(doc);
       return ok(doc, 201);
     });
-    case 'GET /review-documents/:id': { const doc = findDocument(id); return doc ? ok(doc) : notFound(); }
-    case 'PATCH /review-documents/:id': {
-      const doc = findDocument(id); if (!doc) return notFound();
+    case 'GET /review-documents/:id': { const doc = findDocument(id); return doc ? ok(project(doc)) : notFound(); }
+    case 'PATCH /review-documents/:id': return h.idempotent(key, `review-patch:${id}`, body, () => {
+      const doc = findDocument(id)!;
       if (!only(body, ['base_revision', 'title', 'understood']) || !positive(body.base_revision) || ('title' in body && (typeof body.title !== 'string' || body.title.length > 200 || body.title.trim().length === 0))
         || ('understood' in body && typeof body.understood !== 'boolean')) return h.error(400, 'VALIDATION_FAILED', '修改内容无效');
       if (body.base_revision !== doc.revision) return conflict(doc);
-      return ok(save(doc, { ...('title' in body ? { title: String(body.title).trim() } : {}), ...('understood' in body ? { understood: body.understood as boolean } : {}) }));
-    }
+      return ok(project(save(doc, { ...('title' in body ? { title: String(body.title).trim() } : {}), ...('understood' in body ? { understood: body.understood as boolean } : {}) })));
+    });
     case 'GET /review-documents/:id/revisions': {
       const doc = findDocument(id); if (!doc) return notFound();
       return page(store.revisions.filter(item => item.document_id === id).sort((a, b) => b.created_at.localeCompare(a.created_at) || b.id.localeCompare(a.id)));
@@ -145,39 +170,41 @@ export function handleReview(store: ReviewStore, host: ReviewHost, h: ReviewHelp
       return revision && findDocument(revision.document_id) ? ok(revision) : h.error(404, 'NOT_FOUND', '版本不存在');
     }
     case 'POST /review-documents/:id/personal-revisions': return h.idempotent(key, `personal:${id}`, body, () => {
-      const doc = findDocument(id); if (!doc) return notFound();
+      const doc = findDocument(id)!;
       if (!only(body, ['base_revision', 'base_content_revision_id', 'draft_id', 'body_markdown', 'personal_note']) || !positive(body.base_revision) || !isUuid(body.draft_id)
         || !(body.base_content_revision_id === null || isUuid(body.base_content_revision_id)) || typeof body.body_markdown !== 'string' || body.body_markdown.length > 120000
         || typeof body.personal_note !== 'string' || body.personal_note.length > 12000) return h.error(400, 'VALIDATION_FAILED', '个人稿内容无效');
-      if (body.base_content_revision_id !== null && !store.revisions.some(item => item.id === body.base_content_revision_id && item.document_id === id)) return h.error(400, 'VALIDATION_FAILED', '基础版本不属于这份资料');
-      if (body.base_revision !== doc.revision) return conflict(doc);
+      const parent = body.base_content_revision_id === null ? null : store.revisions.find(item => item.id === body.base_content_revision_id && item.document_id === id);
+      if (parent === undefined) return h.error(400, 'VALIDATION_FAILED', '基础版本不属于这份资料');
       const created = h.now();
-      const revision: S['ReviewRevision'] = { id: h.newId(), revision: 1, created_at: created, updated_at: created, document_id: id, kind: 'personal', parent_revision_id: body.base_content_revision_id as string | null,
-        source_snapshot_id: null, raw_output_ref: null, body_markdown: body.body_markdown, structured_content: null, personal_note: body.personal_note };
+      // A derived personal revision keeps its parent's frozen sources; an independent note has none.
+      const revision: S['ReviewRevision'] = { id: h.newId(), revision: 1, created_at: created, updated_at: created, document_id: id, kind: 'personal', parent_revision_id: parent?.id ?? null,
+        source_snapshot_id: parent?.source_snapshot_id ?? null, raw_output_ref: null, body_markdown: body.body_markdown, structured_content: null, personal_note: body.personal_note };
       store.revisions.push(revision);
+      // On a stale base the submitted branch is kept (listed, never made active); pointers stay unchanged.
+      if (body.base_revision !== doc.revision) return conflict(doc);
       // A personal revision never replaces the adopted version or any candidate.
       save(doc, { latest_personal_revision_id: revision.id });
       return ok(revision, 201);
     });
     case 'POST /review-documents/:id/adopt': return h.idempotent(key, `adopt:${id}`, body, () => {
-      const doc = findDocument(id); if (!doc) return notFound();
+      const doc = findDocument(id)!;
       if (!only(body, ['base_revision', 'revision_id']) || !positive(body.base_revision) || !isUuid(body.revision_id)) return h.error(400, 'VALIDATION_FAILED', '采用请求无效');
       const target = store.revisions.find(item => item.id === body.revision_id && item.document_id === id);
       if (!target) return h.error(400, 'VALIDATION_FAILED', '版本不属于这份资料');
       if (body.base_revision !== doc.revision) return conflict(doc);
       // Every AI revision other than the adopted one stays a candidate (a previously adopted one returns to the list).
       const candidates = store.revisions.filter(item => item.document_id === id && item.kind === 'ai_candidate' && item.id !== target.id).map(item => item.id);
-      return ok(save(doc, { adopted_revision_id: target.id, candidate_revision_ids: candidates }));
+      return ok(project(save(doc, { adopted_revision_id: target.id, candidate_revision_ids: candidates })));
     });
-    case 'PATCH /questions/:id': {
-      const question = host.questions().find(item => item.id === id && visible().has(item.class_session_id));
-      if (!question) return h.error(404, 'NOT_FOUND', '疑问不存在');
+    case 'PATCH /questions/:id': return h.idempotent(key, `question-patch:${id}`, body, () => {
+      const question = host.questions().find(item => item.id === id)!;
       if (!only(body, ['base_revision', 'understood']) || !positive(body.base_revision) || typeof body.understood !== 'boolean') return h.error(400, 'VALIDATION_FAILED', '修改内容无效');
       if (body.base_revision !== question.revision) return conflict(question);
       const next = { ...question, understood: body.understood, revision: question.revision + 1, updated_at: h.now() };
       host.saveQuestion(next);
       return ok(next);
-    }
+    });
     case 'GET /source-snapshots/:id': {
       const snapshot = store.snapshots.find(item => item.id === id);
       return snapshot && visible().has(snapshot.class_session_id) ? ok(snapshot) : h.error(404, 'NOT_FOUND', '来源快照不存在');

@@ -6,7 +6,7 @@ import { ApiClientError } from '../../api/client';
 import { alignTranscripts, audioState, formatMs, kindLabel, retranscribeErrors } from '../../domain/review';
 import { formatYuan, TASK_STATE_LABEL } from '../../domain/classroom';
 import { describeError, isConflict, useAppData, useCourse, useInvalidateAccount } from '../../features/data';
-import { useClassSession, useTasks } from '../../features/classroom';
+import { isDefinitiveRejection, useClassSession, useTasks } from '../../features/classroom';
 import { useReviewLibrary, useTranscriptSegments, useTranscriptVersions } from '../../features/review';
 import { DataSourceNote, Empty, Loading, OfflineBanner, QueryError } from '../common';
 import { docState } from './ReviewHub';
@@ -14,8 +14,8 @@ import pages from '../pages.module.css';
 import styles from './review.module.css';
 
 type S = components['schemas'];
-/** A definite server reply ends an intent: the next attempt gets a new key. Only a lost reply is replayed with the same key. */
-const answered = (error: unknown) => error instanceof ApiClientError && error.kind === 'http';
+/** A definitive rejection ends an intent: the next attempt gets a new key. A lost or ambiguous reply is replayed with the same key. */
+const answered = isDefinitiveRejection;
 
 /**
  * Single-class review entry (UI-REVIEW-03): the same documents as the global and course entries,
@@ -88,9 +88,10 @@ function TranscriptVersions({ session }: { session: S['ClassSession'] }) {
   const invalidate = useInvalidateAccount();
   const versions = useTranscriptVersions(session.id);
   const list = useMemo(() => [...(versions.data?.items ?? [])].sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id)), [versions.data]);
-  const adopted = list.find(item => item.adopted) ?? null;
+  // Baseline: the adopted version, else the effective realtime transcript (a first retranscription has no explicit adoption yet).
+  const adopted = list.find(item => item.id === session.adopted_transcript_version_id) ?? list.find(item => item.adopted) ?? list.filter(item => item.kind !== 'retranscription').at(-1) ?? null;
   const [candidateId, setCandidateId] = useState<string | null>(null);
-  const candidate = list.find(item => item.id === candidateId) ?? list.filter(item => !item.adopted).at(-1) ?? null;
+  const candidate = list.find(item => item.id === candidateId) ?? list.filter(item => item.id !== adopted?.id && item.kind === 'retranscription').at(-1) ?? null;
   const left = useTranscriptSegments(adopted?.id ?? null);
   const right = useTranscriptSegments(candidate?.id ?? null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -107,11 +108,11 @@ function TranscriptVersions({ session }: { session: S['ClassSession'] }) {
   const rows = alignTranscripts(left.data?.items ?? [], right.data?.items ?? []);
   return <section className={pages.panel} aria-labelledby="transcript-versions"><h2 id="transcript-versions">转写版本</h2>
     {versions.isError ? <QueryError error={versions.error} /> : versions.isPending ? <Loading label="正在读取转写版本…" /> : list.length === 0 ? <Empty title="还没有转写版本" description="课堂转写完成后会出现在这里。" /> : <>
-      <ul className={styles.versions} data-testid="transcript-version-list">{list.map(version => <li key={version.id} className={styles.version} aria-current={version.adopted} data-version-id={version.id} data-adopted={String(version.adopted)}>
-        <span><strong>{label(version)}</strong>{version.adopted ? ' · 当前采用' : version.kind === 'retranscription' ? ' · 候选（未采用）' : ''}</span>
-        {!version.adopted && <button type="button" className={pages.buttonGhost} onClick={() => setCandidateId(version.id)}>与采用版本对照</button>}
-        {!version.adopted && version.state === 'sealed' && <button type="button" className={pages.buttonSecondary} disabled={!app.online || adopt.isPending} onClick={() => adopt.mutate(version)} data-testid={`adopt-transcript-${version.id}`}>{version.kind === 'retranscription' ? '采用此版本' : '切回此版本'}</button>}
-      </li>)}</ul>
+      <ul className={styles.versions} data-testid="transcript-version-list">{list.map(version => { const current = version.id === adopted?.id; return <li key={version.id} className={styles.version} aria-current={current} data-version-id={version.id} data-adopted={String(current)}>
+        <span><strong>{label(version)}</strong>{current ? (version.adopted || session.adopted_transcript_version_id === version.id ? ' · 当前采用' : ' · 当前使用（尚未明确采用）') : version.kind === 'retranscription' ? ' · 候选（未采用）' : ''}</span>
+        {!current && <button type="button" className={pages.buttonGhost} onClick={() => setCandidateId(version.id)}>与当前版本对照</button>}
+        {!current && version.state === 'sealed' && <button type="button" className={pages.buttonSecondary} disabled={!app.online || adopt.isPending} onClick={() => adopt.mutate(version)} data-testid={`adopt-transcript-${version.id}`}>{version.kind === 'retranscription' ? '采用此版本' : '切回此版本'}</button>}
+      </li>; })}</ul>
       {notice && <p role="status" className={pages.small} data-testid="transcript-notice">{notice}</p>}
       {candidate && adopted && candidate.id !== adopted.id && <div style={{ marginTop: 12, overflowX: 'auto' }}>
         <table className={styles.align} data-testid="transcript-compare"><caption className={pages.srOnly}>按时间对照两个转写版本</caption>
@@ -134,10 +135,15 @@ function Retranscribe({ session }: { session: S['ClassSession'] }) {
   const [startSec, setStartSec] = useState('0');
   const [endSec, setEndSec] = useState('60');
   const [acceptPartial, setAcceptPartial] = useState(false);
-  const [plan, setPlan] = useState<S['GenerationPlan'] | null>(null);
+  // The plan is shown and executed together with the exact request it was prepared from; any input change invalidates it.
+  const [prepared, setPrepared] = useState<{ plan: S['GenerationPlan']; request: S['GenerationPlanRequest'] } | null>(null);
+  const plan = prepared?.plan ?? null;
+  const [sourceChanged, setSourceChanged] = useState(false);
+  const change = <T,>(setter: (value: T) => void) => (value: T) => { setter(value); setPrepared(null); setSourceChanged(false); };
   const [refusal, setRefusal] = useState<{ code: string; text: string } | null>(null);
   const prepareKey = useRef<{ fingerprint: string; key: string } | null>(null);
-  const executeKey = useRef<{ plan: string; key: string } | null>(null);
+  const lastRequest = useRef('{}');
+  const executeKey = useRef<{ intent: string; key: string } | null>(null);
   const audio = audioState(session, app.now());
   const showError = (error: unknown) => {
     const code = error instanceof ApiClientError ? error.code : undefined;
@@ -149,21 +155,29 @@ function Retranscribe({ session }: { session: S['ClassSession'] }) {
       const body: S['GenerationPlanRequest'] = { kind: 'asr_retranscribe', scope, seen_sources: [], include_images: false, accept_partial_scope: acceptPartial,
         ...(scope === 'range' ? { start_ms: Math.round(Number(startSec) * 1000), end_ms: Math.round(Number(endSec) * 1000) } : {}) };
       const fingerprint = JSON.stringify(body);
+      lastRequest.current = fingerprint;
       if (!prepareKey.current || prepareKey.current.fingerprint !== fingerprint) prepareKey.current = { fingerprint, key: crypto.randomUUID() };
       return app.api.createPlan(session.id, body, prepareKey.current.key);
     },
-    onMutate: () => { setRefusal(null); setPlan(null); },
-    onSuccess: next => { prepareKey.current = null; setPlan(next); },
+    onMutate: () => { setRefusal(null); setPrepared(null); setSourceChanged(false); },
+    onSuccess: next => { prepareKey.current = null; setPrepared({ plan: next, request: JSON.parse(lastRequest.current) as S['GenerationPlanRequest'] }); },
     onError: error => { if (answered(error)) prepareKey.current = null; showError(error); },
   });
   const execute = useMutation({
-    mutationFn: (current: S['GenerationPlan']) => {
-      if (!executeKey.current || executeKey.current.plan !== current.id) executeKey.current = { plan: current.id, key: crypto.randomUUID() };
-      return app.api.executePlan(current.id, { plan_sha256: current.plan_sha256, confirmed_destination_revision: current.destination.configuration_revision, confirm_send: true, confirm_images: false, confirm_original_snapshot: false, confirm_partial_scope: acceptPartial }, executeKey.current.key);
+    mutationFn: ({ current, original }: { current: NonNullable<typeof prepared>; original: boolean }) => {
+      // Confirming the frozen original is a separate intent with its own key.
+      const intent = `${current.plan.id}:${original}`;
+      if (!executeKey.current || executeKey.current.intent !== intent) executeKey.current = { intent, key: crypto.randomUUID() };
+      return app.api.executePlan(current.plan.id, { plan_sha256: current.plan.plan_sha256, confirmed_destination_revision: current.plan.destination.configuration_revision, confirm_send: true, confirm_images: false,
+        confirm_original_snapshot: original, confirm_partial_scope: current.request.accept_partial_scope }, executeKey.current.key);
     },
     onMutate: () => setRefusal(null),
-    onSuccess: () => { executeKey.current = null; setPlan(null); void invalidate(); },
-    onError: error => { if (answered(error)) executeKey.current = null; showError(error); },
+    onSuccess: () => { executeKey.current = null; setPrepared(null); setSourceChanged(false); void invalidate(); },
+    onError: error => {
+      if (answered(error)) executeKey.current = null;
+      if (error instanceof ApiClientError && error.code === 'SOURCE_CHANGED') { setSourceChanged(true); return; }
+      showError(error);
+    },
   });
   const retranscriptions = (tasks.data?.items ?? []).filter(item => item.kind === 'asr_retranscribe');
   const rangeInvalid = scope === 'range' && !(Number(endSec) > Number(startSec) && Number(startSec) >= 0);
@@ -172,14 +186,14 @@ function Retranscribe({ session }: { session: S['ClassSession'] }) {
     <p className={pages.small} data-testid="retranscribe-audio">{audio === 'expired' ? '原音已过期，服务端会拒绝重新转写。' : audio === 'in_period' ? `原音保留至 ${session.audio_expires_at!.slice(0, 10)}。` : '原音期限未知。'}</p>
     <form className={pages.form} style={{ maxWidth: 'none' }} onSubmit={event => { event.preventDefault(); prepare.mutate(); }}>
       <fieldset className={pages.row} style={{ border: 0, padding: 0, margin: 0 }}><legend className={pages.fieldLegend}>范围</legend>
-        <label><input type="radio" name="rt-scope" checked={scope === 'all'} onChange={() => setScope('all')} /> 整节课</label>
-        <label><input type="radio" name="rt-scope" checked={scope === 'range'} onChange={() => setScope('range')} /> 时间范围</label>
+        <label><input type="radio" name="rt-scope" checked={scope === 'all'} onChange={() => change(setScope)('all')} /> 整节课</label>
+        <label><input type="radio" name="rt-scope" checked={scope === 'range'} onChange={() => change(setScope)('range')} /> 时间范围</label>
       </fieldset>
       {scope === 'range' && <div className={pages.formGrid}>
-        <div className={pages.field}><label htmlFor="rt-start">开始（秒）</label><input id="rt-start" type="number" min={0} value={startSec} onChange={event => setStartSec(event.target.value)} aria-invalid={rangeInvalid || undefined} /></div>
-        <div className={pages.field}><label htmlFor="rt-end">结束（秒）</label><input id="rt-end" type="number" min={1} value={endSec} onChange={event => setEndSec(event.target.value)} aria-invalid={rangeInvalid || undefined} /></div>
+        <div className={pages.field}><label htmlFor="rt-start">开始（秒）</label><input id="rt-start" type="number" min={0} value={startSec} onChange={event => change(setStartSec)(event.target.value)} aria-invalid={rangeInvalid || undefined} /></div>
+        <div className={pages.field}><label htmlFor="rt-end">结束（秒）</label><input id="rt-end" type="number" min={1} value={endSec} onChange={event => change(setEndSec)(event.target.value)} aria-invalid={rangeInvalid || undefined} /></div>
       </div>}
-      <label className={pages.small}><input type="checkbox" checked={acceptPartial} onChange={event => setAcceptPartial(event.target.checked)} /> 原音有缺失分片时，同意只按已有部分重新转写</label>
+      <label className={pages.small}><input type="checkbox" checked={acceptPartial} onChange={event => change(setAcceptPartial)(event.target.checked)} /> 原音有缺失分片时，同意只按已有部分重新转写</label>
       <div><button type="submit" className={pages.buttonSecondary} disabled={!app.online || prepare.isPending || rangeInvalid}>{prepare.isPending ? '正在准备…' : '准备重新转写'}</button></div>
     </form>
     {refusal && <div className={`${pages.banner} ${refusal.code === 'QUOTA_SESSION_EXCEEDED' ? pages.bannerWarning : pages.bannerDanger}`} role="alert" data-testid="retranscribe-refusal" data-code={refusal.code}>
@@ -188,18 +202,23 @@ function Retranscribe({ session }: { session: S['ClassSession'] }) {
       <div className={pages.stack}>
         <strong>确认后才会提交</strong>
         <dl className={pages.dl}>
+          <dt>范围</dt><dd data-testid="plan-scope">{prepared!.request.scope === 'range' ? `${formatMs(prepared!.request.start_ms ?? 0)}–${formatMs(prepared!.request.end_ms ?? 0)}` : '整节课'}</dd>
           <dt>原音清单</dt><dd>已冻结（摘要 {plan.audio_manifest_sha256?.slice(0, 12)}…，{plan.audio_chunk_ids.length} 个分片）</dd>
           <dt>计量时长</dt><dd>{formatMs(plan.quota_units)}（计入本月重新转写时长）</dd>
           <dt>最高费用</dt><dd>{formatYuan(plan.maximum_cost_microyuan)}</dd>
           <dt>有效期至</dt><dd>{plan.expires_at.slice(0, 16).replace('T', ' ')}</dd>
-          {acceptPartial && <><dt>范围</dt><dd className={pages.warning}>已同意按已有部分重新转写</dd></>}
+          {prepared!.request.accept_partial_scope && <><dt>缺失分片</dt><dd className={pages.warning}>已同意按已有部分重新转写</dd></>}
         </dl>
-        <div className={pages.row}><button type="button" className={pages.button} disabled={!app.online || execute.isPending} onClick={() => execute.mutate(plan)} data-testid="retranscribe-confirm">确认并提交</button>
-          <button type="button" className={pages.buttonGhost} onClick={() => setPlan(null)}>取消</button></div>
+        {sourceChanged ? <div className={`${pages.banner} ${pages.bannerWarning}`} role="alert" data-testid="retranscribe-source-changed"><div className={pages.stack}>
+          <span>原音在准备后有变化（例如又有分片上传完成）。可以重新准备，或明确选择按准备时冻结的原音提交。</span>
+          <div className={pages.row}><button type="button" className={pages.buttonSecondary} onClick={() => prepare.mutate()}>重新准备</button>
+            <button type="button" className={pages.buttonSecondary} disabled={!app.online || execute.isPending} onClick={() => execute.mutate({ current: prepared!, original: true })}>按准备时的原音提交</button></div></div></div>
+          : <div className={pages.row}><button type="button" className={pages.button} disabled={!app.online || execute.isPending} onClick={() => execute.mutate({ current: prepared!, original: false })} data-testid="retranscribe-confirm">确认并提交</button>
+            <button type="button" className={pages.buttonGhost} onClick={() => setPrepared(null)}>取消</button></div>}
       </div>
     </div>}
     <h3 style={{ marginTop: 16 }}>重新转写任务</h3>
-    {tasks.isPending ? <Loading label="正在读取任务…" /> : retranscriptions.length === 0 ? <p className={pages.muted}>还没有重新转写任务。</p> :
+    {tasks.isError && !tasks.data ? <QueryError error={tasks.error} retry={() => void tasks.refetch()} /> : tasks.isPending ? <Loading label="正在读取任务…" /> : retranscriptions.length === 0 ? <p className={pages.muted}>还没有重新转写任务。</p> :
       <ul className={pages.list} data-testid="retranscribe-tasks">{retranscriptions.map(item => <RetranscribeTask key={item.id} task={item} retried={retranscriptions.some(other => other.parent_task_id === item.id)} />)}</ul>}
   </section>;
 }
@@ -220,8 +239,8 @@ function RetranscribeTask({ task, retried }: { task: S['Task']; retried: boolean
     onError: error => { if (answered(error)) keyRef.current = null; },
   });
   const retryError = retry.error instanceof ApiClientError && retry.error.code && retranscribeErrors[retry.error.code] ? retranscribeErrors[retry.error.code] : retry.isError ? describeError(retry.error) : null;
-  // One retry per attempt from this page: once a linked retry exists, follow that task instead.
-  const retryable = (task.state === 'failed' || task.state === 'unknown') && task.attempt_id !== null && !retried;
+  // Only an unknown outcome may be retried (06c), once per attempt: after a linked retry exists, follow that task instead.
+  const retryable = task.state === 'unknown' && task.provider_outcome === 'unknown' && task.attempt_id !== null && !retried;
   return <li className={pages.listItem} data-task-id={task.id} data-state={task.state}>
     <div>
       <strong>{TASK_STATE_LABEL[task.state]}</strong>
@@ -230,6 +249,7 @@ function RetranscribeTask({ task, retried }: { task: S['Task']; retried: boolean
       {retried && <p className={pages.small}>已有重试任务，请查看上方的新任务。</p>}
       {result && <p role="status" className={pages.small}>{result}</p>}
       {retryError && <p role="alert" className={pages.error}>{retryError}</p>}
+      {reconcile.isError && <p role="alert" className={pages.error}>核对没有完成：{describeError(reconcile.error)}。任务状态仍按上方显示，请稍后再核对。</p>}
       {retryable && <div className={pages.row} style={{ marginTop: 6 }}>
         {task.may_have_charged && <label className={pages.small}><input type="checkbox" checked={confirmDuplicate} onChange={event => setConfirmDuplicate(event.target.checked)} /> 我知道原尝试可能已收费，重试可能重复计费</label>}
         <button type="button" className={pages.buttonSecondary} disabled={!app.online || retry.isPending || (task.may_have_charged && !confirmDuplicate)} onClick={() => retry.mutate()}>重试</button>
