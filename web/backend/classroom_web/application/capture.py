@@ -47,6 +47,11 @@ class CaptureService:
 
     @contextmanager
     def transaction(self, context, classroom, *, write=True):
+        with self._authorized_transaction(context, write=write) as (repo, principal):
+            yield repo, principal, repo.scope(identifier(classroom))
+
+    @contextmanager
+    def _authorized_transaction(self, context, *, write):
         phase = 'executing'
         try:
             self.available()
@@ -55,8 +60,7 @@ class CaptureService:
             principal = self.auth.principal(context)
             with self.database.authorized_transaction(principal, activity=True) as tx:
                 repo = PgCaptureRepository(tx, principal.user_id)
-                policy = repo.scope(identifier(classroom))
-                yield repo, principal, policy
+                yield repo, principal
                 self.available()
                 phase = 'committing'
         except AuthorizationDenied:
@@ -231,14 +235,26 @@ class CaptureService:
         return dict(class_session_id=str(epoch['class_session_id']), capture_epoch_id=str(epoch['id']),
             sealed=epoch['manifest_sha256'] is not None, expected_last_seq=last,
             durable_ranges=sequence_ranges(rows), missing_ranges=missing_ranges(rows, last if last is not None else known),
-            unknown_provider_ranges=sequence_ranges(repo.unknown_asr_sequences(epoch['id'])),
+            unknown_provider_ranges=repo.unknown_asr_ranges(epoch['id']),
             audio_expires_at=epoch['hard_expire_at'].isoformat())
+
+    def _read_manifest(self, repo, classroom, epoch_id, policy):
+        epoch = repo.epoch(epoch_id, classroom)
+        repo.consents(epoch, policy)
+        return self.manifest_value(repo, epoch)
 
     def manifest(self, context, classroom, epoch_id):
         with self.transaction(context, classroom, write=False) as (repo, _, policy):
-            epoch = repo.epoch(identifier(epoch_id), identifier(classroom))
-            repo.consents(epoch, policy)
-            return self.manifest_value(repo, epoch)
+            return self._read_manifest(repo, identifier(classroom), identifier(epoch_id), policy)
+
+    def manifests(self, context, classroom, limit, cursor):
+        with self._authorized_transaction(context, write=False) as (repo, _):
+            classroom = identifier(classroom)
+            continuation = repo.manifest_continuation(classroom, cursor)
+            policy = repo.scope(classroom)
+            epoch_ids, next_cursor = repo.manifest_epoch_page(classroom, limit, continuation)
+            items = [self._read_manifest(repo, classroom, epoch_id, policy) for epoch_id in epoch_ids]
+            return dict(items=items, next_cursor=next_cursor)
 
     def recovery(self, context, classroom, key, body):
         with self.transaction(context, classroom) as (repo, principal, policy):

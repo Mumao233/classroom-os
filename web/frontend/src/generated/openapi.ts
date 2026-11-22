@@ -1104,7 +1104,7 @@ export interface paths {
         };
         /**
          * getAudioManifest
-         * @description Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics.
+         * @description Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Exactly one capture_epoch_id UUID is required, including when only one epoch exists. Omitted, malformed, repeated or unknown query parameters return 422 VALIDATION_FAILED.
          */
         get: operations["getAudioManifest"];
         put?: never;
@@ -2463,6 +2463,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/class-sessions/{class_session_id}/audio-manifests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List audio manifests for a classroom
+         * @description List every epoch of the authorized classroom, including recording, paused, retired and ended epochs, regardless of the requesting device or its lease. Order by immutable timeline_offset_ms, fence_token and epoch UUID ascending. Pagination fixes epoch membership at the first page, not the contents of a manifest. Each page rechecks access, consent, expiry and deletion as for getAudioManifest. If a requested page cannot disclose an epoch, fail the page without returning or silently skipping it. Empty classroom: items=[], next_cursor=null. A non-null cursor continues after the last emitted epoch. New epochs appear on a fresh traversal. Do not truncate ranges within a manifest.
+         */
+        get: operations["listAudioManifests"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -2475,8 +2495,11 @@ export interface components {
         };
         Error: {
             error: {
-                /** @enum {string} */
-                code: "UNAUTHENTICATED" | "FORBIDDEN" | "NOT_FOUND" | "GONE" | "VALIDATION_FAILED" | "RATE_LIMITED" | "REVISION_CONFLICT" | "IDEMPOTENCY_MISMATCH" | "LEASE_CONFLICT" | "STALE_FENCE" | "SOURCE_CHANGED" | "SOURCE_UNAVAILABLE" | "CONSENT_REQUIRED" | "PLAN_EXPIRED" | "QUOTA_EXCEEDED" | "BUDGET_BLOCKED" | "SERVICE_DISABLED" | "RESULT_UNKNOWN" | "OUTPUT_INVALID" | "STORAGE_UNAVAILABLE" | "CAPACITY_EXCEEDED" | "CURSOR_EXPIRED" | "INCOMPATIBLE_CLIENT" | "MFA_REQUIRED" | "REAUTH_REQUIRED" | "INVITATION_UNAVAILABLE" | "SECRET_ALREADY_ISSUED";
+                /**
+                 * @description Clients branch on the code. The message is display text. Filetrans-specific codes apply only to a verified audio or quota cause in asr_retranscribe.
+                 * @enum {string}
+                 */
+                code: "UNAUTHENTICATED" | "FORBIDDEN" | "NOT_FOUND" | "GONE" | "VALIDATION_FAILED" | "RATE_LIMITED" | "REVISION_CONFLICT" | "IDEMPOTENCY_MISMATCH" | "LEASE_CONFLICT" | "STALE_FENCE" | "SOURCE_CHANGED" | "SOURCE_UNAVAILABLE" | "CONSENT_REQUIRED" | "PLAN_EXPIRED" | "QUOTA_EXCEEDED" | "BUDGET_BLOCKED" | "SERVICE_DISABLED" | "RESULT_UNKNOWN" | "OUTPUT_INVALID" | "STORAGE_UNAVAILABLE" | "CAPACITY_EXCEEDED" | "CURSOR_EXPIRED" | "INCOMPATIBLE_CLIENT" | "MFA_REQUIRED" | "REAUTH_REQUIRED" | "INVITATION_UNAVAILABLE" | "SECRET_ALREADY_ISSUED" | "AUDIO_EXPIRED" | "AUDIO_DELETED" | "QUOTA_SESSION_EXCEEDED" | "QUOTA_MONTH_EXCEEDED";
                 message: string;
                 /** Format: uuid */
                 request_id: string;
@@ -2494,7 +2517,7 @@ export interface components {
             schema_revision: string;
             minimum_client_build: string;
             /** @constant */
-            contract_version: "0.2.1";
+            contract_version: "0.3.0";
             /** Format: date-time */
             server_time: string;
             features: {
@@ -4284,6 +4307,10 @@ export interface components {
             requires_full_login: true;
             /** @constant */
             new_recovery_codes_issued: false;
+        };
+        AudioManifestPage: {
+            items: components["schemas"]["AudioManifest"][];
+            next_cursor: string | null;
         };
     };
     responses: never;
@@ -6660,8 +6687,8 @@ export interface operations {
     };
     getAudioManifest: {
         parameters: {
-            query?: {
-                capture_epoch_id?: string;
+            query: {
+                capture_epoch_id: string;
             };
             header?: never;
             path: {
@@ -6679,6 +6706,16 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AudioManifest"];
+                };
+            };
+            /** @description VALIDATION_FAILED. Supply exactly one valid capture_epoch_id. */
+            422: {
+                headers: {
+                    "Cache-Control"?: "no-store";
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
                 };
             };
             /** @description Typed failure; no private content in error messages. */
@@ -7585,6 +7622,16 @@ export interface operations {
                     "application/json": components["schemas"]["GenerationPlan"];
                 };
             };
+            /** @description For asr_retranscribe, AUDIO_EXPIRED or AUDIO_DELETED for verified original-audio loss. GONE remains valid for a different resource. Check authorization before disclosing the cause. */
+            410: {
+                headers: {
+                    "Cache-Control"?: "no-store";
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
             /** @description Typed failure; no private content in error messages. */
             default: {
                 headers: {
@@ -7657,6 +7704,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Task"];
+                };
+            };
+            /** @description For asr_retranscribe admission, QUOTA_SESSION_EXCEEDED means another class operation needs approval. QUOTA_MONTH_EXCEEDED means insufficient monthly retranscription duration. Other conflicts and budget codes retain their existing meanings. Do not automatically resubmit. */
+            409: {
+                headers: {
+                    "Cache-Control"?: "no-store";
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description For asr_retranscribe, AUDIO_EXPIRED or AUDIO_DELETED for verified original-audio loss. GONE remains valid for a different resource. Check authorization before disclosing the cause. */
+            410: {
+                headers: {
+                    "Cache-Control"?: "no-store";
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
                 };
             };
             /** @description Typed failure; no private content in error messages. */
@@ -7882,6 +7949,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Task"];
+                };
+            };
+            /** @description For asr_retranscribe admission, QUOTA_SESSION_EXCEEDED means another class operation needs approval. QUOTA_MONTH_EXCEEDED means insufficient monthly retranscription duration. Other conflicts and budget codes retain their existing meanings. Do not automatically resubmit. */
+            409: {
+                headers: {
+                    "Cache-Control"?: "no-store";
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description For asr_retranscribe, AUDIO_EXPIRED or AUDIO_DELETED for verified original-audio loss. GONE remains valid for a different resource. Check authorization before disclosing the cause. */
+            410: {
+                headers: {
+                    "Cache-Control"?: "no-store";
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
                 };
             };
             /** @description Typed failure; no private content in error messages. */
@@ -9454,6 +9541,63 @@ export interface operations {
                 };
             };
             /** @description Typed generic failure; no private data or secrets; consumed cookie never authorizes terminal-status read. */
+            default: {
+                headers: {
+                    "Cache-Control"?: "no-store";
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+        };
+    };
+    listAudioManifests: {
+        parameters: {
+            query?: {
+                /** @description Opaque continuation bound to the owner, classroom and this ordered listing. Omit on the first request. */
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                class_session_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Success */
+            200: {
+                headers: {
+                    "Cache-Control"?: "no-store";
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AudioManifestPage"];
+                };
+            };
+            /** @description CURSOR_EXPIRED. Restart from the first page and replace the previous traversal. */
+            409: {
+                headers: {
+                    "Cache-Control"?: "no-store";
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description VALIDATION_FAILED. Unknown or repeated parameters, limit outside 1..100, malformed cursor, or cursor from another owner or classroom. Do not disclose the issuing scope. */
+            422: {
+                headers: {
+                    "Cache-Control"?: "no-store";
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Error"];
+                };
+            };
+            /** @description Typed failure; no private content in error messages. */
             default: {
                 headers: {
                     "Cache-Control"?: "no-store";

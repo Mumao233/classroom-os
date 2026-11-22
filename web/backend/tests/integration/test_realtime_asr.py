@@ -6,6 +6,7 @@ from uuid import uuid4
 import pytest
 import sqlalchemy as sa
 from fastapi.testclient import TestClient
+from jsonschema import Draft202012Validator, FormatChecker
 
 from classroom_web.application.asr import AsrService
 from classroom_web.application.asr_worker import AsrWorker
@@ -16,7 +17,7 @@ from test_authentication import BASE
 from test_billing_integration import fee_control
 from test_deletion_lifecycle import delete
 from test_capture_recovery import (
-    CONTENT, acquire, capture, command, headers, prepare, put,
+    CONTENT, acquire, capture, command, headers, prepare, put, read_manifests,
 )
 
 
@@ -269,6 +270,13 @@ def test_worker_restart_retains_committed_frame_intent(live):
     assert not asyncio.run(first.run_once())
     stored = get(m, response.json())
     assert stored['state'] == 'unknown' and stored['submitted_end_sample'] == frame.samples.end
+    single = read_manifests(m, {'capture_epoch_id': lease['capture_epoch_id']}, single=True)
+    page = read_manifests(m)
+    assert single.status_code == page.status_code == 200
+    assert page.json() == {'items': [single.json()], 'next_cursor': None}
+    assert single.json()['unknown_provider_ranges'] == [{'start_sample': 0, 'end_sample': 1600}]
+    schema = {'$ref': '#/components/schemas/AudioManifestPage', 'components': contract()['components']}
+    Draft202012Validator(schema, format_checker=FormatChecker()).validate(page.json())
     fresh = create(m, lease, [chunk['id']], mode='catch_up')
     assert fresh.status_code == 201
     assert b''.join(run(m)[0].sent_binary) == CONTENT[3200:]

@@ -32,7 +32,7 @@ def test_formal_authclient_encrypted_cache_and_revocation(cache, tmp_path):
         bundle_env = {**os.environ, 'PR08A_OUTPUT': str(output), 'PR08A_FRONTEND_MODULES': str(dependency / 'web/frontend/node_modules')}
         subprocess.run([node, str(ROOT / 'tools/pr08a/build.mjs')], env=bundle_env, check=True, timeout=30, capture_output=True)
     contract = json.loads((ROOT / 'docs/web-alpha/architecture/contracts/openapi.json').read_text(encoding='utf-8'))
-    assert contract['info']['version'] == '0.2.1'
+    assert contract['info']['version'] == '0.3.0'
     cert, key, pin = _certificate(tmp_path, 'pr08a-formal', uuid4().hex[:12])
     with socket.socket() as listener:
         listener.bind(('127.0.0.1', 0))
@@ -50,7 +50,8 @@ def test_formal_authclient_encrypted_cache_and_revocation(cache, tmp_path):
         time.sleep(0.02)
     assert server.started
     env = {**os.environ, 'PR08A_EMAIL': cache.a.email, 'PR08A_PASSWORD': PASSWORD, 'PR08A_ORIGIN': origin,
-           'PR08A_PIN': pin, 'PR08A_PROFILE': str(tmp_path / 'profile'), 'PR08A_PLAYWRIGHT_MODULE': str(module)}
+           'PR08A_PIN': pin, 'PR08A_PROFILE': str(tmp_path / 'profile'), 'PR08A_PLAYWRIGHT_MODULE': str(module),
+           'PR08A_CONTRACT_VERSION': contract['info']['version']}
     process = None
     try:
         with (output / 'formal-browser-stderr.log').open('w', encoding='utf-8') as stderr:
@@ -65,6 +66,7 @@ def test_formal_authclient_encrypted_cache_and_revocation(cache, tmp_path):
             stdout, _ = process.communicate('synthetic trusted device enabled\n', timeout=45)
         assert process.returncode == 0, (output / 'formal-browser-stderr.log').read_text(encoding='utf-8')
         result = json.loads(stdout.strip().splitlines()[-1])
+        assert result['public_contract'] == contract['info']['version']
         assert result['actual_authclient_login_reauth_unlock'] and result['actual_device_revocation']
         (output / 'formal-browser.json').write_text(json.dumps(result, indent=2), encoding='utf-8')
     finally:
