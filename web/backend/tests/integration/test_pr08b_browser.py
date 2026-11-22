@@ -104,7 +104,7 @@ def test_actual_browser_offline_recovery_conflict_and_deletion(cache, deploy, tm
             time.sleep(0.02)
         assert server.started
         scenario = dict(note=note, semester_id=str(semester.id), course_id=str(course.id),
-                        class_session_id=str(classroom.id), partial=partial)
+                        class_session_id=str(classroom.id), partial=partial, contract_version=contract['info']['version'])
         env = {**os.environ, 'PR08B_EMAIL': cache.a.email, 'PR08B_PASSWORD': PASSWORD,
                'PR08B_ORIGIN': origin, 'PR08B_PIN': pin, 'PR08B_PROFILE': str(tmp_path / 'profile'),
                'PR08B_PLAYWRIGHT_MODULE': str(modules / '@playwright/test/index.mjs'),
@@ -123,6 +123,7 @@ def test_actual_browser_offline_recovery_conflict_and_deletion(cache, deploy, tm
             stdout, _ = process.communicate('synthetic device ready\n', timeout=120)
         assert process.returncode == 0, stderr_path.read_text(encoding='utf-8')
         result = json.loads(stdout.strip().splitlines()[-1])
+        assert result['public_contract'] == contract['info']['version']
         assert result['actual_http_postgres'] and result['offline_refresh_recovery']
         assert result['lost_ack_idempotency'] and result['cas_conflict_preserved']
         assert result['explicit_resolution'] and result['actual_conflict_panel']

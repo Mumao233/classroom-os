@@ -35,6 +35,6 @@ try {
     return { restored, revoked };
   }, process.env.PR08A_PASSWORD);
   assert.deepEqual(result, { restored: '正式合成草稿', revoked: 'LOCKED' });
-  console.log(JSON.stringify({ phase: 'complete', browser: context.browser()?.version(), public_contract: '0.2.1',
+  console.log(JSON.stringify({ phase: 'complete', browser: context.browser()?.version(), public_contract: process.env.PR08A_CONTRACT_VERSION,
     actual_authclient_login_reauth_unlock: true, actual_postgres_key: true, native_crypto_indexeddb: true, actual_device_revocation: true }));
 } finally { input.close(); process.stdin.pause(); await context.close(); }

@@ -2,6 +2,7 @@
 import base64
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
+from datetime import timedelta
 import hashlib
 import json
 import secrets
@@ -13,12 +14,13 @@ from fastapi.testclient import TestClient
 import pytest
 import sqlalchemy as sa
 
-from deletion_support import auth, pg, services, deploy, d, new_user, as_user, versions
+from deletion_support import auth, pg, services, deploy, d, new_user, as_user, versions, classroom
 from test_authentication import BASE, login
 from test_deletion_lifecycle import delete
 from classroom_web.application.capture import CaptureService, CaptureRecordingAuthorizer
 from classroom_web.domain.auth import AuthRejected, BrowserContext
 from classroom_web.entrypoints.http import create_app
+from classroom_web.infrastructure import capture_repository
 
 CONTENT = bytes(range(256)) * 125
 
@@ -90,6 +92,162 @@ def command_body(lease, sample=16000, seq=0, **extra):
 def command(m, lease, action, sample=16000, seq=0, key=None, **extra):
     return m.client.post(BASE+f'/class-sessions/{m.classroom.id}/capture/{action}',
                         json=command_body(lease, sample, seq, **extra), headers=headers(m, key))
+
+
+def read_manifests(m, query=(), *, single=False, room=None):
+    path = 'audio-manifest' if single else 'audio-manifests'
+    response = m.client.get(BASE + f'/class-sessions/{room or m.classroom.id}/{path}', params=query)
+    assert response.headers['cache-control'] == 'no-store'
+    return response
+
+
+def assert_manifest_error(response, status, code):
+    assert response.status_code == status, response.text
+    assert set(response.json()) == {'error'}
+    assert response.json()['error']['code'] == code
+
+
+def test_manifest_queries_and_empty_classroom(capture):
+    m = capture
+    page = read_manifests(m)
+    assert page.status_code == 200
+    assert page.json() == {'items': [], 'next_cursor': None}
+    lease = acquire(m)
+    epoch = ('capture_epoch_id', lease['capture_epoch_id'])
+    for query in ([], [epoch, epoch], [('capture_epoch_id', 'invalid')], [epoch, ('limit', '1')]):
+        assert_manifest_error(read_manifests(m, query, single=True), 422, 'VALIDATION_FAILED')
+    single = read_manifests(m, [('capture_epoch_id', epoch[1].upper())], single=True)
+    assert single.status_code == 200 and single.json()['capture_epoch_id'] == epoch[1]
+    assert read_manifests(m, {'limit': 100}).json() == {'items': [single.json()], 'next_cursor': None}
+    for query in ([epoch], [('limit', '1'), ('limit', '1')], [('cursor', 'a'), ('cursor', 'b')],
+                  [('limit', '0')], [('limit', '101')], [('limit', '-1')], [('limit', '1.5')],
+                  [('limit', '')], [('cursor', '')], [('cursor', 'x' * 513)], [('cursor', 'invalid')]):
+        assert_manifest_error(read_manifests(m, query), 422, 'VALIDATION_FAILED')
+
+
+def test_resumed_manifests_keep_retired_gap_and_complete_ended_epoch(capture):
+    m = capture
+    old = acquire(m)
+    for seq in (0, 2):
+        assert put(m, prepare(m, old, seq)).status_code == 200
+    assert command(m, old, 'pause', sample=48000, seq=2).status_code == 200
+    paused, = read_manifests(m).json()['items']
+    assert paused['capture_epoch_id'] == old['capture_epoch_id']
+    resumed = command(m, old, 'resume', sample=48000, seq=2)
+    assert resumed.status_code == 200
+    active = resumed.json()
+    retired, recording = read_manifests(m).json()['items']
+    assert recording['capture_epoch_id'] == active['capture_epoch_id'] and not recording['sealed']
+    assert retired['capture_epoch_id'] == old['capture_epoch_id'] and not retired['sealed']
+    assert retired['missing_ranges'] == [{'first_seq': 1, 'last_seq': 1}]
+    assert put(m, prepare(m, active)).status_code == 200
+    stopped = command(m, active, 'stop', manifest_sha256='1'*64, known_gaps=[])
+    assert stopped.status_code == 200
+    ended = stopped.json()
+    assert ended['sealed'] and ended['missing_ranges'] == []
+    assert ended['durable_ranges'] == [{'first_seq': 0, 'last_seq': 0}]
+    page = read_manifests(m).json()
+    assert page == {'items': [retired, ended], 'next_cursor': None}
+    for item in page['items']:
+        assert read_manifests(m, {'capture_epoch_id': item['capture_epoch_id']}, single=True).json() == item
+
+
+def test_manifest_default_page_size(capture):
+    m = capture
+    lease = acquire(m)
+    epochs = [lease['capture_epoch_id']]
+    for _ in range(20):
+        lease = acquire(m, confirm_takeover=True, expected_lease_id=lease['id'])
+        epochs.append(lease['capture_epoch_id'])
+    first = read_manifests(m).json()
+    assert [item['capture_epoch_id'] for item in first['items']] == epochs[:20]
+    last = read_manifests(m, {'cursor': first['next_cursor']}).json()
+    assert [item['capture_epoch_id'] for item in last['items']] == epochs[20:]
+    assert last['next_cursor'] is None
+
+
+def test_manifest_cursor_freezes_membership_and_reads_current_contents(capture):
+    m = capture
+    first = acquire(m)
+    second = acquire(m, confirm_takeover=True, expected_lease_id=first['id'])
+    third = acquire(m, confirm_takeover=True, expected_lease_id=second['id'])
+    assert [epoch['timeline_offset_ms'] for epoch in (first, second, third)] == [0, 0, 0]
+    page = read_manifests(m, {'limit': 1}).json()
+    assert [item['capture_epoch_id'] for item in page['items']] == [first['capture_epoch_id']]
+    cursor = page['next_cursor']
+    assert 1 <= len(cursor) <= 512
+    assert put(m, prepare(m, third)).status_code == 200
+    writer = m.ctx
+    takeover = acquire_body(m, confirm_takeover=True, expected_lease_id=third['id'])
+    as_user(m, m.a.email)
+    assert m.session['device_id'] != takeover['device_id']
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        new_epoch = pool.submit(m.capture.acquire, writer, str(m.classroom.id), str(uuid4()), takeover)
+        middle = read_manifests(m, {'limit': 1, 'cursor': cursor}).json()
+        fourth = new_epoch.result()
+    assert [item['capture_epoch_id'] for item in middle['items']] == [second['capture_epoch_id']]
+    last = read_manifests(m, {'cursor': middle['next_cursor']}).json()
+    final_item, = last['items']
+    assert final_item['capture_epoch_id'] == third['capture_epoch_id'] and last['next_cursor'] is None
+    assert final_item['durable_ranges'] == [{'first_seq': 0, 'last_seq': 0}]
+    assert read_manifests(m, {'cursor': cursor}).json() == {'items': middle['items'] + [final_item], 'next_cursor': None}
+    fresh = read_manifests(m).json()
+    assert [item['capture_epoch_id'] for item in fresh['items']] == [
+        epoch['capture_epoch_id'] for epoch in (first, second, third, fourth)]
+
+
+def test_manifest_cursor_scope_tampering_and_expiry(capture, monkeypatch):
+    m = capture
+    first = acquire(m)
+    acquire(m, confirm_takeover=True, expected_lease_id=first['id'])
+    cursor = read_manifests(m, {'limit': 1}).json()['next_cursor']
+    altered = cursor[:-1] + ('1' if cursor[-1] == '0' else '0')
+    assert_manifest_error(read_manifests(m, {'cursor': altered}), 422, 'VALIDATION_FAILED')
+    assert_manifest_error(read_manifests(m, {'cursor': cursor}, room=classroom(m).id), 422, 'VALIDATION_FAILED')
+    # A signed event cursor for this same user also belongs to a different listing.
+    with m.pg.db.authorized_transaction(m.a.service.principal(m.ctx)) as tx:
+        event_cursor = tx.events.watermark()
+    assert_manifest_error(read_manifests(m, {'cursor': event_cursor}), 422, 'VALIDATION_FAILED')
+    monkeypatch.setattr(capture_repository, 'MANIFEST_CURSOR_LIFETIME', timedelta(0))
+    expired = read_manifests(m, {'limit': 1}).json()['next_cursor']
+    assert_manifest_error(read_manifests(m, {'cursor': expired}), 409, 'CURSOR_EXPIRED')
+    as_user(m, new_user(m).email)
+    assert_manifest_error(read_manifests(m, {'cursor': cursor}), 422, 'VALIDATION_FAILED')
+    assert_manifest_error(read_manifests(m, {'cursor': expired}), 422, 'VALIDATION_FAILED')
+    assert_manifest_error(read_manifests(m), 404, 'NOT_FOUND')
+
+
+@pytest.mark.parametrize('denial,status,code', [
+    ('consent', 403, 'CONSENT_REQUIRED'), ('expiry', 410, 'GONE'), ('audio', 410, 'GONE'),
+    ('class_session', 410, 'GONE'),
+])
+def test_manifest_continuation_rechecks_access_and_fails_whole_page(capture, denial, status, code):
+    m = capture
+    first = acquire(m)
+    assert put(m, prepare(m, first)).status_code == 200
+    second = acquire(m, confirm_takeover=True, expected_lease_id=first['id'])
+    if denial == 'expiry':
+        with m.pg.admin.begin() as c:
+            c.execute(sa.text("""INSERT INTO retention_policies(version,media_kind,max_lifetime,approval_reference,synthetic)
+                VALUES('synthetic-manifest-short','audio_chunk',interval '5 seconds','VMware expiry fixture',true)
+                ON CONFLICT(version) DO NOTHING"""))
+            c.execute(sa.text("UPDATE capture_policy SET retention_policy_version='synthetic-manifest-short'"))
+    third = acquire(m, confirm_takeover=True, expected_lease_id=second['id'])
+    cursor = read_manifests(m, {'limit': 1}).json()['next_cursor']
+    target = {'capture_epoch_id': third['capture_epoch_id']}
+    if denial == 'consent':
+        with m.pg.admin.begin() as c:
+            c.execute(sa.text("""UPDATE consent_records SET revoked_at=clock_timestamp()
+                WHERE id=(SELECT asr_consent_id FROM capture_epoch_state WHERE epoch_id=:capture_epoch_id)"""), target)
+    elif denial == 'expiry':
+        with m.pg.admin.connect() as c:
+            remaining = c.scalar(sa.text("""SELECT extract(epoch FROM hard_expire_at-clock_timestamp())
+                FROM capture_epoch_state WHERE epoch_id=:capture_epoch_id"""), target)
+        time.sleep(max(0, float(remaining)) + 0.05)
+    else:
+        delete(m, denial, m.classroom.id)
+    assert_manifest_error(read_manifests(m, {'cursor': cursor}), status, code)
+    assert_manifest_error(read_manifests(m, target, single=True), status, code)
 
 
 def test_acquire_idempotency_and_parallel_owner_lease(capture):

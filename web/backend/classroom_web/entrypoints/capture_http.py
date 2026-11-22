@@ -15,6 +15,20 @@ from ..domain.capture import MAX_CHUNK_BYTES
 from ..infrastructure.auth_deadlines import DEADLINE
 
 
+def manifest_page_query(pairs):
+    query = dict(pairs)
+    if len(query) != len(pairs) or query.keys() - {'limit', 'cursor'}:
+        raise AuthRejected('VALIDATION_FAILED', 422)
+    raw_limit = query.get('limit', '20')
+    digits = raw_limit.lstrip('0')
+    if not (digits.isascii() and digits.isdecimal() and len(digits) <= 3 and int(digits) <= 100):
+        raise AuthRejected('VALIDATION_FAILED', 422)
+    cursor = query.get('cursor')
+    if cursor is not None and not 1 <= len(cursor) <= 512:
+        raise AuthRejected('VALIDATION_FAILED', 422)
+    return int(digits), cursor
+
+
 def register_capture(app, *, capture, contract, secure, request_context, check, failure):
     from .http import strict_json
     slots = threading.BoundedSemaphore(8)
@@ -47,12 +61,15 @@ def register_capture(app, *, capture, contract, secure, request_context, check, 
                 ctx = request_context(request)
                 params = request.path_params
                 name = operation['operationId']
-                if method == 'get':
+                if name == 'listAudioManifests':
+                    limit, cursor = manifest_page_query(request.query_params.multi_items())
+                    result = await blocking(capture.manifests, ctx, params['class_session_id'], limit, cursor)
+                elif name == 'getAudioManifest':
                     pairs = list(request.query_params.multi_items())
                     if len(pairs) != 1 or pairs[0][0] != 'capture_epoch_id':
                         raise AuthRejected('VALIDATION_FAILED', 422)
-                    identifier(pairs[0][1])
-                    result = await blocking(capture.manifest, ctx, params['class_session_id'], pairs[0][1])
+                    epoch_id = identifier(pairs[0][1].lower())
+                    result = await blocking(capture.manifest, ctx, params['class_session_id'], epoch_id)
                 else:
                     if request.url.query:
                         raise AuthRejected('VALIDATION_FAILED', 422)
@@ -111,7 +128,8 @@ def register_capture(app, *, capture, contract, secure, request_context, check, 
         return handle
 
     for path, methods in contract['paths'].items():
-        if '/capture/' in path or '/audio-chunks' in path or path.endswith('/audio-manifest'):
+        if '/capture/' in path or '/audio-chunks' in path or path.endswith(('/audio-manifest', '/audio-manifests')):
             for method, operation in methods.items():
                 if method in ('get', 'post', 'put'):
-                    app.add_api_route('/api/web/v1' + path, endpoint(method, operation), methods=[method.upper()])
+                    app.add_api_route('/api/web/v1' + path, endpoint(method, operation), methods=[method.upper()],
+                                      operation_id=operation['operationId'])

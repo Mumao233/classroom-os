@@ -92,6 +92,9 @@ def validate_candidate(root):
     for name, input_contract in (('review', base), ('billing-and-review', billing_builder(base))):
         before = deepcopy(input_contract)
         candidate = review_builder(input_contract)
+        if (candidate['info']['version'] != fixtures['contract_version']
+                or candidate.get('x-pr07b-candidate') != fixtures['candidate']):
+            raise ValueError('Fixture contract version does not match the candidate')
         if input_contract != before or base != original:
             raise ValueError('Candidate composition mutated its input contract')
         references = check_references(candidate)

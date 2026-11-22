@@ -309,7 +309,7 @@ try {
   assert.equal(await page.evaluate(() => window.sync.snapshot().unlocked), false);
   await page.evaluate(() => window.sync.close());
   await other.evaluate(() => window.sync.close());
-  console.log(JSON.stringify({ phase: 'complete', browser: browser.version(), public_contract: '0.2.1',
+  console.log(JSON.stringify({ phase: 'complete', browser: browser.version(), public_contract: scenario.contract_version,
     review_contract_candidate: 'pr07b-1',
     actual_http_postgres: true, native_crypto_indexeddb: true, two_authenticated_devices: true,
     offline_refresh_recovery: true, lost_ack_idempotency: true, cas_conflict_preserved: true,
