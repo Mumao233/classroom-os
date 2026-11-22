@@ -1,5 +1,5 @@
 {
-  "contract_version": "0.2.1",
+  "contract_version": "0.3.0",
   "candidate": "pr07b-1",
   "description": "Synthetic positive and negative PR-07b candidate fixtures. Values contain no user records. Runtime ownership, cross-field source membership, transaction and billing behavior are verified by integration tests.",
   "cases": [

@@ -1,5 +1,14 @@
 # Classroom OS契约变更记录
 
+## 0.3.0 · 2026-11-22 · PR-10a 音频清单与 PR-06c → PR-10b 错误细分
+
+负责人林珈诚批准方案 B 和机器可读细分，Astra 完成契约设计审查。0.2.1 → 0.3.0 收紧查询参数并扩展封闭枚举，按 Alpha 破坏性升级安排。关联 REC-01/02/03、UI-CLASS-11、ASR-03、QUOTA-01。生产者和消费者的实现、确认及联调见[交接与排期](../../coordination/PR10A-CONTRACT-DECISION-20261122.md)。
+
+- `getAudioManifest` 必须传一个 epoch UUID。新增 `listAudioManifests` 和 `AudioManifestPage`，分页遍历课堂的全部采集轮次，包含退役轮次。两者返回相同的单轮次清单语义。
+- Filetrans 在确认原音过期或删除时返回 410 `AUDIO_EXPIRED` / `AUDIO_DELETED`，在提交或重试的课次、月度额度拒绝时返回 409 `QUOTA_SESSION_EXCEEDED` / `QUOTA_MONTH_EXCEEDED`。通用错误继续供其他原因和既有业务使用。前端只按码分支，四种拒绝均禁止自动重提。
+- HTTP 前缀沿用 `/api/web/v1`。同步 `info.version`、`Meta.contract_version`、契约集版本、合成 fixtures、生成的 HTTP 类型和 Mock Meta。此次读取及错误投影无业务数据迁移，WS 事件仍为 v1。
+- 切换窗口先让 Codex 生产者和 Claude 消费者对齐 0.3.0，再开放真实接线。旧客户端会省略 epoch 或拒绝新枚举，旧服务没有列表端点。联调失败时回到成对的 0.2.1，关闭依赖新契约的界面。
+
 ## 0.2.1 补充 · 2026-11-21 · 收紧导入包媒体上传准入
 
 `POST /media/uploads` 的 `purpose=import_package` 默认返回 `503 SERVICE_DISABLED`，在创建上传预留、资源和收据前拒绝。仅显式挂载并通过隔离校验的 PR-08c 合成预检或传输服务可使用该用途。普通图片的上传、既有上传 ID 的补传与确认，以及 04b 已有对象删除流程沿用现有语义。OpenAPI 0.2.1 请求和响应结构沿用现版，产品开放仍需单独批准。

@@ -2,6 +2,7 @@ import { createContext, useContext, type ReactNode } from 'react';
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ApiClientError, type ApiClient } from '../api/client';
 import type { CaptureView, LocalRisk } from '../domain/dashboard';
+import type { ClassroomShell } from './classroom';
 
 /**
  * Everything a page needs from the authenticated account shell. Pages never import fetch,
@@ -21,6 +22,8 @@ export type AppData = {
   onQuickStart?: () => void;
   /** Mock-only projection of a revoked classroom from scripted events (PR-09a scenario). */
   classroomRevoked?: boolean;
+  /** PR-10a classroom shell (capture port, drafts, layout memory); absent where not provided. */
+  classroom?: ClassroomShell;
 };
 
 const Context = createContext<AppData | null>(null);
@@ -77,6 +80,9 @@ const messages: Partial<Record<NonNullable<ApiClientError['code']>, string>> = {
   RATE_LIMITED: '操作过于频繁，请稍后再试。',
   RESULT_UNKNOWN: '提交结果暂不确定，可能已经生效。请刷新核对后再决定是否重试。',
   SERVICE_DISABLED: '这项服务暂未开放。',
+  SOURCE_CHANGED: '来源内容在准备后已更新。可以重新准备，或明确选择按准备时的原版本发送。',
+  SOURCE_UNAVAILABLE: '所需的来源内容暂不可用。',
+  LEASE_CONFLICT: '已有课堂正在采集，或采集状态已变化。同一时间只能采集一节课堂。',
   INCOMPATIBLE_CLIENT: '客户端版本与服务不兼容，请刷新页面。',
 };
 export function describeError(error: unknown): string {

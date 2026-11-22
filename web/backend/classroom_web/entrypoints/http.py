@@ -71,7 +71,8 @@ def failure(error,request_id):
 def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admission=None,cache=None,media=None,media_spool_directory=None,billing=None,billing_admin=None,qa=None,review=None,deletion=None,capture=None,sync=None,portable=None,portable_transfers=None,portable_jobs=None,asr=None,asr_worker=None,filetrans=None,filetrans_worker=None):
     parsed=urlsplit(origin)
     if parsed.scheme!='https' or not parsed.netloc or parsed.path or parsed.query or parsed.fragment or parsed.username:raise ValueError('one exact HTTPS origin is required')
-    if contract.get('info',{}).get('version') not in ('0.2.0','0.2.1'):raise ValueError('approved contract 0.2.0 or 0.2.1 required')
+    if contract.get('info', {}).get('version') not in ('0.2.0', '0.2.1', '0.3.0'):
+        raise ValueError('approved contract 0.2.0, 0.2.1 or 0.3.0 required')
     if asr is not None and (asr.capture is not capture or asr.auth is not auth):
         raise ValueError('ASR requires the same capture and auth services')
     if asr_worker is not None and (asr is None or asr_worker.service is not asr or not asr.enabled):

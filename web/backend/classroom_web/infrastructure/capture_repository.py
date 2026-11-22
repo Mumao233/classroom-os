@@ -1,11 +1,17 @@
 """Owner-scoped capture state using the existing authorized unit of work."""
+import base64
+from datetime import timedelta
+import hmac
 import json
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from ..domain.auth import AuthRejected
 from ..domain.capture import DurableCaptureChunk
 from ..domain.data import Resource
 from .media_repository import PgMediaRepository
+
+
+MANIFEST_CURSOR_LIFETIME = timedelta(minutes=15)
 
 
 class PgCaptureRepository(PgMediaRepository):
@@ -25,6 +31,54 @@ class PgCaptureRepository(PgMediaRepository):
 
     def lease(self):
         return self.execute('SELECT * FROM capture_leases WHERE owner_id=:owner FOR UPDATE').mappings().one_or_none()
+
+    def _manifest_signature(self, classroom, payload):
+        key = self.tx.events.secret
+        if key is None:
+            raise AuthRejected('SERVICE_DISABLED', 503)
+        message = f'listAudioManifests:v1:{self.owner_id}:{classroom}:{payload}'
+        return hmac.digest(key, message.encode('ascii'), 'sha256').hex()
+
+    def manifest_continuation(self, classroom, cursor):
+        if cursor is None:
+            return None
+        payload, _, signature = cursor.rpartition('.')
+        if (not 1 <= len(cursor) <= 512 or not cursor.isascii()
+                or not hmac.compare_digest(signature, self._manifest_signature(classroom, payload))):
+            raise AuthRejected('VALIDATION_FAILED', 422)
+        try:
+            position = base64.urlsafe_b64decode(payload).decode('ascii')
+            ceiling, offset, fence, identity, expiry = position.split('.')
+            return int(ceiling), int(offset), int(fence), UUID(identity), int(expiry)
+        except ValueError:
+            raise AuthRejected('VALIDATION_FAILED', 422) from None
+
+    def manifest_epoch_page(self, classroom, limit, continuation):
+        now = self.now()
+        if continuation is None:
+            # scope() holds the same owner lock as acquire/resume/takeover. Every
+            # later epoch has a greater fence, even when timeline offsets tie.
+            ceiling = self.execute("""SELECT coalesce(max(fence_token),0) FROM capture_epochs
+                WHERE owner_id=:owner AND class_session_id=:classroom""", classroom=classroom).scalar_one()
+            offset, fence, identity = -1, 0, UUID(int=0)
+            expiry = int((now + MANIFEST_CURSOR_LIFETIME).timestamp())
+        else:
+            ceiling, offset, fence, identity, expiry = continuation
+            if expiry <= now.timestamp():
+                raise AuthRejected('CURSOR_EXPIRED', 409)
+        rows = self.execute("""SELECT id,timeline_offset_ms,fence_token FROM capture_epochs
+            WHERE owner_id=:owner AND class_session_id=:classroom AND fence_token<=:ceiling
+            AND (timeline_offset_ms,fence_token,id)>(:offset,:fence,:identity)
+            ORDER BY timeline_offset_ms,fence_token,id LIMIT :count""", classroom=classroom,
+            ceiling=ceiling, offset=offset, fence=fence, identity=identity, count=limit + 1).mappings().all()
+        cursor = None
+        if len(rows) > limit:
+            rows = rows[:limit]
+            last = rows[-1]
+            position = f"{ceiling}.{last['timeline_offset_ms']}.{last['fence_token']}.{last['id'].hex}.{expiry}"
+            payload = base64.urlsafe_b64encode(position.encode('ascii')).decode('ascii')
+            cursor = f'{payload}.{self._manifest_signature(classroom, payload)}'
+        return [row['id'] for row in rows], cursor
 
     def epoch(self, epoch_id, classroom):
         row = self.execute("""SELECT e.*,s.hard_expire_at,s.retention_policy_version,s.manifest_sha256,
@@ -70,12 +124,13 @@ class PgCaptureRepository(PgMediaRepository):
             WHERE d.owner_id=:owner AND d.chunk_id=:id""", id=chunk_id).scalar_one()
         return state
 
-    def unknown_asr_sequences(self, epoch_id):
-        return self.execute("""SELECT DISTINCT c.seq FROM public.asr_dispatches d
-            JOIN public.asr_streams s ON (s.owner_id,s.id)=(d.owner_id,d.stream_id)
-            JOIN public.audio_chunks c ON (c.owner_id,c.id)=(d.owner_id,d.chunk_id)
-            WHERE d.owner_id=:owner AND d.capture_epoch_id=:epoch AND (s.state='unknown' OR NOT d.handed_off)
-            ORDER BY c.seq""", epoch=epoch_id).scalars().all()
+    def unknown_asr_ranges(self, epoch_id):
+        rows = self.execute("""SELECT lower(span) AS start_sample, upper(span) AS end_sample
+            FROM unnest((SELECT range_agg(int8range(d.start_sample,d.end_sample))
+                FROM public.asr_dispatches d JOIN public.asr_streams s ON (s.owner_id,s.id)=(d.owner_id,d.stream_id)
+                WHERE d.owner_id=:owner AND d.capture_epoch_id=:epoch AND (s.state='unknown' OR NOT d.handed_off)
+            )) AS ranges(span) ORDER BY start_sample""", epoch=epoch_id).mappings()
+        return [dict(row) for row in rows]
 
     def asr_source(self, chunk, epoch):
         if (chunk['capture_epoch_id'], chunk['class_session_id']) != (epoch['id'], epoch['class_session_id']):

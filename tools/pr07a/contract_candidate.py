@@ -1,4 +1,4 @@
-"""Explicit PR-07a overlay on the shared 0.2.0 HTTP contract."""
+"""Explicit PR-07a overlay on the approved shared HTTP contract."""
 from copy import deepcopy
 
 
@@ -16,8 +16,8 @@ QA_OPERATIONS = {
 
 
 def build(base):
-    if base.get('info', {}).get('version') not in {'0.2.0', '0.2.1'}:
-        raise ValueError('PR-07a requires contract 0.2.0 or 0.2.1')
+    if base.get('info', {}).get('version') not in {'0.2.0', '0.2.1', '0.3.0'}:
+        raise ValueError('PR-07a requires contract 0.2.0, 0.2.1 or 0.3.0')
     candidate = deepcopy(base)
     candidate['x-pr07a-candidate'] = 'pr07a-1'
     candidate['x-pr07a-review-status'] = 'candidate, explicit composition only'

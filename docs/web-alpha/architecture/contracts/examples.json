@@ -1,5 +1,5 @@
 {
-  "contract_version": "0.2.1",
+  "contract_version": "0.3.0",
   "description": "Synthetic structural validation cases; stateful transactions require future PG/HTTP/browser tests.",
   "cases": [
     {
@@ -2257,6 +2257,456 @@
         }
       },
       "reason": "PR-05b/08a exact-purpose cache unlock contract."
+    },
+    {
+      "name": "manifests_empty_classroom",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/AudioManifestPage",
+      "expected_valid": true,
+      "value": {
+        "items": [],
+        "next_cursor": null
+      },
+      "reason": ""
+    },
+    {
+      "name": "manifests_retired_then_ended",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/AudioManifestPage",
+      "expected_valid": true,
+      "value": {
+        "items": [
+          {
+            "class_session_id": "11111111-1111-4111-8111-111111111111",
+            "capture_epoch_id": "22222222-2222-4222-8222-222222222222",
+            "sealed": false,
+            "expected_last_seq": 2,
+            "durable_ranges": [
+              {
+                "first_seq": 0,
+                "last_seq": 0
+              },
+              {
+                "first_seq": 2,
+                "last_seq": 2
+              }
+            ],
+            "missing_ranges": [
+              {
+                "first_seq": 1,
+                "last_seq": 1
+              }
+            ],
+            "unknown_provider_ranges": [
+              {
+                "start_sample": 0,
+                "end_sample": 16000
+              }
+            ],
+            "audio_expires_at": "2026-11-28T12:00:00Z"
+          },
+          {
+            "class_session_id": "11111111-1111-4111-8111-111111111111",
+            "capture_epoch_id": "33333333-3333-4333-8333-333333333333",
+            "sealed": true,
+            "expected_last_seq": 0,
+            "durable_ranges": [
+              {
+                "first_seq": 0,
+                "last_seq": 0
+              }
+            ],
+            "missing_ranges": [],
+            "unknown_provider_ranges": [],
+            "audio_expires_at": "2026-11-28T12:00:00Z"
+          }
+        ],
+        "next_cursor": null
+      },
+      "reason": "A retired epoch has a missing sequence and unknown ASR sample range. A complete later epoch must not hide it."
+    },
+    {
+      "name": "manifests_first_page",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/AudioManifestPage",
+      "expected_valid": true,
+      "value": {
+        "items": [
+          {
+            "class_session_id": "11111111-1111-4111-8111-111111111111",
+            "capture_epoch_id": "22222222-2222-4222-8222-222222222222",
+            "sealed": false,
+            "expected_last_seq": 2,
+            "durable_ranges": [
+              {
+                "first_seq": 0,
+                "last_seq": 0
+              },
+              {
+                "first_seq": 2,
+                "last_seq": 2
+              }
+            ],
+            "missing_ranges": [
+              {
+                "first_seq": 1,
+                "last_seq": 1
+              }
+            ],
+            "unknown_provider_ranges": [
+              {
+                "start_sample": 0,
+                "end_sample": 16000
+              }
+            ],
+            "audio_expires_at": "2026-11-28T12:00:00Z"
+          }
+        ],
+        "next_cursor": "fixture-continuation"
+      },
+      "reason": ""
+    },
+    {
+      "name": "manifests_final_page",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/AudioManifestPage",
+      "expected_valid": true,
+      "value": {
+        "items": [
+          {
+            "class_session_id": "11111111-1111-4111-8111-111111111111",
+            "capture_epoch_id": "33333333-3333-4333-8333-333333333333",
+            "sealed": true,
+            "expected_last_seq": 0,
+            "durable_ranges": [
+              {
+                "first_seq": 0,
+                "last_seq": 0
+              }
+            ],
+            "missing_ranges": [],
+            "unknown_provider_ranges": [],
+            "audio_expires_at": "2026-11-28T12:00:00Z"
+          }
+        ],
+        "next_cursor": null
+      },
+      "reason": ""
+    },
+    {
+      "name": "manifests_item_requires_epoch",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/AudioManifestPage",
+      "expected_valid": false,
+      "value": {
+        "items": [
+          {
+            "class_session_id": "11111111-1111-4111-8111-111111111111",
+            "sealed": false,
+            "expected_last_seq": 2,
+            "durable_ranges": [
+              {
+                "first_seq": 0,
+                "last_seq": 0
+              },
+              {
+                "first_seq": 2,
+                "last_seq": 2
+              }
+            ],
+            "missing_ranges": [
+              {
+                "first_seq": 1,
+                "last_seq": 1
+              }
+            ],
+            "unknown_provider_ranges": [
+              {
+                "start_sample": 0,
+                "end_sample": 16000
+              }
+            ],
+            "audio_expires_at": "2026-11-28T12:00:00Z"
+          }
+        ],
+        "next_cursor": null
+      },
+      "reason": ""
+    },
+    {
+      "name": "manifests_unknown_asr_requires_samples",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/AudioManifestPage",
+      "expected_valid": false,
+      "value": {
+        "items": [
+          {
+            "class_session_id": "11111111-1111-4111-8111-111111111111",
+            "capture_epoch_id": "22222222-2222-4222-8222-222222222222",
+            "sealed": false,
+            "expected_last_seq": 2,
+            "durable_ranges": [
+              {
+                "first_seq": 0,
+                "last_seq": 0
+              },
+              {
+                "first_seq": 2,
+                "last_seq": 2
+              }
+            ],
+            "missing_ranges": [
+              {
+                "first_seq": 1,
+                "last_seq": 1
+              }
+            ],
+            "unknown_provider_ranges": [
+              {
+                "first_seq": 0,
+                "last_seq": 0
+              }
+            ],
+            "audio_expires_at": "2026-11-28T12:00:00Z"
+          }
+        ],
+        "next_cursor": null
+      },
+      "reason": ""
+    },
+    {
+      "name": "manifests_missing_cursor",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/AudioManifestPage",
+      "expected_valid": false,
+      "value": {
+        "items": []
+      },
+      "reason": ""
+    },
+    {
+      "name": "manifests_empty_continuation",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/AudioManifestPage",
+      "expected_valid": false,
+      "value": {
+        "items": [],
+        "next_cursor": ""
+      },
+      "reason": ""
+    },
+    {
+      "name": "manifests_page_has_no_owner_field",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/AudioManifestPage",
+      "expected_valid": false,
+      "value": {
+        "items": [],
+        "next_cursor": null,
+        "owner_id": "11111111-1111-4111-8111-111111111111"
+      },
+      "reason": ""
+    },
+    {
+      "name": "filetrans_audio_expired",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/Error",
+      "expected_valid": true,
+      "value": {
+        "error": {
+          "code": "AUDIO_EXPIRED",
+          "message": "Request could not be completed.",
+          "request_id": "11111111-1111-4111-8111-111111111111",
+          "retryable": false,
+          "retry_after_seconds": null,
+          "current_revision": null,
+          "conflict_id": null,
+          "task_id": null
+        }
+      },
+      "reason": "Selected cloud audio reached its retention deadline."
+    },
+    {
+      "name": "filetrans_audio_deleted",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/Error",
+      "expected_valid": true,
+      "value": {
+        "error": {
+          "code": "AUDIO_DELETED",
+          "message": "Request could not be completed.",
+          "request_id": "11111111-1111-4111-8111-111111111111",
+          "retryable": false,
+          "retry_after_seconds": null,
+          "current_revision": null,
+          "conflict_id": null,
+          "task_id": null
+        }
+      },
+      "reason": "Deletion or explicit access revocation of the selected cloud audio was established."
+    },
+    {
+      "name": "filetrans_quota_session_exceeded",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/Error",
+      "expected_valid": true,
+      "value": {
+        "error": {
+          "code": "QUOTA_SESSION_EXCEEDED",
+          "message": "Request could not be completed.",
+          "request_id": "11111111-1111-4111-8111-111111111111",
+          "retryable": false,
+          "retry_after_seconds": null,
+          "current_revision": null,
+          "conflict_id": null,
+          "task_id": null
+        }
+      },
+      "reason": "An additional Filetrans operation in this class requires approval."
+    },
+    {
+      "name": "filetrans_quota_month_exceeded",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/Error",
+      "expected_valid": true,
+      "value": {
+        "error": {
+          "code": "QUOTA_MONTH_EXCEEDED",
+          "message": "Request could not be completed.",
+          "request_id": "11111111-1111-4111-8111-111111111111",
+          "retryable": false,
+          "retry_after_seconds": null,
+          "current_revision": null,
+          "conflict_id": null,
+          "task_id": null
+        }
+      },
+      "reason": "The monthly Filetrans audio-duration quota cannot cover this reservation."
+    },
+    {
+      "name": "filetrans_unknown_code_rejected",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/Error",
+      "expected_valid": false,
+      "value": {
+        "error": {
+          "code": "AUDIO_GONE_UNSPECIFIED",
+          "message": "Request could not be completed.",
+          "request_id": "11111111-1111-4111-8111-111111111111",
+          "retryable": false,
+          "retry_after_seconds": null,
+          "current_revision": null,
+          "conflict_id": null,
+          "task_id": null
+        }
+      },
+      "reason": ""
+    }
+  ],
+  "audio_manifest_request_cases": [
+    {
+      "operationId": "getAudioManifest",
+      "query": [
+        [
+          "capture_epoch_id",
+          "22222222-2222-4222-8222-222222222222"
+        ]
+      ],
+      "expected_status": 200
+    },
+    {
+      "operationId": "getAudioManifest",
+      "query": [],
+      "expected_status": 422,
+      "error_code": "VALIDATION_FAILED"
+    },
+    {
+      "operationId": "getAudioManifest",
+      "query": [
+        [
+          "capture_epoch_id",
+          "22222222-2222-4222-8222-222222222222"
+        ],
+        [
+          "capture_epoch_id",
+          "33333333-3333-4333-8333-333333333333"
+        ]
+      ],
+      "expected_status": 422,
+      "error_code": "VALIDATION_FAILED"
+    },
+    {
+      "operationId": "getAudioManifest",
+      "query": [
+        [
+          "capture_epoch_id",
+          "invalid"
+        ]
+      ],
+      "expected_status": 422,
+      "error_code": "VALIDATION_FAILED"
+    },
+    {
+      "operationId": "listAudioManifests",
+      "query": [],
+      "expected_status": 200
+    },
+    {
+      "operationId": "listAudioManifests",
+      "query": [
+        [
+          "limit",
+          "1"
+        ],
+        [
+          "cursor",
+          "fixture-continuation"
+        ]
+      ],
+      "expected_status": 200
+    },
+    {
+      "operationId": "listAudioManifests",
+      "query": [
+        [
+          "limit",
+          "100"
+        ]
+      ],
+      "expected_status": 200
+    },
+    {
+      "operationId": "listAudioManifests",
+      "query": [
+        [
+          "limit",
+          "0"
+        ]
+      ],
+      "expected_status": 422,
+      "error_code": "VALIDATION_FAILED"
+    },
+    {
+      "operationId": "listAudioManifests",
+      "query": [
+        [
+          "limit",
+          "101"
+        ]
+      ],
+      "expected_status": 422,
+      "error_code": "VALIDATION_FAILED"
+    },
+    {
+      "operationId": "listAudioManifests",
+      "query": [
+        [
+          "capture_epoch_id",
+          "22222222-2222-4222-8222-222222222222"
+        ]
+      ],
+      "expected_status": 422,
+      "error_code": "VALIDATION_FAILED"
     }
   ]
 }

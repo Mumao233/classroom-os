@@ -39,6 +39,26 @@ def test_candidate_composition_and_frozen_base_are_compatible():
     assert [item['name'] for item in report['compositions']] == ['review', 'billing-and-review']
 
 
+def test_composed_candidate_preserves_manifest_operations_and_page_fixtures(candidate):
+    for path in ('/class-sessions/{class_session_id}/audio-manifest', '/class-sessions/{class_session_id}/audio-manifests'):
+        assert candidate['paths'][path] == BASE['paths'][path]
+    examples = json.loads((ROOT / 'docs/web-alpha/architecture/contracts/examples.json').read_text(encoding='utf-8'))
+    cases = {case['name']: case for case in examples['cases']}
+    page = validator(candidate, 'AudioManifestPage')
+    for name in ('manifests_retired_then_ended', 'manifests_missing_cursor', 'manifests_empty_continuation'):
+        assert page.is_valid(cases[name]['value']) == cases[name]['expected_valid']
+
+
+def test_unapproved_patch_version_is_rejected_by_http_and_candidate():
+    from classroom_web.entrypoints.http import create_app
+
+    unapproved = {**BASE, 'info': {**BASE['info'], 'version': '0.3.1'}}
+    with pytest.raises(ValueError, match='approved contract'):
+        create_app(auth=None, contract=unapproved, origin='https://testserver')
+    with pytest.raises(ValueError, match='PR-07a requires contract'):
+        CHECKS.load_builder(ROOT / 'tools/pr07b/contract_candidate.py')(unapproved)
+
+
 def test_batch_extension_is_optional_and_personal_save_contract_is_preserved(candidate):
     schemas = candidate['components']['schemas']
     assert 'batch_tasks' not in schemas['Task']['required']
@@ -55,7 +75,7 @@ def test_generation_task_pointer_is_optional_nullable_and_keeps_formal_base_vers
         {'type': 'string', 'format': 'uuid'}, {'type': 'null'}]
     assert 'generation_task_id' not in BASE['components']['schemas']['ReviewRevision']['properties']
     assert candidate['info']['version'] == BASE['info']['version']
-    assert BASE['info']['version'] in {'0.2.0', '0.2.1'}
+    assert BASE['info']['version'] == '0.3.0'
     legacy = next(case['value'] for case in FIXTURES if case['name'] == 'ai_candidate_revision')
     assert 'generation_task_id' not in legacy
     assert validator(candidate, 'ReviewRevision').is_valid(legacy)
