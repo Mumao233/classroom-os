@@ -78,6 +78,9 @@ const worker = setupWorker(
     // Computed for the account that sent the request; a switch meanwhile is rejected by the client epoch.
     const reply = backend.handle(requestAccount, request.method, path, url.searchParams, body, request.headers.get('Idempotency-Key'));
     if (!reply) return HttpResponse.error();
+    // Browser-test-only: the server processed the request but its reply is lost once (path suffix match).
+    const drop = localStorage.getItem('mock-test-drop-reply');
+    if (drop && request.method !== 'GET' && path.endsWith(drop)) { localStorage.removeItem('mock-test-drop-reply'); return HttpResponse.error(); }
     return HttpResponse.json(reply.body as Record<string, unknown>, { status: reply.status, headers });
   }),
   // Explicit catch-all is essential: throwing in onUnhandledRequest alone can

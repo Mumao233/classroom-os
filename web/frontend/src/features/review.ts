@@ -39,6 +39,25 @@ export function evictClassroomFromReview(client: QueryClient, classId: string) {
   client.removeQueries({ predicate: query => query.queryKey.includes('source-snapshot') && (query.state.data as { class_session_id?: string } | undefined)?.class_session_id === classId });
 }
 
+/**
+ * A cascade deletion of a course or semester evicts the review projections of every classroom it
+ * contained (known from cached course and classroom data). Moved children are not passed here.
+ */
+export function evictScopeFromReview(client: QueryClient, scope: { kind: 'course' | 'semester'; id: string }) {
+  type Course = components['schemas']['Course'];
+  type Session = components['schemas']['ClassSession'];
+  const courseIds = new Set<string>(scope.kind === 'course' ? [scope.id] : []);
+  if (scope.kind === 'semester') {
+    for (const [, data] of client.getQueriesData<{ items: Course[] }>({ predicate: query => query.queryKey.includes('courses') })) for (const course of data?.items ?? []) if (course.semester_id === scope.id) courseIds.add(course.id);
+    for (const [, data] of client.getQueriesData<Course>({ predicate: query => query.queryKey.includes('course') })) if (data?.semester_id === scope.id) courseIds.add(data.id);
+  }
+  const classIds = new Set<string>();
+  for (const [, data] of client.getQueriesData<{ items: Session[] }>({ predicate: query => query.queryKey.includes('class-sessions') })) for (const session of data?.items ?? []) if (courseIds.has(session.course_id)) classIds.add(session.id);
+  for (const [, data] of client.getQueriesData<Session>({ predicate: query => query.queryKey.includes('class-session') })) if (data && courseIds.has(data.course_id)) classIds.add(data.id);
+  for (const classId of classIds) evictClassroomFromReview(client, classId);
+  return classIds;
+}
+
 const STORAGE_KEY = 'classroom-os.review.reading.v1';
 function storageKey(accountKey: string) { return `${STORAGE_KEY}:${accountKey.split(':')[0]}`; }
 /** Device-local "continue" memory (no content); failures to read or write are ignored. */

@@ -6,7 +6,7 @@ import { ApiClientError } from '../../api/client';
 import { alignTranscripts, audioState, formatMs, kindLabel, retranscribeErrors } from '../../domain/review';
 import { formatYuan, TASK_STATE_LABEL } from '../../domain/classroom';
 import { describeError, isConflict, useAppData, useCourse, useInvalidateAccount } from '../../features/data';
-import { isDefinitiveRejection, useClassSession, useTasks } from '../../features/classroom';
+import { isDefinitiveRejection, useClassSession, useDraft, useTasks } from '../../features/classroom';
 import { useReviewLibrary, useTranscriptSegments, useTranscriptVersions } from '../../features/review';
 import { DataSourceNote, Empty, Loading, OfflineBanner, QueryError } from '../common';
 import { docState } from './ReviewHub';
@@ -145,16 +145,22 @@ function Retranscribe({ session }: { session: S['ClassSession'] }) {
   const [endSec, setEndSec] = useState('60');
   const [acceptPartial, setAcceptPartial] = useState(false);
   // The plan is shown and executed together with the exact request it was prepared from; any input change invalidates it.
-  const [prepared, setPrepared] = useState<{ plan: S['GenerationPlan']; request: S['GenerationPlanRequest'] } | null>(null);
+  // A submitted (pending or unconfirmed) execution is kept in the account-scoped classroom shell, so leaving
+  // and returning restores the same plan, intent and key for a same-key replay.
+  const [pendingRaw, setPendingRaw] = useDraft(session.id, 'retranscribe:pending-execute');
+  const restored = parsePending(pendingRaw);
+  const [prepared, setPreparedState] = useState<{ plan: S['GenerationPlan']; request: S['GenerationPlanRequest'] } | null>(restored ? { plan: restored.plan, request: restored.request } : null);
+  const setPrepared = (value: typeof prepared) => { setPreparedState(value); if (!value) setPendingRaw(''); };
   const plan = prepared?.plan ?? null;
   const [sourceChanged, setSourceChanged] = useState(false);
   // A lost or ambiguous execute reply: the outcome is unconfirmed, the plan and key are kept for a same-key replay.
-  const [unconfirmed, setUnconfirmed] = useState(false);
+  // A submission restored after leaving the page never got a definitive reply here: its outcome is unconfirmed.
+  const [unconfirmed, setUnconfirmed] = useState(restored !== null);
   const change = <T,>(setter: (value: T) => void) => (value: T) => { setter(value); setPrepared(null); setSourceChanged(false); };
   const [refusal, setRefusal] = useState<{ code: string; text: string } | null>(null);
   const prepareKey = useRef<{ fingerprint: string; key: string } | null>(null);
   const lastRequest = useRef('{}');
-  const executeKey = useRef<{ intent: string; key: string } | null>(null);
+  const executeKey = useRef<{ intent: string; key: string } | null>(restored ? { intent: restored.intent, key: restored.key } : null);
   const audio = audioState(session, app.now());
   const showError = (error: unknown) => {
     const code = error instanceof ApiClientError ? error.code : undefined;
@@ -179,19 +185,29 @@ function Retranscribe({ session }: { session: S['ClassSession'] }) {
       // Confirming the frozen original is a separate intent with its own key.
       const intent = `${current.plan.id}:${original}`;
       if (!executeKey.current || executeKey.current.intent !== intent) executeKey.current = { intent, key: crypto.randomUUID() };
+      setPendingRaw(JSON.stringify({ plan: current.plan, request: current.request, intent, key: executeKey.current.key, unconfirmed: false } satisfies PendingExecute));
       return app.api.executePlan(current.plan.id, { plan_sha256: current.plan.plan_sha256, confirmed_destination_revision: current.plan.destination.configuration_revision, confirm_send: true, confirm_images: false,
         confirm_original_snapshot: original, confirm_partial_scope: current.request.accept_partial_scope }, executeKey.current.key);
     },
     onMutate: () => setRefusal(null),
     onSuccess: () => { executeKey.current = null; setPrepared(null); setSourceChanged(false); setUnconfirmed(false); void invalidate(); },
     onError: error => {
-      if (!answered(error)) { setUnconfirmed(true); void tasks.refetch(); return; }
+      if (!answered(error)) {
+        setUnconfirmed(true);
+        const kept = parsePending(pendingRawRef.current);
+        if (kept) setPendingRaw(JSON.stringify({ ...kept, unconfirmed: true }));
+        void tasks.refetch();
+        return;
+      }
       executeKey.current = null;
+      setPendingRaw('');
       setUnconfirmed(false);
       if (error instanceof ApiClientError && error.code === 'SOURCE_CHANGED') { setSourceChanged(true); return; }
       showError(error);
     },
   });
+  const pendingRawRef = useRef(pendingRaw);
+  pendingRawRef.current = pendingRaw;
   const retranscriptions = (tasks.data?.items ?? []).filter(item => item.kind === 'asr_retranscribe');
   const rangeInvalid = scope === 'range' && !(Number(endSec) > Number(startSec) && Number(startSec) >= 0);
   return <section className={pages.panel} aria-labelledby="retranscribe-heading"><h2 id="retranscribe-heading">重新转写</h2>
@@ -242,6 +258,14 @@ function Retranscribe({ session }: { session: S['ClassSession'] }) {
     {tasks.isError && !tasks.data ? <QueryError error={tasks.error} retry={() => void tasks.refetch()} /> : tasks.isPending ? <Loading label="正在读取任务…" /> : retranscriptions.length === 0 ? <p className={pages.muted}>还没有重新转写任务。</p> :
       <ul className={pages.list} data-testid="retranscribe-tasks">{retranscriptions.map(item => <RetranscribeTask key={item.id} task={item} retried={retranscriptions.some(other => other.parent_task_id === item.id)} />)}</ul>}
   </section>;
+}
+
+type PendingExecute = { plan: S['GenerationPlan']; request: S['GenerationPlanRequest']; intent: string; key: string; unconfirmed: boolean };
+function parsePending(raw: string): PendingExecute | null {
+  try {
+    const value = JSON.parse(raw) as Partial<PendingExecute>;
+    return value.plan && value.request && typeof value.intent === 'string' && typeof value.key === 'string' ? { ...value, unconfirmed: value.unconfirmed === true } as PendingExecute : null;
+  } catch { return null; }
 }
 
 function RetranscribeTask({ task, retried }: { task: S['Task']; retried: boolean }) {

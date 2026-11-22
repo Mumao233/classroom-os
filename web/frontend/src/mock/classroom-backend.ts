@@ -176,6 +176,8 @@ function sourceStatus(store: ClassroomStore, plan: S['GenerationPlan'], now: str
     } else if (ref.kind === 'transcript_segment') {
       const segment = store.segments.find(item => item.id === ref.id);
       if (!segment) return 'unavailable';
+      // A frozen segment outside the transcript generation now reads (another version was adopted) is a changed source.
+      if (session && !activeVersionIds(store, session).has(segment.transcript_version_id)) status = 'changed';
       if (segment.segment_revision_id !== ref.revision_id) {
         if (!store.segmentHistory.some(item => item.id === ref.id && item.segment_revision_id === ref.revision_id)) return 'unavailable';
         status = 'changed';
@@ -537,7 +539,7 @@ export function handleClassroom(store: ClassroomStore, host: ClassroomHost, h: C
       }
       if (plan.contains_images && body.confirm_images !== true) return h.error(400, 'VALIDATION_FAILED', '计划包含图片，需要确认发送图片');
       if (plan.source_snapshot && !plan.source_snapshot.scope_complete && body.confirm_partial_scope !== true) return h.error(400, 'VALIDATION_FAILED', '材料不完整，需要确认按部分范围生成');
-      const status = sourceStatus(store, plan, h.now());
+      const status = sourceStatus(store, plan, h.now(), findSession(plan.class_session_id));
       if (status === 'unavailable') return h.error(409, 'SOURCE_UNAVAILABLE', '部分来源已不可用，请重新准备');
       if (status === 'changed' && body.confirm_original_snapshot !== true) return h.error(409, 'SOURCE_CHANGED', '来源在准备后已更新，需要明确选择按原版本发送或重新准备');
       // Synthetic units are rechecked and reserved on first execution (a replay returned the task above).
@@ -658,7 +660,8 @@ function selectAudio(store: ClassroomStore, session: S['ClassSession'], from: nu
     const epochEnd = epoch.order.offset + duration;
     timelineEnd = Math.max(timelineEnd, epochEnd);
     if (epochEnd <= from || epoch.order.offset >= to) continue;
-    if (epoch.revoked || epoch.expired || !durable.size) { uncovered = true; continue; }
+    // Only sealed epochs can be frozen; an unsealed (retired or still open) epoch leaves its part uncovered.
+    if (epoch.revoked || epoch.expired || !epoch.manifest.sealed || !durable.size) { uncovered = true; continue; }
     const count = epoch.manifest.expected_last_seq !== null ? epoch.manifest.expected_last_seq + 1 : Math.max(...durable) + 1;
     const chunkMs = Math.max(1, duration / count);
     const slice: AudioSlice = { epochId: epoch.epochId, seqs: [], missing: [], chunkMs };

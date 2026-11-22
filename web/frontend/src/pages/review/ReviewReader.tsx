@@ -8,7 +8,7 @@ import {
   type Block, type Doc, type Revision,
 } from '../../domain/review';
 import { describeError, isConflict, useAppData, useCourse, useInvalidateAccount, usePreferences } from '../../features/data';
-import { isDefinitiveRejection, useClassSession, useDraft, useMarks, useSlides } from '../../features/classroom';
+import { isDefinitiveRejection, useClassSession, useClassroomShell, useDraft, useMarks, useSlides } from '../../features/classroom';
 import { useClassSegments, useReadingMemory, useReviewDocument, useReviewRevisions, useSourceSnapshot } from '../../features/review';
 import { DataSourceNote, OfflineBanner } from '../common';
 import pages from '../pages.module.css';
@@ -319,7 +319,9 @@ function PersonalEditor({ doc, basis, onSaved, onConflict }: { doc: Doc; basis: 
   const [metaRaw, setMetaRaw] = useDraft(doc.class_session_id, `review:${doc.id}:base`);
   const meta = parseMeta(metaRaw);
   const [conflicted, setConflicted] = useState(false);
+  const { drafts } = useClassroomShell();
   const keyRef = useRef<{ fingerprint: string; key: string } | null>(null);
+  const submitted = useRef<{ body: string; note: string } | null>(null);
   const save = useMutation({
     mutationFn: () => {
       const pinned = meta ?? { content: basis?.id ?? null, revision: doc.revision, draft: crypto.randomUUID() };
@@ -330,9 +332,19 @@ function PersonalEditor({ doc, basis, onSaved, onConflict }: { doc: Doc; basis: 
       if (!keyRef.current || keyRef.current.fingerprint !== fingerprint) keyRef.current = { fingerprint, key: crypto.randomUUID() };
       // The key travels with the draft, so a retry after leaving and returning replays the same intent.
       setMetaRaw(JSON.stringify({ ...pinned, key: keyRef.current }));
+      submitted.current = { body, note };
       return app.api.writePersonalRevision(doc.id, payload, keyRef.current.key);
     },
-    onSuccess: revision => { keyRef.current = null; setBody(''); setNote(''); setMetaRaw(''); setConflicted(false); setOpen(false); void invalidate(); onSaved(revision); },
+    onSuccess: revision => {
+      keyRef.current = null;
+      // The shared draft is cleared only if it still holds exactly what was submitted (another reader instance may have edited it since).
+      const unchanged = submitted.current && drafts.get(doc.class_session_id, `review:${doc.id}:body`) === submitted.current.body && drafts.get(doc.class_session_id, `review:${doc.id}:note`) === submitted.current.note;
+      if (unchanged) { setBody(''); setNote(''); setMetaRaw(''); setOpen(false); }
+      // Otherwise the newer draft stays pinned to its original base (its next save meets the conflict and the user chooses to rebase); only the spent key is dropped.
+      else { const current = parseMeta(drafts.get(doc.class_session_id, `review:${doc.id}:base`)); if (current) setMetaRaw(JSON.stringify({ ...current, key: undefined })); }
+      submitted.current = null;
+      setConflicted(false); void invalidate(); onSaved(revision);
+    },
     onError: error => { if (answered(error)) { keyRef.current = null; if (meta) setMetaRaw(JSON.stringify({ ...meta, key: undefined })); } if (isConflict(error)) { setConflicted(true); onConflict(); } },
   });
   const start = () => {

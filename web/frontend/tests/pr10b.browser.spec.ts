@@ -209,6 +209,24 @@ test.describe('PR-10b review', () => {
     await expect(list.locator('li[data-adopted="true"]')).toContainText('实时转写');
   });
 
+  test('a submission without a reply stays unconfirmed across navigation and is confirmed with the same operation', async ({ page }) => {
+    await ready(page, `/classrooms/${ENDED}/review`);
+    await page.getByRole('button', { name: '准备重新转写' }).click();
+    await expect(page.getByTestId('retranscribe-plan')).toBeVisible();
+    // The server accepts the execution but its reply is lost.
+    await page.evaluate(() => localStorage.setItem('mock-test-drop-reply', '/execute'));
+    await page.getByTestId('retranscribe-confirm').click();
+    await expect(page.getByTestId('retranscribe-unconfirmed')).toContainText('提交结果待确认');
+    await spa(page, '/review');
+    await expect(page.getByRole('heading', { name: '复习', level: 1 })).toBeVisible();
+    await spa(page, `/classrooms/${ENDED}/review`);
+    await expect(page.getByTestId('retranscribe-unconfirmed')).toBeVisible();
+    // The same key replays the accepted execution: exactly one task, never a second submission.
+    await page.getByRole('button', { name: '用同一操作再确认' }).click();
+    await expect(page.getByTestId('retranscribe-tasks').locator('li')).toHaveCount(1);
+    await expect(page.getByTestId('retranscribe-unconfirmed')).toHaveCount(0);
+  });
+
   test('the four refusals are shown by error code; a session-quota refusal stays pending approval', async ({ page }) => {
     await ready(page, `/classrooms/${ENDED}/review`);
     const devAudio = page.locator('[aria-label="重新转写模拟（PR-10b）"]');

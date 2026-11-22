@@ -369,3 +369,25 @@ describe('PR-10b mock: Astra r2 findings', () => {
     expect(call('A', 'POST', `/generation-plans/${plan.id}/execute`, execute(plan)).status).toBe(202);
   });
 });
+
+describe('PR-10b mock: third-round review findings', () => {
+  it('an unsealed capture epoch is never frozen as complete audio', () => {
+    const { backend, call } = harness();
+    const manifest = backend.classroomStore('A').manifests.get(ENDED)!;
+    backend.classroomStore('A').manifests.set(ENDED, { ...manifest, sealed: false });
+    expect(err(call('A', 'POST', `/class-sessions/${ENDED}/generation-plans`, retranscribe())).code).toBe('SOURCE_UNAVAILABLE');
+    expect(err(call('A', 'POST', `/class-sessions/${ENDED}/generation-plans`, retranscribe({ accept_partial_scope: true }))).code).toBe('SOURCE_UNAVAILABLE');
+  });
+  it('an AI plan frozen before a transcript adoption needs a new plan or an explicit original-snapshot confirmation', () => {
+    const { backend, call } = harness();
+    const summary = call('A', 'POST', `/class-sessions/${ENDED}/generation-plans`, { kind: 'review_summary', scope: 'all', seen_sources: [], include_images: false, accept_partial_scope: false }).body as S['GenerationPlan'];
+    const plan = call('A', 'POST', `/class-sessions/${ENDED}/generation-plans`, retranscribe()).body as S['GenerationPlan'];
+    const task = call('A', 'POST', `/generation-plans/${plan.id}/execute`, execute(plan)).body as S['Task'];
+    const versionId = backend.advanceTask('A', task.id, 'succeeded')!.result_id!;
+    const session = call('A', 'GET', `/class-sessions/${ENDED}`).body as S['ClassSession'];
+    call('A', 'POST', `/class-sessions/${ENDED}/adopt-transcript`, { base_revision: session.revision, transcript_version_id: versionId });
+    expect(call('A', 'GET', `/generation-plans/${summary.id}`).body).toMatchObject({ source_status: 'changed' });
+    expect(err(call('A', 'POST', `/generation-plans/${summary.id}/execute`, execute(summary))).code).toBe('SOURCE_CHANGED');
+    expect(call('A', 'POST', `/generation-plans/${summary.id}/execute`, execute(summary, { confirm_original_snapshot: true })).status).toBe(202);
+  });
+});
