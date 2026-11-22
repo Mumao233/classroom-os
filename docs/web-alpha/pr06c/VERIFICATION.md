@@ -83,3 +83,36 @@
 ## 2026-11-22 HTTP 0.3.0 合入与复验
 
 在 06c 工作树执行 `git merge --no-ff --no-edit --no-autostash origin/main`。merge 提交为 `370bd0ebc7124c3fde1b84e37e9498b2ea7515a9`，双亲为 `5915593e06c09cd7fc050ef230d7117b26788287` 和 `a0f5b4becfdb8bc35c3d5d0bac71a6181a04e553`。Git 自动合并 HTTP 入口，未发生冲突。冻结契约、前端和清单读取沿用主线 0.3.0。
+
+候选提交 `080c8ed5abbfcfd6635cbd7353b34fb1b4d66da5` 将原音到期、删除或读取权撤销分别投影为 HTTP 410 `AUDIO_EXPIRED`、`AUDIO_DELETED`。课次追加审批和月时长余额不足分别返回 HTTP 409 `QUOTA_SESSION_EXCEEDED`、`QUOTA_MONTH_EXCEEDED`。月额由实际超限的 `retranscribe_month_ms` 账本识别。四码共用默认文案，均为 `retryable=false`。PR-10b 按 `error.code` 分支。
+
+| 本轮验证 | 源码与来宾运行号 | 实际结果 | 证据 ZIP SHA-256 |
+|---|---|---|---|
+| VMware 定向与冻结契约 | `080c8ed` · `5bef693205174156` | 传输成功，来宾、pytest、独立 PostgreSQL 停止均退出 0。20 个主测试通过（含 14 个 Filetrans 用例），0 子测试、失败、错误、跳过，59.24 秒。冻结契约 9/9 通过，144 份正反 fixtures 包含四份同文案正例和一份未知码反例。 | `A8FDA487CC5E1D0DF0638D7EB356A3DE40CB0BAD8E3D9F9DCBE6AD86C59FC982` |
+| A/B 第 1 轮，主线单跑 pool | `a0f5b4b` · `44e84aa7df454344` | 启动后发生来宾 bugcheck 和重启，随后 broker 传输超时。没有 pytest / 来宾退出码、JUnit 或完整用例结果。证据包由重启后的取证任务生成，收录残留日志。 | `88FC31EACDE1A72781FC272133F713C64E273E6F6C904387F5F1C4294AB22F3D` |
+
+定向命令为 `tools/pr06c/guest.ps1 -Mode targeted`，含 `tools/overnight/check_contracts.py` 和 `tools/pr06c/run_targeted.py`。真实 HTTP 合成请求经 PostgreSQL 与私有对象存储，测试校验四种回包的 Error schema、HTTP 状态、`no-store`、重试标志，以及拒绝前后的任务、预留与供应商尝试数。另覆盖已失效原音的计划预览、显式重试的课次审批、来源不全、课堂删除和平台预算拒绝。
+
+宿主对 `a0f5b4b..080c8ed` 的 31 个 Python 文件执行 AST 解析，对 `tools/pr06c/guest.ps1` 执行 PowerShell 解析。`git diff --check`、受保护路径及本轮改动范围检查均退出 0。与主线比对，冻结契约、前端、路线图和既有测试工具未改。历史 06c 分支已有的 `docs/web-alpha/DECISIONS.md` 在本轮与 `5915593` 一致。
+
+### A/B 中断与取证
+
+原计划按主线、06c 交替三组。第一轮启动前实测来宾 C 盘可用 26,342,666,240 字节。启动了独立 PostgreSQL、媒体及账本 SeaweedFS，运行 `tests/integration/test_pr08c_pool.py`，开启 urllib3 连接池 DEBUG、botocore 请求结果及异常链记录、SeaweedFS `-v=2`。pytest 已打印 loopback guard 校验成功。源码和观测器随运行目录归档。
+
+broker 于 15:13:16 UTC 开始执行，来宾在 15:15:20 UTC 重新启动。Windows 系统事件 1001（记录 2271，15:15:31 UTC）报告 bugcheck `0x00000124`，同时段有 Kernel-Power 41 与异常关机事件 6008。15:39:08 UTC，broker 在 1,550 秒超时后返回 `Result=null`。取证时没有进程引用原运行目录。部分 JSONL 记录已无法解析，回收了客户端异常链和 6 份 SeaweedFS 原生日志或进程输出。可读异常链含就绪探针的读超时。现有证据无法确定 bugcheck 的底层原因，也无法把它与旧轮的请求体截断归为同一故障。
+
+| 版本 | 已启动 | 有完整结果 | pool 失败率 |
+|---|---:|---:|---|
+| 主线 `a0f5b4b` | 1/3 | 0/3 | 无有效分母 |
+| 06c `080c8ed` | 0/3 | 0/3 | 无有效分母 |
+
+按第 4 步停止条件结束本轮。新 HEAD 上的完整 Web 与 Windows 本地门禁未执行，主测试、子测试及失败数均无本轮结果。未触发 Astra 复审，P0/P1 未评定。未推送，未开 Draft PR。真实 DashScope / Filetrans 调用为 0，生产接入关闭。
+
+两轮归档均位于 `J:\class-assistant\vm-archive\2026-11-22\pr06c-final\<运行号>`。每个目录内含归档 ZIP、逐文件清单与核验和删除回执。主线中断轮另存原始 broker 回执、传输错误和来宾事件 1001 的停止码。
+
+| 运行号 | 归档 ZIP SHA-256 | 清单 SHA-256 | 逐文件核验数 |
+|---|---|---|---:|
+| `5bef693205174156` | `C7536A4CB8569297B646188C1D5833E79FA1E3FC44273D3C354C82791F35D985` | `34025485A98833E76A21662781956E9B431344C43962B7F56AFB8C8545C94C09` | 3,615 |
+| `44e84aa7df454344` | `E615ED7C236BB3E8809A3BC0F899474A6FDB13DF5349AE01E65FC3E09CB66A2B` | `F074B5F39C59642CE367593F81D53330DAFF9F0B73629122D9F9079B5540D1A3` | 4,349 |
+
+中断轮第一次打包因一份 PostgreSQL 文件的元数据在读取前后不一致而中止。复查同一文件，两次读取的长度、修改时间与 SHA-256 一致。随后打包时重新读取各文件的元数据，并对最终归档逐文件复算 SHA-256。两轮均在宿主核验和来宾再次核对后删除原运行目录及对应测试、预检传输目录，发现 junction 数均为 0。主线中断轮的未完成打包临时件也已清理。15:45 UTC 实测来宾 C 盘可用 26,551,017,472 字节。
