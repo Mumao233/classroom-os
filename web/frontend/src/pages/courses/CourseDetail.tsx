@@ -223,6 +223,14 @@ function MaterialEditor({ material }: { material: S['CourseMaterial'] }) {
   </form>;
 }
 
+/** UI-REVIEW-03: the course entry groups the shared documents by class, newest class first. */
+function groupByClass(docs: S['ReviewDocument'][], sessions: S['ClassSession'][]) {
+  const order = new Map([...sessions].sort((a, b) => (b.started_at ?? b.created_at).localeCompare(a.started_at ?? a.created_at)).map((item, index) => [item.id, index]));
+  const groups = new Map<string, S['ReviewDocument'][]>();
+  for (const doc of docs) groups.set(doc.class_session_id, [...(groups.get(doc.class_session_id) ?? []), doc]);
+  return [...groups].map(([classId, items]) => ({ classId, docs: items })).sort((a, b) => (order.get(a.classId) ?? Number.MAX_SAFE_INTEGER) - (order.get(b.classId) ?? Number.MAX_SAFE_INTEGER));
+}
+
 /** UI-COURSE-10 / UI-REVIEW-02 (course part): filters the shared review objects; no copies. */
 function ReviewTab({ course }: { course: S['Course'] }) {
   const location = useLocation();
@@ -238,9 +246,12 @@ function ReviewTab({ course }: { course: S['Course'] }) {
       <div className={styles.field}><label htmlFor="review-kind">类型</label><select id="review-kind" value={kind ?? ''} onChange={event => set('kind', event.target.value)}><option value="">全部</option><option value="summary">课堂总结</option><option value="card">复习卡片</option><option value="note">个人笔记</option></select></div>
       <div className={styles.field}><label htmlFor="review-understood">理解状态</label><select id="review-understood" value={understood === undefined ? '' : String(understood)} onChange={event => set('understood', event.target.value)}><option value="">全部</option><option value="false">尚未理解</option><option value="true">已理解</option></select></div>
     </div>
-    <p className={`${styles.small} ${styles.muted}`}>这里与全局复习、单课复习是同一批资料，只按当前课程筛选；在任一入口的修改都会同步出现。完整阅读与编辑在复习页（PR-10b）。</p>
+    <p className={`${styles.small} ${styles.muted}`}>这里与全局复习、单课复习是同一批资料，只按当前课程筛选并按课堂分组；在任一入口的修改都会同步出现。</p>
     {documents.isError && !documents.data ? <QueryError error={documents.error} retry={() => void documents.refetch()} /> : documents.isPending ? <Loading label="正在读取复习资料…" /> :
       documents.data.items.length === 0 ? <Empty title={kind || understood !== undefined ? '没有符合筛选的资料' : '这门课还没有复习资料'} description="课堂结束并生成或保存资料后会出现在这里。" /> :
-      <ul className={styles.list} data-testid="course-review-list">{documents.data.items.map(doc => <li key={doc.id} className={styles.listItem} data-document-id={doc.id}><div><strong>{doc.title || '未命名'}</strong><p>{kindLabel[doc.kind]} · {docState(doc)} · {doc.understood ? '已理解' : '尚未理解'} · {sessionTitle.get(doc.class_session_id) ?? '课堂'}</p></div><Link to={`/review/items/${doc.id}`}>打开</Link></li>)}</ul>}
+      <div data-testid="course-review-list">{groupByClass(documents.data.items, sessions.data?.items ?? []).map(group => <section key={group.classId} aria-label={sessionTitle.get(group.classId) ?? '课堂'} data-class-id={group.classId}>
+        <h3 className={styles.small} style={{ margin: '12px 0 4px' }}><Link to={`/classrooms/${group.classId}/review`} state={location.state}>{sessionTitle.get(group.classId) ?? '课堂'}</Link></h3>
+        <ul className={styles.list}>{group.docs.map(doc => <li key={doc.id} className={styles.listItem} data-document-id={doc.id}><div><strong>{doc.title || '未命名'}</strong><p>{kindLabel[doc.kind]} · {docState(doc)} · {doc.understood ? '已理解' : '尚未理解'}</p></div><Link to={`/review/items/${doc.id}`} state={{ from: `${location.pathname}${location.search}` }}>打开</Link></li>)}</ul>
+      </section>)}</div>}
   </section>;
 }

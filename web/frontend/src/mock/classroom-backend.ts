@@ -23,6 +23,8 @@ export type ClassroomHost = {
   updateQuestion: (taskId: string, change: Partial<S['Question']>) => void;
   addDocument: (document: S['ReviewDocument']) => void;
   document: (id: string) => S['ReviewDocument'] | undefined;
+  /** Stores a summary result as a candidate revision with its frozen snapshot (PR-10b review store). */
+  addCandidate: (input: { revisionId: string; documentId: string; snapshot: S['SourceSnapshot'] | null; created: string; rawOutputRef: string }) => void;
 };
 export type ClassroomHelpers = {
   now: () => string;
@@ -68,6 +70,10 @@ export type ClassroomStore = {
   manifestCursors: Map<string, { classId: string; ids: string[]; next: number; expired: boolean }>;
   /** Synthetic quota units reserved by each executed task, moved once as the task progresses. */
   reservations: Map<string, { bucket: S['QuotaBucket']['kind']; units: number; phase: 'reserved' | 'submitted' | 'done' }>;
+  /** PR-10b development controls for retranscription refusals (original audio state, session and month quota). */
+  retranscribeDev: { audio: Map<string, 'expired' | 'deleted'>; quota: 'ok' | 'session' | 'month' };
+  /** Retranscription plans that cover only part of the audio (missing chunks): execution needs an explicit confirmation. */
+  partialPlans: Set<string>;
 };
 
 const DAY = 86_400_000;
@@ -102,7 +108,7 @@ const CAPTURE_KEYS = ['capture_epoch_id', 'fence_token', 'last_local_seq', 'last
 
 /** Synthetic records for seeded, already ended classes (record page and processing page demos). */
 export function seedClassroom(sessionIds: { ended: string; uploadFailed: string; unknownAi: string } | null): ClassroomStore {
-  const store: ClassroomStore = { versions: [], segments: [], marks: [], slides: [], uploads: new Map(), assets: [], manifests: new Map(), leases: new Map(), plans: new Map(), tasks: [], durable: new Map(), captured: new Map(), slideHistory: [], segmentHistory: [], epochs: new Map(), retired: new Map(), epochManifests: new Map(), epochOrder: new Map(), manifestCursors: new Map(), revokedAudio: new Set(), manifestDev: { pageSize: null, failContinuations: false }, reservations: new Map() };
+  const store: ClassroomStore = { versions: [], segments: [], marks: [], slides: [], uploads: new Map(), assets: [], manifests: new Map(), leases: new Map(), plans: new Map(), tasks: [], durable: new Map(), captured: new Map(), slideHistory: [], segmentHistory: [], epochs: new Map(), retired: new Map(), epochManifests: new Map(), epochOrder: new Map(), manifestCursors: new Map(), revokedAudio: new Set(), manifestDev: { pageSize: null, failContinuations: false }, reservations: new Map(), retranscribeDev: { audio: new Map(), quota: 'ok' }, partialPlans: new Set() };
   if (!sessionIds) return store;
   const created = '2026-10-27T06:00:00Z';
   const version = (n: number, classId: string): S['TranscriptVersion'] => ({ id: uuid('71000000', n), revision: 1, created_at: created, updated_at: created, class_session_id: classId, kind: 'realtime', state: 'sealed', source_task_id: uuid('72000000', n), adopted: true });
@@ -510,6 +516,16 @@ export function handleClassroom(store: ClassroomStore, host: ClassroomHost, h: C
       if (record.taskId) { const existing = store.tasks.find(item => item.id === record.taskId); if (existing) return ok(existing, 202); }
       if (Date.parse(plan.expires_at) <= Date.parse(h.now())) return h.error(409, 'PLAN_EXPIRED', '计划已过期，请重新准备');
       if (body.plan_sha256 !== plan.plan_sha256 || body.confirmed_destination_revision !== plan.destination.configuration_revision) return h.error(409, 'PLAN_EXPIRED', '计划内容或目的地已变化，请重新准备');
+      if (plan.kind === 'asr_retranscribe') {
+        const session = findSession(plan.class_session_id)!;
+        const refusal = audioRefusal(store, h, session) ?? quotaRefusal(store, h);
+        if (refusal) return refusal;
+        if (store.partialPlans.has(plan.id) && body.confirm_partial_scope !== true) return h.error(400, 'VALIDATION_FAILED', '原音不完整，需要确认按已有部分重新转写');
+        const next = task({ id: h.newId(), classId: plan.class_session_id, kind: 'asr_retranscribe', state: 'queued', created: h.now(), snapshotId: null, attemptId: h.newId(), maximum: plan.maximum_cost_microyuan });
+        store.tasks.push(next);
+        record.taskId = next.id;
+        return ok(next, 202);
+      }
       if (plan.contains_images && body.confirm_images !== true) return h.error(400, 'VALIDATION_FAILED', '计划包含图片，需要确认发送图片');
       if (plan.source_snapshot && !plan.source_snapshot.scope_complete && body.confirm_partial_scope !== true) return h.error(400, 'VALIDATION_FAILED', '材料不完整，需要确认按部分范围生成');
       const status = sourceStatus(store, plan);
@@ -533,6 +549,35 @@ export function handleClassroom(store: ClassroomStore, host: ClassroomHost, h: C
       return ok(next, 202);
     });
 
+    case 'POST /tasks/:id/retry': return h.idempotent(key, `retry:${id}`, body, () => {
+      const found = store.tasks.find(item => item.id === id && (!item.class_session_id || findSession(item.class_session_id)));
+      if (!found) return h.error(404, 'NOT_FOUND', '任务不存在');
+      if (!only(body, ['reason', 'confirm_duplicate_billing', 'original_attempt_id']) || typeof body.reason !== 'string' || body.reason.trim().length === 0 || body.reason.length > 500
+        || typeof body.confirm_duplicate_billing !== 'boolean' || !isUuid(body.original_attempt_id)) return h.error(400, 'VALIDATION_FAILED', '重试请求无效');
+      if (found.kind !== 'asr_retranscribe' || !['failed', 'unknown'].includes(found.state)) return h.error(409, 'VALIDATION_FAILED', '只有失败或结果未知的重新转写可以重试');
+      if (found.attempt_id !== body.original_attempt_id) return h.error(409, 'VALIDATION_FAILED', '重试必须指明原尝试');
+      if (found.may_have_charged && body.confirm_duplicate_billing !== true) return h.error(409, 'VALIDATION_FAILED', '原尝试可能已收费，重试需要确认可能重复计费');
+      const session = found.class_session_id ? findSession(found.class_session_id) : undefined;
+      if (!session) return notFound();
+      const refusal = audioRefusal(store, h, session) ?? quotaRefusal(store, h);
+      if (refusal) return refusal;
+      // The original attempt is immutable; the retry is a new linked task with its own attempt.
+      const next: S['Task'] = { ...task({ id: h.newId(), classId: session.id, kind: 'asr_retranscribe', state: 'queued', created: h.now(), snapshotId: null, attemptId: h.newId(), maximum: found.maximum_cost_microyuan }), parent_task_id: found.id };
+      store.tasks.push(next);
+      return ok(next, 202);
+    });
+    case 'POST /class-sessions/:id/adopt-transcript': return h.idempotent(key, `adopt-transcript:${id}`, body, () => {
+      const session = findSession(id); if (!session) return notFound();
+      if (!only(body, ['base_revision', 'transcript_version_id']) || !Number.isSafeInteger(body.base_revision) || (body.base_revision as number) < 1 || !isUuid(body.transcript_version_id)) return h.error(400, 'VALIDATION_FAILED', '采用请求无效');
+      const version = store.versions.find(item => item.id === body.transcript_version_id && item.class_session_id === id);
+      if (!version || version.state !== 'sealed') return h.error(400, 'VALIDATION_FAILED', '只能采用本课堂已完成的转写版本');
+      if (body.base_revision !== session.revision) return h.error(409, 'REVISION_CONFLICT', '课堂已在其他地方更新', session.revision);
+      const at = h.now();
+      store.versions = store.versions.map(item => item.class_session_id !== id || item.adopted === (item.id === version.id) ? item : { ...item, adopted: item.id === version.id, revision: item.revision + 1, updated_at: at });
+      const next = { ...session, adopted_transcript_version_id: version.id, revision: session.revision + 1, updated_at: at };
+      host.saveSession(next);
+      return ok(next);
+    });
     case 'GET /tasks': {
       const classId = query.get('class_session_id');
       const state = query.get('state');
@@ -567,6 +612,64 @@ function syncAi(store: ClassroomStore, host: ClassroomHost, h: ClassroomHelpers,
   if (session.flows.ai !== ai) host.saveSession({ ...session, revision: session.revision + 1, updated_at: h.now(), flows: { ...session.flows, ai } });
 }
 
+/** Original-audio refusals of 06c, distinguished only by error code (HTTP 0.3.0). */
+function audioRefusal(store: ClassroomStore, h: ClassroomHelpers, session: S['ClassSession']): ClassroomReply | null {
+  const dev = store.retranscribeDev.audio.get(session.id);
+  const revoked = [...store.revokedAudio].some(epoch => store.epochs.get(epoch) === session.id);
+  if (dev === 'deleted' || revoked) return h.error(410, 'AUDIO_DELETED', '原音已删除或访问已撤销');
+  if (dev === 'expired' || (session.audio_expires_at !== null && Date.parse(session.audio_expires_at) <= Date.parse(h.now()))) return h.error(410, 'AUDIO_EXPIRED', '原音已到期');
+  return null;
+}
+function quotaRefusal(store: ClassroomStore, h: ClassroomHelpers): ClassroomReply | null {
+  if (store.retranscribeDev.quota === 'session') return h.error(409, 'QUOTA_SESSION_EXCEEDED', '本节课追加重新转写需要审批');
+  if (store.retranscribeDev.quota === 'month') return h.error(409, 'QUOTA_MONTH_EXCEEDED', '本月重新转写时长不足');
+  return null;
+}
+
+/** A frozen retranscription plan: original-audio manifest digest, chunk IDs, metered duration and maximum cost. */
+function retranscribePlan(store: ClassroomStore, h: ClassroomHelpers, session: S['ClassSession'], body: Record<string, unknown>): ClassroomReply {
+  if (!['all', 'range'].includes(String(body.scope)) || (Array.isArray(body.seen_sources) && body.seen_sources.length > 0) || body.include_images !== false) return h.error(400, 'VALIDATION_FAILED', '重新转写只能选择整节或时间范围，且不发送图片');
+  if (body.scope === 'range' && !(nonNegative(body.start_ms) && nonNegative(body.end_ms) && (body.end_ms as number) > (body.start_ms as number))) return h.error(400, 'VALIDATION_FAILED', '范围需要起止时间');
+  if (session.capture_ended_at === null) return h.error(409, 'SOURCE_UNAVAILABLE', '课堂仍在采集，结束后才能重新转写');
+  const refusal = audioRefusal(store, h, session);
+  if (refusal) return refusal;
+  const manifest = store.manifests.get(session.id);
+  if (!manifest || manifest.durable_ranges.length === 0) return h.error(409, 'SOURCE_UNAVAILABLE', '没有已持久保存的原音，无法重新转写');
+  const partial = manifest.missing_ranges.length > 0;
+  if (partial && body.accept_partial_scope !== true) return h.error(409, 'SOURCE_UNAVAILABLE', '原音有分片缺失。可以等待上传完成，或明确选择按已有部分重新转写。');
+  const durableCount = manifest.durable_ranges.reduce((sum, range) => sum + range.last_seq - range.first_seq + 1, 0);
+  const total = Math.max(60_000, session.effective_capture_ms);
+  const ms = body.scope === 'range' ? Math.min(total, (body.end_ms as number) - (body.start_ms as number)) : total;
+  const chunkCount = Math.max(1, Math.min(durableCount, Math.ceil(ms / 20_000)));
+  const created = h.now();
+  const serial = store.plans.size + 1;
+  const plan: S['GenerationPlan'] = { id: h.newId(), class_session_id: session.id, kind: 'asr_retranscribe', plan_sha256: sha256Hex(`retranscribe:${session.id}:${serial}`), source_snapshot: null,
+    audio_manifest_sha256: sha256Hex(JSON.stringify(manifest)), audio_chunk_ids: Array.from({ length: chunkCount }, (_, index) => uuid('7a000000', serial * 1000 + index + 1)),
+    destination: MOCK_DESTINATION, prompt_version: 'mock-filetrans-1', output_schema_version: 'mock-transcript-1', price_version: 'mock-price-1', estimated_batches: 1,
+    maximum_cost_microyuan: String(Math.ceil(ms / 1000) * 50), quota_units: Math.max(1, ms), expires_at: iso(Date.parse(created) + 10 * 60_000), source_status: 'unchanged', contains_images: false };
+  store.plans.set(plan.id, { plan, request: body as unknown as S['GenerationPlanRequest'], taskId: null });
+  if (partial) store.partialPlans.add(plan.id);
+  return { status: 201, body: plan };
+}
+
+/** A succeeded retranscription yields a new, unadopted transcript version (a candidate); returns its ID. */
+function retranscribed(store: ClassroomStore, h: ClassroomHelpers, source: S['Task']): string {
+  const classId = source.class_session_id!;
+  const created = h.now();
+  const versionId = h.newId();
+  const plan = [...store.plans.values()].find(record => record.taskId === source.id || (source.parent_task_id !== null && record.taskId === source.parent_task_id));
+  const request = plan?.request as unknown as Record<string, unknown> | undefined;
+  const inRange = (item: S['TranscriptSegment']) => request?.scope !== 'range' || (item.start_ms !== null && item.start_ms >= (request.start_ms as number) && (item.end_ms ?? item.start_ms) <= (request.end_ms as number));
+  const adopted = store.versions.find(item => item.class_session_id === classId && item.adopted && item.kind !== 'retranscription') ?? store.versions.find(item => item.class_session_id === classId && item.adopted);
+  const basis = store.segments.filter(item => item.class_session_id === classId && item.kind === 'machine' && item.status === 'final' && (!adopted || item.transcript_version_id === adopted.id) && inRange(item));
+  store.versions.push({ id: versionId, revision: 1, created_at: created, updated_at: created, class_session_id: classId, kind: 'retranscription', state: 'sealed', source_task_id: source.id, adopted: false });
+  for (const item of basis) {
+    store.segments.push({ ...item, id: h.newId(), revision: 1, created_at: created, updated_at: created, transcript_version_id: versionId, stream_id: null, segment_revision_id: h.newId(),
+      origin: 'retranscription', text: item.text.replace('（合成）', '（合成·重新转写）'), timestamp_source: 'capture_mapping', provider_request_id: null, adopted_revision_id: null });
+  }
+  return versionId;
+}
+
 function planFor(store: ClassroomStore, host: ClassroomHost, h: ClassroomHelpers, classId: string, body: Record<string, unknown>): ClassroomReply {
   const session = host.sessions().find(item => item.id === classId && item.deleted_at === null && host.courseExists(item.course_id));
   if (!session) return h.error(404, 'NOT_FOUND', '课堂不存在');
@@ -575,7 +678,7 @@ function planFor(store: ClassroomStore, host: ClassroomHost, h: ClassroomHelpers
   if (!only(body, ['kind', 'scope', 'anchor_ms', 'start_ms', 'end_ms', 'seen_sources', 'question', 'include_images', 'card_types', 'english_answer', 'accept_partial_scope'])
     || !kinds.includes(String(body.kind)) || !scopes.includes(String(body.scope)) || !Array.isArray(body.seen_sources) || typeof body.include_images !== 'boolean' || typeof body.accept_partial_scope !== 'boolean') return h.error(400, 'VALIDATION_FAILED', '生成请求无效');
   const kind = body.kind as S['GenerationPlan']['kind'];
-  if (kind === 'asr_retranscribe') return h.error(503, 'SERVICE_DISABLED', '重转写不在本开发预览中提供');
+  if (kind === 'asr_retranscribe') return retranscribePlan(store, h, session, body);
   if (kind === 'ai_question' && (typeof body.question !== 'string' || body.question.trim().length === 0 || body.question.length > 2000)) return h.error(400, 'VALIDATION_FAILED', '请输入问题');
   if (body.scope === 'range' && !(nonNegative(body.start_ms) && nonNegative(body.end_ms) && (body.end_ms as number) > (body.start_ms as number))) return h.error(400, 'VALIDATION_FAILED', '范围需要起止时间');
   const quota = host.quota();
@@ -630,6 +733,13 @@ function planFor(store: ClassroomStore, host: ClassroomHost, h: ClassroomHelpers
   return { status: 201, body: plan };
 }
 
+/** PR-10b development panel: original audio state and quota refusals for retranscription. */
+export function setRetranscribeDev(store: ClassroomStore, value: { classId?: string; audio?: 'ok' | 'expired' | 'deleted'; quota?: 'ok' | 'session' | 'month' }) {
+  if (value.classId && value.audio) { if (value.audio === 'ok') store.retranscribeDev.audio.delete(value.classId); else store.retranscribeDev.audio.set(value.classId, value.audio); }
+  if (value.quota) store.retranscribeDev.quota = value.quota;
+  return { audio: Object.fromEntries(store.retranscribeDev.audio), quota: store.retranscribeDev.quota };
+}
+
 /** Development-panel helper: move a task to a later state the way a worker would report it. */
 export function advanceTask(store: ClassroomStore, host: ClassroomHost, h: ClassroomHelpers, taskId: string, outcome: TaskOutcome): S['Task'] | null {
   const found = store.tasks.find(item => item.id === taskId);
@@ -638,7 +748,7 @@ export function advanceTask(store: ClassroomStore, host: ClassroomHost, h: Class
   const next: S['Task'] = { ...found, revision: found.revision + 1, updated_at: h.now(), state: outcome,
     provider_outcome: outcome === 'running' ? 'not_submitted' : outcome, completed_units: terminal && outcome === 'succeeded' ? found.total_units ?? 1 : found.completed_units,
     may_have_charged: outcome === 'unknown' || outcome === 'succeeded' || found.may_have_charged, settled_cost_microyuan: outcome === 'succeeded' ? '9000' : found.settled_cost_microyuan,
-    error_code: outcome === 'failed' ? 'PROVIDER_FAILED' : null, result_id: outcome === 'succeeded' ? h.newId() : null };
+    error_code: outcome === 'failed' ? 'PROVIDER_FAILED' : null, result_id: outcome === 'succeeded' ? (found.kind === 'asr_retranscribe' ? retranscribed(store, h, found) : h.newId()) : null };
   store.tasks = store.tasks.map(item => item.id === taskId ? next : item);
   // Units move once: submitted when running, settled on success or a failure after submission,
   // kept as unknown (never refunded) on an unknown outcome, released when never submitted.
@@ -647,8 +757,10 @@ export function advanceTask(store: ClassroomStore, host: ClassroomHost, h: Class
   if (next.kind === 'review_summary' && outcome === 'succeeded' && next.class_session_id) {
     // A generated summary is only a candidate; nothing becomes the adopted version automatically.
     const scope = [...store.plans.values()].find(record => record.taskId === taskId)?.plan.source_snapshot;
-    host.addDocument({ id: h.newId(), revision: 1, created_at: h.now(), updated_at: h.now(), class_session_id: next.class_session_id, kind: 'summary',
+    const documentId = h.newId();
+    host.addDocument({ id: documentId, revision: 1, created_at: h.now(), updated_at: h.now(), class_session_id: next.class_session_id, kind: 'summary',
       title: scope && !scope.scope_complete ? '课堂总结（部分范围候选）' : '课堂总结（候选）', adopted_revision_id: null, latest_personal_revision_id: null, candidate_revision_ids: [next.result_id!], understood: false, source_status: 'unchanged' });
+    host.addCandidate({ revisionId: next.result_id!, documentId, snapshot: scope ?? null, created: h.now(), rawOutputRef: h.newId() });
   }
   if (next.class_session_id) syncAi(store, host, h, next.class_session_id);
   return next;

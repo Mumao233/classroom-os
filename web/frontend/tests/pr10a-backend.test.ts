@@ -132,7 +132,8 @@ describe('PR-10a generation plans and tasks', () => {
   it('seeded unknown task stays unknown; quota, retranscription and accounts are enforced', () => {
     const { call } = harness();
     expect(items<S['Task']>(call('A', 'GET', '/tasks', undefined, `class_session_id=${UNKNOWN_AI}`))[0]).toMatchObject({ state: 'unknown', may_have_charged: true });
-    expect(err(call('A', 'POST', `/class-sessions/${ENDED}/generation-plans`, plan({ kind: 'asr_retranscribe' }))).code).toBe('SERVICE_DISABLED');
+    // PR-10b implemented retranscription (the PR-10a placeholder answered SERVICE_DISABLED): a whole-class plan freezes the audio manifest.
+    expect(call('A', 'POST', `/class-sessions/${ENDED}/generation-plans`, plan({ kind: 'asr_retranscribe' })).body).toMatchObject({ kind: 'asr_retranscribe', source_snapshot: null, contains_images: false });
     expect(err(call('B', 'GET', `/class-sessions/${ENDED}`)).code).toBe('NOT_FOUND');
     expect(items<S['Task']>(call('B', 'GET', '/tasks', undefined, `class_session_id=${UNKNOWN_AI}`))).toHaveLength(0);
     expect(err(call('B', 'POST', `/class-sessions/${ENDED}/generation-plans`, plan({ kind: 'ai_question', scope: 'all', question: 'x' }))).code).toBe('NOT_FOUND');

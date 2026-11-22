@@ -48,6 +48,8 @@ export type ApiOptions = {
 };
 
 type Query = Record<string, string | number | boolean | null | undefined>;
+/** Library filters of GET /review-documents (all optional, combined with AND by the server). */
+export type ReviewLibraryQuery = { semester_id?: string; course_id?: string; class_session_id?: string; kind?: 'summary' | 'card' | 'note'; understood?: boolean };
 const withQuery = (path: string, query: Query = {}) => {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(query)) if (value !== undefined && value !== null && value !== '') params.set(key, String(value));
@@ -210,6 +212,20 @@ export function createApiClient(scope: Scope, transportOrOptions: typeof fetch |
     task: (taskId: string, signal?: AbortSignal) => get<S['Task']>(`/tasks/${segment(taskId)}`, undefined, signal),
     reconcileTask: (taskId: string, key?: string) => post<S['TaskReconcile']>(`/tasks/${segment(taskId)}/reconcile`, {}, key),
     cancelTask: (taskId: string, key?: string) => post<S['Task']>(`/tasks/${segment(taskId)}/cancel`, {}, key),
+
+    // PR-10b review, sources and adoption. Every write carries base_revision (CAS) and a stable key.
+    reviewLibrary: (query: ReviewLibraryQuery, signal?: AbortSignal) => allPages<S['ReviewDocument']>('/review-documents', signal, query),
+    reviewDocument: (id: string, signal?: AbortSignal) => get<S['ReviewDocument']>(`/review-documents/${segment(id)}`, undefined, signal),
+    updateReviewDocument: (id: string, body: S['ReviewDocumentPatch'], key?: string) => patch<S['ReviewDocument']>(`/review-documents/${segment(id)}`, body, key),
+    reviewRevisions: (id: string, signal?: AbortSignal) => allPages<S['ReviewRevision']>(`/review-documents/${segment(id)}/revisions`, signal),
+    reviewRevision: (revisionId: string, signal?: AbortSignal) => get<S['ReviewRevision']>(`/review-revisions/${segment(revisionId)}`, undefined, signal),
+    writePersonalRevision: (id: string, body: S['PersonalRevisionWrite'], key: string) => post<S['ReviewRevision']>(`/review-documents/${segment(id)}/personal-revisions`, body, key),
+    adoptReviewRevision: (id: string, body: S['AdoptRequest'], key: string) => post<S['ReviewDocument']>(`/review-documents/${segment(id)}/adopt`, body, key),
+    createPersonalNote: (body: S['ReviewDocumentCreate'], key: string) => post<S['ReviewDocument']>('/review-documents', body, key),
+    updateQuestion: (questionId: string, body: S['QuestionPatch'], key?: string) => patch<S['Question']>(`/questions/${segment(questionId)}`, body, key),
+    sourceSnapshot: (snapshotId: string, signal?: AbortSignal) => get<S['SourceSnapshot']>(`/source-snapshots/${segment(snapshotId)}`, undefined, signal),
+    retryTask: (taskId: string, body: S['RetryTask'], key: string) => post<S['Task']>(`/tasks/${segment(taskId)}/retry`, body, key),
+    adoptTranscript: (classSessionId: string, body: S['AdoptTranscriptRequest'], key: string) => post<S['ClassSession']>(`/class-sessions/${segment(classSessionId)}/adopt-transcript`, body, key),
   };
 }
 export type ApiClient = ReturnType<typeof createApiClient>;
