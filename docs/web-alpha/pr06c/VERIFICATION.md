@@ -156,3 +156,9 @@ broker 于 15:13:16 UTC 开始执行，来宾在 15:15:20 UTC 重新启动。Win
 完整门禁通过后，`gpt-6.2-astra`（ultra，只读）复审了 `370bd0e` 合并、`080c8ed` 四码接入及其在 `b2abce9` 上的直接影响，**P0 为 0，P1 为 0**。复审核对了冻结契约与正反 fixtures、先鉴权再读原音、课次和月额度、拒绝时事务回滚、未知费用保留及显式重试、合成适配器和 PR-10b 按码处理，并对照 A/B 回执及完整门禁的 JUnit 和 pytest 摘要。
 
 复审保留一项非阻塞配置边界。若手动向 HTTP 工厂注入新版合成 Filetrans，同时指定旧 0.2.1 契约，旧契约的封闭枚举无法识别四个新码。已验证配置使用 0.3.0，回退时应将实现与其契约成对恢复。[HTTP 工厂](../../../web/backend/classroom_web/entrypoints/http.py) · [PR-10b 交接](PR10B-HANDOFF.md)
+
+### GitHub CI 的 Filetrans 测试收集
+
+GitHub CI 在 `2b57b65` 上报告后端 1,563 项通过、14 项 fixture 错误。runner 缺少自有对象服务，却收集了 `test_filetrans.py`，14 项均在准备 fixture 时收到 `PR04B_OBJECT_ROOT must name the owned object directory`。[失败记录](https://github.com/Mumao233/classroom-os/actions/runs/45054323048)
+
+集成测试的 `conftest.py` 现仅在 `PR04B_DELETION_INTEGRATION` 和 `PR05B_CAPTURE_INTEGRATION` 均为 `1` 时收集该模块。宿主从 `web/backend` 运行 `pytest --collect-only -q -p no:cacheprovider tests/integration`，两者均未设置或仅设置一个时收集到 0 项 Filetrans，两者均为 `1` 时收集到 14 项，四次退出码均为 0。`guest.ps1` 在 `targeted` 和 `full` 分支前已将两者设为 `1`，本次仅调整收集条件，来宾执行的用例与 fixture 均未改动。上文 VMware 结果仍对应原验证提交，本次未重跑来宾。
