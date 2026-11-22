@@ -97,7 +97,8 @@ test.describe('PR-10b review', () => {
     await page.getByTestId(`adopt-${CANDIDATE}`).click();
     await expect(page.getByTestId('review-notice')).toContainText('已采用所选版本');
     await expect(versionRow(page, CANDIDATE)).toHaveAttribute('data-role', 'adopted');
-    await expect(versionRow(page, ADOPTED)).toHaveAttribute('data-role', 'candidate');
+    // The earlier adopted AI version stays listed as history and can be adopted again; it is no longer a pending candidate.
+    await expect(versionRow(page, ADOPTED)).toHaveAttribute('data-role', 'ai_earlier');
     // The newly adopted version was frozen before a source correction: the server projects the change.
     await expect(page.getByTestId('source-status')).toContainText('仍按生成时的来源');
     await page.getByTestId(`adopt-${ADOPTED}`).click();

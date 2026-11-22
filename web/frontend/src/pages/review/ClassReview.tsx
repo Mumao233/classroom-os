@@ -73,8 +73,10 @@ function NewNote({ classId }: { classId: string }) {
   });
   return <form className={pages.form} style={{ maxWidth: 'none', marginTop: 14 }} onSubmit={event => { event.preventDefault(); create.mutate(); }} aria-labelledby="new-note-heading">
     <h3 id="new-note-heading">新建个人笔记</h3>
+    <fieldset disabled={create.isPending} className={pages.stack} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
     <div className={pages.field}><label htmlFor="note-title">标题</label><input id="note-title" value={title} maxLength={200} onChange={event => setTitle(event.target.value)} /></div>
     <div className={pages.field}><label htmlFor="note-body">内容</label><textarea id="note-body" value={body} maxLength={120000} onChange={event => setBody(event.target.value)} /></div>
+    </fieldset>
     {create.isError && <p role="alert" className={pages.error}>{describeError(create.error)}</p>}
     {create.isSuccess && <p role="status" className={pages.success}>笔记已保存。</p>}
     <div><button type="submit" className={pages.button} disabled={!app.online || create.isPending || !title.trim() || !body.trim()}>{create.isPending ? '正在保存…' : '保存笔记'}</button></div>
@@ -114,6 +116,11 @@ function TranscriptVersions({ session }: { session: S['ClassSession'] }) {
         {!current && version.state === 'sealed' && <button type="button" className={pages.buttonSecondary} disabled={!app.online || adopt.isPending} onClick={() => adopt.mutate(version)} data-testid={`adopt-transcript-${version.id}`}>{version.kind === 'retranscription' ? '采用此版本' : '切回此版本'}</button>}
       </li>; })}</ul>
       {notice && <p role="status" className={pages.small} data-testid="transcript-notice">{notice}</p>}
+      {candidate && !adopted && <div style={{ marginTop: 12, overflowX: 'auto' }} data-testid="transcript-preview">
+        <p className={pages.small}>这节课没有更早的转写可以对照，下面直接预览候选内容；预览不会改变采用状态。</p>
+        <table className={styles.align}><caption className={pages.srOnly}>候选转写预览</caption><thead><tr><th scope="col">时间</th><th scope="col">候选（{label(candidate)}）</th></tr></thead>
+          <tbody>{(right.data?.items ?? []).map(item => <tr key={item.id}><td>{formatMs(item.start_ms)}</td><td>{item.text}</td></tr>)}</tbody></table>
+      </div>}
       {candidate && adopted && candidate.id !== adopted.id && <div style={{ marginTop: 12, overflowX: 'auto' }}>
         <table className={styles.align} data-testid="transcript-compare"><caption className={pages.srOnly}>按时间对照两个转写版本</caption>
           <thead><tr><th scope="col">时间</th><th scope="col">当前采用（{label(adopted)}）</th><th scope="col">候选（{label(candidate)}）</th></tr></thead>
@@ -139,6 +146,8 @@ function Retranscribe({ session }: { session: S['ClassSession'] }) {
   const [prepared, setPrepared] = useState<{ plan: S['GenerationPlan']; request: S['GenerationPlanRequest'] } | null>(null);
   const plan = prepared?.plan ?? null;
   const [sourceChanged, setSourceChanged] = useState(false);
+  // A lost or ambiguous execute reply: the outcome is unconfirmed, the plan and key are kept for a same-key replay.
+  const [unconfirmed, setUnconfirmed] = useState(false);
   const change = <T,>(setter: (value: T) => void) => (value: T) => { setter(value); setPrepared(null); setSourceChanged(false); };
   const [refusal, setRefusal] = useState<{ code: string; text: string } | null>(null);
   const prepareKey = useRef<{ fingerprint: string; key: string } | null>(null);
@@ -172,9 +181,11 @@ function Retranscribe({ session }: { session: S['ClassSession'] }) {
         confirm_original_snapshot: original, confirm_partial_scope: current.request.accept_partial_scope }, executeKey.current.key);
     },
     onMutate: () => setRefusal(null),
-    onSuccess: () => { executeKey.current = null; setPrepared(null); setSourceChanged(false); void invalidate(); },
+    onSuccess: () => { executeKey.current = null; setPrepared(null); setSourceChanged(false); setUnconfirmed(false); void invalidate(); },
     onError: error => {
-      if (answered(error)) executeKey.current = null;
+      if (!answered(error)) { setUnconfirmed(true); void tasks.refetch(); return; }
+      executeKey.current = null;
+      setUnconfirmed(false);
       if (error instanceof ApiClientError && error.code === 'SOURCE_CHANGED') { setSourceChanged(true); return; }
       showError(error);
     },
@@ -185,6 +196,8 @@ function Retranscribe({ session }: { session: S['ClassSession'] }) {
     <p className={`${pages.small} ${pages.muted}`}>用已保存的原音重新识别，结果是新的转写候选，不会自动采用。开发预览只使用合成结果，不会调用真实服务。</p>
     <p className={pages.small} data-testid="retranscribe-audio">{audio === 'expired' ? '原音已过期，服务端会拒绝重新转写。' : audio === 'in_period' ? `原音保留至 ${session.audio_expires_at!.slice(0, 10)}。` : '原音期限未知。'}</p>
     <form className={pages.form} style={{ maxWidth: 'none' }} onSubmit={event => { event.preventDefault(); prepare.mutate(); }}>
+      {/* Inputs are locked while a plan is prepared or submitted, so the confirmation always matches them. */}
+      <fieldset disabled={prepare.isPending || execute.isPending || unconfirmed} className={pages.stack} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
       <fieldset className={pages.row} style={{ border: 0, padding: 0, margin: 0 }}><legend className={pages.fieldLegend}>范围</legend>
         <label><input type="radio" name="rt-scope" checked={scope === 'all'} onChange={() => change(setScope)('all')} /> 整节课</label>
         <label><input type="radio" name="rt-scope" checked={scope === 'range'} onChange={() => change(setScope)('range')} /> 时间范围</label>
@@ -195,6 +208,7 @@ function Retranscribe({ session }: { session: S['ClassSession'] }) {
       </div>}
       <label className={pages.small}><input type="checkbox" checked={acceptPartial} onChange={event => change(setAcceptPartial)(event.target.checked)} /> 原音有缺失分片时，同意只按已有部分重新转写</label>
       <div><button type="submit" className={pages.buttonSecondary} disabled={!app.online || prepare.isPending || rangeInvalid}>{prepare.isPending ? '正在准备…' : '准备重新转写'}</button></div>
+      </fieldset>
     </form>
     {refusal && <div className={`${pages.banner} ${refusal.code === 'QUOTA_SESSION_EXCEEDED' ? pages.bannerWarning : pages.bannerDanger}`} role="alert" data-testid="retranscribe-refusal" data-code={refusal.code}>
       <div><strong>{refusal.code === 'QUOTA_SESSION_EXCEEDED' ? '待审批' : '未提交'}</strong>：{refusal.text}</div></div>}
@@ -209,7 +223,10 @@ function Retranscribe({ session }: { session: S['ClassSession'] }) {
           <dt>有效期至</dt><dd>{plan.expires_at.slice(0, 16).replace('T', ' ')}</dd>
           {prepared!.request.accept_partial_scope && <><dt>缺失分片</dt><dd className={pages.warning}>已同意按已有部分重新转写</dd></>}
         </dl>
-        {sourceChanged ? <div className={`${pages.banner} ${pages.bannerWarning}`} role="alert" data-testid="retranscribe-source-changed"><div className={pages.stack}>
+        {unconfirmed ? <div className={`${pages.banner} ${pages.bannerWarning}`} role="alert" data-testid="retranscribe-unconfirmed"><div className={pages.stack}>
+          <span><strong>提交结果待确认</strong>：没有收到服务端的明确答复，这次可能已经提交。请先查看下方任务列表；需要时用同一操作再确认一次，不会重复提交。</span>
+          <div><button type="button" className={pages.buttonSecondary} disabled={!app.online || execute.isPending} onClick={() => execute.mutate({ current: prepared!, original: executeKey.current?.intent.endsWith(':true') ?? false })}>用同一操作再确认</button></div></div></div>
+          : sourceChanged ? <div className={`${pages.banner} ${pages.bannerWarning}`} role="alert" data-testid="retranscribe-source-changed"><div className={pages.stack}>
           <span>原音在准备后有变化（例如又有分片上传完成）。可以重新准备，或明确选择按准备时冻结的原音提交。</span>
           <div className={pages.row}><button type="button" className={pages.buttonSecondary} onClick={() => prepare.mutate()}>重新准备</button>
             <button type="button" className={pages.buttonSecondary} disabled={!app.online || execute.isPending} onClick={() => execute.mutate({ current: prepared!, original: true })}>按准备时的原音提交</button></div></div></div>
@@ -246,6 +263,7 @@ function RetranscribeTask({ task, retried }: { task: S['Task']; retried: boolean
       <strong>{TASK_STATE_LABEL[task.state]}</strong>
       <p>{task.created_at.slice(0, 16).replace('T', ' ')}{task.parent_task_id ? ' · 重试' : ''}{task.may_have_charged && task.state !== 'succeeded' ? ' · 可能已产生费用' : ''}</p>
       {task.state === 'unknown' && <p className={pages.warning}>结果未知：不会自动重试。请先核对；确需重试时必须确认可能重复计费。</p>}
+      {task.state === 'failed' && task.provider_outcome === 'succeeded' && task.error_code === 'AUDIO_DELETED' && <p className={pages.warning}>识别已完成，但原音在完成前被删除或撤销，结果没有发布；费用记录保留。</p>}
       {retried && <p className={pages.small}>已有重试任务，请查看上方的新任务。</p>}
       {result && <p role="status" className={pages.small}>{result}</p>}
       {retryError && <p role="alert" className={pages.error}>{retryError}</p>}

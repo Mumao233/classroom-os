@@ -207,18 +207,24 @@ function CardDeck({ doc, revision, cards }: { doc: Doc; revision: Revision; card
   const [revealed, setRevealed] = useState(false);
   const marks = useMarks(doc.class_session_id);
   const card = cards[Math.min(index, cards.length - 1)];
-  const noteOf = (item: S['ReviewCard']) => `复习卡片：${item.title}`;
+  // A card is identified by its position in this immutable revision (titles may repeat).
+  const position = Math.min(index, cards.length - 1);
+  const noteOf = (at: number) => `复习卡片 #${at + 1}：${cards[at].title}`;
   // Marked state is per card of this revision: restored from existing marks, updated only for the card marked.
   const [marked, setMarked] = useState<ReadonlySet<string>>(new Set());
-  const markedHere = marked.has(noteOf(card)) || (marks.data?.items ?? []).some(item => item.kind === 'unclear' && item.anchor.kind === 'review_revision' && item.anchor.revision_id === revision.id && item.note === noteOf(card));
+  const markedHere = marked.has(noteOf(position)) || (marks.data?.items ?? []).some(item => item.kind === 'unclear' && item.anchor.kind === 'review_revision' && item.anchor.revision_id === revision.id && item.note === noteOf(position));
+  // One key per card-mark intent, reused for an ambiguous retry until success or a definitive rejection.
+  const markKeys = useRef(new Map<number, string>());
   const typeLabel: Record<S['ReviewCard']['type'], string> = { concept: '概念', derivation: '推导', example: '例题', pitfall: '易错点' };
   const mark = useMutation({
     mutationFn: async () => {
       const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(revision.body_markdown)));
       const content = [...digest].map(byte => byte.toString(16).padStart(2, '0')).join('');
-      return app.api.createMark(doc.class_session_id, { kind: 'unclear', note: noteOf(card), anchor: { kind: 'review_revision', document_id: doc.id, revision_id: revision.id, content_sha256: content } });
+      if (!markKeys.current.has(position)) markKeys.current.set(position, crypto.randomUUID());
+      return app.api.createMark(doc.class_session_id, { kind: 'unclear', note: noteOf(position), anchor: { kind: 'review_revision', document_id: doc.id, revision_id: revision.id, content_sha256: content } }, markKeys.current.get(position));
     },
-    onSuccess: mark => { setMarked(previous => new Set([...previous, mark.note])); void invalidate(); void marks.refetch(); },
+    onSuccess: mark => { markKeys.current.delete(position); setMarked(previous => new Set([...previous, mark.note])); void invalidate(); void marks.refetch(); },
+    onError: error => { if (answered(error)) markKeys.current.delete(position); void marks.refetch(); },
   });
   const go = (next: number) => { setIndex(next); setRevealed(false); };
   return <section className={pages.panel} aria-labelledby="cards-heading" data-testid="card-deck">
@@ -264,7 +270,7 @@ function SourcePanel({ revision, session, classId }: { revision: Revision; sessi
               const resolved = resolveSource(ref, { segments: segments.data ?? [], slides: slides.data?.items ?? [], marks: marks.data?.items ?? [] }, snapshot.data.created_at);
               return <div key={`${ref.kind}-${ref.id}-${index}`} className={`${styles.sourceItem} ${resolved.state !== 'current' ? styles.changed : ''}`} data-source-state={resolved.state} data-testid="source-item">
                 <p style={{ margin: 0 }}><span className={styles.sourceTag}>{resolved.label}</span>{resolved.startMs !== null && <span className={pages.small}>{formatMs(resolved.startMs)}</span>}</p>
-                {resolved.state === 'current' ? <p style={{ margin: '4px 0 0' }}>{resolved.text}</p>
+                {resolved.state === 'current' ? <p style={{ margin: '4px 0 0' }}>{resolved.text}{ref.kind === 'slide_version' && <span className={`${pages.small} ${pages.muted}`}>（图片内容未加载：开发预览不读取课件原图，只显示标题和时间）</span>}</p>
                   : resolved.state === 'changed' ? <p className={pages.warning} style={{ margin: '4px 0 0' }}>{ref.kind === 'mark' ? '标记在生成后被修改过，生成时的内容暂不可读；不会用修改后的内容代替。' : '来源已更新，生成时使用的原版本暂不可读；不会用新版本代替。'}</p>
                     : <p className={pages.warning} style={{ margin: '4px 0 0' }}>{ref.kind === 'slide_version' ? '课件图片当前不可用（已移除或离线缺失）。' : '来源当前不可用。'}</p>}
               </div>;
@@ -336,8 +342,11 @@ function PersonalEditor({ doc, basis, onSaved, onConflict }: { doc: Doc; basis: 
     <div className={pages.sectionHead}><h2 id="personal-heading">个人稿</h2>
       {!open && <button type="button" className={pages.buttonSecondary} onClick={start} disabled={!app.online} data-testid="edit-personal">{body ? '继续编辑草稿' : '基于当前版本写个人稿'}</button>}</div>
     {open && <form className={pages.form} style={{ maxWidth: 'none' }} onSubmit={event => { event.preventDefault(); save.mutate(); }}>
+      {/* Locked while saving, so nothing typed after submitting can be lost when the draft is cleared. */}
+      <fieldset disabled={save.isPending} className={pages.stack} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
       <div className={pages.field}><label htmlFor="personal-body">正文</label><textarea id="personal-body" value={body} maxLength={120000} onChange={event => setBody(event.target.value)} /></div>
       <div className={pages.field}><label htmlFor="personal-note">备注（可选）</label><textarea id="personal-note" value={note} maxLength={12000} style={{ minHeight: 60 }} onChange={event => setNote(event.target.value)} /></div>
+      </fieldset>
       <p className={`${pages.small} ${pages.muted}`} data-testid="draft-base">草稿基于：{meta?.content ? '开始编辑时查看的版本' : '空白'}（资料版本 {meta?.revision ?? doc.revision}）。草稿只保存在本页面会话中，离开页面再回来仍在；保存后成为新的个人版本，不覆盖采用版本和 AI 候选。</p>
       {conflicted && <div className={`${pages.banner} ${pages.bannerWarning}`} role="alert" data-testid="draft-conflict"><div className={pages.stack}><span>保存时资料已在其他地方更新，这次没有生效；提交的内容已另存在版本列表中。</span>
         <div><button type="button" className={pages.buttonSecondary} onClick={rebase}>基于最新版本继续编辑</button></div></div></div>}

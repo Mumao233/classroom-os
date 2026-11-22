@@ -153,7 +153,13 @@ export function handleReview(store: ReviewStore, host: ReviewHost, h: ReviewHelp
       host.addDocument(doc);
       return ok(doc, 201);
     });
-    case 'GET /review-documents/:id': { const doc = findDocument(id); return doc ? ok(project(doc)) : notFound(); }
+    case 'GET /review-documents/:id': {
+      const doc = findDocument(id); if (!doc) return notFound();
+      // An exact-revision read is served only for the current revision (history is not kept by the Mock).
+      const exact = query.get('revision');
+      if (exact !== null && (!/^[1-9][0-9]*$/.test(exact) || Number(exact) !== doc.revision)) return conflict(doc);
+      return ok(project(doc));
+    }
     case 'PATCH /review-documents/:id': return h.idempotent(key, `review-patch:${id}`, body, () => {
       const doc = findDocument(id)!;
       if (!only(body, ['base_revision', 'title', 'understood']) || !positive(body.base_revision) || ('title' in body && (typeof body.title !== 'string' || body.title.length > 200 || body.title.trim().length === 0))
@@ -193,8 +199,8 @@ export function handleReview(store: ReviewStore, host: ReviewHost, h: ReviewHelp
       const target = store.revisions.find(item => item.id === body.revision_id && item.document_id === id);
       if (!target) return h.error(400, 'VALIDATION_FAILED', '版本不属于这份资料');
       if (body.base_revision !== doc.revision) return conflict(doc);
-      // Every AI revision other than the adopted one stays a candidate (a previously adopted one returns to the list).
-      const candidates = store.revisions.filter(item => item.document_id === id && item.kind === 'ai_candidate' && item.id !== target.id).map(item => item.id);
+      // Only AI revisions generated after the adopted one remain pending candidates; older ones stay listed (and adoptable) as history.
+      const candidates = store.revisions.filter(item => item.document_id === id && item.kind === 'ai_candidate' && item.id !== target.id && item.created_at > target.created_at).map(item => item.id);
       return ok(project(save(doc, { adopted_revision_id: target.id, candidate_revision_ids: candidates })));
     });
     case 'PATCH /questions/:id': return h.idempotent(key, `question-patch:${id}`, body, () => {

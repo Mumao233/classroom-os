@@ -43,7 +43,7 @@ export function revokeMockClassroom(classId: string) { return mockAccount ? back
 export function setMockManifestDev(value: { pageSize?: number | null; failContinuations?: boolean }) { return mockAccount ? backend.setManifestDev(mockAccount, value) : null; }
 
 /** PR-10b development panel: retranscription refusals (original audio expired/deleted, session or month quota). */
-export function setMockRetranscribe(value: { classId?: string; audio?: 'ok' | 'expired' | 'deleted'; quota?: 'ok' | 'session' | 'month'; approve?: boolean }) { return mockAccount ? backend.setRetranscribeDev(mockAccount, value) : null; }
+export function setMockRetranscribe(value: { classId?: string; audio?: 'ok' | 'expired' | 'deleted'; quota?: 'ok' | 'session' | 'month'; approve?: boolean; approvePlan?: string; approveTask?: string }) { return mockAccount ? backend.setRetranscribeDev(mockAccount, value) : null; }
 
 (globalThis as { __classroomMock?: unknown }).__classroomMock = { bump: bumpMockRecord, advanceTask: advanceMockTask, finishAsr: finishMockAsr, manifestDev: setMockManifestDev, retranscribe: setMockRetranscribe };
 function viteAsset(request: Request) {

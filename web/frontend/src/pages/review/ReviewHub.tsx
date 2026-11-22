@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, type ReactNode } from 'react';
 import { Link, useLocation, useSearchParams } from 'react-router';
 import { useMutation } from '@tanstack/react-query';
 import type { components } from '../../generated/openapi';
@@ -17,7 +17,7 @@ export const docState = (doc: Doc) => doc.adopted_revision_id ? (undecidedCandid
  * UI-REVIEW-01/02/03: task-first entry (continue / needs a decision / unresolved) above the full
  * library. Filters live in the URL so returning from a document restores the same view.
  */
-export function ReviewHub() {
+export function ReviewHub({ notice }: { notice?: ReactNode } = {}) {
   const location = useLocation();
   const [params, setParams] = useSearchParams();
   const filters = parseFilters(params);
@@ -30,6 +30,8 @@ export function ReviewHub() {
   const memory = useReadingMemory();
   const sessionList = useMemo(() => sessions.data?.items ?? [], [sessions.data]);
   const questions = useQuestionsFor(sessionList.map(item => item.id));
+  // "Everything understood" is claimed only after the class list and every question read succeeded.
+  const questionsComplete = sessions.isSuccess && !questions.pending && !questions.error;
   const sessionById = useMemo(() => new Map(sessionList.map(item => [item.id, item])), [sessionList]);
   // Archived courses keep their documents: they stay in the filters and labels.
   const allCourses = useMemo(() => [...(courses.data?.items ?? []), ...(archived.data?.items ?? [])].filter((item, index, list) => list.findIndex(other => other.id === item.id) === index), [courses.data, archived.data]);
@@ -44,6 +46,7 @@ export function ReviewHub() {
   return <main id="main-content" className={styles.page}>
     <PageHeading title="复习" detail="先处理需要你决定的内容，完整资料库在下方。" focusKey="review" />
     <DataSourceNote />
+    {notice}
     <OfflineBanner scope="复习资料只读显示已加载的内容；" />
     {all.isError && !all.data ? <QueryError error={all.error} retry={() => void all.refetch()} /> : all.isPending ? <Loading label="正在读取复习资料…" /> : <>
       <div className={pages.lowerGrid}>
@@ -61,7 +64,8 @@ export function ReviewHub() {
       </div>
       <section className={pages.panel} aria-labelledby="hub-unresolved"><h2 id="hub-unresolved">未解决</h2>
         <p className={`${pages.small} ${pages.muted}`}>尚未标记为已理解的资料和疑问。“已理解”只由你手动标记。</p>
-        {tasks.unresolvedDocs.length === 0 && tasks.unresolvedQuestions.length === 0 ? <Empty title="没有未解决的内容" description="全部资料和疑问都已标记为已理解。" /> :
+        {tasks.unresolvedDocs.length === 0 && tasks.unresolvedQuestions.length === 0 ? (questionsComplete ? <Empty title="没有未解决的内容" description="全部资料和疑问都已标记为已理解。" />
+          : sessions.isError || questions.error ? <p className={`${pages.small} ${pages.warning}`}>部分疑问暂时无法读取，不能确认是否都已理解。</p> : <Loading label="正在读取疑问…" />) :
           <ul className={pages.list} data-testid="unresolved-list">
             {tasks.unresolvedDocs.map(doc => <li key={doc.id} className={pages.listItem}><div><strong>{doc.title || '未命名'}</strong><p>{kindLabel[doc.kind]} · {where(doc.class_session_id)}</p></div><Link to={`/review/items/${doc.id}`} state={{ from }}>阅读</Link></li>)}
             {tasks.unresolvedQuestions.map(question => <QuestionRow key={question.id} question={question} where={where(question.class_session_id)} />)}

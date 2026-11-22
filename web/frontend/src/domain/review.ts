@@ -100,8 +100,8 @@ export function narrowFilters(current: LibraryFilters, change: Partial<LibraryFi
 /** Everything the reader displays for a revision, as deterministic text for comparison (body, sections, cards, note). */
 export function revisionText(revision: Revision): string {
   const parts = [revision.body_markdown];
-  for (const section of revision.structured_content?.notes ?? []) parts.push(`【小节】${section.title}`, section.body, ...(section.supplement ? [`补充：${section.supplement}`] : []), ...(section.missing.length ? [`缺失：${section.missing.join('；')}`] : []));
-  for (const card of revision.structured_content?.cards ?? []) parts.push(`【卡片·${card.type}】${card.title}`, `问：${card.front}`, `答：${card.back}`, ...(card.supplement ? [`补充：${card.supplement}`] : []), ...(card.missing.length ? [`缺失：${card.missing.join('；')}`] : []));
+  for (const section of revision.structured_content?.notes ?? []) parts.push(`【小节】${section.title}`, section.body, ...(section.supplement ? [`补充：${section.supplement}`] : []), ...(section.source_ids.length ? [`来源标签：${section.source_ids.join(' ')}`] : []), ...(section.missing.length ? [`缺失：${section.missing.join('；')}`] : []));
+  for (const card of revision.structured_content?.cards ?? []) parts.push(`【卡片·${card.type}】${card.title}`, `问：${card.front}`, `答：${card.back}`, ...(card.supplement ? [`补充：${card.supplement}`] : []), ...(card.english || card.english_meaning ? [`英文：${card.english} ${card.english_meaning}`.trim()] : []), ...(card.source_ids.length ? [`来源标签：${card.source_ids.join(' ')}`] : []), ...(card.missing.length ? [`缺失：${card.missing.join('；')}`] : []));
   if (revision.personal_note) parts.push(`【备注】${revision.personal_note}`);
   return parts.join('\n');
 }
