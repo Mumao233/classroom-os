@@ -79,3 +79,7 @@
 | `21447221ddbc4e94` | `B564A2DA9EF9BC537FE2D72871DF4661E7985ACF6268A3D89F571FCD9B36D2EC` | `844474A56083922F276E4574DBE5F941C4298292626CEA5ACEC28999BADBBA3C` | 3,332 |
 
 最后一轮删除后 C: 可用 26,489,393,152 字节。03:58 PST 核实 broker 正在运行且队列为空，本轮没有移动已入队的任务。真实 DashScope / Filetrans 调用均为 0。
+
+## 2026-11-22 HTTP 0.3.0 合入与复验
+
+在 06c 工作树执行 `git merge --no-ff --no-edit --no-autostash origin/main`。merge 提交为 `370bd0ebc7124c3fde1b84e37e9498b2ea7515a9`，双亲为 `5915593e06c09cd7fc050ef230d7117b26788287` 和 `a0f5b4becfdb8bc35c3d5d0bac71a6181a04e553`。Git 自动合并 HTTP 入口，未发生冲突。冻结契约、前端和清单读取沿用主线 0.3.0。

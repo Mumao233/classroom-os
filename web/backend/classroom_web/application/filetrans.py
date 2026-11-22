@@ -102,7 +102,9 @@ class FiletransService:
             raise AuthRejected('GONE', 410) from None
         except (AuthorizationDenied, InactiveOwner):
             raise AuthRejected() from None
-        except QuotaExceeded:
+        except QuotaExceeded as error:
+            if error.resource == 'retranscribe_month_ms':
+                raise AuthRejected('QUOTA_MONTH_EXCEEDED', 409) from None
             raise AuthRejected('QUOTA_EXCEEDED', 409) from None
         except BillingBlocked:
             raise AuthRejected('BUDGET_BLOCKED', 409) from None

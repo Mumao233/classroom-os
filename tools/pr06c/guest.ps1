@@ -68,6 +68,7 @@ if ($Mode -ne 'legacy') {
     Gate 'offline-deps' { & $python -I -X utf8 -B -m pip install --disable-pip-version-check --no-index --find-links $wheels --target "$work/deps" -r automation/validation-requirements.txt Pillow==13.0.0 }
     Gate 'loopback-guard' { & $python -I -X utf8 -B tools/pr06c/write_guard.py "$work/guard/sitecustomize.py" }
     if ($report.steps['offline-deps'] -eq 0 -and $report.steps['loopback-guard'] -eq 0) {
+        Gate 'frozen-contracts' { & $python -I -X utf8 -B tools/overnight/check_contracts.py --deps "$work/deps" --output "$out/contracts.json" }
         if ($Mode -eq 'targeted') {
             $env:PYTHONPATH = "$work/deps"
             Gate 'targeted' { & $python -X utf8 -B tools/pr06c/run_targeted.py --deps "$work/deps" --guard "$work/guard/sitecustomize.py" --output "$out/targeted" }
@@ -75,7 +76,6 @@ if ($Mode -ne 'legacy') {
         } else {
             $front = Join-Path $root 'web/frontend'
             $null = New-Item -ItemType Junction -Path "$front/node_modules" -Target "$primary/web/frontend/node_modules"
-            Gate 'frozen-contracts' { & $python -I -X utf8 -B tools/overnight/check_contracts.py --deps "$work/deps" --output "$out/contracts.json" }
             Gate 'web-backend-full' { & $python -I -X utf8 -B tools/pr07b/run_combined.py --root $root --deps "$work/deps" --auth-browser --pytest-loopback-guard "$work/guard/sitecustomize.py" --timeout 2100 }
         }
     } else { Record $Mode 124 }

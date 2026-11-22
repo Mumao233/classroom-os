@@ -28,7 +28,9 @@ class BillingBlocked(Exception):
 
 
 class QuotaExceeded(BillingBlocked):
-    pass
+    def __init__(self, *, resource):
+        super().__init__('QUOTA_EXCEEDED')
+        self.resource = resource
 
 
 class UsageConflict(Exception):

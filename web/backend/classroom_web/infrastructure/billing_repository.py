@@ -141,7 +141,7 @@ class PgBillingRepository:
                 resource=resource, start=start).one()
             quantity = request.maximum_units['audio_duration_ms'] if resource.endswith('_ms') else 1
             if self._quota_used(row['id']) + quantity > row['limit_value']:
-                raise QuotaExceeded('QUOTA_EXCEEDED')
+                raise QuotaExceeded(resource=resource)
             rows.append((row, quantity))
         return rows
 

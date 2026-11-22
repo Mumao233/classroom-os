@@ -54,7 +54,8 @@ class PgFiletransRepository(PgFiletransSources):
         try:
             self.verify(row)
         except AuthRejected as error:
-            if error.code in ('GONE', 'SOURCE_UNAVAILABLE', 'SOURCE_CHANGED', 'CONSENT_REQUIRED', 'SERVICE_DISABLED'):
+            if error.code in ('GONE', 'AUDIO_DELETED', 'AUDIO_EXPIRED', 'SOURCE_UNAVAILABLE',
+                              'SOURCE_CHANGED', 'CONSENT_REQUIRED', 'SERVICE_DISABLED'):
                 return 'unavailable'
             raise
         return 'changed' if self.source_changed(row) else 'unchanged'
@@ -65,7 +66,8 @@ class PgFiletransRepository(PgFiletransSources):
         except AuthRejected as error:
             # The original listed chunks have passed verify(). Newly available
             # or newly inaccessible material can change the current selection.
-            if error.code in ('GONE', 'SOURCE_UNAVAILABLE', 'CONSENT_REQUIRED', 'CAPACITY_EXCEEDED'):
+            if error.code in ('GONE', 'AUDIO_DELETED', 'AUDIO_EXPIRED', 'SOURCE_UNAVAILABLE',
+                              'CONSENT_REQUIRED', 'CAPACITY_EXCEEDED'):
                 return True
             raise
         return _hash(current) != row['audio_manifest_sha256']
@@ -101,7 +103,7 @@ class PgFiletransRepository(PgFiletransSources):
         expiry = min(now + timedelta(minutes=10),
                      min_epoch_expiry(manifest['chunks']))
         if expiry <= now:
-            raise FiletransRejected('GONE', 410, 'Cloud audio in the selection has expired.')
+            raise AuthRejected('AUDIO_EXPIRED', 410)
         manifest_hash = _hash(manifest)
         plan_hash = _hash(dict(audio_manifest_sha256=manifest_hash, request=request, config=config))
         identity = uuid4()
@@ -126,8 +128,7 @@ class PgFiletransRepository(PgFiletransSources):
               AND NOT EXISTS(SELECT FROM filetrans_runs r WHERE r.approval_id=a.id)
             ORDER BY a.created_at,a.id LIMIT 1""", plan=row['id'], original=original).scalar_one_or_none()
         if approval is None:
-            raise FiletransRejected('QUOTA_EXCEEDED', 409,
-                'This classroom has used its Filetrans operation. An additional operation requires approval.')
+            raise AuthRejected('QUOTA_SESSION_EXCEEDED', 409)
         return approval
 
     def _reserve(self, row, principal, price_id, approval, *, key, original=None, attempt=None):

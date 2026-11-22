@@ -27,12 +27,12 @@ class PgFiletransSources(PgCaptureRepository):
         if audio and self.execute("""SELECT EXISTS(SELECT FROM deletion_requests
                 WHERE owner_id=:owner AND scope_type='audio' AND scope_id=:classroom)""",
                 classroom=class_id).scalar_one():
-            raise FiletransRejected('GONE', 410, 'Cloud audio for this classroom was deleted.')
+            raise AuthRejected('AUDIO_DELETED', 410)
         return classroom
 
     def policy(self, class_id):
         self.classroom(class_id)
-        policy = self.scope(class_id)
+        policy = self.scope(class_id, audio_deleted_code='AUDIO_DELETED')
         if not policy['synthetic']:
             raise AuthRejected('SERVICE_DISABLED', 503)
         return policy
@@ -77,7 +77,7 @@ class PgFiletransSources(PgCaptureRepository):
     @staticmethod
     def record(row, epoch, first, last, now):
         if row['status'] in ('delete_pending', 'delete_failed', 'deleted') or row['deleted_at'] or row['access_revoked_at']:
-            raise FiletransRejected('GONE', 410, 'Cloud audio in the selection was deleted.')
+            raise AuthRejected('AUDIO_DELETED', 410)
         if row['status'] != 'committed' or row['confirmed_at'] is None:
             return None
         if (row['kind'] != 'audio_chunk' or row['sha256'] != row['chunk_sha256']
@@ -87,7 +87,7 @@ class PgFiletransSources(PgCaptureRepository):
         expiry = min(value for value in (row['expires_at'], row['hard_expire_at'],
             epoch['hard_expire_at'], row['first_cloud_received_at'] + timedelta(days=7)) if value is not None)
         if expiry <= now:
-            raise FiletransRejected('GONE', 410, 'Cloud audio in the selection has expired.')
+            raise AuthRejected('AUDIO_EXPIRED', 410)
         if row['recovery_grant_id'] is not None or row['ingest_mode'] == 'recovery':
             if (row['granted_epoch'] != epoch['id'] or row['granted_manifest'] != epoch['manifest_sha256']
                     or row['last_seq'] < row['seq'] or row['last_sample'] < row['end_sample']):

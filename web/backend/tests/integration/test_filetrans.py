@@ -1,6 +1,7 @@
 """Frozen HTTP contract and synthetic Filetrans on isolated PostgreSQL/SeaweedFS."""
 import json
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from hashlib import sha256
 from threading import Event
 from uuid import UUID, uuid4
@@ -8,6 +9,7 @@ from uuid import UUID, uuid4
 import pytest
 import sqlalchemy as sa
 from fastapi.testclient import TestClient
+from jsonschema import Draft202012Validator, FormatChecker
 
 from classroom_web.application.filetrans import FiletransService
 from classroom_web.application.filetrans_worker import FiletransWorker
@@ -116,6 +118,27 @@ def accounting(m, identity):
             FROM quota_reservations r WHERE r.task_id=:id"""), {'id': UUID(identity)}).mappings().one()
 
 
+@contextmanager
+def no_new_admission(m):
+    query = sa.text("""SELECT
+        (SELECT count(*) FROM tasks WHERE owner_id=:owner),
+        (SELECT count(*) FROM quota_reservations WHERE owner_id=:owner),
+        (SELECT count(*) FROM task_attempts WHERE owner_id=:owner)""")
+    with m.pg.admin.connect() as c:
+        before = c.execute(query, {'owner': m.uid}).one()
+        yield
+        assert c.execute(query, {'owner': m.uid}).one() == before
+
+
+def assert_filetrans_error(response, status, code):
+    assert response.status_code == status, response.text
+    assert response.headers['cache-control'] == 'no-store'
+    body = response.json()
+    assert body['error']['code'] == code and body['error']['retryable'] is False
+    schema = {'$ref': '#/components/schemas/Error', 'components': contract()['components']}
+    Draft202012Validator(schema, format_checker=FormatChecker()).validate(body)
+
+
 def test_range_uses_durable_pcm_and_explicit_cas_adoption(filetrans, monkeypatch):
     m = filetrans
     lease, chunk = source(m)
@@ -210,7 +233,8 @@ def test_only_confirmed_chunks_and_partial_confirmation(filetrans):
     durable = prepare(m, lease, seq=1)
     assert put(m, durable).status_code == 200
     seal(m, lease, sample=32000, seq=1)
-    assert plan(m).status_code == 409
+    unavailable = plan(m)
+    assert unavailable.status_code == 409 and unavailable.json()['error']['code'] == 'SOURCE_UNAVAILABLE'
     selected = plan(m, accept_partial_scope=True)
     assert selected.status_code == 201, selected.text
     prepared = selected.json()
@@ -232,8 +256,8 @@ def test_parallel_class_limit_and_single_use_approval(filetrans):
     assert sorted(item.status_code for item in results) == [202, 409], [item.text for item in results]
     assert worker(m).run_once()
     rejected_plan = plans[next(i for i, response in enumerate(results) if response.status_code == 409)]
-    rejected = execute(m, rejected_plan)
-    assert rejected.json()['error']['code'] == 'QUOTA_EXCEEDED' and 'approval' in rejected.json()['error']['message']
+    with no_new_admission(m):
+        assert_filetrans_error(execute(m, rejected_plan), 409, 'QUOTA_SESSION_EXCEEDED')
     approval(m, rejected_plan)
     allowed = execute(m, rejected_plan)
     assert allowed.status_code == 202, allowed.text
@@ -263,7 +287,8 @@ def test_unknown_keeps_original_fee_and_explicit_retry(filetrans, outcome):
     url = BASE + f'/tasks/{original}/retry'
     confirm = dict(original_attempt_id=first['attempt_id'], reason='合成用户确认', confirm_duplicate_billing=True)
     assert m.client.post(url, json=confirm | {'confirm_duplicate_billing': False}, headers=headers(m)).status_code == 422
-    assert m.client.post(url, json=confirm, headers=headers(m)).status_code == 409
+    with no_new_admission(m):
+        assert_filetrans_error(m.client.post(url, json=confirm, headers=headers(m)), 409, 'QUOTA_SESSION_EXCEEDED')
     approval(m, prepared, original)
     with ThreadPoolExecutor(2) as pool:
         results = list(pool.map(lambda _: m.client.post(url, json=confirm, headers=headers(m)), range(2)))
@@ -300,12 +325,17 @@ def test_expiry_and_explicit_audio_deletion(filetrans):
         c.execute(sa.text("""UPDATE media_assets SET expires_at=clock_timestamp()-interval '1 second',
                     revision=revision+1,updated_at=clock_timestamp()
             WHERE id=(SELECT asset_id FROM audio_chunks WHERE id=:id)"""), {'id': UUID(chunk['id'])})
-    expired = execute(m, prepared)
-    assert expired.status_code == 410 and 'expired' in expired.json()['error']['message'], expired.text
+    preview = BASE + '/generation-plans/' + prepared['id']
+    with no_new_admission(m):
+        assert_filetrans_error(execute(m, prepared), 410, 'AUDIO_EXPIRED')
+        assert_filetrans_error(plan(m), 410, 'AUDIO_EXPIRED')
+        assert m.client.get(preview).json()['source_status'] == 'unavailable'
     deletion_id = delete(m, 'audio', m.classroom.id)
     assert deletion_id
-    deleted = plan(m)
-    assert deleted.status_code == 410 and 'deleted' in deleted.json()['error']['message'], deleted.text
+    with no_new_admission(m):
+        assert_filetrans_error(plan(m), 410, 'AUDIO_DELETED')
+        assert_filetrans_error(execute(m, prepared), 410, 'AUDIO_DELETED')
+        assert m.client.get(preview).json()['source_status'] == 'unavailable'
 
 
 def test_quota_and_kill_switch_block_admission_and_send(filetrans):
@@ -319,8 +349,8 @@ def test_quota_and_kill_switch_block_admission_and_send(filetrans):
                 date_trunc('month',clock_timestamp() AT TIME ZONE 'Asia/Shanghai') AT TIME ZONE 'Asia/Shanghai',
                 (date_trunc('month',clock_timestamp() AT TIME ZONE 'Asia/Shanghai')+interval '1 month') AT TIME ZONE 'Asia/Shanghai',1)"""),
             {'owner':m.uid})
-    denied = execute(m, prepared)
-    assert denied.status_code == 409 and denied.json()['error']['code'] == 'QUOTA_EXCEEDED'
+    with no_new_admission(m):
+        assert_filetrans_error(execute(m, prepared), 409, 'QUOTA_MONTH_EXCEEDED')
     with m.pg.admin.begin() as c:
         c.execute(sa.text("UPDATE quota_periods SET limit_value=8640000 WHERE owner_id=:owner"), {'owner':m.uid})
     admitted = execute(m, prepared)
@@ -369,6 +399,7 @@ def test_unready_deletion_gate_and_classroom_deletion_prevent_dispatch(filetrans
         assert not w.run_once()
     assert delete(m, 'class_session', m.classroom.id)
     w.run_once()
+    assert plan(m).json()['error']['code'] == 'GONE'
     assert m.client.get(BASE + '/tasks/' + admitted.json()['id']).status_code in (404,410)
     assert m.client.get(BASE + f'/class-sessions/{m.classroom.id}/transcript-versions').status_code == 410
 
