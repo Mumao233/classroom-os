@@ -107,6 +107,28 @@ describe('mock backend failure modes used by PR-09b pages', () => {
     expect((call('A', 'GET', `/courses/${mockIds.la}`).body as S['Course']).class_session_count).toBe(5);
   });
 
+  it('the deletion token is bound to the impact scope: a classroom moved in after the preview makes the deletion expire (revocation R1)', () => {
+    const { call } = harness();
+    const preview = call('A', 'GET', `/courses/${mockIds.mp}/deletion-preview`).body as S['DeletionPreview'];
+    const moved = items<S['ClassSession']>(call('A', 'GET', '/class-sessions', undefined, `course_id=${mockIds.la}`))[0]!;
+    expect(call('A', 'PATCH', `/class-sessions/${moved.id}`, { base_revision: moved.revision, course_id: mockIds.mp }).status).toBe(200);
+    const refused = call('A', 'POST', `/courses/${mockIds.mp}/delete`, { base_revision: 1, mode: 'cascade', confirmation_token: preview.confirmation_token });
+    expect(err(refused).code).toBe('PLAN_EXPIRED');
+    expect(call('A', 'GET', `/class-sessions/${moved.id}`).status).toBe(200);
+    // A new preview covers the new scope.
+    const again = call('A', 'GET', `/courses/${mockIds.mp}/deletion-preview`).body as S['DeletionPreview'];
+    expect(call('A', 'POST', `/courses/${mockIds.mp}/delete`, { base_revision: 1, mode: 'cascade', confirmation_token: again.confirmation_token }).status).toBe(202);
+  });
+
+  it('the deletion token also expires when a classroom moves in and back out after the preview (revocation R2)', () => {
+    const { call } = harness();
+    const preview = call('A', 'GET', `/courses/${mockIds.mp}/deletion-preview`).body as S['DeletionPreview'];
+    const moved = items<S['ClassSession']>(call('A', 'GET', '/class-sessions', undefined, `course_id=${mockIds.la}`))[0]!;
+    const inside = call('A', 'PATCH', `/class-sessions/${moved.id}`, { base_revision: moved.revision, course_id: mockIds.mp }).body as S['ClassSession'];
+    expect(call('A', 'PATCH', `/class-sessions/${moved.id}`, { base_revision: inside.revision, course_id: mockIds.la }).status).toBe(200);
+    expect(err(call('A', 'POST', `/courses/${mockIds.mp}/delete`, { base_revision: 1, mode: 'cascade', confirmation_token: preview.confirmation_token })).code).toBe('PLAN_EXPIRED');
+  });
+
   it('course materials: CAS, validation, and language change stored for later defaults only', () => {
     const { call } = harness();
     const [material] = items<S['CourseMaterial']>(call('A', 'GET', `/courses/${mockIds.la}/materials`));

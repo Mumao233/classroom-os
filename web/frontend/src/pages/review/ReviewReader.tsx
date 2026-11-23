@@ -7,7 +7,8 @@ import {
   audioState, formatMs, kindLabel, lineDiff, markdownBlocks, newestFirst, readingRevision, resolveSource, revisionRole, revisionText, roleLabel, sourceStatusText,
   type Block, type Doc, type Revision,
 } from '../../domain/review';
-import { describeError, isConflict, isTransportFailure, readableCache, ReadOnlyWhile, useAppData, useCourse, useInvalidateAccount, usePreferences } from '../../features/data';
+import { describeError, isConflict, readableCache, ReadOnlyWhile, useAppData, useCourse, useInvalidateAccount, usePreferences } from '../../features/data';
+import { personalEditorAccess } from '../../features/revocation';
 import { isDefinitiveRejection, useClassSession, useClassroomShell, useDraft, useMarks, useSlides } from '../../features/classroom';
 import { useClassSegments, useReadingMemory, useReviewDocument, useReviewRevisions, useSourceSnapshot } from '../../features/review';
 import { DataSourceNote, OfflineBanner } from '../common';
@@ -47,8 +48,9 @@ export function ReviewReader() {
   useEffect(() => { heading.current?.focus({ preventScroll: true }); }, [documentId]);
 
   const readableRevisions = readableCache(revisions);
-  // Revisions refused by the server (not merely unreachable): nothing copied from them may stay on screen.
-  const revisionsDenied = revisions.isError && !isTransportFailure(revisions.error);
+  // The personal editor (which may hold text copied from a version) opens only on readable versions: not
+  // after a refusal, and not while the re-read after one is pending.
+  const editorAccess = personalEditorAccess(revisions);
   const list = useMemo(() => [...(readableRevisions?.items ?? [])].sort(newestFirst), [readableRevisions]);
   const opening = doc ? readingRevision(doc, list) : null;
   const shown = list.find(item => item.id === selectedId) ?? opening?.revision ?? null;
@@ -125,7 +127,8 @@ export function ReviewReader() {
     <ReadOnlyWhile stale={stale}>{shown ? <ReadingArea key={shown.id} doc={doc} revision={shown} role={role!} showSources={showSources} setShowSources={setShowSources} memory={memory} session={session.data} />
       : <div className={pages.empty}><h3>还没有可阅读的版本</h3><p>生成的候选或保存的个人稿会出现在这里。</p></div>}
 
-    {revisionsDenied ? <div className={pages.empty} data-testid="editor-hidden"><h3>个人稿编辑暂不可用</h3><p>版本来源已不可访问，从版本复制的内容不再显示。你写的草稿保留在本机，恢复访问后可继续编辑。</p></div> :
+    {editorAccess === 'checking' ? <div className={pages.empty} data-testid="editor-checking"><p role="status">正在读取版本，个人稿编辑稍后可用。</p></div> :
+    editorAccess !== 'open' ? <div className={pages.empty} data-testid="editor-hidden"><h3>个人稿编辑暂不可用</h3><p>{editorAccess === 'denied' ? '版本来源已不可访问，从版本复制的内容不再显示。' : '版本暂时无法读取，从版本复制的内容不显示。'}你写的草稿保留在本机，恢复访问后可继续编辑。</p></div> :
     <PersonalEditor doc={doc} basis={shown} onSaved={revision => { setSelectedId(revision.id); setNotice({ tone: 'success', text: '个人稿已保存为新版本；采用版本和 AI 候选保持不变。' }); }}
       onConflict={() => { void document.refetch(); void revisions.refetch(); setNotice({ tone: 'warning', text: '这份资料已在其他地方更新。你提交的内容已另存为未生效的个人稿（见版本列表），编辑框里的草稿也保留；看过最新版本后，可以选择基于最新版本再保存。' }); }} />}</ReadOnlyWhile>
   </main>;

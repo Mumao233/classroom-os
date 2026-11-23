@@ -203,9 +203,30 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
     if ('icon_token' in body && !str(body.icon_token, 64)) return false;
     return true;
   }
+  /** What a scope deletion would remove right now: its courses (semester) and classrooms. */
+  function impactOf(store: Store, scope: 'semester' | 'course', id: string) {
+    const courseIds = scope === 'course' ? [id] : liveCourses(store).filter(course => course.semester_id === id).map(course => course.id);
+    const sessionIds = liveSessions(store).filter(item => courseIds.includes(item.course_id)).map(item => item.id);
+    return JSON.stringify([[...courseIds].sort(), sessionIds.sort(), moves(store, `${scope}:${id}`)]);
+  }
+  /**
+   * Moves into or out of a scope since its preview, counted per course and semester: a classroom that moved in and
+   * back out leaves the same members but may have been listed in between, so the token expires too.
+   */
+  const scopeMoves = new WeakMap<Store, Map<string, number>>();
+  const moves = (store: Store, key: string) => scopeMoves.get(store)?.get(key) ?? 0;
+  function countMove(store: Store, courseIds: string[], semesterIds: string[]) {
+    const counts = scopeMoves.get(store) ?? new Map<string, number>();
+    scopeMoves.set(store, counts);
+    const semesters = new Set([...semesterIds, ...courseIds.map(courseId => findCourse(store, courseId)?.semester_id).filter((value): value is string => typeof value === 'string')]);
+    for (const key of [...courseIds.map(courseId => `course:${courseId}`), ...[...semesters].map(semesterId => `semester:${semesterId}`)]) counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  /** The confirmation token is bound to the object's revision and its impact scope (04-CONTRACTS-FLOWS: 删除). */
+  const previewImpact = new WeakMap<S['DeletionPreview'], string>();
   function issuePreview(store: Store, scope: 'semester' | 'course', id: string, revision: number, sessionCount: number): MockReply {
     const preview: S['DeletionPreview'] = { scope_type: scope, scope_id: id, revision, class_session_count: sessionCount, media_bytes: sessionCount * 48000000, confirmation_token: `mock-confirm-${newId()}`, expires_at: new Date(Date.parse(now()) + 10 * 60000).toISOString().replace('.000Z', 'Z') };
     store.previews.set(`${scope}:${id}`, preview);
+    previewImpact.set(preview, impactOf(store, scope, id));
     return ok(preview);
   }
   function deletion(scope: 'semester' | 'course', id: string): S['Deletion'] {
@@ -214,6 +235,8 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
   function checkDeleteBody(store: Store, scope: 'semester' | 'course', id: string, current: { revision: number }, body: Record<string, unknown>): MockReply | null {
     const preview = store.previews.get(`${scope}:${id}`);
     if (!preview || preview.confirmation_token !== body.confirmation_token) return error(409, 'PLAN_EXPIRED', '删除确认已失效，请重新查看影响范围');
+    // A classroom or course moved into or out of the scope since the preview changes what would be removed.
+    if (previewImpact.get(preview) !== impactOf(store, scope, id)) return error(409, 'PLAN_EXPIRED', '删除范围已变化，请重新查看影响范围');
     if (body.base_revision !== current.revision) return error(409, 'REVISION_CONFLICT', '内容已在其他地方更新', current.revision);
     if (body.mode !== 'cascade' && body.mode !== 'move_children') return error(400, 'VALIDATION_FAILED', '删除方式无效');
     return null;
@@ -387,6 +410,7 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
         if ('semester_id' in body && !findSemester(store, String(body.semester_id))) return error(404, 'NOT_FOUND', '学期不存在');
         const conflict = cas(found, body); if (conflict) return conflict;
         const { base_revision: _ignored, ...change } = body; void _ignored;
+        if ('semester_id' in change && change.semester_id !== found.semester_id) countMove(store, [], [found.semester_id, String(change.semester_id)]);
         const next = touch({ ...found, ...change }) as Store['courses'][number];
         store.courses = store.courses.map(course => course.id === id ? next : course);
         return ok(courseView(store, next));
@@ -443,6 +467,7 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
         if ('course_id' in body && !findCourse(store, String(body.course_id))) return error(404, 'NOT_FOUND', '目标课程不存在');
         const conflict = cas(found, body); if (conflict) return conflict;
         const { base_revision: _ignored, ...change } = body; void _ignored;
+        if ('course_id' in change && change.course_id !== found.course_id) countMove(store, [found.course_id, String(change.course_id)], []);
         // started_at / capture_ended_at / flows are history and never rewritten by a move.
         const next = touch({ ...found, ...change }) as S['ClassSession'];
         store.sessions = store.sessions.map(item => item.id === id ? next : item);
