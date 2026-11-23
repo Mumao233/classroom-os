@@ -421,3 +421,19 @@ describe('PR-10b mock: fourth-round review findings', () => {
     expect(backend.advanceTask('A', task.id, 'succeeded')).toMatchObject({ state: 'failed', error_code: 'AUDIO_DELETED', result_id: null });
   });
 });
+
+describe('PR-10b mock: fifth-round review finding', () => {
+  const acquire = { device_id: 'a2000000-0000-4000-8000-000000000001', microphone_consent_version: 'm', recovery_consent_version: 'r', asr_consent_version: 'a', confirm_takeover: false, expected_lease_id: null };
+  it('a window wholly inside a reported capture gap freezes and meters nothing; a gap is never billed', () => {
+    const { backend, call } = harness();
+    const created = call('A', 'POST', '/class-sessions', { course_id: mockIds.la, title: '缺口计费检查', language: 'auto' }).body as S['ClassSession'];
+    const lease = call('A', 'POST', `/class-sessions/${created.id}/capture/acquire`, acquire).body as S['CaptureLease'];
+    backend.setDurable('A', created.id, lease.capture_epoch_id, [0, 1, 2]);
+    // 3 s recorded in three 1 s chunks; 1.0–1.5 s was lost.
+    call('A', 'POST', `/class-sessions/${created.id}/capture/stop`, { capture_epoch_id: lease.capture_epoch_id, fence_token: lease.fence_token, last_local_seq: 2, last_sample: 48_000, client_monotonic_ms: 1, manifest_sha256: 'a'.repeat(64), known_gaps: [{ start_sample: 16_000, end_sample: 24_000, reason: 'device_lost' }] });
+    expect(err(call('A', 'POST', `/class-sessions/${created.id}/generation-plans`, retranscribe({ scope: 'range', start_ms: 1_000, end_ms: 1_500, accept_partial_scope: true }))).code).toBe('SOURCE_UNAVAILABLE');
+    const whole = call('A', 'POST', `/class-sessions/${created.id}/generation-plans`, retranscribe({ accept_partial_scope: true })).body as S['GenerationPlan'];
+    expect(whole.quota_units).toBe(2_500);
+    expect(whole.audio_chunk_ids).toHaveLength(3);
+  });
+});

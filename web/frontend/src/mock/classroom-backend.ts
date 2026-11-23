@@ -665,15 +665,22 @@ function selectAudio(store: ClassroomStore, session: S['ClassSession'], from: nu
     if (epochEnd <= from || epoch.order.offset >= to) continue;
     // Only sealed epochs can be frozen; an unsealed (retired or still open) epoch leaves its part uncovered.
     if (epoch.revoked || epoch.expired || !epoch.manifest.sealed || !durable.size) { uncovered = true; continue; }
-    // A reported capture gap (other than a deliberate pause) inside the window is audio that does not exist.
-    if ((store.knownGaps.get(epoch.epochId) ?? []).some(gap => gap.reason !== 'paused' && epoch.order.offset + gap.end_sample / 16 > from && epoch.order.offset + gap.start_sample / 16 < to)) uncovered = true;
+    // Reported capture gaps are audio that does not exist: never selected or metered. Any gap other than a
+    // deliberate pause inside the window also makes the selection partial.
+    const gaps = (store.knownGaps.get(epoch.epochId) ?? []).map(gap => ({ start: epoch.order.offset + gap.start_sample / 16, end: epoch.order.offset + gap.end_sample / 16, paused: gap.reason === 'paused' }));
+    if (gaps.some(gap => !gap.paused && gap.end > from && gap.start < to)) uncovered = true;
     const count = epoch.manifest.expected_last_seq !== null ? epoch.manifest.expected_last_seq + 1 : Math.max(...durable) + 1;
     const chunkMs = Math.max(1, duration / count);
     const slice: AudioSlice = { epochId: epoch.epochId, seqs: [], missing: [], chunkMs };
     for (let seq = 0; seq < count; seq++) {
       const start = epoch.order.offset + seq * chunkMs; const end = start + chunkMs;
       if (end <= from || start >= to) continue;
-      if (durable.has(seq)) { slice.seqs.push(seq); ms += Math.min(end, to) - Math.max(start, from); } else slice.missing.push(seq);
+      if (!durable.has(seq)) { slice.missing.push(seq); continue; }
+      // Recorded time of this chunk inside the window, minus the reported gaps.
+      const recorded = recordedWithin(Math.max(start, from), Math.min(end, to), gaps);
+      if (recorded <= 0) continue;
+      slice.seqs.push(seq);
+      ms += recorded;
     }
     if (slice.seqs.length || slice.missing.length) slices.push(slice);
   }
@@ -681,6 +688,15 @@ function selectAudio(store: ClassroomStore, session: S['ClassSession'], from: nu
   if (to !== Number.MAX_SAFE_INTEGER && to > timelineEnd) uncovered = true;
   const frozen = slices.map(slice => ({ epochId: slice.epochId, seqs: slice.seqs }));
   return { slices, uncovered, digest: sha256Hex(JSON.stringify(frozen)), ms: Math.round(ms) };
+}
+
+/** Length of [from, to) not covered by any gap interval (gaps may overlap each other). */
+function recordedWithin(from: number, to: number, gaps: ReadonlyArray<{ start: number; end: number }>) {
+  if (to <= from) return 0;
+  const cuts = gaps.map(gap => [Math.max(from, gap.start), Math.min(to, gap.end)] as const).filter(([a, b]) => b > a).sort((x, y) => x[0] - y[0]);
+  let covered = 0; let cursor = from;
+  for (const [a, b] of cuts) { const start = Math.max(a, cursor); if (b > start) { covered += b - start; cursor = b; } }
+  return to - from - covered;
 }
 
 /** Whether every frozen epoch still exists and still holds each frozen chunk as durable. */
