@@ -202,6 +202,9 @@ export function createMockRuntime(options: { createVault?: () => MemoryVault } =
     if (!id) { id = crypto.randomUUID(); scriptEventIds.set(key, id); }
     return id;
   };
+  // PR-11b: the simulated server sends no captions for a stream its ASR admission refuses.
+  let admitTranscript: (streamId: string) => boolean = () => true;
+  const transcriptAdmitted = (event: ClassroomOSWebV1EventEnvelope) => (event.type !== 'transcript.partial' && event.type !== 'transcript.final') || admitTranscript(event.data.stream_id);
   const bindScriptEvent = (event: ClassroomOSWebV1EventEnvelope, scope = state.captureScope): ClassroomOSWebV1EventEnvelope => {
     if (!scope) return event;
     if (event.type === 'capture.lease_lost') return { ...event, event_id: scriptedId(`${event.type}:${event.event_id}:${scope.captureEpochId}:${scope.fenceToken}`), data: { ...event.data, class_session_id: scope.classSessionId, capture_epoch_id: scope.captureEpochId, fence_token: scope.fenceToken } };
@@ -339,15 +342,20 @@ export function createMockRuntime(options: { createVault?: () => MemoryVault } =
       if (!state.account) return false;
       // Keep the original connection reference so revocation destroys the rest of a script.
       const connection = events;
-      eventScripts[name].forEach(event => connection.emit(bindScriptEvent(event)));
+      eventScripts[name].forEach(event => { const bound = bindScriptEvent(event); if (transcriptAdmitted(bound)) connection.emit(bound); });
       return true;
     },
     runEventStep: (name: EventScriptName, index: number) => {
       const event = eventScripts[name][index];
       if (!state.account || !event) return false;
-      events.emit(bindScriptEvent(event));
+      const bound = bindScriptEvent(event);
+      if (transcriptAdmitted(bound)) events.emit(bound);
       return true;
     },
+    /** PR-11b: the simulated server's ASR admission, applied to every transcript event it delivers. */
+    setTranscriptAdmission: (admit: (streamId: string) => boolean) => { admitTranscript = admit; },
+    /** Feed and scripts share one delivery check. */
+    deliverTranscript: (event: ClassroomOSWebV1EventEnvelope) => { if (state.account && transcriptAdmitted(event)) events.emit(event); },
     /**
      * The server answered that a classroom no longer exists or is no longer accessible (for example a
      * course cascade deletion). The Mock server's deletion event for it is delivered on the account

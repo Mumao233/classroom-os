@@ -219,10 +219,13 @@ function MockWorkbenchContent({ runtime }: { runtime: ReturnType<typeof useMockR
   };
   const emitFeed = (event: ClassroomOSWebV1EventEnvelope | null) => {
     if (!event) return;
-    // The simulated server sends no captions for a new stream while the platform ASR switch is off.
-    if ((event.type === 'transcript.partial' || event.type === 'transcript.final') && !mockAsrAdmits(event.data.stream_id)) return;
+    // Transcript events pass the simulated server's ASR admission, like scripted ones.
+    if (event.type === 'transcript.partial' || event.type === 'transcript.final') { runtime.deliverTranscript(event); return; }
     runtime.getEventClient().emit(event);
   };
+  // One admission rule for the feed and the event scripts: the platform ASR switch (PR-11b).
+  const { setTranscriptAdmission } = runtime;
+  useEffect(() => { setTranscriptAdmission(mockAsrAdmits); }, [setTranscriptAdmission]);
   const feedClassId = active ? boundClassId : null;
   // Durable receipts, including ones that arrive after the stop, reach the Mock server per epoch.
   const durableUploads = runtime.state.durableUploads;

@@ -90,6 +90,7 @@ function SwitchDialog({ base, edits, onClose, onSaved }: { base: S['AdminSwitche
   const write = useAdminWrite<S['AdminSwitchesPatch'], S['AdminSwitches']>({
     operationId: 'adminUpdateSwitches', targetId: () => null,
     send: (api, body, key, token) => api.adminUpdateSwitches(body, key, token),
+    apply: (client, accountKey, saved) => client.setQueryData<S['AdminSwitches']>(['account', accountKey, 'admin', 'switches'], cached => !cached || cached.revision <= saved.revision ? saved : cached),
     onSuccess: onSaved,
   });
   const changes = switchKeys.filter(key => key in edits && draft[key] !== base[key]);
@@ -106,7 +107,9 @@ function Audit() {
   const audit = useAdminAudit();
   const users = useAdminUsers();
   const emails = useMemo(() => new Map((readableCache(users)?.items ?? []).map(user => [user.id, user.email])), [users]);
-  const who = (id: string | null) => id === null ? '—' : emails.get(id) ?? '已不在列表中的账号';
+  // "No longer listed" only after a complete, successful users read; otherwise the recorded ID is shown.
+  const short = (id: string) => id.slice(0, 8);
+  const who = (id: string | null) => id === null ? '—' : emails.get(id) ?? (users.status === 'success' ? `已不在列表中的账号（${short(id)}）` : `账号 ${short(id)}`);
   // Rows stay visible only while the latest failure (if any) was the transport; a denial hides them all.
   const items = readableCache(audit)?.pages.flatMap(page => page.items) ?? [];
   return <section className={styles.panel} aria-labelledby="admin-audit-title">

@@ -127,7 +127,17 @@ export function createAdminBackend(host: AdminHost, accountUsers: S['User'][]) {
     ({ status, body: { error: { code, message, request_id: host.newId(), retryable: false, retry_after_seconds: null, current_revision: currentRevision, conflict_id: null, task_id: null } } });
   const ok = (body: unknown, status = 200): AdminReply => ({ status, body });
   const touch = <T extends { revision: number; updated_at: string }>(value: T): T => ({ ...value, revision: value.revision + 1, updated_at: host.now() });
-  function applyGates(quota: S['QuotaView']): S['QuotaView'] { return { ...quota, asr_enabled: switches.asr_enabled, ai_enabled: switches.ai_enabled }; }
+  /** billing_state() over the current month of the platform ledger (the same numbers the usage page shows). */
+  function platformState(): S['QuotaView']['platform_billing_state'] {
+    const month = usage.get(current);
+    if (!month) return 'normal';
+    const budget = BigInt(month.budget_microyuan);
+    const risk = BigInt(month.fixed_and_accrued_microyuan) + BigInt(month.settled_microyuan) + BigInt(month.reserved_microyuan) + BigInt(month.unknown_microyuan);
+    if (budget === 0n || risk >= budget) return 'blocked100';
+    if (risk * 100n >= budget * 80n) return 'warning80';
+    return risk * 100n >= budget * 60n ? 'warning60' : 'normal';
+  }
+  function applyGates(quota: S['QuotaView']): S['QuotaView'] { return { ...quota, asr_enabled: switches.asr_enabled, ai_enabled: switches.ai_enabled, platform_billing_state: platformState() }; }
 
   /**
    * Cursor = the id of the last record returned, scoped to the list. Records added before it (newer audit
@@ -163,8 +173,10 @@ export function createAdminBackend(host: AdminHost, accountUsers: S['User'][]) {
   }
 
   /** Replay first (a lost reply is recovered with the same key), then the single-use proof, then the write. */
-  function write(actorId: string, operationId: AdminOperationId, targetId: string | null, key: string | null, reauth: string | null, body: Record<string, unknown>, secret: boolean, run: () => AdminReply): AdminReply {
+  function write(actorId: string, operationId: AdminOperationId, targetId: string | null, key: string | null, reauth: string | null, body: Record<string, unknown>, secret: boolean, run: () => AdminReply, replayed?: (stored: AdminReply) => AdminReply): AdminReply {
     if (!isUuid(key)) return fail(422, 'VALIDATION_FAILED', '缺少幂等键');
+    // The header is required on every write, a replay included (it is only not re-consumed then).
+    if (!reauth || !/^[A-Za-z0-9_-]{43,256}$/.test(reauth)) return fail(403, 'REAUTH_REQUIRED', '请重新验证密码和验证码');
     const scope = `${actorId}:${operationId}:${key}`;
     // Path target and body together, as the contract's receipt fingerprint does.
     const serialized = canonical({ targetId, body });
@@ -172,7 +184,9 @@ export function createAdminBackend(host: AdminHost, accountUsers: S['User'][]) {
     if (prior) {
       if (prior.body !== serialized) return fail(409, 'IDEMPOTENCY_MISMATCH', '同一操作键对应了不同的对象或内容');
       // A secret-bearing success is never replayed: only its non-secret status was kept.
-      return prior.reply === SECRET_ISSUED ? fail(409, 'SECRET_ALREADY_ISSUED', '该操作已完成，一次性令牌不会再次显示') : prior.reply;
+      if (prior.reply === SECRET_ISSUED) return fail(409, 'SECRET_ALREADY_ISSUED', '该操作已完成，一次性令牌不会再次显示');
+      // Applied once; what is returned now is rechecked against current access (as BillingAdmin.apply does).
+      return replayed && prior.reply.status < 300 ? replayed(prior.reply) : prior.reply;
     }
     const proof = reauth ? proofs.get(reauth) : undefined;
     const binding = canonical({ operationId, targetId, idempotencyKey: key, body });
@@ -200,7 +214,10 @@ export function createAdminBackend(host: AdminHost, accountUsers: S['User'][]) {
     const actor = user(actorId);
     if (!actor || actor.role !== 'admin') return fail(403, 'FORBIDDEN', '当前账号无权访问运营后台');
     if (!actor.mfa_enabled) return fail(403, 'MFA_REQUIRED', '管理员需要先启用双重验证');
-    const body = (typeof rawBody === 'object' && rawBody !== null && !Array.isArray(rawBody) ? rawBody : {}) as Record<string, unknown>;
+    const isObject = typeof rawBody === 'object' && rawBody !== null && !Array.isArray(rawBody);
+    // Every admin write carries a JSON object; a missing or malformed body is never treated as {}.
+    if (method !== 'GET' && !isObject) return fail(422, 'VALIDATION_FAILED', '请求体必须是 JSON 对象');
+    const body = (isObject ? rawBody : {}) as Record<string, unknown>;
     const route = `${method} /${parts.map(part => (isUuid(part) ? ':id' : part)).join('/')}`;
     const id = parts.find(isUuid) ?? '';
     switch (route) {
@@ -267,6 +284,9 @@ export function createAdminBackend(host: AdminHost, accountUsers: S['User'][]) {
           adjustments.set(target.id, [...(adjustments.get(target.id) ?? []), { kind: bucket.kind, period_start: bucket.period_start, units }]);
           record(actorId, 'adminAdjustQuota', 'user', target.id, body.reason as string);
           return ok(next, 201);
+        }, () => {
+          const target = user(body.user_id as string);
+          return target?.status === 'active' ? ok(quotaOf(target.id), 201) : fail(404, 'NOT_FOUND', '用户不存在或未启用');
         });
       }
       case 'GET /admin/usage': {
@@ -306,6 +326,8 @@ export function createAdminBackend(host: AdminHost, accountUsers: S['User'][]) {
     switches: () => switches,
     /** A reseeded account fixture keeps the platform switches and the admin's quota adjustments. */
     reapply: (userId: string, quota: S['QuotaView']) => withAdjustments(userId, quota),
+    /** Platform switches and billing state applied to a quota view. */
+    gate: (quota: S['QuotaView']) => applyGates(quota),
     /** Test helper: the audit trail as stored. */
     audit: () => audit,
   };

@@ -86,6 +86,8 @@ const worker = setupWorker(
     if (mockOffline) return HttpResponse.error();
     const requestAccount = mockAccount;
     if (!requestAccount) return HttpResponse.json(unauthenticated, { status: 401, headers });
+    // The session that dispatched this request; a later session (even of the same account) never adopts it.
+    const requestGeneration = backend.sessionGeneration(requestAccount);
     const url = new URL(request.url);
     const path = url.pathname.slice('/api/web/v1'.length);
     // Browser-test-only timing control; it never changes the HTTP contract.
@@ -117,7 +119,7 @@ const worker = setupWorker(
       try { body = await request.json(); } catch { body = undefined; }
     }
     // Computed for the account that sent the request; a switch meanwhile is rejected by the client epoch.
-    const reply = backend.handle(requestAccount, request.method, path, url.searchParams, body, request.headers.get('Idempotency-Key'), request.headers.get('X-Reauth-Token'));
+    const reply = backend.handle(requestAccount, request.method, path, url.searchParams, body, request.headers.get('Idempotency-Key'), request.headers.get('X-Reauth-Token'), requestGeneration);
     if (!reply) return HttpResponse.error();
     // Browser-test-only: the server processed the request but its reply is lost once (path suffix match).
     const drop = localStorage.getItem('mock-test-drop-reply');

@@ -2,9 +2,8 @@ import { useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import type { components } from '../../generated/openapi';
 import { invitationKindLabel, invitationRef, invitationStateLabel } from '../../domain/admin';
-import { isAuthoritativeDenial, isUnauthenticated } from '../../features/revocation';
 import { formatDateTime } from '../../domain/dashboard';
-import { useAdminInvitations, useAdminWrite } from '../../features/admin';
+import { isAdminDenial, useAdminInvitations, useAdminWrite } from '../../features/admin';
 import { ReadOnlyWhile, readableCache, useAppData } from '../../features/data';
 import { Badge, Empty } from '../common';
 import { AdminActionDialog, AdminData, AdminPage } from './AdminShell';
@@ -28,7 +27,7 @@ function InvitesBody() {
   const client = useQueryClient();
   const { accountKey } = useAppData();
   // A denial (or an ended session) withdraws the secret for good; a later transport failure cannot show it again.
-  const denied = invitations.isError && (isAuthoritativeDenial(invitations.error) || isUnauthenticated(invitations.error));
+  const denied = invitations.isError && isAdminDenial(invitations.error);
   useEffect(() => { if (denied) setIssued(null); }, [denied]);
   /** The confirmed receipt supersedes an older cached row (metadata only; the token never enters the cache). */
   const issue = (created: Created, reissued: boolean) => {
@@ -94,6 +93,7 @@ function RevokeDialog({ invitation, onClose, onRevoked }: { invitation: S['Invit
   const write = useAdminWrite<Record<string, never>, S['Invitation']>({
     operationId: 'adminRevokeInvitation', targetId: () => invitation.id,
     send: (api, _body, key, token) => api.adminRevokeInvitation(invitation.id, key, token),
+    apply: (client, accountKey, revoked) => client.setQueryData<S['InvitationPage']>(['account', accountKey, 'admin', 'invitations'], page => page && ({ ...page, items: page.items.map(item => item.id === revoked.id && item.revision <= revoked.revision ? revoked : item) })),
     onSuccess: () => onRevoked(invitation.id),
   });
   return <AdminActionDialog open onClose={onClose} write={write} danger title="撤销邀请"

@@ -57,7 +57,12 @@ export function AdminActionDialog<B>({ open, onClose, title, description, write,
   open: boolean; onClose: () => void; title: string; description: string; write: AdminWrite<B>;
   prepare?: ReactNode; prepareValid: boolean; build: () => B; confirmLabel?: string; danger?: boolean;
 }) {
-  const { online } = useAppData();
+  const app = useAppData();
+  const online = app.online;
+  // Replaying an already dispatched request (same key and body) needs only connectivity, even while a stale
+  // projection keeps the page read-only for new writes.
+  const reachable = app.transportOnline ?? app.online;
+  const canAct = online || (write.resuming && reachable);
   const [password, setPassword] = useState('');
   const [code, setCode] = useState('');
   const [verifying, setVerifying] = useState(false);
@@ -81,16 +86,24 @@ export function AdminActionDialog<B>({ open, onClose, title, description, write,
           <button type="button" className={styles.buttonSecondary} onClick={close}>取消</button>
         </div>
       </>}
-      {write.stage === 'reauth' && <form className={styles.stack} onSubmit={event => { event.preventDefault(); if (password && codeValid && online && !verifying) void verify(); }}>
+      {write.stage === 'choose' && <>
+        <div className={`${styles.banner} ${styles.bannerWarning}`} role="alert" data-testid="admin-earlier-unconfirmed"><div><strong>之前有一次相同的操作没有收到确认</strong>：它可能已经生效。请先核对列表中的当前状态。重试上一次会发送原来的请求，不会重复执行；确认需要再做一次时，才选择作为新的操作提交。</div></div>
+        <div className={styles.row}>
+          <button type="button" className={styles.button} onClick={() => write.choose(true)}>重试上一次（不会重复执行）</button>
+          <button type="button" className={styles.buttonSecondary} disabled={!online} onClick={() => write.choose(false)}>作为新的操作提交</button>
+          <button type="button" className={styles.buttonSecondary} onClick={close}>取消</button>
+        </div>
+      </>}
+      {write.stage === 'reauth' && <form className={styles.stack} onSubmit={event => { event.preventDefault(); if (password && codeValid && canAct && !verifying) void verify(); }}>
         <p className={`${styles.small} ${styles.muted}`}>管理操作需要重新验证。验证结果只用于这一次操作，短时间内有效。</p>
         <div className={styles.field}><label htmlFor="admin-reauth-password">当前密码</label>
           <input id="admin-reauth-password" type="password" autoComplete="current-password" value={password} onChange={event => setPassword(event.target.value)} /></div>
         <div className={styles.field}><label htmlFor="admin-reauth-code">验证器中的 6 位验证码</label>
           <input id="admin-reauth-code" inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={code} onChange={event => setCode(event.target.value.replace(/\D/g, ''))} aria-invalid={code !== '' && !codeValid ? true : undefined} /></div>
         {message && <p role="alert" className={styles.error}>{message}</p>}
-        {!online && <p className={styles.error}>离线时不能验证。</p>}
+        {!canAct && <p className={styles.error}>离线时不能验证。</p>}
         <div className={styles.row}>
-          <button type="submit" className={danger ? styles.buttonDanger : styles.button} disabled={!password || !codeValid || !online || verifying}>{verifying ? '正在验证…' : '验证并执行'}</button>
+          <button type="submit" className={danger ? styles.buttonDanger : styles.button} disabled={!password || !codeValid || !canAct || verifying}>{verifying ? '正在验证…' : '验证并执行'}</button>
           <button type="button" className={styles.buttonSecondary} disabled={verifying} onClick={close}>取消</button>
         </div>
       </form>}
@@ -98,7 +111,7 @@ export function AdminActionDialog<B>({ open, onClose, title, description, write,
       {write.stage === 'unconfirmed' && <>
         <div className={`${styles.banner} ${styles.bannerWarning}`} role="alert" data-testid="admin-unconfirmed"><div><strong>没有收到服务端确认</strong>：操作可能已经生效。重试会发送同一个请求，不会重复执行。{message ? ` ${message}` : ''}</div></div>
         <div className={styles.row}>
-          <button type="button" className={styles.button} disabled={!online} onClick={write.retry}>重试同一操作</button>
+          <button type="button" className={styles.button} disabled={!reachable} onClick={write.retry}>重试同一操作</button>
           <button type="button" className={styles.buttonSecondary} onClick={close}>放弃并刷新</button>
         </div>
       </>}

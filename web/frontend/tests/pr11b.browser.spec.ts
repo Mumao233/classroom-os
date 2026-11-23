@@ -133,12 +133,31 @@ test.describe('PR-11b operations console', () => {
     await page.getByRole('button', { name: '放弃并刷新' }).click();
     // It was applied once on the server.
     await expect(page.getByTestId('admin-quota')).toContainText('65 次');
-    await submit();
+    await page.getByTestId('admin-quota').getByRole('button', { name: '追加总结与卡片（本月）' }).click();
+    await page.getByLabel('追加数量（次）').fill('5');
+    await page.getByTestId('admin-action').getByLabel('操作理由').fill('合成：重复提交检查');
+    await page.getByRole('button', { name: '下一步：验证身份' }).click();
+    // The earlier identical request is surfaced; replaying it is the safe default.
+    await expect(page.getByTestId('admin-earlier-unconfirmed')).toBeVisible();
+    await expect(page.getByRole('button', { name: '作为新的操作提交' })).toBeVisible();
+    await page.getByRole('button', { name: '重试上一次（不会重复执行）' }).click();
+    await verify(page);
     await expect(page.getByTestId('admin-action')).toHaveCount(0);
     await expect(page.getByTestId('admin-quota')).toContainText('65 次');
     await expect(page.getByTestId('admin-quota')).not.toContainText('70 次');
     await page.getByRole('link', { name: '运行状态' }).click();
     await expect(page.getByTestId('admin-audit').getByText('合成：重复提交检查')).toHaveCount(1);
+  });
+
+  test('a confirmed write is shown even when the refetch after it cannot reach the server', async ({ page }) => {
+    await asAdmin(page);
+    await page.evaluate(id => localStorage.setItem('mock-test-offline-after', `/admin/users/${id}`), B_ID);
+    await page.getByTestId(`admin-user-${B_ID}`).getByRole('button', { name: '停用' }).click();
+    await page.getByTestId('admin-action').getByLabel('操作理由').fill('合成：确认后断网');
+    await page.getByRole('button', { name: '下一步：验证身份' }).click();
+    await verify(page);
+    await expect(page.getByTestId('admin-action')).toHaveCount(0);
+    await expect(page.getByTestId(`admin-user-${B_ID}`)).toContainText('已停用');
   });
 
   test('invitations: the one-time token is shown once and is gone after dismissal; reissue replaces it', async ({ page }) => {
@@ -154,7 +173,8 @@ test.describe('PR-11b operations console', () => {
     const token = await page.getByLabel('一次性令牌').inputValue();
     expect(token).toMatch(/^[A-Za-z0-9_-]{43}$/);
     await expect(page.getByTestId('admin-invitations')).toContainText('n***@example.invalid');
-    await shot(page, 'admin-invites-token');
+    // The one-time token is masked in the durable screenshot.
+    await page.screenshot({ path: resolve(shots, 'admin-invites-token.png'), fullPage: true, mask: [page.getByLabel('一次性令牌')] });
     await panel.getByRole('button', { name: '我已保存，关闭' }).click();
     await expect(panel).toHaveCount(0);
     expect(await page.content()).not.toContain(token);

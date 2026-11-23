@@ -169,6 +169,16 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
   const generations: Record<MockAccountKey, number> = { A: 0, B: 0, C: 0 };
   /** Accounts whose existing sessions an administrator ended; only a fresh sign-in (beginSession) admits them again. */
   const revokedSessions = new Set<MockAccountKey>();
+  /** Accounts whose session history includes an administrator's revocation (kept across dataset reseeds). */
+  const adminRevoked = new Set<MockAccountKey>();
+  /** Live transcription streams admitted per account; a stream admitted while ASR was on keeps going. */
+  const admittedStreams: Record<MockAccountKey, Set<string>> = { A: new Set(), B: new Set(), C: new Set() };
+  const asrAdmits = (account: MockAccountKey, streamId: string) => {
+    if (admittedStreams[account].has(streamId)) return true;
+    if (!stores[account].quota.asr_enabled) return false;
+    admittedStreams[account].add(streamId);
+    return true;
+  };
   const accountOf = (userId: string) => accounts.find(account => stores[account].user.id === userId) ?? null;
   // The platform operations backend sees only each account's user record and quota buckets, never its study records.
   const admin = createAdminBackend({
@@ -177,16 +187,18 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
     setAccountUser: user => { const account = accountOf(user.id); if (account) stores[account].user = user; },
     accountQuota: userId => { const account = accountOf(userId); return account ? stores[account].quota : null; },
     setAccountQuota: (userId, value) => { const account = accountOf(userId); if (account) stores[account].quota = value; },
-    applySwitches: value => { for (const account of accounts) stores[account].quota = { ...stores[account].quota, asr_enabled: value.asr_enabled, ai_enabled: value.ai_enabled }; },
+    applySwitches: () => { for (const account of accounts) stores[account].quota = admin.gate(stores[account].quota); },
     sessionGeneration: userId => { const account = accountOf(userId); return account ? generations[account] : 0; },
     revokeSessions: userId => {
       const account = accountOf(userId);
       if (!account) return;
       generations[account] += 1;
       revokedSessions.add(account);
-      stores[account].deviceSessions = stores[account].deviceSessions.map(item => item.revoked_at ? item : { ...item, revoked_at: now(), revision: item.revision + 1, updated_at: now() });
+      adminRevoked.add(account);
+      stores[account].deviceSessions = stores[account].deviceSessions.map(item => item.revoked_at ? { ...item, is_current: false } : { ...item, is_current: false, revoked_at: now(), revision: item.revision + 1, updated_at: now() });
     },
   }, accounts.map(account => stores[account].user));
+  for (const account of accounts) stores[account].quota = admin.gate(stores[account].quota);
 
   const error = (status: number, code: ErrorCode, message: string, currentRevision: number | null = null): MockReply =>
     ({ status, body: { error: { code, message, request_id: newId(), retryable: false, retry_after_seconds: null, current_revision: currentRevision, conflict_id: null, task_id: null } } });
@@ -325,8 +337,10 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
     return { now, newId, error, idempotent: (key, scope, body, run) => idempotent(stores[account], key, scope, body, run) };
   }
 
-  function handle(account: MockAccountKey, method: string, path: string, query: URLSearchParams, rawBody: unknown, key: string | null, reauth: string | null = null): MockReply | null {
+  function handle(account: MockAccountKey, method: string, path: string, query: URLSearchParams, rawBody: unknown, key: string | null, reauth: string | null = null, generation?: number): MockReply | null {
     const store = stores[account];
+    // A request dispatched by a session that has since ended is refused, even if the account signed in again.
+    if (generation !== undefined && generation !== generations[account]) return error(401, 'UNAUTHENTICATED', '会话已失效');
     // A disabled (or deleting) account's sessions are revoked: every request is unauthenticated from then on.
     if (store.user.status !== 'active' || revokedSessions.has(account)) return error(401, 'UNAUTHENTICATED', '会话已失效');
     const body = (typeof rawBody === 'object' && rawBody !== null && !Array.isArray(rawBody) ? rawBody : {}) as Record<string, unknown>;
@@ -530,7 +544,7 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
       // Learning fixtures are reseeded; admin-owned account state (status, switches, quota adjustments) stays.
       const previous = stores[account];
       const seeded = account === 'A' ? seedA(dataset) : account === 'B' ? seedB() : seedC();
-      stores[account] = { ...seeded, user: previous.user, quota: admin.reapply(previous.user.id, seeded.quota) };
+      stores[account] = { ...seeded, user: previous.user, quota: admin.reapply(previous.user.id, seeded.quota), deviceSessions: adminRevoked.has(account) ? previous.deviceSessions : seeded.deviceSessions };
       classrooms[account] = withHistory(account, account === 'A' && dataset === 'seeded' ? seededClassroom() : seedClassroom(null));
       reviews[account] = seedReview(account === 'A' && dataset === 'seeded');
     },
@@ -539,10 +553,19 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
     setAdminHealth: (value: AdminHealthDev) => admin.setHealthDev(value),
     /** The account's Mock session ended (sign-out, switch, revocation): its admin proofs are no longer valid. */
     retireSession: (account: MockAccountKey) => { generations[account] += 1; },
-    /** A fresh Mock sign-in of the account (a session an administrator ended is not revived by a restore). */
-    beginSession: (account: MockAccountKey) => { revokedSessions.delete(account); },
-    /** PR-11b: the platform ASR switch admits new live streams; a stream admitted before keeps its results. */
-    asrAdmits: (account: MockAccountKey, streamId: string) => stores[account].quota.asr_enabled || classrooms[account].segments.some(item => item.stream_id === streamId),
+    /**
+     * A fresh Mock sign-in. After an administrator ended the account's sessions it gets a new current session
+     * row; the revoked rows stay as history (a restore never revives them).
+     */
+    beginSession: (account: MockAccountKey) => {
+      if (!revokedSessions.delete(account)) return;
+      const store = stores[account];
+      const device = store.deviceSessions[0]?.device_id ?? newId();
+      store.deviceSessions = [{ ...base(newId(), now()), device_id: device, device_name: '本机浏览器（模拟）', last_active_at: now(), expires_at: new Date(Date.parse(now()) + 30 * 86_400_000).toISOString().replace('.000Z', 'Z'), is_current: true, revoked_at: null }, ...store.deviceSessions.map(item => ({ ...item, is_current: false }))];
+    },
+    sessionGeneration: (account: MockAccountKey) => generations[account],
+    /** PR-11b: the platform ASR switch admits new live streams; a stream admitted before keeps going. */
+    asrAdmits,
     /** Development panel: the administrator has (or has not) enrolled MFA. */
     setAdminMfa: (enabled: boolean) => { stores.C.user = { ...stores.C.user, mfa_enabled: enabled }; },
     adminAudit: () => admin.audit(),
@@ -556,7 +579,7 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
       return done;
     },
     persistFinal: (account: MockAccountKey, input: Parameters<typeof persistFinal>[3]) => {
-      if (!stores[account].quota.asr_enabled && !classrooms[account].segments.some(item => item.stream_id === input.streamId)) return;
+      if (!asrAdmits(account, input.streamId)) return;
       persistFinal(classrooms[account], classroomHost(account), classroomHelpers(account), input);
     },
     ensureDemoClassroom: (account: MockAccountKey, input: Parameters<typeof ensureDemoClassroom>[3]) => ensureDemoClassroom(classrooms[account], classroomHost(account), classroomHelpers(account), input),

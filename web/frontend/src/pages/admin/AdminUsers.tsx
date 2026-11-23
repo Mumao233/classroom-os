@@ -53,6 +53,11 @@ function StatusDialog({ user, onClose }: { user: S['User']; onClose: () => void 
   const write = useAdminWrite<S['AdminUserPatch'], S['User']>({
     operationId: 'adminUpdateUser', targetId: () => user.id,
     send: (api, body, key, token) => api.adminUpdateUser(user.id, body, key, token),
+    apply: (client, accountKey, updated) => {
+      client.setQueryData<S['UserPage']>(['account', accountKey, 'admin', 'users'], page => page && ({ ...page, items: page.items.map(item => item.id === updated.id && item.revision <= updated.revision ? updated : item) }));
+      // A disabled account has no quota projection any more.
+      if (updated.status !== 'active') client.removeQueries({ queryKey: ['account', accountKey, 'admin', 'user-quota', updated.id] });
+    },
     onSuccess: onClose,
   });
   const error = reasonError(reason);
@@ -91,6 +96,7 @@ function AdjustDialog({ user, bucket, onClose }: { user: S['User']; bucket: S['Q
   const write = useAdminWrite<S['QuotaAdjustment'], S['QuotaView']>({
     operationId: 'adminAdjustQuota', targetId: body => body.user_id,
     send: (api, body, key, token) => api.adminAdjustQuota(body, key, token),
+    apply: (client, accountKey, quota, body) => client.setQueryData(['account', accountKey, 'admin', 'user-quota', body.user_id], quota),
     onSuccess: onClose,
   });
   const units = additionalUnits(bucket.kind, amount);

@@ -116,7 +116,8 @@ describe('PR-11b user status, quota and switches', () => {
     expect(err(call('A', 'GET', '/me'))).toBe('UNAUTHENTICATED');
     backend.beginSession('A');
     expect(call('A', 'GET', '/me').status).toBe(200);
-    expect(items<S['DeviceSession']>(call('A', 'GET', '/me/sessions')).every(item => item.revoked_at !== null)).toBe(true);
+    // The ended sessions stay revoked; the fresh sign-in is the only current, unrevoked one.
+    expect(items<S['DeviceSession']>(call('A', 'GET', '/me/sessions')).filter(item => item.revoked_at === null).map(item => item.is_current)).toEqual([true]);
     expect(err(write('adminUpdateUser', C_ID, 'PATCH', `/admin/users/${C_ID}`, { base_revision: 1, status: 'disabled', reason: '自己' }).reply)).toBe('FORBIDDEN');
     expect(err(write('adminUpdateUser', DELETING, 'PATCH', `/admin/users/${DELETING}`, { base_revision: 2, status: 'disabled', reason: 'x' }).reply)).toBe('GONE');
     expect(err(write('adminUpdateUser', PENDING, 'PATCH', `/admin/users/${PENDING}`, { base_revision: 1, status: 'disabled', reason: 'x' }).reply)).toBe('VALIDATION_FAILED');
@@ -294,5 +295,70 @@ describe('PR-11b review round 1 regressions (mock)', () => {
     expect(backend.asrAdmits('A', '5c000000-0000-4000-8000-000000000002')).toBe(false);
     backend.persistFinal('A', final('5c000000-0000-4000-8000-000000000002', 2));
     expect(backend.classroomStore('A').segments.some(item => item.stream_id === '5c000000-0000-4000-8000-000000000002')).toBe(false);
+  });
+});
+
+describe('PR-11b extra review regressions (mock)', () => {
+  it('a replay still needs the reauthentication header and is rechecked against current access', () => {
+    const { call, write } = harness();
+    const quota = (call('C', 'GET', `/admin/users/${A_ID}/quota`).body as S['QuotaView']).buckets.find(item => item.kind === 'summary_month_count')!;
+    const body = { user_id: A_ID, bucket_kind: 'summary_month_count', period_start: quota.period_start, additional_units: 3, reason: '合成：重放复核' };
+    const first = write('adminAdjustQuota', A_ID, 'POST', '/admin/quota-adjustments', body);
+    expect(first.reply.status).toBe(201);
+    expect(err(call('C', 'POST', '/admin/quota-adjustments', body, '', first.key, null))).toBe('REAUTH_REQUIRED');
+    // Same key and proof: applied once, current projection returned.
+    const replay = call('C', 'POST', '/admin/quota-adjustments', body, '', first.key, first.token);
+    expect((replay.body as S['QuotaView']).buckets.find(item => item.kind === 'summary_month_count')!.limit).toBe(quota.limit + 3);
+    write('adminUpdateUser', A_ID, 'PATCH', `/admin/users/${A_ID}`, { base_revision: 1, status: 'disabled', reason: '合成' });
+    expect(err(call('C', 'POST', '/admin/quota-adjustments', body, '', first.key, first.token))).toBe('NOT_FOUND');
+  });
+
+  it('a missing or malformed write body is refused, never treated as {}', () => {
+    const { backend, call, newKey } = harness();
+    for (const raw of [undefined, null, [], 'x', 3]) {
+      const key = newKey();
+      const proof = backend.issueAdminProof('C', { operationId: 'adminRevokeInvitation', targetId: ISSUED, idempotencyKey: key, body: {} }, 'p', '123456') as { token: string };
+      expect(err(call('C', 'POST', `/admin/invitations/${ISSUED}/revoke`, raw, '', key, proof.token))).toBe('VALIDATION_FAILED');
+    }
+    expect((items<S['Invitation']>(call('C', 'GET', '/admin/invitations')).find(item => item.id === ISSUED))!.state).toBe('issued');
+  });
+
+  it('a request dispatched by an ended session is refused even after the account signs in again', () => {
+    const { backend } = harness();
+    const stale = backend.sessionGeneration('A');
+    backend.retireSession('A');
+    backend.beginSession('A');
+    expect(err(backend.handle('A', 'GET', '/me', new URLSearchParams(), undefined, null, null, stale)!)).toBe('UNAUTHENTICATED');
+    expect(backend.handle('A', 'GET', '/me', new URLSearchParams(), undefined, null, null, backend.sessionGeneration('A'))!.status).toBe(200);
+  });
+
+  it('a fresh sign-in after a restore gets a new current session; the revoked rows stay, also across a reseed', () => {
+    const { backend, call, write } = harness();
+    write('adminUpdateUser', A_ID, 'PATCH', `/admin/users/${A_ID}`, { base_revision: 1, status: 'disabled', reason: '合成' });
+    write('adminUpdateUser', A_ID, 'PATCH', `/admin/users/${A_ID}`, { base_revision: 2, status: 'active', reason: '合成' });
+    backend.beginSession('A');
+    const sessions = () => items<S['DeviceSession']>(call('A', 'GET', '/me/sessions'));
+    expect(sessions().filter(item => item.is_current)).toHaveLength(1);
+    expect(sessions().find(item => item.is_current)!.revoked_at).toBeNull();
+    expect(sessions().filter(item => item.revoked_at !== null)).toHaveLength(2);
+    backend.reset('A', 'empty');
+    expect(sessions().filter(item => item.revoked_at !== null)).toHaveLength(2);
+  });
+
+  it('a stream admitted by its first partial keeps going after ASR is turned off', () => {
+    const { backend, write } = harness();
+    const STREAM = '5c000000-0000-4000-8000-000000000003';
+    expect(backend.asrAdmits('A', STREAM)).toBe(true);
+    write('adminUpdateSwitches', null, 'PATCH', '/admin/switches', { base_revision: 1, asr_enabled: false, reason: '合成' });
+    expect(backend.asrAdmits('A', STREAM)).toBe(true);
+    backend.persistFinal('A', { classId: 'c0000000-0000-4000-8000-000000000001', streamId: STREAM, segmentId: '5e000000-0000-4000-8000-000000000009', segmentRevisionId: '5f000000-0000-4000-8000-000000000009', versionId: '5d000000-0000-4000-8000-000000000002', text: '合成', startMs: 0, endMs: 1, revision: 1 });
+    expect(backend.classroomStore('A').segments.some(item => item.stream_id === STREAM)).toBe(true);
+  });
+
+  it('every quota view reports the platform state of the same ledger the usage page shows', () => {
+    const { call } = harness();
+    expect((call('C', 'GET', '/admin/usage').body as S['AdminUsage']).settled_microyuan).toBe('180000000');
+    expect((call('A', 'GET', '/me/quota').body as S['QuotaView']).platform_billing_state).toBe('warning60');
+    expect((call('C', 'GET', '/admin/users/d0000000-0000-4000-8000-000000000001/quota').body as S['QuotaView']).platform_billing_state).toBe('warning60');
   });
 });
