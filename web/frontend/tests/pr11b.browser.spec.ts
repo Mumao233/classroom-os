@@ -114,6 +114,30 @@ test.describe('PR-11b operations console', () => {
     await expect(page.getByTestId('admin-audit').getByText('合成：响应丢失检查')).toHaveCount(1);
   });
 
+  test('leaving an unconfirmed quota adjustment and submitting it again never applies it twice', async ({ page }) => {
+    await asAdmin(page);
+    await page.evaluate(() => localStorage.setItem('mock-test-drop-reply', '/admin/quota-adjustments'));
+    const submit = async () => {
+      await page.getByTestId('admin-quota').getByRole('button', { name: '追加总结与卡片（本月）' }).click();
+      await page.getByLabel('追加数量（次）').fill('5');
+      await page.getByTestId('admin-action').getByLabel('操作理由').fill('合成：重复提交检查');
+      await page.getByRole('button', { name: '下一步：验证身份' }).click();
+      await verify(page);
+    };
+    await page.getByTestId(`admin-user-${B_ID}`).getByRole('button', { name: /查看 .* 的额度/ }).click();
+    await submit();
+    await expect(page.getByTestId('admin-unconfirmed')).toBeVisible();
+    await page.getByRole('button', { name: '放弃并刷新' }).click();
+    // It was applied once on the server.
+    await expect(page.getByTestId('admin-quota')).toContainText('65 次');
+    await submit();
+    await expect(page.getByTestId('admin-action')).toHaveCount(0);
+    await expect(page.getByTestId('admin-quota')).toContainText('65 次');
+    await expect(page.getByTestId('admin-quota')).not.toContainText('70 次');
+    await page.getByRole('link', { name: '运行状态' }).click();
+    await expect(page.getByTestId('admin-audit').getByText('合成：重复提交检查')).toHaveCount(1);
+  });
+
   test('invitations: the one-time token is shown once and is gone after dismissal; reissue replaces it', async ({ page }) => {
     await asAdmin(page, '/admin/invites');
     await page.getByRole('button', { name: '创建邀请' }).click();

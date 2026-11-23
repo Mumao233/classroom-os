@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { ApiClientError, type ApiClient } from '../api/client';
 import { canonicalJson } from '../domain/admin';
 import type { components } from '../generated/openapi';
@@ -42,7 +42,14 @@ export function useAdminAudit() {
 }
 
 export type AdminWriteStage = 'idle' | 'reauth' | 'sending' | 'unconfirmed' | 'failed';
-type Pending<B> = { body: B; key: string; token: string | null; expires: number };
+type Pending<B> = { slot: string; body: B; key: string; token: string | null; expires: number };
+/**
+ * Unconfirmed intents per account epoch (one QueryClient each), by operation and target. They outlive the
+ * dialog: submitting the same body again later reuses the same Idempotency-Key, so a write whose reply was
+ * lost is never applied twice (quota adjustments and invitations have no CAS to catch it).
+ */
+const unconfirmed = new WeakMap<QueryClient, Map<string, Pending<unknown>>>();
+const intentsOf = (client: QueryClient) => { let map = unconfirmed.get(client); if (!map) { map = new Map(); unconfirmed.set(client, map); } return map; };
 
 /**
  * One admin write intent: reason and body first, then a purpose-bound reauthentication, then the request.
@@ -62,6 +69,7 @@ export function useAdminWrite<B, R>(spec: {
   const [stage, setStage] = useState<AdminWriteStage>('idle');
   const [error, setError] = useState<unknown>(null);
   const pending = useRef<Pending<B> | null>(null);
+  const settle = (intent: Pending<B>) => { if (intentsOf(client).get(intent.slot) === intent) intentsOf(client).delete(intent.slot); if (pending.current === intent) pending.current = null; };
   // The reply may carry a one-time secret (an invitation token): it is handed to the page once and never
   // kept in the mutation cache. The mutation itself stays, so a 401 still retires the account session.
   const reply = useRef<{ value: R } | null>(null);
@@ -78,7 +86,7 @@ export function useAdminWrite<B, R>(spec: {
       await mutation.mutateAsync({ body: intent.body, key: intent.key, token: intent.token });
       const result = reply.current;
       reply.current = null;
-      pending.current = null;
+      settle(intent);
       setStage('idle');
       if (result) spec.onSuccess?.(result.value, intent.body);
     } catch (failure) {
@@ -89,9 +97,9 @@ export function useAdminWrite<B, R>(spec: {
         setStage('reauth');
         return;
       }
-      if (isDefinitiveRejection(failure)) { pending.current = null; setStage('failed'); }
+      if (isDefinitiveRejection(failure)) { settle(intent); setStage('failed'); }
       // No definitive reply: the write may have been applied. Keep key and proof for a replay.
-      else setStage('unconfirmed');
+      else { intentsOf(client).set(intent.slot, intent as Pending<unknown>); setStage('unconfirmed'); }
     } finally { void refresh(); }
   }
 
@@ -101,9 +109,11 @@ export function useAdminWrite<B, R>(spec: {
     /** Starts (or resumes, for the same body) an intent; a different body never reuses an older key. */
     start(body: B) {
       setError(null);
-      const current = pending.current;
-      if (!current || canonicalJson(current.body) !== canonicalJson(body)) pending.current = { body, key: crypto.randomUUID(), token: null, expires: 0 };
-      else if (current.token && current.expires <= wall()) current.token = null;
+      const slot = `${spec.operationId}:${spec.targetId(body) ?? ''}`;
+      const earlier = intentsOf(client).get(slot) as Pending<B> | undefined;
+      const current = pending.current?.slot === slot ? pending.current : earlier ?? null;
+      if (!current || canonicalJson(current.body) !== canonicalJson(body)) pending.current = { slot, body, key: crypto.randomUUID(), token: null, expires: 0 };
+      else { pending.current = current; if (current.token && current.expires <= wall()) current.token = null; }
       setStage('reauth');
     },
     async verify(password: string, code: string) {
@@ -118,12 +128,16 @@ export function useAdminWrite<B, R>(spec: {
       } catch (failure) { setError(failure); return; }
       await send();
     },
-    retry: () => { const intent = pending.current; if (intent?.token && intent.expires <= wall()) intent.token = null; void send(); },
+    // The server answers a replayed key from its receipt before it looks at the proof, so an expired proof
+    // is still sent; only an unprocessed request comes back REAUTH_REQUIRED and asks for a new one.
+    retry: () => { void send(); },
     /** Leaves the intent. An unconfirmed one is re-read from the server, never assumed to have failed. */
     cancel() { pending.current = null; setStage('idle'); setError(null); void refresh(); },
+    /** Whether an earlier attempt of this operation on this target is still unconfirmed. */
+    hasUnconfirmed: (targetId: string | null) => intentsOf(client).has(`${spec.operationId}:${targetId ?? ''}`),
   };
 }
-export type AdminWrite<B> = { stage: AdminWriteStage; error: unknown; operationId: AdminOperationId; pendingBody: () => B | null; start(body: B): void; verify(password: string, code: string): Promise<void>; retry(): void; cancel(): void };
+export type AdminWrite<B> = { stage: AdminWriteStage; error: unknown; operationId: AdminOperationId; pendingBody: () => B | null; start(body: B): void; verify(password: string, code: string): Promise<void>; retry(): void; cancel(): void; hasUnconfirmed(targetId: string | null): boolean };
 
 const reauthMessages: Record<AdminReauthError['kind'], string> = {
   unavailable: '管理写操作暂不可用：接口契约还没有定义管理员再认证用途。',
