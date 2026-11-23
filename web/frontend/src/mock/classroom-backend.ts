@@ -545,6 +545,8 @@ export function handleClassroom(store: ClassroomStore, host: ClassroomHost, h: C
       const status = sourceStatus(store, plan, h.now(), findSession(plan.class_session_id));
       if (status === 'unavailable') return h.error(409, 'SOURCE_UNAVAILABLE', '部分来源已不可用，请重新准备');
       if (status === 'changed' && body.confirm_original_snapshot !== true) return h.error(409, 'SOURCE_CHANGED', '来源在准备后已更新，需要明确选择按原版本发送或重新准备');
+      // The platform AI switch is rechecked at first execution, not only when the plan was prepared.
+      if (!host.quota().ai_enabled) return h.error(409, 'BUDGET_BLOCKED', '新的 AI 请求已暂停');
       // Synthetic units are rechecked and reserved on first execution (a replay returned the task above).
       const bucket = host.quota().buckets.find(item => item.kind === (plan.kind === 'review_summary' ? 'summary_month_count' : 'interactive_month_count'));
       if (bucket) {
@@ -727,6 +729,8 @@ function audioRefusal(store: ClassroomStore, h: ClassroomHelpers, session: S['Cl
  * millisecond bucket must cover the frozen units.
  */
 function quotaRefusal(store: ClassroomStore, host: ClassroomHost, h: ClassroomHelpers, classId: string, approval: string, units: number): ClassroomReply | null {
+  // The platform ASR switch is checked at every new admission (a retry included); admitted tasks keep their receipts.
+  if (!host.quota().asr_enabled) return h.error(503, 'SERVICE_DISABLED', '转写服务已暂停');
   const bucket = host.quota().buckets.find(item => item.kind === 'retranscribe_month_ms');
   if (store.retranscribeDev.quota === 'month' || (bucket && bucket.remaining < units)) return h.error(409, 'QUOTA_MONTH_EXCEEDED', '本月重新转写时长不足');
   const admitted = store.tasks.filter(item => item.class_session_id === classId && item.kind === 'asr_retranscribe').length;

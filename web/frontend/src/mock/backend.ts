@@ -165,6 +165,8 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
   const classrooms: Record<MockAccountKey, ClassroomStore> = { A: withHistory('A', seededClassroom()), B: withHistory('B', seedClassroom(null)), C: withHistory('C', seedClassroom(null)) };
   const reviews: Record<MockAccountKey, ReviewStore> = { A: seedReview(true), B: seedReview(false), C: seedReview(false) };
   const accounts: MockAccountKey[] = ['A', 'B', 'C'];
+  /** Mock session generation per account: a sign-out or account switch retires the proofs issued before it. */
+  const generations: Record<MockAccountKey, number> = { A: 0, B: 0, C: 0 };
   const accountOf = (userId: string) => accounts.find(account => stores[account].user.id === userId) ?? null;
   // The platform operations backend sees only each account's user record and quota buckets, never its study records.
   const admin = createAdminBackend({
@@ -174,6 +176,7 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
     accountQuota: userId => { const account = accountOf(userId); return account ? stores[account].quota : null; },
     setAccountQuota: (userId, value) => { const account = accountOf(userId); if (account) stores[account].quota = value; },
     applySwitches: value => { for (const account of accounts) stores[account].quota = { ...stores[account].quota, asr_enabled: value.asr_enabled, ai_enabled: value.ai_enabled }; },
+    sessionGeneration: userId => { const account = accountOf(userId); return account ? generations[account] : 0; },
   }, accounts.map(account => stores[account].user));
 
   const error = (status: number, code: ErrorCode, message: string, currentRevision: number | null = null): MockReply =>
@@ -515,13 +518,18 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
   return {
     handle,
     reset(account: MockAccountKey, dataset: MockDataset = 'seeded') {
-      stores[account] = account === 'A' ? seedA(dataset) : account === 'B' ? seedB() : seedC();
+      // Learning fixtures are reseeded; admin-owned account state (status, switches, quota adjustments) stays.
+      const previous = stores[account];
+      const seeded = account === 'A' ? seedA(dataset) : account === 'B' ? seedB() : seedC();
+      stores[account] = { ...seeded, user: previous.user, quota: admin.reapply(previous.user.id, seeded.quota) };
       classrooms[account] = withHistory(account, account === 'A' && dataset === 'seeded' ? seededClassroom() : seedClassroom(null));
       reviews[account] = seedReview(account === 'A' && dataset === 'seeded');
     },
     /** PR-11b development stand-in for the missing admin reauthentication purpose (contract gap §1); not an HTTP route. */
     issueAdminProof: (account: MockAccountKey, binding: AdminReauthBinding, password: string, code: string) => admin.issueProof(stores[account].user.id, binding, password, code),
     setAdminHealth: (value: AdminHealthDev) => admin.setHealthDev(value),
+    /** The account's Mock session ended (sign-out, switch, revocation): its admin proofs are no longer valid. */
+    retireSession: (account: MockAccountKey) => { generations[account] += 1; },
     /** Development panel: the administrator has (or has not) enrolled MFA. */
     setAdminMfa: (enabled: boolean) => { stores.C.user = { ...stores.C.user, mfa_enabled: enabled }; },
     adminAudit: () => admin.audit(),

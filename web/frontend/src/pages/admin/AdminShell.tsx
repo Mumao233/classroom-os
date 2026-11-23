@@ -114,6 +114,6 @@ export function AdminActionDialog<B>({ open, onClose, title, description, write,
 export function ReasonField({ id, value, onChange, error }: { id: string; value: string; onChange: (value: string) => void; error: string | null }) {
   const [touched, setTouched] = useState(false);
   return <div className={styles.field}><label htmlFor={id}>操作理由</label>
-    <textarea id={id} value={value} maxLength={500} onBlur={() => setTouched(true)} onChange={event => onChange(event.target.value)} aria-invalid={touched && error ? true : undefined} aria-describedby={`${id}-hint`} />
+    <textarea id={id} value={value} onBlur={() => setTouched(true)} onChange={event => onChange(event.target.value)} aria-invalid={touched && error ? true : undefined} aria-describedby={`${id}-hint`} />
     <span id={`${id}-hint`} className={touched && error ? styles.error : styles.hint}>{touched && error ? error : '理由会写入审计记录，请不要填写密码、验证码或学生的学习内容。'}</span></div>;
 }

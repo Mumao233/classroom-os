@@ -3,7 +3,7 @@ import type { components } from '../../generated/openapi';
 import { healthLabel, healthWarnings, heartbeatAge, operationLabel, reasonError, targetTypeLabel } from '../../domain/admin';
 import { formatDateTime } from '../../domain/dashboard';
 import { describeAdminError, useAdminAudit, useAdminHealth, useAdminSwitches, useAdminUsers, useAdminWrite } from '../../features/admin';
-import { describeError, readableCache, useAppData } from '../../features/data';
+import { describeError, ReadOnlyWhile, readableCache, useAppData } from '../../features/data';
 import { Badge, Empty, Loading, QueryError } from '../common';
 import { AdminActionDialog, AdminData, AdminPage, ReasonField } from './AdminShell';
 import styles from '../pages.module.css';
@@ -43,6 +43,9 @@ function Health() {
 }
 
 type SwitchDraft = Pick<S['AdminSwitches'], 'registration_enabled' | 'asr_enabled' | 'ai_enabled' | 'max_active_users'>;
+const switchKeys = ['registration_enabled', 'asr_enabled', 'ai_enabled', 'max_active_users'] as const;
+/** Only the editable fields: the server revision is tracked apart from the draft and never edited. */
+const draftOf = (value: S['AdminSwitches']): SwitchDraft => ({ registration_enabled: value.registration_enabled, asr_enabled: value.asr_enabled, ai_enabled: value.ai_enabled, max_active_users: value.max_active_users });
 const switchFields = [
   { key: 'registration_enabled', label: '开放邀请注册', hint: '关闭后已发出的邀请也不能注册新账号，已有账号不受影响。' },
   { key: 'asr_enabled', label: '实时转写', hint: '关闭后不再开始新的转写；进行中的会话按服务端规则结束，已有字幕保留。' },
@@ -57,17 +60,17 @@ function Switches() {
   const [draft, setDraft] = useState<SwitchDraft | null>(null);
   const [confirming, setConfirming] = useState<{ base: S['AdminSwitches']; draft: SwitchDraft } | null>(null);
   const shown = draft ?? current;
-  const changed = current && draft ? (Object.keys(draft) as Array<keyof SwitchDraft>).filter(key => draft[key] !== current[key]) : [];
-  return <section className={styles.panel} aria-labelledby="admin-switches-title">
+  const changed = current && draft ? switchKeys.filter(key => draft[key] !== current[key]) : [];
+  return <ReadOnlyWhile stale={switches.isError}><section className={styles.panel} aria-labelledby="admin-switches-title">
     <h2 id="admin-switches-title">平台开关</h2>
     {!shown ? (switches.isError ? <QueryError error={switches.error} retry={() => void switches.refetch()} /> : <Loading label="正在读取平台开关…" />) : <div className={styles.stack} data-testid="admin-switches">
       {switches.isError && <div className={`${styles.banner} ${styles.bannerWarning}`} role="status"><div>刷新失败：{describeError(switches.error)} 以下为上次读取的开关。</div></div>}
       {switchFields.map(field => <label key={field.key} className={styles.choice}>
-        <input type="checkbox" checked={shown[field.key]} disabled={!online || !current} onChange={event => setDraft({ ...(draft ?? current!), [field.key]: event.target.checked })} />
+        <input type="checkbox" checked={shown[field.key]} disabled={!online || !current} onChange={event => setDraft({ ...(draft ?? draftOf(current!)), [field.key]: event.target.checked })} />
         <span><strong>{field.label}</strong><br /><span className={styles.hint}>{field.hint}</span></span>
       </label>)}
       <div className={styles.field}><label htmlFor="max-active-users">活跃用户上限</label>
-        <select id="max-active-users" value={shown.max_active_users} disabled={!online || !current} onChange={event => setDraft({ ...(draft ?? current!), max_active_users: event.target.value as SwitchDraft['max_active_users'] })}>
+        <select id="max-active-users" value={shown.max_active_users} disabled={!online || !current} onChange={event => setDraft({ ...(draft ?? draftOf(current!)), max_active_users: event.target.value as SwitchDraft['max_active_users'] })}>
           <option value="10">10 人</option><option value="30">30 人</option></select>
         <span className={styles.hint}>上限只影响新账号的激活，不会停用已有账号。</span></div>
       <div className={styles.row}>
@@ -76,7 +79,7 @@ function Switches() {
       </div>
     </div>}
     {confirming && <SwitchDialog key={confirming.base.revision} base={confirming.base} draft={confirming.draft} onClose={() => setConfirming(null)} onSaved={() => { setConfirming(null); setDraft(null); }} />}
-  </section>;
+  </section></ReadOnlyWhile>;
 }
 
 function SwitchDialog({ base, draft, onClose, onSaved }: { base: S['AdminSwitches']; draft: SwitchDraft; onClose: () => void; onSaved: () => void }) {
@@ -86,7 +89,7 @@ function SwitchDialog({ base, draft, onClose, onSaved }: { base: S['AdminSwitche
     send: (api, body, key, token) => api.adminUpdateSwitches(body, key, token),
     onSuccess: onSaved,
   });
-  const changes = (Object.keys(draft) as Array<keyof SwitchDraft>).filter(key => draft[key] !== base[key]);
+  const changes = switchKeys.filter(key => draft[key] !== base[key]);
   const describe = (key: keyof SwitchDraft) => key === 'max_active_users' ? `活跃用户上限：${base.max_active_users} 人 → ${draft.max_active_users} 人` : `${switchFields.find(field => field.key === key)!.label}：${base[key] ? '开' : '关'} → ${draft[key] ? '开' : '关'}`;
   const error = reasonError(reason);
   return <AdminActionDialog open onClose={onClose} write={write} danger={changes.some(key => key !== 'max_active_users' && draft[key] === false)}
@@ -101,13 +104,14 @@ function Audit() {
   const users = useAdminUsers();
   const emails = useMemo(() => new Map((readableCache(users)?.items ?? []).map(user => [user.id, user.email])), [users]);
   const who = (id: string | null) => id === null ? '—' : emails.get(id) ?? '已不在列表中的账号';
-  const items = audit.data?.pages.flatMap(page => page.items) ?? [];
+  // Rows stay visible only while the latest failure (if any) was the transport; a denial hides them all.
+  const items = readableCache(audit)?.pages.flatMap(page => page.items) ?? [];
   return <section className={styles.panel} aria-labelledby="admin-audit-title">
     <h2 id="admin-audit-title">管理操作记录</h2>
     <p className={`${styles.small} ${styles.muted}`}>记录操作人、对象和理由，不记录密码、验证码、邀请令牌或任何学习内容。</p>
     {audit.isPending ? <Loading label="正在读取操作记录…" /> : audit.isError && !items.length ? <QueryError error={audit.error} retry={() => void audit.refetch()} /> :
       items.length === 0 ? <Empty title="还没有管理操作" description="停用账号、邀请、额度和开关的变更会记录在这里。" /> : <>
-        {audit.isError && <p role="alert" className={styles.error}>{describeAdminError(audit.error, describeError)}</p>}
+        {(audit.isError || audit.isFetchNextPageError) && <p role="alert" className={styles.error}>{describeAdminError(audit.error, describeError)}</p>}
         <div className={styles.tableWrap}><table className={styles.table} data-testid="admin-audit">
           <thead><tr><th>时间</th><th>操作</th><th>对象</th><th>理由</th><th>操作人</th></tr></thead>
           <tbody>{items.map(item => <tr key={item.id}>

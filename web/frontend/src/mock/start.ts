@@ -9,7 +9,11 @@ const headers = { 'Cache-Control': 'no-store' };
 let mockAccount: MockAccountKey | null = 'A';
 let mockOffline = false;
 const backend = createMockBackend();
-export function setMockAccount(account: MockAccountKey | null) { mockAccount = account; }
+export function setMockAccount(account: MockAccountKey | null) {
+  // The outgoing session ends here; proofs it obtained cannot authorise a write that arrives later.
+  if (mockAccount && mockAccount !== account) backend.retireSession(mockAccount);
+  mockAccount = account;
+}
 /** Simulated loss of connectivity: every business request fails like a network error. */
 export function setMockOffline(offline: boolean) { mockOffline = offline; }
 export function isMockOffline() { return mockOffline; }
@@ -120,6 +124,8 @@ const worker = setupWorker(
 /** Must be awaited before app render. Unmatched requests fail, never bypass. */
 export async function startMock(): Promise<void> {
   await worker.start({
+    // No request/response logging: admin traffic carries reauthentication proofs and one-time tokens.
+    quiet: true,
     serviceWorker: { url: '/mockServiceWorker.js' },
     onUnhandledRequest(request, print) {
       // Only the Vite development server's own public assets may pass through.

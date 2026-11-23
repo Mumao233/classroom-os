@@ -19,7 +19,7 @@ export function AdminUsage() {
 function UsageBody() {
   const { now } = useAppData();
   const months = recentMonths(now());
-  const [period, setPeriod] = useState(months[0]!.start);
+  const [period, setPeriod] = useState(months[0]!.date);
   const usage = useAdminUsage(period);
   const data = readableCache(usage);
   const missing = usage.isError && usage.error instanceof ApiClientError && usage.error.code === 'NOT_FOUND';
@@ -27,7 +27,7 @@ function UsageBody() {
   return <section className={styles.panel} aria-labelledby="admin-usage-title">
     <div className={styles.sectionHead}><h2 id="admin-usage-title">平台费用</h2>
       <div className={styles.field}><label htmlFor="usage-period">月份</label>
-        <select id="usage-period" value={period} onChange={event => setPeriod(event.target.value)}>{months.map(month => <option key={month.start} value={month.start}>{month.label}</option>)}</select></div>
+        <select id="usage-period" value={period} onChange={event => setPeriod(event.target.value)}>{months.map(month => <option key={month.date} value={month.date}>{month.label}</option>)}</select></div>
     </div>
     {missing ? <Empty title="这个月没有用量记录" description="平台在该月尚未开始计费，或记录已超出保留期。" />
       : !data ? (usage.isError ? <QueryError error={usage.error} retry={() => void usage.refetch()} /> : <Loading label="正在读取用量…" />)

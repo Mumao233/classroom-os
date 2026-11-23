@@ -53,10 +53,12 @@ describe('PR-11b admin domain', () => {
 
   it('months follow Beijing time, also across the UTC day boundary', () => {
     // 2026-10-31T17:00Z is already 1 November in Beijing.
+    // The usage query takes the calendar date of the month's first day (`format: date`, YYYY-MM-01).
     expect(recentMonths(Date.parse('2026-10-31T17:00:00Z'), 2)).toEqual([
-      { start: '2026-10-31T16:00:00Z', label: '2026 年 11 月' }, { start: '2026-09-30T16:00:00Z', label: '2026 年 10 月' },
+      { date: '2026-11-01', label: '2026 年 11 月' }, { date: '2026-10-01', label: '2026 年 10 月' },
     ]);
-    expect(recentMonths(Date.parse('2026-01-15T00:00:00Z'), 2)[1]).toEqual({ start: '2025-11-30T16:00:00Z', label: '2025 年 12 月' });
+    expect(recentMonths(Date.parse('2026-10-31T15:59:00Z'), 1)).toEqual([{ date: '2026-10-01', label: '2026 年 10 月' }]);
+    expect(recentMonths(Date.parse('2026-01-15T00:00:00Z'), 2)[1]).toEqual({ date: '2025-12-01', label: '2025 年 12 月' });
     expect(beijingMonthStart('2026-10-28T08:00:00Z')).toBe('2026-09-30T16:00:00Z');
     expect(beijingMonthStart('2026-10-28T08:00:00Z', -1)).toBe('2026-10-31T16:00:00Z');
   });

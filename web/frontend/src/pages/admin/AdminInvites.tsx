@@ -3,7 +3,7 @@ import type { components } from '../../generated/openapi';
 import { invitationKindLabel, invitationStateLabel } from '../../domain/admin';
 import { formatDateTime } from '../../domain/dashboard';
 import { useAdminInvitations, useAdminWrite } from '../../features/admin';
-import { useAppData } from '../../features/data';
+import { ReadOnlyWhile, readableCache, useAppData } from '../../features/data';
 import { Badge, Empty } from '../common';
 import { AdminActionDialog, AdminData, AdminPage } from './AdminShell';
 import styles from '../pages.module.css';
@@ -23,8 +23,11 @@ function InvitesBody() {
   const [creating, setCreating] = useState(false);
   const [action, setAction] = useState<{ kind: 'revoke' | 'reissue'; invitation: S['Invitation'] } | null>(null);
   const [issued, setIssued] = useState<Issued | null>(null);
-  return <>
-    {issued && <TokenPanel issued={issued} onDismiss={() => setIssued(null)} />}
+  // A token is offered only while its invitation is still the issued revision the token belongs to.
+  const listed = readableCache(invitations)?.items.find(item => item.id === issued?.invitation.id);
+  const tokenCurrent = issued !== null && (listed === undefined || (listed.state === 'issued' && listed.revision === issued.invitation.revision));
+  return <ReadOnlyWhile stale={invitations.isError}>
+    {issued && tokenCurrent && <TokenPanel issued={issued} onDismiss={() => setIssued(null)} />}
     <section className={styles.panel} aria-labelledby="admin-invites-title">
       <div className={styles.sectionHead}><h2 id="admin-invites-title">邀请</h2><button type="button" className={styles.button} disabled={!online} onClick={() => setCreating(true)}>创建邀请</button></div>
       <AdminData query={invitations} label="正在读取邀请…">{page => page.items.length === 0 ? <Empty title="还没有邀请" description="创建邀请后，把一次性令牌通过可信渠道交给受邀人。" /> :
@@ -43,9 +46,9 @@ function InvitesBody() {
       </AdminData>
     </section>
     {creating && <CreateDialog onClose={() => setCreating(false)} onIssued={created => { setCreating(false); setIssued({ ...created, reissued: false }); }} />}
-    {action?.kind === 'revoke' && <RevokeDialog key={action.invitation.id} invitation={action.invitation} onClose={() => setAction(null)} />}
+    {action?.kind === 'revoke' && <RevokeDialog key={action.invitation.id} invitation={action.invitation} onClose={() => setAction(null)} onRevoked={id => { setAction(null); setIssued(current => current?.invitation.id === id ? null : current); }} />}
     {action?.kind === 'reissue' && <ReissueDialog key={action.invitation.id} invitation={action.invitation} onClose={() => setAction(null)} onIssued={created => { setAction(null); setIssued({ ...created, reissued: true }); }} />}
-  </>;
+  </ReadOnlyWhile>;
 }
 
 type Created = { token: string; invitation: S['Invitation'] };
@@ -75,11 +78,11 @@ function CreateDialog({ onClose, onIssued }: { onClose: () => void; onIssued: (c
     build={() => kind === 'email_bound' ? { kind, email: email.trim() } : { kind }} />;
 }
 
-function RevokeDialog({ invitation, onClose }: { invitation: S['Invitation']; onClose: () => void }) {
+function RevokeDialog({ invitation, onClose, onRevoked }: { invitation: S['Invitation']; onClose: () => void; onRevoked: (id: string) => void }) {
   const write = useAdminWrite<Record<string, never>, S['Invitation']>({
     operationId: 'adminRevokeInvitation', targetId: () => invitation.id,
     send: (api, _body, key, token) => api.adminRevokeInvitation(invitation.id, key, token),
-    onSuccess: onClose,
+    onSuccess: () => onRevoked(invitation.id),
   });
   return <AdminActionDialog open onClose={onClose} write={write} danger title="撤销邀请"
     description={`撤销后这个${invitationKindLabel[invitation.kind]}${invitation.email_hint ? `（${invitation.email_hint}）` : ''}立即失效，已注册的账号不受影响。`}

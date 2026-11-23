@@ -3,7 +3,7 @@ import type { components } from '../../generated/openapi';
 import { additionalUnits, bucketLabel, formatUnits, isDurationBucket, reasonError, roleLabel, statusLabel } from '../../domain/admin';
 import { formatDate, formatDateTime } from '../../domain/dashboard';
 import { useAdminUserQuota, useAdminUsers, useAdminWrite } from '../../features/admin';
-import { readableCache, useMe } from '../../features/data';
+import { ReadOnlyWhile, readableCache, useMe } from '../../features/data';
 import { Badge, Empty } from '../common';
 import { AdminActionDialog, AdminData, AdminPage, ReasonField } from './AdminShell';
 import styles from '../pages.module.css';
@@ -21,7 +21,8 @@ function UsersBody() {
   const me = readableCache(useMe());
   const [statusTarget, setStatusTarget] = useState<S['User'] | null>(null);
   const [quotaUser, setQuotaUser] = useState<S['User'] | null>(null);
-  return <>
+  // A list kept after a failed refresh is read-only: no write is based on a projection marked stale.
+  return <ReadOnlyWhile stale={users.isError}>
     <section className={styles.panel} aria-labelledby="admin-users-title"><h2 id="admin-users-title">账号</h2>
       <AdminData query={users} label="正在读取用户列表…">{page => page.items.length === 0 ? <Empty title="还没有用户" description="通过邀请注册的账号会出现在这里。" /> :
         <div className={styles.tableWrap}><table className={styles.table} data-testid="admin-users">
@@ -33,7 +34,7 @@ function UsersBody() {
             <td>{user.mfa_enabled ? '已启用' : '未启用'}</td>
             <td>{formatDate(user.created_at)}</td>
             <td><div className={styles.row}>
-              <button type="button" className={styles.buttonGhost} onClick={() => setQuotaUser(user)} aria-label={`查看 ${user.email} 的额度`}>额度</button>
+              {user.status === 'active' && <button type="button" className={styles.buttonGhost} onClick={() => setQuotaUser(user)} aria-label={`查看 ${user.email} 的额度`}>额度</button>}
               {user.id !== me?.id && (user.status === 'active' || user.status === 'disabled') &&
                 <button type="button" className={user.status === 'active' ? styles.buttonDanger : styles.buttonSecondary} onClick={() => setStatusTarget(user)}>{user.status === 'active' ? '停用' : '恢复'}</button>}
             </div></td>
@@ -41,9 +42,9 @@ function UsersBody() {
         </table></div>}
       </AdminData>
     </section>
-    {quotaUser && <QuotaPanel key={quotaUser.id} user={quotaUser} onClose={() => setQuotaUser(null)} />}
+    {quotaUser && users.data?.items.find(user => user.id === quotaUser.id)?.status === 'active' && <QuotaPanel key={quotaUser.id} user={quotaUser} onClose={() => setQuotaUser(null)} />}
     {statusTarget && <StatusDialog key={`${statusTarget.id}:${statusTarget.revision}`} user={statusTarget} onClose={() => setStatusTarget(null)} />}
-  </>;
+  </ReadOnlyWhile>;
 }
 
 function StatusDialog({ user, onClose }: { user: S['User']; onClose: () => void }) {
@@ -65,7 +66,7 @@ function StatusDialog({ user, onClose }: { user: S['User']; onClose: () => void 
 function QuotaPanel({ user, onClose }: { user: S['User']; onClose: () => void }) {
   const quota = useAdminUserQuota(user.id);
   const [bucket, setBucket] = useState<S['QuotaBucket'] | null>(null);
-  return <section className={styles.panel} aria-labelledby="admin-quota-title" data-testid="admin-quota">
+  return <ReadOnlyWhile stale={quota.isError}><section className={styles.panel} aria-labelledby="admin-quota-title" data-testid="admin-quota">
     <div className={styles.sectionHead}><h2 id="admin-quota-title">{user.email} 的额度</h2><button type="button" className={styles.buttonGhost} onClick={onClose}>收起</button></div>
     <AdminData query={quota} label="正在读取额度…">{view => <>
       <p className={`${styles.small} ${styles.muted}`}>实时转写{view.asr_enabled ? '已开启' : '已关闭'}，AI {view.ai_enabled ? '已开启' : '已关闭'}。额度只记录用量数字，不包含任何学习内容。</p>
@@ -81,7 +82,7 @@ function QuotaPanel({ user, onClose }: { user: S['User']; onClose: () => void })
       </table></div>
     </>}</AdminData>
     {bucket && <AdjustDialog key={`${bucket.kind}:${bucket.period_start}`} user={user} bucket={bucket} onClose={() => setBucket(null)} />}
-  </section>;
+  </section></ReadOnlyWhile>;
 }
 
 function AdjustDialog({ user, bucket, onClose }: { user: S['User']; bucket: S['QuotaBucket']; onClose: () => void }) {

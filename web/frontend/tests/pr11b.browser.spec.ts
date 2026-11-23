@@ -3,6 +3,7 @@ import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const BASE = 'http://127.0.0.1:19309';
+const A_ID = 'a0000000-0000-4000-8000-000000000001';
 const B_ID = 'b0000000-0000-4000-8000-000000000001';
 const EXPIRED = 'd0000000-0000-4000-8000-000000000104';
 const shots = resolve(process.cwd(), '../../outputs/pr11b/screenshots');
@@ -81,7 +82,9 @@ test.describe('PR-11b operations console', () => {
     await expect(row.getByRole('button', { name: '恢复' })).toBeVisible();
     await shot(page, 'admin-users');
 
-    await row.getByRole('button', { name: /查看 .* 的额度/ }).click();
+    // Only an active account has a quota projection (billing backend rule).
+    await expect(row.getByRole('button', { name: /查看 .* 的额度/ })).toHaveCount(0);
+    await page.getByTestId(`admin-user-${A_ID}`).getByRole('button', { name: /查看 .* 的额度/ }).click();
     await expect(page.getByTestId('admin-quota')).toContainText('实时转写（本月）');
     await page.getByTestId('admin-quota').getByRole('button', { name: '追加总结与卡片（本月）' }).click();
     await page.getByLabel('追加数量（次）').fill('10');
@@ -139,6 +142,8 @@ test.describe('PR-11b operations console', () => {
   });
 
   test('invitations: the one-time token is shown once and is gone after dismissal; reissue replaces it', async ({ page }) => {
+    const consoleText: string[] = [];
+    page.on('console', message => consoleText.push(message.text()));
     await asAdmin(page, '/admin/invites');
     await page.getByRole('button', { name: '创建邀请' }).click();
     await page.getByLabel('受邀邮箱').fill('new-student@example.invalid');
@@ -155,16 +160,21 @@ test.describe('PR-11b operations console', () => {
     expect(await page.content()).not.toContain(token);
     // Nothing of it was persisted by the page.
     expect(await page.evaluate(value => JSON.stringify({ ...localStorage }).includes(value) || JSON.stringify({ ...sessionStorage }).includes(value), token)).toBe(false);
+    // Nor logged (the Mock transport is quiet): neither the token nor a reauthentication header.
+    expect(consoleText.join(' ')).not.toContain(token);
+    expect(consoleText.join(' ')).not.toContain('X-Reauth-Token');
 
     await page.getByTestId(`admin-invitation-${EXPIRED}`).getByRole('button', { name: '重新签发' }).click();
     await page.getByRole('button', { name: '下一步：验证身份' }).click();
     await verify(page);
     await expect(page.getByTestId('invite-token')).toContainText('新的一次性令牌');
     await expect(page.getByTestId(`admin-invitation-${EXPIRED}`)).toContainText('未使用');
+    // Revoking it while its token is still on screen withdraws the token too.
     await page.getByTestId(`admin-invitation-${EXPIRED}`).getByRole('button', { name: '撤销' }).click();
     await page.getByRole('button', { name: '下一步：验证身份后撤销' }).click();
     await verify(page);
     await expect(page.getByTestId(`admin-invitation-${EXPIRED}`)).toContainText('已撤销');
+    await expect(page.getByTestId('invite-token')).toHaveCount(0);
   });
 
   test('usage shows exact amounts, the risk level and an empty month', async ({ page }) => {

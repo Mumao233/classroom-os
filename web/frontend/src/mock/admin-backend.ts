@@ -29,6 +29,8 @@ export type AdminHost = {
   setAccountQuota: (userId: string, quota: S['QuotaView']) => void;
   /** Platform switches also gate every account's own quota view. */
   applySwitches: (switches: S['AdminSwitches']) => void;
+  /** Current session generation of a user's Mock session; a proof is valid only within the one that issued it. */
+  sessionGeneration: (userId: string) => number;
 };
 
 const BEIJING = 8 * 3600_000;
@@ -38,6 +40,9 @@ export function beijingMonthStart(iso: string, monthsBack = 0) {
   return new Date(Date.UTC(local.getUTCFullYear(), local.getUTCMonth() - monthsBack, 1) - BEIJING).toISOString().replace('.000Z', 'Z');
 }
 
+/** `YYYY-MM-01` of the Beijing month starting at `start` (the contract's `period_start` query is a calendar date). */
+export const beijingMonthDate = (start: string) => new Date(Date.parse(start) + BEIJING).toISOString().slice(0, 10);
+
 const base = (id: string, created: string, revision = 1) => ({ id, revision, created_at: created, updated_at: created });
 const synthetic = (n: number) => `d0000000-0000-4000-8000-${n.toString(16).padStart(12, '0')}`;
 const token = () => { const bytes = crypto.getRandomValues(new Uint8Array(32)); return btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); };
@@ -46,7 +51,8 @@ const canonical = (value: unknown): string => Array.isArray(value) ? `[${value.m
 const maskEmail = (email: string) => { const [name, domain] = email.split('@'); return `${name!.slice(0, 1)}***@${domain}`; };
 const isEmail = (value: unknown) => typeof value === 'string' && value.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 const isUuid = (value: unknown) => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
-const reasonOk = (value: unknown) => typeof value === 'string' && value.length >= 1 && value.length <= 500 && value.trim().length > 0;
+/** 1–500 Unicode code points (JSON Schema counts code points), not only whitespace. */
+const reasonOk = (value: unknown) => typeof value === 'string' && value.trim().length > 0 && [...value].length <= 500;
 const only = (body: Record<string, unknown>, keys: string[]) => Object.keys(body).every(key => keys.includes(key));
 const PROOF_MS = 300_000;
 
@@ -78,6 +84,13 @@ export function createAdminBackend(host: AdminHost, accountUsers: S['User'][]) {
   const saveUser = (next: S['User']) => { if (host.accountUser(next.id)) host.setAccountUser(next); else others.set(next.id, next); };
   const quotaOf = (id: string) => host.accountQuota(id) ?? otherQuotas.get(id) ?? (() => { const quota = applyGates(syntheticQuota(host.now())); otherQuotas.set(id, quota); return quota; })();
   const saveQuota = (id: string, quota: S['QuotaView']) => { if (host.accountQuota(id)) host.setAccountQuota(id, quota); else otherQuotas.set(id, quota); };
+  /** Admin-owned quota changes per user, so a reseeded account fixture gets them back. */
+  const adjustments = new Map<string, Array<{ kind: S['QuotaBucket']['kind']; period_start: string; units: number }>>();
+  const withAdjustments = (userId: string, quota: S['QuotaView']): S['QuotaView'] => {
+    let next = applyGates(quota);
+    for (const change of adjustments.get(userId) ?? []) next = { ...next, buckets: next.buckets.map(item => item.kind === change.kind && Date.parse(item.period_start) === Date.parse(change.period_start) ? { ...item, limit: item.limit + change.units, remaining: item.remaining + change.units } : item) };
+    return next;
+  };
 
   const expiresIn = (days: number) => new Date(Date.parse(host.now()) + days * 86_400_000).toISOString().replace('.000Z', 'Z');
   let invitations: S['Invitation'][] = [
@@ -101,8 +114,9 @@ export function createAdminBackend(host: AdminHost, accountUsers: S['User'][]) {
   period(current, { budget_microyuan: '1000000000', fixed_and_accrued_microyuan: '300000000', settled_microyuan: '312450000', reserved_microyuan: '41200000', unknown_microyuan: '3800000', safety_reserve_microyuan: '100000000' }, '2026-10-28T07:30:00Z');
   period(beijingMonthStart(host.now(), 1), { budget_microyuan: '1000000000', fixed_and_accrued_microyuan: '300000000', settled_microyuan: '268000000', reserved_microyuan: '0', unknown_microyuan: '0', safety_reserve_microyuan: '100000000' }, '2026-10-01T02:00:00Z');
   let healthDev: AdminHealthDev = 'healthy';
-  const proofs = new Map<string, { binding: string; actor: string; expires: number; used: boolean }>();
+  const proofs = new Map<string, { binding: string; actor: string; generation: number; expires: number; used: boolean }>();
   const receipts = new Map<string, { body: string; reply: AdminReply }>();
+  const SECRET_ISSUED: AdminReply = { status: 0, body: null };
 
   const fail = (status: number, code: ErrorCode, message: string, currentRevision: number | null = null): AdminReply =>
     ({ status, body: { error: { code, message, request_id: host.newId(), retryable: false, retry_after_seconds: null, current_revision: currentRevision, conflict_id: null, task_id: null } } });
@@ -134,7 +148,7 @@ export function createAdminBackend(host: AdminHost, accountUsers: S['User'][]) {
     if (!password || !/^[0-9]{6}$/.test(code) || code === '000000') return { error: 'REAUTH_FAILED' };
     const value = token();
     const expires = host.clockMs() + PROOF_MS;
-    proofs.set(value, { binding: canonical({ ...binding }), actor: actorId, expires, used: false });
+    proofs.set(value, { binding: canonical({ ...binding }), actor: actorId, generation: host.sessionGeneration(actorId), expires, used: false });
     return { token: value, expires_at: new Date(expires).toISOString() };
   }
 
@@ -142,19 +156,21 @@ export function createAdminBackend(host: AdminHost, accountUsers: S['User'][]) {
   function write(actorId: string, operationId: AdminOperationId, targetId: string | null, key: string | null, reauth: string | null, body: Record<string, unknown>, secret: boolean, run: () => AdminReply): AdminReply {
     if (!isUuid(key)) return fail(422, 'VALIDATION_FAILED', '缺少幂等键');
     const scope = `${actorId}:${operationId}:${key}`;
-    const serialized = canonical(body);
+    // Path target and body together, as the contract's receipt fingerprint does.
+    const serialized = canonical({ targetId, body });
     const prior = receipts.get(scope);
     if (prior) {
-      if (prior.body !== serialized) return fail(422, 'IDEMPOTENCY_MISMATCH', '同一操作键对应了不同内容');
-      // A secret-bearing reply is never replayed: the token was shown once (or lost) and must be reissued.
-      return secret && prior.reply.status < 300 ? fail(409, 'SECRET_ALREADY_ISSUED', '该操作已完成，一次性令牌不会再次显示') : prior.reply;
+      if (prior.body !== serialized) return fail(409, 'IDEMPOTENCY_MISMATCH', '同一操作键对应了不同的对象或内容');
+      // A secret-bearing success is never replayed: only its non-secret status was kept.
+      return prior.reply === SECRET_ISSUED ? fail(409, 'SECRET_ALREADY_ISSUED', '该操作已完成，一次性令牌不会再次显示') : prior.reply;
     }
     const proof = reauth ? proofs.get(reauth) : undefined;
     const binding = canonical({ operationId, targetId, idempotencyKey: key, body });
-    if (!proof || proof.used || proof.actor !== actorId || proof.expires <= host.clockMs() || proof.binding !== binding) return fail(403, 'REAUTH_REQUIRED', '请重新验证密码和验证码');
+    if (!proof || proof.used || proof.actor !== actorId || proof.generation !== host.sessionGeneration(actorId) || proof.expires <= host.clockMs() || proof.binding !== binding) return fail(403, 'REAUTH_REQUIRED', '请重新验证密码和验证码');
     proof.used = true;
     const reply = run();
-    receipts.set(scope, { body: serialized, reply });
+    // The one-time token of an invitation is never kept in a receipt (frozen endpoint rule).
+    receipts.set(scope, { body: serialized, reply: secret && reply.status < 300 ? SECRET_ISSUED : reply });
     return reply;
   }
   function record(actorId: string, operation: AdminOperationId, targetType: string, targetId: string | null, reason: string) {
@@ -180,8 +196,9 @@ export function createAdminBackend(host: AdminHost, accountUsers: S['User'][]) {
     switch (route) {
       case 'GET /admin/users': return paged(users(), query);
       case 'GET /admin/users/:id/quota': {
+        // Like the billing backend: only an active owner has a quota projection.
         const target = user(id);
-        return target ? ok(quotaOf(target.id)) : fail(404, 'NOT_FOUND', '用户不存在');
+        return target?.status === 'active' ? ok(quotaOf(target.id)) : fail(404, 'NOT_FOUND', '用户不存在或未启用');
       }
       case 'PATCH /admin/users/:id': {
         if (!only(body, ['base_revision', 'status', 'reason']) || !Number.isInteger(body.base_revision) || (body.base_revision as number) < 1 || !['active', 'disabled'].includes(body.status as string) || !reasonOk(body.reason)) return fail(422, 'VALIDATION_FAILED', '状态变更无效：需要基础版本、目标状态和理由');
@@ -229,21 +246,23 @@ export function createAdminBackend(host: AdminHost, accountUsers: S['User'][]) {
           || !Number.isSafeInteger(body.additional_units) || (body.additional_units as number) < 1 || !reasonOk(body.reason)) return fail(422, 'VALIDATION_FAILED', '额度调整无效：需要用户、额度类型、周期、追加数量和理由');
         return write(actorId, 'adminAdjustQuota', body.user_id as string, key, reauth, body, false, () => {
           const target = user(body.user_id as string);
-          if (!target) return fail(404, 'NOT_FOUND', '用户不存在');
+          if (target?.status !== 'active') return fail(404, 'NOT_FOUND', '用户不存在或未启用');
           const quota = quotaOf(target.id);
           const bucket = quota.buckets.find(item => item.kind === body.bucket_kind && Date.parse(item.period_start) === Date.parse(body.period_start as string));
           if (!bucket) return fail(422, 'VALIDATION_FAILED', '该周期没有对应的额度桶');
           const units = body.additional_units as number;
           const next = { ...quota, buckets: quota.buckets.map(item => item === bucket ? { ...item, limit: item.limit + units, remaining: item.remaining + units } : item) };
           saveQuota(target.id, next);
+          adjustments.set(target.id, [...(adjustments.get(target.id) ?? []), { kind: bucket.kind, period_start: bucket.period_start, units }]);
           record(actorId, 'adminAdjustQuota', 'user', target.id, body.reason as string);
           return ok(next, 201);
         });
       }
       case 'GET /admin/usage': {
+        // `format: date`: the first day of a Beijing month, as the HTTP service accepts it (YYYY-MM-01).
         const start = query.get('period_start');
-        const found = start === null ? usage.get(current) : [...usage.values()].find(item => Date.parse(item.period_start) === Date.parse(start));
-        if (start !== null && Number.isNaN(Date.parse(start))) return fail(422, 'VALIDATION_FAILED', '周期起点无效');
+        if (start !== null && !/^\d{4}-(0[1-9]|1[0-2])-01$/.test(start)) return fail(422, 'VALIDATION_FAILED', '周期起点必须是某月 1 日（YYYY-MM-01）');
+        const found = start === null ? usage.get(current) : [...usage.values()].find(item => beijingMonthDate(item.period_start) === start);
         return found ? ok(found) : fail(404, 'NOT_FOUND', '该周期没有用量记录');
       }
       case 'GET /admin/health': return ok(health());
@@ -273,6 +292,8 @@ export function createAdminBackend(host: AdminHost, accountUsers: S['User'][]) {
     issueProof,
     setHealthDev: (value: AdminHealthDev) => { healthDev = value; },
     switches: () => switches,
+    /** A reseeded account fixture keeps the platform switches and the admin's quota adjustments. */
+    reapply: (userId: string, quota: S['QuotaView']) => withAdjustments(userId, quota),
     /** Test helper: the audit trail as stored. */
     audit: () => audit,
   };

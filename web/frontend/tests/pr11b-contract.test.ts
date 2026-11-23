@@ -49,6 +49,7 @@ describe('PR-11b admin mock responses conform to contract 0.3.0', () => {
     ok('QuotaView', get('/admin/users/d0000000-0000-4000-8000-000000000001/quota'));
     ok('InvitationPage', get('/admin/invitations'));
     ok('AdminUsage', get('/admin/usage'));
+    ok('AdminUsage', get('/admin/usage', 'period_start=2026-09-01'));
     for (const mode of ['healthy', 'degraded', 'stalled'] as const) { backend.setAdminHealth(mode); ok('AdminHealth', get('/admin/health')); }
     const switches = ok('AdminSwitches', get('/admin/switches'));
     ok('User', write('adminUpdateUser', B_ID, 'PATCH', `/admin/users/${B_ID}`, { base_revision: 1, status: 'disabled', reason: '合成' }));

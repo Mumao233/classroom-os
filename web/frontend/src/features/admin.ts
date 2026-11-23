@@ -69,21 +69,33 @@ export function useAdminWrite<B, R>(spec: {
   const [stage, setStage] = useState<AdminWriteStage>('idle');
   const [error, setError] = useState<unknown>(null);
   const pending = useRef<Pending<B> | null>(null);
+  const slotOf = (body: B) => `${spec.operationId}:${spec.targetId(body) ?? ''}:${canonicalJson(body)}`;
   const settle = (intent: Pending<B>) => { if (intentsOf(client).get(intent.slot) === intent) intentsOf(client).delete(intent.slot); if (pending.current === intent) pending.current = null; };
   // The reply may carry a one-time secret (an invitation token): it is handed to the page once and never
   // kept in the mutation cache. The mutation itself stays, so a 401 still retires the account session.
   const reply = useRef<{ value: R } | null>(null);
-  const mutation = useMutation({
-    mutationFn: async ({ body, key, token }: { body: B; key: string; token: string }) => { reply.current = { value: await spec.send(api, body, key, token) }; return null; },
+  // Only the operation name is the mutation's variable: body, key and proof stay in the intent ref, so the
+  // proof never lands in the mutation cache.
+  const mutation = useMutation<null, unknown, AdminOperationId>({
+    mutationFn: async () => {
+      const intent = pending.current;
+      if (!intent?.token) throw new Error('admin write without proof');
+      reply.current = { value: await spec.send(api, intent.body, intent.key, intent.token) };
+      return null;
+    },
   });
-  const refresh = () => client.invalidateQueries({ queryKey: ['account', accountKey, 'admin'] });
+  // Admin projections and this account's own quota view (a switch or an own-quota change shows there too).
+  const refresh = () => Promise.all([
+    client.invalidateQueries({ queryKey: ['account', accountKey, 'admin'] }),
+    client.invalidateQueries({ queryKey: ['account', accountKey, 'quota'] }),
+  ]);
 
   async function send() {
     const intent = pending.current;
     if (!intent?.token) { setStage('reauth'); return; }
     setStage('sending'); setError(null);
     try {
-      await mutation.mutateAsync({ body: intent.body, key: intent.key, token: intent.token });
+      await mutation.mutateAsync(spec.operationId);
       const result = reply.current;
       reply.current = null;
       settle(intent);
@@ -109,10 +121,11 @@ export function useAdminWrite<B, R>(spec: {
     /** Starts (or resumes, for the same body) an intent; a different body never reuses an older key. */
     start(body: B) {
       setError(null);
-      const slot = `${spec.operationId}:${spec.targetId(body) ?? ''}`;
-      const earlier = intentsOf(client).get(slot) as Pending<B> | undefined;
-      const current = pending.current?.slot === slot ? pending.current : earlier ?? null;
-      if (!current || canonicalJson(current.body) !== canonicalJson(body)) pending.current = { slot, body, key: crypto.randomUUID(), token: null, expires: 0 };
+      // One slot per operation, target and exact body: two different unconfirmed adjustments of one user
+      // each keep their own key, and submitting either again replays it.
+      const slot = slotOf(body);
+      const current = pending.current?.slot === slot ? pending.current : (intentsOf(client).get(slot) as Pending<B> | undefined) ?? null;
+      if (!current) pending.current = { slot, body, key: crypto.randomUUID(), token: null, expires: 0 };
       else { pending.current = current; if (current.token && current.expires <= wall()) current.token = null; }
       setStage('reauth');
     },
@@ -133,11 +146,11 @@ export function useAdminWrite<B, R>(spec: {
     retry: () => { void send(); },
     /** Leaves the intent. An unconfirmed one is re-read from the server, never assumed to have failed. */
     cancel() { pending.current = null; setStage('idle'); setError(null); void refresh(); },
-    /** Whether an earlier attempt of this operation on this target is still unconfirmed. */
-    hasUnconfirmed: (targetId: string | null) => intentsOf(client).has(`${spec.operationId}:${targetId ?? ''}`),
+    /** Whether an earlier attempt of this operation with this body is still unconfirmed. */
+    hasUnconfirmed: (body: B) => intentsOf(client).has(slotOf(body)),
   };
 }
-export type AdminWrite<B> = { stage: AdminWriteStage; error: unknown; operationId: AdminOperationId; pendingBody: () => B | null; start(body: B): void; verify(password: string, code: string): Promise<void>; retry(): void; cancel(): void; hasUnconfirmed(targetId: string | null): boolean };
+export type AdminWrite<B> = { stage: AdminWriteStage; error: unknown; operationId: AdminOperationId; pendingBody: () => B | null; start(body: B): void; verify(password: string, code: string): Promise<void>; retry(): void; cancel(): void; hasUnconfirmed(body: B): boolean };
 
 const reauthMessages: Record<AdminReauthError['kind'], string> = {
   unavailable: '管理写操作暂不可用：接口契约还没有定义管理员再认证用途。',

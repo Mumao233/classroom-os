@@ -46,13 +46,15 @@ export const formatBasisPoints = (value: number) => `${Math.floor(value / 100)}.
 export const levelLabel: Record<UsageView['level'], string> = { normal: '正常', warning60: '已过 60% 提醒线', warning80: '已过 80% 提醒线', blocked100: '已到 100%，新收费任务暂停' };
 
 const BEIJING = 8 * 3600_000;
-/** Starts of the last `count` Beijing calendar months (newest first), as UTC instants. */
-export function recentMonths(nowMs: number, count = 6): Array<{ start: string; label: string }> {
+/**
+ * The last `count` Beijing calendar months (newest first). `date` is the `period_start` query value of
+ * `GET /admin/usage` (`format: date`, the first day of the month: YYYY-MM-01).
+ */
+export function recentMonths(nowMs: number, count = 6): Array<{ date: string; label: string }> {
   const local = new Date(nowMs + BEIJING);
   return Array.from({ length: count }, (_, back) => {
-    const start = new Date(Date.UTC(local.getUTCFullYear(), local.getUTCMonth() - back, 1) - BEIJING);
-    const shown = new Date(start.getTime() + BEIJING);
-    return { start: start.toISOString().replace('.000Z', 'Z'), label: `${shown.getUTCFullYear()} 年 ${shown.getUTCMonth() + 1} 月` };
+    const first = new Date(Date.UTC(local.getUTCFullYear(), local.getUTCMonth() - back, 1));
+    return { date: first.toISOString().slice(0, 10), label: `${first.getUTCFullYear()} 年 ${first.getUTCMonth() + 1} 月` };
   });
 }
 

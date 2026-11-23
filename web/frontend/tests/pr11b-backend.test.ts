@@ -185,15 +185,76 @@ describe('PR-11b usage and health', () => {
     const { call } = harness();
     const current = call('C', 'GET', '/admin/usage').body as S['AdminUsage'];
     expect(current.period_start).toBe('2026-09-30T16:00:00Z');
-    expect(call('C', 'GET', '/admin/usage', undefined, 'period_start=2026-09-30T16:00:00Z').body).toEqual(current);
-    expect((call('C', 'GET', '/admin/usage', undefined, 'period_start=2026-08-31T16:00:00Z').body as S['AdminUsage']).ledger_reconciled_at).not.toBeNull();
-    expect(err(call('C', 'GET', '/admin/usage', undefined, 'period_start=2025-01-01T00:00:00Z'))).toBe('NOT_FOUND');
-    expect(err(call('C', 'GET', '/admin/usage', undefined, 'period_start=yesterday'))).toBe('VALIDATION_FAILED');
+    // `format: date`, the first day of the Beijing month, as the HTTP service accepts it.
+    expect(call('C', 'GET', '/admin/usage', undefined, 'period_start=2026-10-01').body).toEqual(current);
+    expect((call('C', 'GET', '/admin/usage', undefined, 'period_start=2026-09-01').body as S['AdminUsage']).ledger_reconciled_at).not.toBeNull();
+    expect(err(call('C', 'GET', '/admin/usage', undefined, 'period_start=2025-01-01'))).toBe('NOT_FOUND');
+    for (const bad of ['yesterday', '2026-09-30T16:00:00Z', '2026-10-02', '2026-13-01']) expect(err(call('C', 'GET', '/admin/usage', undefined, `period_start=${bad}`))).toBe('VALIDATION_FAILED');
   });
   it('health readings follow the development panel', () => {
     const { backend, call } = harness();
     expect((call('C', 'GET', '/admin/health').body as S['AdminHealth']).database).toBe('healthy');
     backend.setAdminHealth('stalled');
     expect(call('C', 'GET', '/admin/health').body).toMatchObject({ objects: 'degraded', unknown_task_count: 3, failed_delete_count: 2 });
+  });
+});
+
+describe('PR-11b review round 0 regressions (mock)', () => {
+  it('a replayed key with the same body but another target is a mismatch, not the first target\'s success', () => {
+    const { backend, call, write } = harness();
+    const first = write('adminRevokeInvitation', ISSUED, 'POST', `/admin/invitations/${ISSUED}/revoke`, {});
+    expect(first.reply.status).toBe(200);
+    const proof = backend.issueAdminProof('C', { operationId: 'adminRevokeInvitation', targetId: EXPIRED, idempotencyKey: first.key, body: {} }, 'p', '123456') as { token: string };
+    expect(err(call('C', 'POST', `/admin/invitations/${EXPIRED}/revoke`, {}, '', first.key, proof.token))).toBe('IDEMPOTENCY_MISMATCH');
+    expect((items<S['Invitation']>(call('C', 'GET', '/admin/invitations')).find(item => item.id === EXPIRED))!.state).toBe('expired');
+  });
+
+  it('a proof dies with the Mock session that obtained it', () => {
+    const { backend, call, newKey } = harness();
+    const key = newKey();
+    const body = { base_revision: 1, status: 'disabled', reason: '合成：会话检查' };
+    const proof = backend.issueAdminProof('C', { operationId: 'adminUpdateUser', targetId: B_ID, idempotencyKey: key, body }, 'p', '123456') as { token: string };
+    backend.retireSession('C');
+    expect(err(call('C', 'PATCH', `/admin/users/${B_ID}`, body, '', key, proof.token))).toBe('REAUTH_REQUIRED');
+    expect(backend.accountUser('B').status).toBe('active');
+  });
+
+  it('only an active owner has a quota projection or adjustment', () => {
+    const { call, write } = harness();
+    write('adminUpdateUser', B_ID, 'PATCH', `/admin/users/${B_ID}`, { base_revision: 1, status: 'disabled', reason: '合成' });
+    expect(err(call('C', 'GET', `/admin/users/${B_ID}/quota`))).toBe('NOT_FOUND');
+    expect(err(call('C', 'GET', `/admin/users/${PENDING}/quota`))).toBe('NOT_FOUND');
+    expect(err(write('adminAdjustQuota', B_ID, 'POST', '/admin/quota-adjustments', { user_id: B_ID, bucket_kind: 'summary_month_count', period_start: '2026-09-30T16:00:00Z', additional_units: 1, reason: '合成' }).reply)).toBe('NOT_FOUND');
+  });
+
+  it('reseeding a student dataset keeps the account status, platform switches and quota adjustments', () => {
+    const { backend, call, write } = harness();
+    const before = (call('A', 'GET', '/me/quota').body as S['QuotaView']).buckets.find(item => item.kind === 'summary_month_count')!;
+    write('adminAdjustQuota', A_ID, 'POST', '/admin/quota-adjustments', { user_id: A_ID, bucket_kind: 'summary_month_count', period_start: before.period_start, additional_units: 7, reason: '合成' });
+    write('adminUpdateSwitches', null, 'PATCH', '/admin/switches', { base_revision: 1, ai_enabled: false, reason: '合成' });
+    backend.reset('A', 'empty');
+    const after = call('A', 'GET', '/me/quota').body as S['QuotaView'];
+    expect(after.ai_enabled).toBe(false);
+    expect(after.buckets.find(item => item.kind === 'summary_month_count')!.limit).toBe(before.limit + 7);
+    expect(items(call('A', 'GET', '/courses'))).toHaveLength(0);
+  });
+
+  it('the switches are enforced at new task admission, not only at preparation', () => {
+    const { call, write } = harness();
+    const ENDED = 'c0000000-0000-4000-8000-000000000001';
+    const request = (over: Record<string, unknown>) => ({ scope: 'all', seen_sources: [], include_images: false, accept_partial_scope: false, ...over });
+    const execute = (plan: S['GenerationPlan']) => ({ plan_sha256: plan.plan_sha256, confirmed_destination_revision: plan.destination.configuration_revision, confirm_send: true, confirm_images: false, confirm_original_snapshot: false, confirm_partial_scope: false });
+    const question = call('A', 'POST', `/class-sessions/${ENDED}/generation-plans`, request({ kind: 'ai_question', scope: 'recent120', question: '为什么？' })).body as S['GenerationPlan'];
+    const retranscribe = call('A', 'POST', `/class-sessions/${ENDED}/generation-plans`, request({ kind: 'asr_retranscribe' })).body as S['GenerationPlan'];
+    write('adminUpdateSwitches', null, 'PATCH', '/admin/switches', { base_revision: 1, ai_enabled: false, asr_enabled: false, reason: '合成：维护' });
+    expect(err(call('A', 'POST', `/generation-plans/${question.id}/execute`, execute(question)))).toBe('BUDGET_BLOCKED');
+    expect(err(call('A', 'POST', `/generation-plans/${retranscribe.id}/execute`, execute(retranscribe)))).toBe('SERVICE_DISABLED');
+    expect(items<S['Task']>(call('A', 'GET', '/tasks', undefined, `class_session_id=${ENDED}`)).filter(item => item.kind === 'ai_question' || item.kind === 'asr_retranscribe')).toHaveLength(0);
+  });
+
+  it('a reason is limited in code points, not UTF-16 units', () => {
+    const { write } = harness();
+    expect(write('adminUpdateUser', B_ID, 'PATCH', `/admin/users/${B_ID}`, { base_revision: 1, status: 'disabled', reason: '😀'.repeat(500) }).reply.status).toBe(200);
+    expect(err(write('adminUpdateUser', B_ID, 'PATCH', `/admin/users/${B_ID}`, { base_revision: 2, status: 'active', reason: '😀'.repeat(501) }).reply)).toBe('VALIDATION_FAILED');
   });
 });
