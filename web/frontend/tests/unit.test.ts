@@ -222,6 +222,22 @@ describe('revocation, isolated tasks and segment projection', () => {
     runtime.runEventScript('classroomDeletion');
     expect(runtime.getState()).toMatchObject({ active: false, leaseValid: false, eventProjection: { classroomDeleted: true } });
   });
+  it('a scenario change on the same data set keeps a deleted classroom deleted and never records it (merged-review P1-6)', () => {
+    const runtime = createMockRuntime();
+    runtime.start(); runtime.runEventScript('classroomDeletion');
+    runtime.chooseScenario('03', { keepDeleted: true });
+    expect(runtime.getState()).toMatchObject({ active: false, leaseValid: false, flows: { capture: 'idle' }, eventProjection: { classroomDeleted: true, chunkDurable: false } });
+    expect(runtime.getState().eventProjection.portCaptureState).not.toBe('recording');
+    expect(runtime.start()).toBe(false);
+    expect(runtime.acquireMockLease()).toBe(false);
+  });
+  it('a scenario never binds a classroom the account-shell ledger revoked (merged-review P1-6)', () => {
+    const runtime = createMockRuntime();
+    const demo = runtime.getState().currentClassroomId;
+    runtime.chooseScenario('04', { keepDeleted: true, isRevoked: id => id === demo });
+    expect(runtime.getState()).toMatchObject({ active: false, leaseValid: false, eventProjection: { classroomDeleted: true } });
+    expect(runtime.start()).toBe(false);
+  });
   it('isolates tasks by classroom and retains unknown cost risk until that task is reconciled', () => {
     const runtime = createMockRuntime();
     const original = eventScripts.taskUnknown[0];

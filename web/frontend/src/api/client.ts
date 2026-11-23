@@ -157,6 +157,13 @@ export function createApiClient(scope: Scope, transportOrOptions: typeof fetch |
     writeMaterial: (courseId: string, body: S['CourseMaterialWrite']) => post<S['CourseMaterial']>(`/courses/${segment(courseId)}/materials`, body),
 
     classSessions: (query: { course_id?: string }, signal?: AbortSignal) => get<S['ClassSessionPage']>('/class-sessions', { ...query, limit: 100 }, signal),
+    /** Every classroom of a course, read to the last page (a cascade deletion lists what it removes first). */
+    allClassSessions: (query: { course_id: string }, signal?: AbortSignal) => allPages<S['ClassSession']>('/class-sessions', signal, query),
+    /** Every course of a semester, archived ones included, read to the last page. */
+    allCourses: async (query: { semester_id: string }, signal?: AbortSignal) => {
+      const [active, archived] = await Promise.all([allPages<S['Course']>('/courses', signal, { ...query, archived: false }), allPages<S['Course']>('/courses', signal, { ...query, archived: true })]);
+      return { items: [...active.items, ...archived.items], next_cursor: null };
+    },
     updateClassSession: (id: string, body: S['ClassSessionPatch']) => patch<S['ClassSession']>(`/class-sessions/${segment(id)}`, body),
     reviewDocuments: (query: { course_id?: string; kind?: 'summary' | 'card' | 'note'; understood?: boolean }, signal?: AbortSignal) => get<S['ReviewDocumentPage']>('/review-documents', { ...query, limit: 100 }, signal),
     questions: (classSessionId: string, signal?: AbortSignal) => get<S['QuestionPage']>('/questions', { class_session_id: classSessionId, limit: 100 }, signal),

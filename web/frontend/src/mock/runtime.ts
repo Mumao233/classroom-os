@@ -265,14 +265,23 @@ export function createMockRuntime(options: { createVault?: () => MemoryVault } =
       update({ ...state, currentClassroomId: classroomId, flows: { ...state.flows, ai: projected.ai }, eventProjection: { ...state.eventProjection, mayHaveCharged: projected.risk, finalRevision: Math.max(0, ...[...finalSegments.values()].filter(item => item.classroomId === classroomId).map(item => item.revision)), partial: partialText(classroomId), finalText: [...finalSegments.values()].filter(item => item.classroomId === classroomId).sort((a, b) => a.sequence - b.sequence).map(item => item.text).join(' / ') || null, classroomDeleted: deletedClassrooms.has(classroomId) } });
       return true;
     },
-    chooseScenario: (scenario: string) => {
+    /**
+     * `keepDeleted`: the data set behind the account is unchanged, so deleted classrooms and audio stay deleted
+     * (only a replaced data set forgets them). `isRevoked`: the account shell's own revocations; a scenario
+     * never binds or records a classroom either of them considers deleted.
+     */
+    chooseScenario: (scenario: string, options: { keepDeleted?: boolean; isRevoked?: (classroomId: string) => boolean } = {}) => {
       if (!state.account) return;
-      stopCapture('ended'); stopEvents(); events.clear(); durableIds.clear(); finalSegments.clear(); partialSegments.clear(); deletedClassrooms.clear(); deletedAudioIds.clear(); resetPorts();
+      stopCapture('ended'); stopEvents(); events.clear(); durableIds.clear(); finalSegments.clear(); partialSegments.clear(); resetPorts();
+      if (!options.keepDeleted) { deletedClassrooms.clear(); deletedAudioIds.clear(); }
       const scope = freshScope(mockCaptureScope().classSessionId); registerUpload(scope);
-      const recording = ['03', '04', '05'].includes(scenario);
+      if (options.isRevoked?.(scope.classSessionId)) deletedClassrooms.add(scope.classSessionId);
+      const revoked = deletedClassrooms.has(scope.classSessionId);
+      if (revoked) for (const item of uploadRecords.values()) if (item.entry.classSessionId === scope.classSessionId) item.canAccept = false;
+      const recording = !revoked && ['03', '04', '05'].includes(scenario);
       if (recording) capture.command('recording');
       const projected = taskProjection(scope.classSessionId);
-      update({ ...state, scenario, currentClassroomId: scope.classSessionId, captureScope: scope, leaseValid: true, tasks: Object.fromEntries(tasks), eventProjection: { ...emptyProjection(), mayHaveCharged: projected.risk, portCaptureState: capture.state, uploadPending: upload.pending(1) }, active: recording, flows: {
+      update({ ...state, scenario, currentClassroomId: scope.classSessionId, captureScope: scope, leaseValid: !revoked, tasks: Object.fromEntries(tasks), eventProjection: { ...emptyProjection(), mayHaveCharged: projected.risk, portCaptureState: capture.state, uploadPending: upload.pending(1), classroomDeleted: revoked }, active: recording, flows: {
         capture: recording ? 'recording' : 'idle',
         upload: scenario === '04' ? 'failed' : 'pending',
         asr: recording ? 'streaming' : 'idle',
@@ -281,8 +290,8 @@ export function createMockRuntime(options: { createVault?: () => MemoryVault } =
       } });
       connectEvents();
       // This synthetic durable fixture uses the same receipt path as user-triggered events.
-      if (scenario === '03') events.emit(bindScriptEvent(eventScripts.upload[1]));
-      if (scenario === '06' && ![...tasks.values()].some(task => task.classroomId === scope.classSessionId && task.state === 'unknown' && task.mayHaveCharged)) {
+      if (scenario === '03' && !revoked) events.emit(bindScriptEvent(eventScripts.upload[1]));
+      if (scenario === '06' && !revoked && ![...tasks.values()].some(task => task.classroomId === scope.classSessionId && task.state === 'unknown' && task.mayHaveCharged)) {
         const event = eventScripts.taskUnknown[0];
         events.emit({ ...event, event_id: crypto.randomUUID(), data: { ...event.data, task_id: crypto.randomUUID(), class_session_id: scope.classSessionId } });
       }

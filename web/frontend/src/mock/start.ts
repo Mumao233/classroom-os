@@ -71,6 +71,9 @@ const worker = setupWorker(
     // Browser-test-only: hold requests to a path (suffix match) so an in-flight change can be attempted.
     const slow = localStorage.getItem('mock-test-delay-path');
     if (slow && request.method !== 'GET' && path.endsWith(slow)) await delay(1500);
+    // Browser-test-only: hold reads under a path prefix, so a page can be observed while its re-read is pending.
+    const slowGet = localStorage.getItem('mock-test-delay-get');
+    if (slowGet && request.method === 'GET' && path.startsWith(slowGet)) await delay(1500);
     // Same rule as the media service: raw upload bytes must be sent as application/octet-stream.
     if (request.method === 'PUT' && request.headers.get('Content-Type') !== 'application/octet-stream') {
       return HttpResponse.json({ error: { code: 'VALIDATION_FAILED', message: '上传内容类型必须为 application/octet-stream', request_id: crypto.randomUUID(), retryable: false, retry_after_seconds: null, current_revision: null, conflict_id: null, task_id: null } }, { status: 422, headers });

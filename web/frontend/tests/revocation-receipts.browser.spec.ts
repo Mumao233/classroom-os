@@ -183,3 +183,62 @@ test.describe('revocation on receipt (offline after the reply)', () => {
     await expect(page.getByRole('heading', { name: '线性代数', level: 1 })).toHaveCount(0);
   });
 });
+
+test.describe('merged-review regressions (round 3)', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.addInitScript(() => { for (const key of ['mock-test-offline-after', 'mock-test-delay-path', 'mock-test-fail-get', 'mock-test-delay-get']) localStorage.removeItem(key); });
+  });
+
+  test('P1-1 · a classroom moved to another course on another device survives the old course\'s cascade, offline too', async ({ page }) => {
+    await ready(page, `/classrooms/${ENDED}/record`);
+    await expect(page.getByRole('heading', { name: '特征值与特征向量', level: 1 })).toBeVisible();
+    // Another device moves the classroom from 线性代数 to 大学物理 II; this page's cache still places it in 线性代数.
+    const status = await page.evaluate(async ({ id, course }) => {
+      const current = await (await fetch(`/api/web/v1/class-sessions/${id}`)).json() as { revision: number };
+      return (await fetch(`/api/web/v1/class-sessions/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() }, body: JSON.stringify({ base_revision: current.revision, course_id: course }) })).status;
+    }, { id: ENDED, course: MP });
+    expect(status).toBe(200);
+    await loseConnectionAfterDelete(page);
+    await deleteCourse(page, LA);
+    await spa(page, `/classrooms/${ENDED}/record`);
+    await expect(page.getByRole('heading', { name: '特征值与特征向量', level: 1 })).toBeVisible();
+    await expect(page.getByRole('alert').filter({ hasText: '内容已被删除' })).toHaveCount(0);
+    await shot(page, 'round3-moved-classroom-survives');
+  });
+
+  test('P1-4 · after the versions are refused, copied text stays hidden while the next versions read is pending', async ({ page }) => {
+    await ready(page, `/review/items/${SUMMARY}`);
+    await expect(page.getByTestId('reader')).toContainText('特征值');
+    await page.getByTestId('edit-personal').click();
+    await expect(page.locator('#personal-body')).toHaveValue(/特征值/);
+    await page.getByRole('button', { name: '收起（保留草稿）' }).click();
+    await page.evaluate(id => (globalThis as unknown as { __classroomMock: { denyRevisions(id: string): void } }).__classroomMock.denyRevisions(id), SUMMARY);
+    await page.getByTestId('toggle-understood').click();
+    await expect(page.getByTestId('editor-hidden')).toBeVisible();
+    await spa(page, '/review');
+    await expect(page.getByRole('heading', { name: '复习', level: 1 })).toBeVisible();
+    await testControl(page, 'mock-test-delay-get', `/review-documents/${SUMMARY}/revisions`);
+    await spa(page, `/review/items/${SUMMARY}`);
+    // The versions are being read again: nothing copied from them, and no way to reveal the draft.
+    await expect(page.getByTestId('editor-checking')).toBeVisible();
+    await expect(page.getByTestId('edit-personal')).toHaveCount(0);
+    await expect(page.locator('#personal-body')).toHaveCount(0);
+    // The re-read is refused again.
+    await expect(page.getByTestId('editor-hidden')).toBeVisible();
+    await expect(page.getByTestId('edit-personal')).toHaveCount(0);
+    await shot(page, 'round3-editor-hidden-while-rechecking');
+  });
+
+  test('P1-6 · a classroom revoked in this account stays revoked when another scenario of the same data set is chosen', async ({ page }) => {
+    await ready(page);
+    const result = page.getByRole('region', { name: '模拟事件结果' });
+    await page.getByLabel('模拟事件脚本').selectOption('classroomDeletion');
+    await page.getByRole('button', { name: '运行模拟事件' }).click();
+    await expect(result).toContainText('课堂撤权：已撤权');
+    // MOCK-03 records on the demo classroom; it uses the same seeded data set, so the deletion stands.
+    await page.getByLabel('模拟场景').selectOption('03');
+    await expect(result).toContainText('课堂撤权：已撤权');
+    await expect(result).not.toHaveAttribute('data-port-capture', 'recording');
+    await expect(result).toContainText('持久上传：未确认');
+  });
+});
