@@ -31,7 +31,8 @@ export function ClassReview() {
   const heading = useRef<HTMLHeadingElement>(null);
   useEffect(() => { heading.current?.focus({ preventScroll: true }); }, [classId]);
   if (session.isPending) return <main id="main-content" className={styles.page}><Loading label="正在读取课堂…" /></main>;
-  if (session.isError || !session.data) return <main id="main-content" className={styles.page}><QueryError error={session.error} /><Link to="/review">返回复习</Link></main>;
+  // A denied classroom has no data left (revocation ledger); a transport failure keeps it readable.
+  if (!session.data) return <main id="main-content" className={styles.page}><QueryError error={session.error} /><Link to="/review">返回复习</Link></main>;
   const data = session.data;
   const from = `${location.pathname}${location.search}`;
   return <main id="main-content" className={styles.page}>

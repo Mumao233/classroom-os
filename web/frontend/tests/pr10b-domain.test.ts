@@ -138,17 +138,20 @@ describe('PR-10b reading memory and markdown', () => {
 describe('PR-10b classroom deletion evicts cached review projections', () => {
   it('removes the classroom from lists, documents and revisions without a refetch', async () => {
     const { QueryClient } = await import('@tanstack/react-query');
-    const { evictClassroomFromReview } = await import('../src/features/review');
+    const { createRevocationLedger } = await import('../src/features/revocation');
     const client = new QueryClient();
+    const ledger = createRevocationLedger({ client, accountKey: 'A:1' });
     const gone = doc({ id: 'e0000000-0000-4000-8000-0000000000a1', class_session_id: 'c-gone' });
     const kept = doc({ id: 'e0000000-0000-4000-8000-0000000000a2', class_session_id: 'c-kept' });
     client.setQueryData(['account', 'A:1', 'review-library', {}], { items: [gone, kept], next_cursor: null });
     client.setQueryData(['account', 'A:1', 'review-document', gone.id], gone);
     client.setQueryData(['account', 'A:1', 'review-revisions', gone.id], { items: [], next_cursor: null });
     client.setQueryData(['account', 'A:1', 'review-document', kept.id], kept);
-    evictClassroomFromReview(client, 'c-gone');
+    // Membership of both documents is known from their own data, so nothing else is dropped.
+    ledger.revokeClass('c-gone');
     expect((client.getQueryData(['account', 'A:1', 'review-library', {}]) as { items: S['ReviewDocument'][] }).items.map(item => item.id)).toEqual([kept.id]);
     expect(client.getQueryData(['account', 'A:1', 'review-document', gone.id])).toBeUndefined();
+    expect(client.getQueryState(['account', 'A:1', 'review-document', gone.id])?.status).toBe('error');
     expect(client.getQueryData(['account', 'A:1', 'review-revisions', gone.id])).toBeUndefined();
     expect(client.getQueryData(['account', 'A:1', 'review-document', kept.id])).toEqual(kept);
   });
@@ -157,12 +160,15 @@ describe('PR-10b classroom deletion evicts cached review projections', () => {
 describe('PR-10b cascade deletion evicts contained classrooms', () => {
   it('a deleted semester evicts the review data of every classroom of its courses, nothing else', async () => {
     const { QueryClient } = await import('@tanstack/react-query');
-    const { evictScopeFromReview } = await import('../src/features/review');
+    const { createRevocationLedger } = await import('../src/features/revocation');
     const client = new QueryClient();
+    const revoked: string[] = [];
+    const ledger = createRevocationLedger({ client, accountKey: 'A:1', hooks: { onClassRevoked: id => revoked.push(id) } });
     client.setQueryData(['account', 'A:1', 'courses', {}], { items: [{ id: 'k1', semester_id: 's1' }, { id: 'k2', semester_id: 's2' }], next_cursor: null });
     client.setQueryData(['account', 'A:1', 'class-sessions', null], { items: [{ id: 'c1', course_id: 'k1' }, { id: 'c2', course_id: 'k2' }], next_cursor: null });
     client.setQueryData(['account', 'A:1', 'review-library', {}], { items: [doc({ id: 'd1', class_session_id: 'c1' }), doc({ id: 'd2', class_session_id: 'c2' })], next_cursor: null });
-    expect([...evictScopeFromReview(client, { kind: 'semester', id: 's1' })]).toEqual(['c1']);
+    ledger.applyScopeReceipt({ kind: 'semester', id: 's1', mode: 'cascade' });
+    expect(revoked).toEqual(['c1']);
     expect((client.getQueryData(['account', 'A:1', 'review-library', {}]) as { items: S['ReviewDocument'][] }).items.map(item => item.id)).toEqual(['d2']);
   });
 });
@@ -170,12 +176,13 @@ describe('PR-10b cascade deletion evicts contained classrooms', () => {
 describe('PR-10b cascade deletion also drops classroom rows and their questions', () => {
   it('removes deleted classrooms from cached lists and every query keyed by them', async () => {
     const { QueryClient } = await import('@tanstack/react-query');
-    const { evictScopeFromReview } = await import('../src/features/review');
+    const { createRevocationLedger } = await import('../src/features/revocation');
     const client = new QueryClient();
+    const ledger = createRevocationLedger({ client, accountKey: 'A:1' });
     client.setQueryData(['account', 'A:1', 'class-sessions', null], { items: [{ id: 'c1', course_id: 'k1' }, { id: 'c2', course_id: 'k2' }], next_cursor: null });
     client.setQueryData(['account', 'A:1', 'questions', 'c1'], { items: [{ id: 'q1', class_session_id: 'c1' }], next_cursor: null });
     client.setQueryData(['account', 'A:1', 'questions', 'c2'], { items: [], next_cursor: null });
-    evictScopeFromReview(client, { kind: 'course', id: 'k1' });
+    ledger.applyScopeReceipt({ kind: 'course', id: 'k1', mode: 'cascade' });
     expect((client.getQueryData(['account', 'A:1', 'class-sessions', null]) as { items: Array<{ id: string }> }).items.map(item => item.id)).toEqual(['c2']);
     expect(client.getQueryData(['account', 'A:1', 'questions', 'c1'])).toBeUndefined();
     expect(client.getQueryData(['account', 'A:1', 'questions', 'c2'])).toBeDefined();

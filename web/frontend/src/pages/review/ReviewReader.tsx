@@ -75,7 +75,8 @@ export function ReviewReader() {
   });
 
   if (document.isPending) return <main id="main-content" className={styles.page}><p role="status" className={pages.muted}>正在读取复习资料…</p></main>;
-  if (document.isError || !doc) return <main id="main-content" className={styles.page}><div className={`${pages.banner} ${pages.bannerDanger}`} role="alert"><div>{describeError(document.error)} <Link to="/review">返回复习</Link></div></div></main>;
+  // A denied document has no data left (revocation ledger); a transport failure keeps it readable.
+  if (!doc) return <main id="main-content" className={styles.page}><div className={`${pages.banner} ${pages.bannerDanger}`} role="alert"><div>{describeError(document.error)} <Link to="/review">返回复习</Link></div></div></main>;
 
   const role = shown ? revisionRole(doc, shown) : null;
   const sourceNote = sourceStatusText[doc.source_status];
@@ -94,6 +95,7 @@ export function ReviewReader() {
       </div>
     </div>
     <DataSourceNote />
+    {document.isError && <div className={`${pages.banner} ${pages.bannerWarning}`} role="status" data-testid="document-refresh-error">{describeError(document.error)}</div>}
     <OfflineBanner scope="复习资料仍可阅读已加载的内容；" />
     {sourceNote && <div className={`${pages.banner} ${pages.bannerWarning}`} role="status" data-testid="source-status">{sourceNote}</div>}
     {notice && <div className={`${pages.banner} ${notice.tone === 'danger' ? pages.bannerDanger : notice.tone === 'warning' ? pages.bannerWarning : ''}`} role={notice.tone === 'success' ? 'status' : 'alert'} data-testid="review-notice">{notice.text}</div>}
@@ -102,7 +104,8 @@ export function ReviewReader() {
       <div className={pages.sectionHead}><h2 id="versions-heading">版本</h2>
         <div className={pages.row}><button type="button" className={pages.buttonSecondary} aria-pressed={comparing} onClick={() => setComparing(value => !value)} disabled={list.length < 2}>比较版本</button></div></div>
       <p className={`${pages.small} ${pages.muted}`}>AI 生成的内容都是候选，只有你选择“采用”后才会成为采用版本；保存个人稿不会覆盖任何版本。</p>
-      {revisions.isError ? <p role="alert" className={pages.error}>{describeError(revisions.error)}</p> : revisions.isPending ? <p role="status" className={pages.muted}>正在读取版本…</p> :
+      {revisions.isError && <p role="alert" className={pages.error}>{describeError(revisions.error)}</p>}
+      {revisions.isError && !revisions.data ? null : revisions.isPending ? <p role="status" className={pages.muted}>正在读取版本…</p> :
         <ul className={styles.versions} data-testid="version-list">{list.map(item => {
           const itemRole = revisionRole(doc, item);
           return <li key={item.id} className={styles.version} aria-current={shown?.id === item.id} data-revision-id={item.id} data-role={itemRole}>

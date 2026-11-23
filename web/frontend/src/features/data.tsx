@@ -3,6 +3,7 @@ import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ApiClientError, type ApiClient } from '../api/client';
 import type { CaptureView, LocalRisk } from '../domain/dashboard';
 import type { ClassroomShell } from './classroom';
+import type { RevocationLedger } from './revocation';
 
 /**
  * Everything a page needs from the authenticated account shell. Pages never import fetch,
@@ -24,6 +25,8 @@ export type AppData = {
   classroomRevoked?: boolean;
   /** PR-10a classroom shell (capture port, drafts, layout memory); absent where not provided. */
   classroom?: ClassroomShell;
+  /** Account-shell revocation ledger: deletion receipts revoke cached content at once (REVOCATION-DESIGN.md). */
+  revocation?: RevocationLedger;
 };
 
 const Context = createContext<AppData | null>(null);

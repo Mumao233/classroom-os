@@ -15,7 +15,6 @@ import { useMockRuntime } from '../mock/runtime';
 import { createMockClassroomShell } from '../mock/classroom-shell';
 import { createTranscriptFeed } from '../mock/classroom-feed';
 import { advanceMockTask, finishMockAsr, persistMockFinal, projectMockTask, releaseMockAccountLeases, releaseMockLease, revokeMockAudio, revokeMockClassroom, setMockDurable, setMockRetranscribe } from '../mock/start';
-import { ApiClientError } from '../api/client';
 import { formatClock } from '../domain/classroom';
 import { stopCapture } from '../features/classroom';
 import { ClassroomEntry } from '../pages/classroom/ClassroomEntry';
@@ -23,7 +22,7 @@ import { ClassroomLive } from '../pages/classroom/ClassroomLive';
 import { ClassroomProcessing } from '../pages/classroom/ClassroomProcessing';
 import { ClassroomRecord } from '../pages/classroom/ClassroomRecord';
 import { ReviewHub } from '../pages/review/ReviewHub';
-import { evictClassroomFromReview } from '../features/review';
+import { createRevocationLedger } from '../features/revocation';
 import { ReviewReader } from '../pages/review/ReviewReader';
 import { ClassReview } from '../pages/review/ClassReview';
 import type { ClassroomOSWebV1EventEnvelope } from '../generated/events';
@@ -83,6 +82,20 @@ function MockWorkbenchContent({ runtime }: { runtime: ReturnType<typeof useMockR
   // This component remounts per account epoch, so drafts, pending stops and the feed never cross accounts.
   const [classroomShell] = useState(() => createMockClassroomShell(runtime, () => MOCK_NOW));
   const [feed] = useState(createTranscriptFeed);
+  // One revocation ledger per account epoch: deletion receipts, deletion events and authoritative
+  // denials revoke cached content and the bound capture at once, without relying on a refetch.
+  const { revokeClassroomAccess } = runtime;
+  const [revocation] = useState(() => createRevocationLedger({ client: queryClient, accountKey: `${account}:${epoch}`, api, hooks: {
+    boundClassId: () => classroomShell.capture.bound()?.classId ?? null,
+    onClassRevoked: classId => {
+      // Stops a capture bound to it, rejects its unconfirmed uploads and clears its live transcript.
+      revokeClassroomAccess(classId);
+      // Nothing of a revoked classroom can be confirmed any more: drop its pending stop and command.
+      classroomShell.pendingStops.set(classId, null);
+      classroomShell.pendingCommands.set(classId, null);
+    },
+  } }));
+  useEffect(() => revocation.install(), [revocation]);
   const classQueries = (ids: ReadonlySet<unknown>) => ({ predicate: (query: { queryKey: readonly unknown[] }) => query.queryKey.some(part => ids.has(part)) });
   const location = useLocation();
   const routeClassId = /^\/classrooms\/([0-9a-f-]{36})(?:\/|$)/.exec(location.pathname)?.[1] ?? null;
@@ -130,6 +143,7 @@ function MockWorkbenchContent({ runtime }: { runtime: ReturnType<typeof useMockR
     localRisk, dataSourceLabel: '开发预览：以下课程、课堂和设置均为合成数据。学期/课程/课堂等接口后端尚未实现，由 Mock 按已批准契约提供。',
     onQuickStart: () => start(), classroomRevoked: runtime.state.eventProjection.classroomDeleted,
     classroom: classroomShell,
+    revocation,
   };
   const start = () => {
     // The demo quick start always uses the PR-09a demo classroom, never a PR-10a classroom bound earlier.
@@ -183,23 +197,23 @@ function MockWorkbenchContent({ runtime }: { runtime: ReturnType<typeof useMockR
   useEffect(() => {
     if (!deletedAudioKey) return;
     const touched = new Set<string>();
-    for (const pair of deletedAudioKey.split('|')) { const [classId = '', epochId = ''] = pair.split(':'); if (revokeMockAudio(classId, epochId)) touched.add(classId); }
+    for (const pair of deletedAudioKey.split('|')) {
+      const [classId = '', epochId = ''] = pair.split(':');
+      if (revokeMockAudio(classId, epochId)) touched.add(classId);
+      // The deleted epoch leaves the cached manifests now, not when a (possibly offline) refetch succeeds.
+      revocation.revokeAudio(classId, epochId);
+    }
     if (touched.size) void queryClient.invalidateQueries(classQueries(touched));
-  }, [deletedAudioKey, queryClient]);
-  // A classroom deletion event revokes server access, then drops that classroom's cached data.
+  }, [deletedAudioKey, queryClient, revocation]);
+  // A classroom deletion event revokes server access, then revokes everything of it in this account.
   const deletedClassId = runtime.state.eventProjection.classroomDeleted ? runtime.state.currentClassroomId : null;
   useEffect(() => {
     if (!deletedClassId) return;
     revokeMockClassroom(deletedClassId);
-    // Nothing of a revoked classroom can be confirmed any more: drop its pending stop and command.
-    classroomShell.pendingStops.set(deletedClassId, null);
-    classroomShell.pendingCommands.set(deletedClassId, null);
-    void queryClient.resetQueries(classQueries(new Set([deletedClassId])));
-    // Review lists and documents carry the classroom inside their data, not their keys: evict them now.
-    evictClassroomFromReview(queryClient, deletedClassId);
-    // Lists (course classrooms, entry, dashboard, review lists) may also project it: refetch them all.
+    revocation.revokeClass(deletedClassId);
+    // Lists may also have changed on the server: read them again (cached content is already gone).
     void queryClient.invalidateQueries();
-  }, [deletedClassId, queryClient, classroomShell]);
+  }, [deletedClassId, queryClient, revocation]);
   // Account-shell unload guard: an unconfirmed stop or stopped capture with local-only audio is at
   // risk on every route, not only while the processing page is open.
   useSyncExternalStore(classroomShell.subscribe, classroomShell.version, classroomShell.version);
@@ -224,13 +238,8 @@ function MockWorkbenchContent({ runtime }: { runtime: ReturnType<typeof useMockR
   // refreshed projection then offers an explicit new start.
   const lostClassId = runtime.state.eventProjection.leaseLost ? boundClassId : null;
   useEffect(() => { if (lostClassId && releaseMockLease(lostClassId)) void queryClient.invalidateQueries(); }, [lostClassId, queryClient]);
-  // The server says the bound classroom is gone (e.g. its course or semester was deleted): revoke
-  // the capture like a deletion event, so nothing keeps targeting it. Only a classroom the server
-  // served before can be gone; the PR-09a demo classroom is unknown until it is registered.
-  const boundError = boundSession.error;
-  const boundGone = boundClassId !== null && boundSession.data !== undefined && boundError instanceof ApiClientError && (boundError.code === 'NOT_FOUND' || boundError.code === 'GONE' || boundError.code === 'FORBIDDEN') ? boundClassId : null;
-  const { revokeClassroomAccess } = runtime;
-  useEffect(() => { if (boundGone) revokeClassroomAccess(boundGone); }, [boundGone, revokeClassroomAccess]);
+  // A bound classroom the server now refuses (it served it before) is revoked by the ledger's cache
+  // guard, like a deletion event; the PR-09a demo classroom is unknown until it is registered.
   // The global AI indicator follows the bound classroom's tasks too; an unknown outcome always wins.
   const boundAi = boundSession.data?.flows.ai;
   const aiFlow = flows.ai === 'unknown' || boundAi === 'unknown' ? 'unknown' : boundAi && boundAi !== 'idle' ? boundAi : flows.ai;

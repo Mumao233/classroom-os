@@ -27,7 +27,9 @@ export function ClassroomRecord() {
   const heading = useRef<HTMLHeadingElement>(null);
   useEffect(() => { heading.current?.focus({ preventScroll: true }); }, [classId]);
   if (session.isPending) return <main id="main-content" className={styles.page}><p role="status" className={styles.muted}>正在读取课堂记录…</p></main>;
-  if (session.isError || !session.data) return <main id="main-content" className={styles.page}><div className={`${styles.banner} ${styles.bannerDanger}`} role="alert"><div>{describeError(session.error)} <Link to="/classrooms">返回课堂入口</Link></div></div></main>;
+  // Only data the account still holds is shown: an authoritative denial has already removed it
+  // (revocation ledger); a transport failure keeps the loaded record readable.
+  if (!session.data) return <main id="main-content" className={styles.page}><div className={`${styles.banner} ${styles.bannerDanger}`} role="alert"><div>{describeError(session.error)} <Link to="/classrooms">返回课堂入口</Link></div></div></main>;
   const data = session.data;
   const expires = data.audio_expires_at ? Date.parse(data.audio_expires_at) : null;
   const audio = data.capture_ended_at === null ? '课堂尚未结束。'
@@ -40,6 +42,7 @@ export function ClassroomRecord() {
       <FlowStrip flows={data.flows} />
     </header>
     <DataSourceNote />
+    {session.isError && <div className={`${styles.banner} ${styles.bannerWarning}`} role="status" data-testid="record-refresh-error"><div>{describeError(session.error)}</div></div>}
     <div className={styles.processingGrid}>
       <section className={styles.panel} aria-labelledby="record-transcript"><h2 id="record-transcript">正式字幕</h2>
         {transcript.isError ? <p className={styles.error} role="alert">{describeError(transcript.error)}</p> : <TranscriptTimeline entries={entries} label="课堂正式字幕" emptyText="这节课没有正式字幕。" />}

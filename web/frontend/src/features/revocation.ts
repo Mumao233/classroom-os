@@ -1,0 +1,344 @@
+import type { Query, QueryCacheNotifyEvent, QueryClient } from '@tanstack/react-query';
+import { ApiClientError, type ApiClient } from '../api/client';
+
+/**
+ * Account-shell revocation ledger (design: web/frontend/REVOCATION-DESIGN.md).
+ *
+ * A deletion receipt, a deletion event or an authoritative denial revokes content at once in every
+ * cached projection of this account epoch, without waiting for a refetch that fails offline. One
+ * ledger exists per account epoch and is dropped together with its QueryClient.
+ */
+
+export type ScopeKind = 'course' | 'semester';
+export type DeleteMode = 'cascade' | 'move_children';
+export type ScopeDeletion = { kind: ScopeKind; id: string; mode: DeleteMode };
+
+export type RevocationHooks = {
+  /** The classroom the account-level capture is bound to (active or stopped here), if any. */
+  boundClassId?: () => string | null;
+  /** A classroom is revoked: stop a capture bound to it and drop its unconfirmed commands. */
+  onClassRevoked?: (classId: string) => void;
+};
+
+export type RevocationLedger = {
+  /** Before submitting a scope deletion: resolve the bound classroom's course and semester. */
+  prepareScopeDeletion(scope: { kind: ScopeKind; id: string }): Promise<void>;
+  /** The server confirmed a scope deletion with the submitted kind, id and mode. */
+  applyScopeReceipt(scope: ScopeDeletion): void;
+  /** A scope deletion's outcome is unknown (its reply was lost): drop what it may have removed, revoke nothing. */
+  applyAmbiguousScopeDeletion(scope: ScopeDeletion): void;
+  revokeClass(classId: string): void;
+  revokeAudio(classId: string, captureEpochId: string): void;
+  isClassRevoked(classId: string): boolean;
+  /** Subscribe to the query cache (late responses, reverts, refetch denials). Returns the unsubscribe. */
+  install(): () => void;
+};
+
+/** What the deletion dialog submitted; the receipt is applied with exactly these values. */
+export type ScopeDeletionRequest = ScopeDeletion & { destination: string; revision: number; token: string };
+
+/**
+ * Send a course or semester deletion and apply its receipt inside the request itself, with the
+ * submitted scope and mode (never the dialog's state at reply time, and whether or not it is mounted).
+ */
+export async function submitScopeDeletion(api: Pick<ApiClient, 'deleteCourse' | 'deleteSemester'>, revocation: RevocationLedger | undefined, submitted: ScopeDeletionRequest) {
+  const scope: ScopeDeletion = { kind: submitted.kind, id: submitted.id, mode: submitted.mode };
+  await revocation?.prepareScopeDeletion(scope);
+  const body = { base_revision: submitted.revision, mode: submitted.mode, confirmation_token: submitted.token, ...(submitted.mode === 'move_children' ? { destination_id: submitted.destination } : {}) };
+  try {
+    const receipt = await (submitted.kind === 'course' ? api.deleteCourse(submitted.id, body) : api.deleteSemester(submitted.id, body));
+    revocation?.applyScopeReceipt(scope);
+    return receipt;
+  } catch (error) {
+    // The server may have deleted it although the reply was lost: hide what it may have removed until a read says otherwise.
+    if (error instanceof ApiClientError && error.kind === 'network') revocation?.applyAmbiguousScopeDeletion(scope);
+    throw error;
+  }
+}
+
+type Tri = boolean | 'unknown';
+/**
+ * What the revocation being applied right now introduces. Only memberships it could affect count as
+ * "unknown" (and are dropped); earlier revocations were already applied by their own sweeps.
+ */
+type Strict = { cascade: boolean; semesterCascade: boolean; classes: boolean } | null;
+type Verdict = { type: 'keep' } | { type: 'gone' } | { type: 'unknown' } | { type: 'filter'; data: unknown };
+const KEEP: Verdict = { type: 'keep' };
+const GONE: Verdict = { type: 'gone' };
+const UNKNOWN: Verdict = { type: 'unknown' };
+const tri = (value: Tri): Verdict => value === true ? GONE : value === 'unknown' ? UNKNOWN : KEEP;
+
+/** Queries whose fourth key part is a classroom ID and whose whole content belongs to it. */
+const CLASS_KEYED = new Set(['audio-manifests', 'marks', 'slides', 'tasks', 'questions', 'transcript', 'transcript-versions', 'class-segments']);
+const DENIAL_CODES = new Set(['NOT_FOUND', 'GONE', 'FORBIDDEN']);
+
+/** The server refused the resource itself (not a transport failure): cached content must not stay visible. */
+export function isAuthoritativeDenial(error: unknown): boolean {
+  if (!(error instanceof ApiClientError) || error.kind !== 'http') return false;
+  return error.code ? DENIAL_CODES.has(error.code) : error.status === 403 || error.status === 404 || error.status === 410;
+}
+
+/** The synthetic error a revoked projection shows (same code the server returns for deleted content). */
+export function revokedError() {
+  return new ApiClientError('http', 410, { error: { code: 'GONE', message: '内容已被删除', request_id: 'local-revocation', retryable: false, retry_after_seconds: null, current_revision: null, conflict_id: null, task_id: null } });
+}
+
+type Membership = { classCourse: Map<string, string>; courseSemester: Map<string, string>; docClass: Map<string, string>; versionClass: Map<string, string> };
+const record = (value: unknown): Record<string, unknown> | null => typeof value === 'object' && value !== null ? value as Record<string, unknown> : null;
+const str = (value: unknown): string | undefined => typeof value === 'string' && value ? value : undefined;
+const items = (data: unknown): unknown[] | null => { const items = record(data)?.items; return Array.isArray(items) ? items : null; };
+
+function readMembership(client: QueryClient): Membership {
+  const m: Membership = { classCourse: new Map(), courseSemester: new Map(), docClass: new Map(), versionClass: new Map() };
+  const course = (value: unknown) => { const v = record(value); const id = str(v?.id); const semester = str(v?.semester_id); if (id && semester) m.courseSemester.set(id, semester); };
+  const session = (value: unknown) => { const v = record(value); const id = str(v?.id); const courseId = str(v?.course_id); if (id && courseId) m.classCourse.set(id, courseId); };
+  const doc = (value: unknown) => { const v = record(value); const id = str(v?.id); const classId = str(v?.class_session_id); if (id && classId) m.docClass.set(id, classId); };
+  const version = (value: unknown) => { const v = record(value); const id = str(v?.id); const classId = str(v?.class_session_id); if (id && classId) m.versionClass.set(id, classId); };
+  for (const query of client.getQueryCache().getAll()) {
+    const data = query.state.data;
+    if (data === undefined || query.queryKey[0] !== 'account') continue;
+    switch (query.queryKey[2]) {
+      case 'courses': items(data)?.forEach(course); break;
+      case 'course': course(data); break;
+      case 'class-sessions': items(data)?.forEach(session); break;
+      case 'class-session': session(data); break;
+      case 'review-library': case 'review-documents': items(data)?.forEach(doc); break;
+      case 'review-document': doc(data); break;
+      case 'transcript-versions': items(data)?.forEach(version); break;
+    }
+  }
+  return m;
+}
+
+export function createRevocationLedger({ client, accountKey, api, hooks = {} }: { client: QueryClient; accountKey: string; api?: ApiClient; hooks?: RevocationHooks }): RevocationLedger {
+  const semesters = new Map<string, 'cascade' | 'self'>();
+  const courses = new Map<string, 'cascade' | 'self'>();
+  const classes = new Set<string>();
+  const documents = new Set<string>();
+  const versions = new Set<string>();
+  const audio = new Map<string, Set<string>>();
+  const notified = new Set<string>();
+  /** Bound classrooms the server reported as nonexistent just before a deletion: no deletion can contain them. */
+  const notServerClasses = new Set<string>();
+  /** Requests in flight during a new revocation started before it: their replies are judged strictly once. */
+  const strictOnArrival = new WeakMap<Query, NonNullable<Strict>>();
+  /** Projections shown as revoked: a later transport failure (offline refetch) must not relabel them as merely unreachable. */
+  const revokedQueries = new WeakSet<Query>();
+
+  const hasSemesterCascade = () => [...semesters.values()].includes('cascade');
+  const hasCascade = () => hasSemesterCascade() || [...courses.values()].includes('cascade');
+  // `strict` (applying a new revocation): a membership it could affect that cannot be established counts as affected.
+  const semesterOf = (courseId: string, m: Membership, strict: Strict, hint?: string): Tri => {
+    if (!hasSemesterCascade()) return false;
+    const semester = hint ?? m.courseSemester.get(courseId);
+    if (semester === undefined) return strict?.semesterCascade ? 'unknown' : false;
+    return semesters.get(semester) === 'cascade';
+  };
+  /** The course object itself is gone (deleted directly, either mode, or inside a cascaded semester). */
+  const courseGone = (courseId: string, m: Membership, strict: Strict, semesterHint?: string): Tri => courses.has(courseId) ? true : semesterOf(courseId, m, strict, semesterHint);
+  /** The course's classrooms are revoked (cascade only; moved children survive). */
+  const courseCascaded = (courseId: string, m: Membership, strict: Strict): Tri => courses.get(courseId) === 'cascade' ? true : courses.has(courseId) ? false : semesterOf(courseId, m, strict);
+  const classGone = (classId: string, m: Membership, strict: Strict, courseHint?: string): Tri => {
+    if (classes.has(classId)) return true;
+    if (!hasCascade()) return false;
+    const courseId = courseHint ?? m.classCourse.get(classId);
+    if (courseId === undefined) return strict?.cascade && !notServerClasses.has(classId) ? 'unknown' : false;
+    return courseCascaded(courseId, m, strict);
+  };
+  const viaClass = (classId: string | undefined, m: Membership, strict: Strict): Tri => {
+    if (classId !== undefined) return classGone(classId, m, strict);
+    return strict?.classes ? 'unknown' : false;
+  };
+  const docGone = (docId: string, m: Membership, strict: Strict, classHint?: string): Tri => documents.has(docId) ? true : viaClass(classHint ?? m.docClass.get(docId), m, strict);
+
+  /** Filter a paged list; an item whose membership is unknown makes the whole list untrustworthy. */
+  const filterList = (data: unknown, gone: (item: Record<string, unknown>) => Tri): Verdict => {
+    const list = items(data);
+    if (!list) return KEEP;
+    let unknown = false;
+    const kept = list.filter(item => { const v = record(item); if (!v) return true; const result = gone(v); if (result === 'unknown') unknown = true; return result !== true; });
+    if (unknown) return UNKNOWN;
+    return kept.length === list.length ? KEEP : { type: 'filter', data: { ...record(data), items: kept } };
+  };
+
+  const judge = (query: Query, m: Membership, strict: Strict): Verdict => {
+    const key = query.queryKey;
+    if (key[0] !== 'account') return KEEP;
+    const kind = key[2];
+    const arg = key[3];
+    const data = query.state.data;
+    const value = record(data);
+    if (typeof kind !== 'string') return KEEP;
+    if (CLASS_KEYED.has(kind) && typeof arg === 'string') {
+      const gone = classGone(arg, m, strict);
+      if (gone !== false || kind !== 'audio-manifests') return tri(gone);
+      const epochs = audio.get(arg);
+      return epochs ? filterList(data, item => epochs.has(String(item.capture_epoch_id))) : KEEP;
+    }
+    switch (kind) {
+      case 'semesters': return filterList(data, item => semesters.has(String(item.id)));
+      case 'courses': return filterList(data, item => courseGone(String(item.id), m, strict, str(item.semester_id)));
+      case 'course': return typeof arg === 'string' && arg ? tri(courseGone(arg, m, strict, str(value?.semester_id))) : KEEP;
+      case 'materials': return typeof arg === 'string' ? tri(courseGone(arg, m, strict)) : KEEP;
+      case 'class-sessions': return filterList(data, item => classGone(String(item.id), m, strict, str(item.course_id)));
+      case 'class-session': return typeof arg === 'string' && arg ? tri(classGone(arg, m, strict, str(value?.course_id))) : KEEP;
+      case 'review-library': case 'review-documents': {
+        const filter = record(arg);
+        const courseId = str(filter?.course_id);
+        const classId = str(filter?.class_session_id);
+        // A list filtered to a revoked course or classroom has nothing left to show.
+        if ((courseId && courseCascaded(courseId, m, strict) === true) || (classId && classGone(classId, m, strict) === true)) return filterList(data, () => true);
+        return filterList(data, item => docGone(String(item.id), m, strict, str(item.class_session_id)));
+      }
+      case 'review-document': return typeof arg === 'string' ? tri(docGone(arg, m, strict, str(value?.class_session_id))) : KEEP;
+      case 'review-revisions': return typeof arg === 'string' ? tri(docGone(arg, m, strict)) : KEEP;
+      case 'source-snapshot': return value ? tri(viaClass(str(value.class_session_id), m, strict)) : KEEP;
+      case 'transcript-segments': return typeof arg === 'string' ? versions.has(arg) ? GONE : tri(viaClass(m.versionClass.get(arg), m, strict)) : KEEP;
+      default: return KEEP;
+    }
+  };
+
+  /**
+   * `gone`: content known to be revoked becomes an error state (no data, no automatic refetch loop).
+   * `unknown` (and everything in a tentative sweep): the query is reset; online it is read again,
+   * offline it shows a connection error instead of the old content.
+   */
+  const apply = (query: Query, verdict: Verdict, tentative: boolean) => {
+    if (verdict.type === 'keep') return;
+    if (verdict.type === 'filter' && !tentative) {
+      // A reply still in flight lands later and is judged again (strictly, if it predates this revocation).
+      query.setState({ data: verdict.data });
+      return;
+    }
+    if (verdict.type === 'gone' && !tentative) {
+      if (query.state.data === undefined) return;
+      if (query.state.fetchStatus === 'fetching') void query.cancel({ revert: true });
+      query.setState({ data: undefined, dataUpdatedAt: 0, status: 'error', error: revokedError(), errorUpdatedAt: Date.now(), fetchStatus: 'idle', isInvalidated: false });
+      revokedQueries.add(query);
+      return;
+    }
+    if (query.state.data === undefined && query.state.fetchStatus !== 'fetching') return;
+    // Resetting cancels any old request; what is read afterwards postdates the revocation.
+    strictOnArrival.delete(query);
+    void client.resetQueries({ queryKey: query.queryKey, exact: true });
+  };
+
+  const notifyClass = (classId: string) => {
+    if (notified.has(classId)) return;
+    notified.add(classId);
+    hooks.onClassRevoked?.(classId);
+  };
+
+  /** Sweep every cached projection of this account; then tell the shell which classrooms are revoked. */
+  const sweep = ({ strict, tentative = false }: { strict: Strict; tentative?: boolean }) => {
+    const m = readMembership(client);
+    if (!tentative) {
+      // Remember every revoked ID by itself: once filtered out of the cache, its membership is no longer readable,
+      // and a late or repeated reply must still be recognised.
+      for (const [classId, courseId] of m.classCourse) if (classGone(classId, m, null, courseId) === true) classes.add(classId);
+      for (const [docId, classId] of m.docClass) if (classGone(classId, m, null) === true) documents.add(docId);
+      for (const [versionId, classId] of m.versionClass) if (classGone(classId, m, null) === true) versions.add(versionId);
+    }
+    for (const query of client.getQueryCache().getAll()) {
+      if (strict && !tentative && query.state.fetchStatus === 'fetching') strictOnArrival.set(query, strict);
+      apply(query, judge(query, m, strict), tentative);
+    }
+    if (tentative) return;
+    for (const classId of classes) notifyClass(classId);
+    // A bound capture whose classroom cannot be placed outside the newly deleted scope is revoked too.
+    const bound = hooks.boundClassId?.() ?? null;
+    if (bound && strict?.cascade && classGone(bound, m, strict) !== false) notifyClass(bound);
+  };
+  const scopeStrict = (scope: ScopeDeletion): Strict => scope.mode === 'cascade' ? { cascade: true, semesterCascade: scope.kind === 'semester', classes: true } : null;
+
+  const recordScope = (scope: ScopeDeletion) => {
+    const map = scope.kind === 'course' ? courses : semesters;
+    if (map.get(scope.id) !== 'cascade') map.set(scope.id, scope.mode === 'cascade' ? 'cascade' : 'self');
+  };
+
+  // In a semester cascade, record every course known to belong to it, so later data is judged without
+  // needing the course → semester link again.
+  const expandSemester = (semesterId: string) => {
+    const m = readMembership(client);
+    for (const [courseId, semester] of m.courseSemester) if (semester === semesterId && courses.get(courseId) !== 'cascade') courses.set(courseId, 'cascade');
+  };
+
+  const onCacheEvent = (event: QueryCacheNotifyEvent) => {
+    if (event.type !== 'updated' && event.type !== 'added') return;
+    const query = event.query;
+    if (query.queryKey[0] !== 'account') return;
+    const state = query.state;
+    if (event.type === 'updated' && event.action.type === 'error' && revokedQueries.has(query) && !isAuthoritativeDenial(event.action.error)) {
+      query.setState({ error: revokedError() });
+      return;
+    }
+    if (event.type === 'updated' && event.action.type === 'error' && isAuthoritativeDenial(event.action.error) && state.data !== undefined) {
+      // A resource the server served before is now refused: stop showing it, and revoke what it identifies.
+      const kind = query.queryKey[2];
+      const id = query.queryKey[3];
+      query.setState({ data: undefined, dataUpdatedAt: 0 });
+      if (typeof id === 'string' && id) {
+        if (kind === 'class-session') revokeClass(id);
+        else if (kind === 'course' && !courses.has(id)) { courses.set(id, 'self'); sweep({ strict: null }); }
+        else if (kind === 'review-document' && !documents.has(id)) { documents.add(id); sweep({ strict: null }); }
+      }
+      return;
+    }
+    if (state.data === undefined) return;
+    if (!semesters.size && !courses.size && !classes.size && !documents.size && !versions.size && !audio.size) return;
+    const strict = event.type === 'updated' && event.action.type === 'success' ? strictOnArrival.get(query) ?? null : null;
+    if (strict) strictOnArrival.delete(query);
+    apply(query, judge(query, readMembership(client), strict), false);
+  };
+
+  function revokeClass(classId: string) {
+    const fresh = !classes.has(classId);
+    classes.add(classId);
+    // A single classroom is known by its ID: only projections whose classroom is unknown are affected.
+    if (fresh) sweep({ strict: { cascade: false, semesterCascade: false, classes: true } });
+    notifyClass(classId);
+  }
+
+  return {
+    async prepareScopeDeletion(scope) {
+      const bound = hooks.boundClassId?.() ?? null;
+      if (!bound || !api) return;
+      const ensure = async <T>(kind: string, id: string, read: (signal: AbortSignal) => Promise<T>) => client.ensureQueryData({ queryKey: ['account', accountKey, kind, id], queryFn: ({ signal }) => read(signal) });
+      try {
+        const session = await ensure('class-session', bound, signal => api.classSession(bound, signal));
+        if (scope.kind === 'semester') await ensure('course', session.course_id, signal => api.course(session.course_id, signal));
+      } catch (error) {
+        // The server does not know this classroom (e.g. the demo classroom before registration): it is
+        // not inside any deletable scope. Other failures leave it unknown (revoked on the receipt).
+        if (error instanceof ApiClientError && error.kind === 'http' && (error.code === 'NOT_FOUND' || error.code === 'GONE') && readMembership(client).classCourse.get(bound) === undefined) notServerClasses.add(bound);
+      }
+    },
+    applyScopeReceipt(scope) {
+      recordScope(scope);
+      if (scope.kind === 'semester' && scope.mode === 'cascade') expandSemester(scope.id);
+      sweep({ strict: scopeStrict(scope) });
+    },
+    applyAmbiguousScopeDeletion(scope) {
+      // Judge as if confirmed, but keep nothing in the ledger: a later read decides what really happened.
+      const savedCourses = new Map(courses);
+      const savedSemesters = new Map(semesters);
+      recordScope(scope);
+      if (scope.kind === 'semester' && scope.mode === 'cascade') expandSemester(scope.id);
+      sweep({ strict: scopeStrict(scope), tentative: true });
+      courses.clear(); for (const [id, mode] of savedCourses) courses.set(id, mode);
+      semesters.clear(); for (const [id, mode] of savedSemesters) semesters.set(id, mode);
+    },
+    revokeClass,
+    revokeAudio(classId, captureEpochId) {
+      const epochs = audio.get(classId) ?? new Set<string>();
+      if (epochs.has(captureEpochId)) return;
+      epochs.add(captureEpochId);
+      audio.set(classId, epochs);
+      sweep({ strict: null });
+    },
+    isClassRevoked: classId => classes.has(classId),
+    install() {
+      return client.getQueryCache().subscribe(onCacheEvent);
+    },
+  };
+}
