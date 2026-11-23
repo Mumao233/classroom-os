@@ -22,8 +22,9 @@ export type ScopeMembers = { courses: string[]; classes: string[] };
  * - `unverifiedLinks`: that listing failed, so no cached classroom/course parent link is proof for this
  *   deletion (except the `verified` ones read fresh): affected projections are hidden, nothing is
  *   tombstoned from such a link, and a bound capture is only suspended.
- * - `unresolved`: classrooms missing from the listing that may still belong to it (the bound one, or one cached
- *   under the scope) and whose fresh detail read failed: hidden and, if bound, suspended for this deletion.
+ * - `unresolved`: classrooms (and, for a semester, courses) missing from the listing that may still belong to it
+ *   (the bound classroom, or one cached under the scope) whose fresh detail read failed: hidden and, if bound,
+ *   suspended for this deletion.
  * Neither (a ledger without an API, e.g. unit tests of the cache machinery): cached links are used.
  */
 export type PreparedDeletion = { exempt: string | null; members?: ScopeMembers; unverifiedLinks?: boolean; verified?: string[]; unresolved?: string[] };
@@ -103,7 +104,7 @@ type Tri = boolean | 'unknown';
  * "unknown" (and are dropped); earlier revocations were already applied by their own sweeps.
  * `exempt`: a bound classroom the server reported as nonexistent just before this deletion.
  * `distrust`: the deletion's children could not be listed, so no parent link (except `verified` ones) is proof.
- * `unresolved`: classrooms whose membership in this deletion could not be established either way.
+ * `unresolved`: classrooms and courses whose membership in this deletion could not be established either way.
  */
 type Strict = { cascade: boolean; semesterCascade: boolean; classes: boolean; exempt: string | null; distrust: boolean; verified: ReadonlySet<string>; unresolved: ReadonlySet<string> } | null;
 type Verdict = { type: 'keep' } | { type: 'gone' } | { type: 'unknown' } | { type: 'filter'; data: unknown };
@@ -137,6 +138,14 @@ export function isAuthoritativeDenial(error: unknown): boolean {
 /** The session is no longer authenticated: nothing private may stay on screen from this account. */
 export function isUnauthenticated(error: unknown): boolean {
   return error instanceof ApiClientError && error.kind === 'http' && (error.code === 'UNAUTHENTICATED' || error.status === 401);
+}
+
+/** Every outcome first: an expired session wins over any other failure (a sibling's transport error must not hide it). */
+async function settleAll<T>(work: Promise<T>[]): Promise<T[]> {
+  const results = await Promise.allSettled(work);
+  const failures = results.flatMap(result => result.status === 'rejected' ? [result.reason as unknown] : []);
+  if (failures.length) throw failures.find(isUnauthenticated) ?? failures[0];
+  return results.map(result => (result as PromiseFulfilledResult<T>).value);
 }
 
 /** The synthetic error a revoked projection shows (same code the server returns for deleted content). */
@@ -263,7 +272,7 @@ export function createRevocationLedger({ client, accountKey, api, hooks = {} }: 
     return semesters.get(follow(movedSemester, cached)) === 'cascade';
   };
   /** The course object itself is gone (deleted directly, either mode, or inside a cascaded semester). */
-  const courseGone = (courseId: string, m: Membership, strict: Strict, semesterHint?: string): Tri => courses.has(courseId) ? true : semesterOf(courseId, m, strict, semesterHint);
+  const courseGone = (courseId: string, m: Membership, strict: Strict, semesterHint?: string): Tri => courses.has(courseId) ? true : strict?.unresolved.has(courseId) ? 'unknown' : semesterOf(courseId, m, strict, semesterHint);
   /** The course's classrooms are revoked through their links (cascade only; listed cascades revoke them by ID; moved children survive). */
   const courseCascaded = (courseId: string, m: Membership, strict: Strict): Tri => courses.get(courseId) === 'cascade' ? true : courses.has(courseId) ? false : semesterOf(courseId, m, strict);
   const classGone = (classId: string, m: Membership, strict: Strict, courseHint?: string): Tri => {
@@ -579,15 +588,33 @@ export function createRevocationLedger({ client, accountKey, api, hooks = {} }: 
       return list.map(item => { const value = record(item); const itemId = str(value?.id); if (!itemId || value?.[field] !== parent) throw new ApiClientError('invalid_response'); return itemId; });
     };
     const courseIds = scope.kind === 'course' ? [scope.id] : under(await reader.allCourses({ semester_id: scope.id }), 'semester_id', scope.id);
-    const classIds = (await Promise.all(courseIds.map(async courseId => under(await reader.allClassSessions({ course_id: courseId }), 'course_id', courseId)))).flat();
+    const classIds = (await settleAll(courseIds.map(async courseId => under(await reader.allClassSessions({ course_id: courseId }), 'course_id', courseId)))).flat();
     return { courses: scope.kind === 'semester' ? courseIds : [], classes: classIds };
   };
+  /** A new server read through the cache: never joins a read already in flight, whose reply may predate the listing. */
+  const freshRead = async <T>(kind: string, id: string, read: (signal: AbortSignal) => Promise<T>) => {
+    const queryKey = ['account', accountKey, kind, id];
+    await client.cancelQueries({ queryKey, exact: true });
+    return client.fetchQuery({ queryKey, queryFn: ({ signal }) => read(signal), staleTime: 0 });
+  };
+  /** A classroom confirmed to live elsewhere: cached classroom lists show it there (or not, if filtered to its old course). */
+  const reconcileMove = (session: Record<string, unknown>) => quietly(() => {
+    const classId = str(session.id);
+    const courseId = str(session.course_id);
+    for (const query of client.getQueryCache().getAll()) {
+      if (query.queryKey[0] !== 'account' || query.queryKey[2] !== 'class-sessions') continue;
+      const list = items(query.state.data);
+      if (!list || !list.some(item => str(record(item)?.id) === classId)) continue;
+      const filter = typeof query.queryKey[3] === 'string' ? query.queryKey[3] : undefined;
+      const next = filter && filter !== courseId ? list.filter(item => str(record(item)?.id) !== classId) : list.map(item => str(record(item)?.id) === classId ? session : item);
+      query.setState({ data: { ...record(query.state.data), items: next } });
+    }
+  });
 
   return {
     async prepareScopeDeletion(scope) {
       // Moved children survive: nothing to establish. Without an API the cached links are all there is.
       if (!api || scope.mode === 'move_children') return { exempt: null };
-      const fresh = async <T>(kind: string, id: string, read: (signal: AbortSignal) => Promise<T>) => client.fetchQuery({ queryKey: ['account', accountKey, kind, id], queryFn: ({ signal }) => read(signal), staleTime: 0 });
       let members: ScopeMembers | null = null;
       try {
         // The server's own listing, just before the deletion, is its membership (a cached link may predate a
@@ -607,15 +634,29 @@ export function createRevocationLedger({ client, accountKey, api, hooks = {} }: 
         // them unresolved (hidden, a bound capture suspended).
         const listed = new Set(members.classes);
         const parents = new Set(scope.kind === 'course' ? [scope.id] : members.courses);
+        const unresolved: string[] = [];
+        // A course cached in the semester but missing from its listing (moved, or deleted elsewhere) is read too.
+        const cached = readMembership(client);
+        const missingCourses = scope.kind === 'semester' ? [...cached.courseSemester].filter(([courseId, link]) => link.parent === scope.id && !parents.has(courseId)).map(([courseId]) => courseId) : [];
+        await settleAll(missingCourses.map(async courseId => {
+          try {
+            const course = await freshRead('course', courseId, signal => api.course(courseId, signal));
+            if (course.semester_id === scope.id) unresolved.push(courseId);
+          } catch (error) {
+            if (isUnauthenticated(error)) throw error;
+            if (!isAuthoritativeDenial(error)) unresolved.push(courseId);
+          }
+        }));
+        const under = new Set([...parents, ...missingCourses]);
         const candidates = new Set<string>();
         const bound = hooks.boundClassId?.() ?? null;
         if (bound && !listed.has(bound)) candidates.add(bound);
-        for (const [classId, link] of readMembership(client).classCourse) if (!listed.has(classId) && parents.has(link.parent)) candidates.add(classId);
-        const unresolved: string[] = [];
-        await Promise.all([...candidates].map(async classId => {
+        for (const [classId, link] of cached.classCourse) if (!listed.has(classId) && under.has(link.parent)) candidates.add(classId);
+        await settleAll([...candidates].map(async classId => {
           try {
-            const session = await fresh('class-session', classId, signal => api.classSession(classId, signal));
+            const session = await freshRead('class-session', classId, signal => api.classSession(classId, signal));
             if (parents.has(session.course_id)) unresolved.push(classId);
+            else reconcileMove(session as unknown as Record<string, unknown>);
           } catch (error) {
             if (isUnauthenticated(error)) throw error;
             if (!isAuthoritativeDenial(error)) unresolved.push(classId);
@@ -626,9 +667,9 @@ export function createRevocationLedger({ client, accountKey, api, hooks = {} }: 
       const bound = hooks.boundClassId?.() ?? null;
       if (!bound) return { exempt: null, unverifiedLinks: true };
       try {
-        const session = await fresh('class-session', bound, signal => api.classSession(bound, signal));
+        const session = await freshRead('class-session', bound, signal => api.classSession(bound, signal));
         const verified = [bound];
-        if (scope.kind === 'semester') { await fresh('course', session.course_id, signal => api.course(session.course_id, signal)); verified.push(session.course_id); }
+        if (scope.kind === 'semester') { await freshRead('course', session.course_id, signal => api.course(session.course_id, signal)); verified.push(session.course_id); }
         unverified.delete(bound);
         return { exempt: null, unverifiedLinks: true, verified };
       } catch (error) {

@@ -207,7 +207,19 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
   function impactOf(store: Store, scope: 'semester' | 'course', id: string) {
     const courseIds = scope === 'course' ? [id] : liveCourses(store).filter(course => course.semester_id === id).map(course => course.id);
     const sessionIds = liveSessions(store).filter(item => courseIds.includes(item.course_id)).map(item => item.id);
-    return JSON.stringify([[...courseIds].sort(), sessionIds.sort()]);
+    return JSON.stringify([[...courseIds].sort(), sessionIds.sort(), moves(store, `${scope}:${id}`)]);
+  }
+  /**
+   * Moves into or out of a scope since its preview, counted per course and semester: a classroom that moved in and
+   * back out leaves the same members but may have been listed in between, so the token expires too.
+   */
+  const scopeMoves = new WeakMap<Store, Map<string, number>>();
+  const moves = (store: Store, key: string) => scopeMoves.get(store)?.get(key) ?? 0;
+  function countMove(store: Store, courseIds: string[], semesterIds: string[]) {
+    const counts = scopeMoves.get(store) ?? new Map<string, number>();
+    scopeMoves.set(store, counts);
+    const semesters = new Set([...semesterIds, ...courseIds.map(courseId => findCourse(store, courseId)?.semester_id).filter((value): value is string => typeof value === 'string')]);
+    for (const key of [...courseIds.map(courseId => `course:${courseId}`), ...[...semesters].map(semesterId => `semester:${semesterId}`)]) counts.set(key, (counts.get(key) ?? 0) + 1);
   }
   /** The confirmation token is bound to the object's revision and its impact scope (04-CONTRACTS-FLOWS: 删除). */
   const previewImpact = new WeakMap<S['DeletionPreview'], string>();
@@ -398,6 +410,7 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
         if ('semester_id' in body && !findSemester(store, String(body.semester_id))) return error(404, 'NOT_FOUND', '学期不存在');
         const conflict = cas(found, body); if (conflict) return conflict;
         const { base_revision: _ignored, ...change } = body; void _ignored;
+        if ('semester_id' in change && change.semester_id !== found.semester_id) countMove(store, [], [found.semester_id, String(change.semester_id)]);
         const next = touch({ ...found, ...change }) as Store['courses'][number];
         store.courses = store.courses.map(course => course.id === id ? next : course);
         return ok(courseView(store, next));
@@ -454,6 +467,7 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
         if ('course_id' in body && !findCourse(store, String(body.course_id))) return error(404, 'NOT_FOUND', '目标课程不存在');
         const conflict = cas(found, body); if (conflict) return conflict;
         const { base_revision: _ignored, ...change } = body; void _ignored;
+        if ('course_id' in change && change.course_id !== found.course_id) countMove(store, [found.course_id, String(change.course_id)], []);
         // started_at / capture_ended_at / flows are history and never rewritten by a move.
         const next = touch({ ...found, ...change }) as S['ClassSession'];
         store.sessions = store.sessions.map(item => item.id === id ? next : item);

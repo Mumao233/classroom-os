@@ -619,6 +619,7 @@ describe('merged-review regressions (round 3)', () => {
       allClassSessions: ({ course_id }: { course_id: string }) => lists.fail ? Promise.reject(lists.fail === true ? networkError() : lists.fail) : Promise.resolve(page(lists.classes?.[course_id] ?? [])),
       allCourses: ({ semester_id }: { semester_id: string }) => lists.fail ? Promise.reject(lists.fail === true ? networkError() : lists.fail) : Promise.resolve(page(lists.courses?.[semester_id] ?? [])),
       classSession: (id: string) => { const detail = lists.details?.[id]; return detail instanceof ApiClientError ? Promise.reject(detail) : detail ? Promise.resolve(detail) : Promise.reject(networkError()); },
+      course: (id: string) => { const detail = lists.details?.[id]; return detail instanceof ApiClientError ? Promise.reject(detail) : detail ? Promise.resolve(detail) : Promise.reject(networkError()); },
       deleteCourse: vi.fn((id: string) => Promise.resolve(receipt('course', id))),
       deleteSemester: (id: string) => Promise.resolve(receipt('semester', id)),
     };
@@ -657,7 +658,8 @@ describe('merged-review regressions (round 3)', () => {
     expect(ids(client, 'review-library', {})).toEqual([]);
   });
   it('P1-1 · a semester cascade revokes exactly the listed courses and classrooms', async () => {
-    const { client, ledger, remove } = listed({ courses: { s1: [{ id: 'k1', semester_id: 's1' }] }, classes: { k1: [{ id: 'c1', course_id: 'k1' }] } });
+    // k2 is missing from the listing although cached in s1: read again, the server places it in s2.
+    const { client, ledger, remove } = listed({ courses: { s1: [{ id: 'k1', semester_id: 's1' }] }, classes: { k1: [{ id: 'c1', course_id: 'k1' }] }, details: { k2: { id: 'k2', semester_id: 's2', revision: 2 }, c2: { id: 'c2', course_id: 'k2', revision: 2 } } });
     client.setQueryData(key('courses', {}), page([{ id: 'k1', semester_id: 's1' }, { id: 'k2', semester_id: 's1' }]));
     client.setQueryData(key('class-sessions', null), page([{ id: 'c1', course_id: 'k1' }, { id: 'c2', course_id: 'k2' }]));
     await remove('semester', 's1');
@@ -812,5 +814,51 @@ describe('merged-review regressions (round 3)', () => {
     await inFlight;
     await fetchInto(client, ['class-sessions', null], () => Promise.resolve(page([{ id: 'c9', course_id: 'kB' }])));
     expect(ids(client, 'class-sessions', null)).toEqual(['c9']);
+  });
+
+  it('R2 · a course cached in the semester but missing from its listing is read again: denials revoke it and its classrooms', async () => {
+    const { client, ledger, revoked, remove } = listed({ courses: { s1: [] }, details: { c4: httpError(404, 'NOT_FOUND') } });
+    client.setQueryData(key('course', 'k4'), { id: 'k4', semester_id: 's1', revision: 1 });
+    client.setQueryData(key('materials', 'k4'), page([{ id: 'mat4' }]));
+    client.setQueryData(key('class-session', 'c4'), { id: 'c4', course_id: 'k4', revision: 1 });
+    // The course read itself fails at the transport: unresolved, so its projections are hidden.
+    await remove('semester', 's1');
+    expect(client.getQueryData(key('course', 'k4'))).toBeUndefined();
+    expect(client.getQueryData(key('materials', 'k4'))).toBeUndefined();
+    expect(ledger.isClassRevoked('c4')).toBe(true);
+    expect(revoked).toEqual(['c4']);
+  });
+  it('R2 · the verification read never joins an older read still in flight', async () => {
+    const { client, ledger, remove } = listed({ classes: { kA: [] }, details: { c1: httpError(404, 'NOT_FOUND') } });
+    client.setQueryData(key('class-session', 'c1'), { id: 'c1', course_id: 'kA', revision: 1 });
+    const older = deferred<unknown>();
+    const inFlight = fetchInto(client, ['class-session', 'c1'], () => older.promise);
+    const removal = remove('course', 'kA');
+    // The older reply lands only after the verification read was issued.
+    setTimeout(() => older.resolve({ id: 'c1', course_id: 'kB', revision: 2 }), 5);
+    await removal;
+    await inFlight;
+    expect(ledger.isClassRevoked('c1')).toBe(true);
+    expect(client.getQueryData(key('class-session', 'c1'))).toBeUndefined();
+  });
+  it('R2 · an expired session wins over a sibling transport failure while listing', async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+    const api = {
+      allCourses: () => Promise.resolve(page([{ id: 'k1', semester_id: 's1' }, { id: 'k2', semester_id: 's1' }])),
+      allClassSessions: ({ course_id }: { course_id: string }) => course_id === 'k1' ? Promise.reject(networkError()) : new Promise((_, fail) => setTimeout(() => fail(httpError(401, 'UNAUTHENTICATED')), 5)),
+      deleteSemester: vi.fn(() => Promise.resolve(receipt('semester', 's1'))), deleteCourse: () => Promise.reject(new Error('unused')),
+    };
+    const ledger = createRevocationLedger({ client, accountKey: A, api: api as never });
+    ledger.install();
+    await expect(submitScopeDeletion(api as never, ledger, { kind: 'semester', id: 's1', mode: 'cascade', destination: '', revision: 1, token: 't' })).rejects.toMatchObject({ status: 401 });
+    expect(api.deleteSemester).not.toHaveBeenCalled();
+  });
+  it('R2 · a confirmed move updates cached classroom lists (shown under its new course, gone from the old one)', async () => {
+    const { client, remove } = listed({ classes: { kA: [] }, details: { c1: { id: 'c1', course_id: 'kB', revision: 2, title: '移走的课堂' } } });
+    client.setQueryData(key('class-sessions', null), page([{ id: 'c1', course_id: 'kA', revision: 1 }, { id: 'c2', course_id: 'kC', revision: 1 }]));
+    client.setQueryData(key('class-sessions', 'kA'), page([{ id: 'c1', course_id: 'kA', revision: 1 }]));
+    await remove('course', 'kA');
+    expect((client.getQueryData(key('class-sessions', null)) as { items: Array<{ id: string; course_id: string }> }).items).toEqual([expect.objectContaining({ id: 'c1', course_id: 'kB' }), expect.objectContaining({ id: 'c2', course_id: 'kC' })]);
+    expect(ids(client, 'class-sessions', 'kA')).toEqual([]);
   });
 });

@@ -274,14 +274,16 @@ export function createMockRuntime(options: { createVault?: () => MemoryVault } =
       if (!state.account) return;
       stopCapture('ended'); stopEvents(); events.clear(); durableIds.clear(); finalSegments.clear(); partialSegments.clear(); resetPorts();
       if (!options.keepDeleted) { deletedClassrooms.clear(); deletedAudioIds.clear(); }
-      const scope = freshScope(mockCaptureScope().classSessionId); registerUpload(scope);
+      const scope = freshScope(mockCaptureScope().classSessionId);
       if (options.isRevoked?.(scope.classSessionId)) deletedClassrooms.add(scope.classSessionId);
       const revoked = deletedClassrooms.has(scope.classSessionId);
-      if (revoked) for (const item of uploadRecords.values()) if (item.entry.classSessionId === scope.classSessionId) item.canAccept = false;
+      // A revoked classroom gets no staged upload at all (it could never be acknowledged).
+      if (revoked) { for (const item of uploadRecords.values()) if (item.entry.classSessionId === scope.classSessionId) item.canAccept = false; }
+      else registerUpload(scope);
       const recording = !revoked && ['03', '04', '05'].includes(scenario);
       if (recording) capture.command('recording');
       const projected = taskProjection(scope.classSessionId);
-      update({ ...state, scenario, currentClassroomId: scope.classSessionId, captureScope: scope, leaseValid: !revoked, tasks: Object.fromEntries(tasks), eventProjection: { ...emptyProjection(), mayHaveCharged: projected.risk, portCaptureState: capture.state, uploadPending: upload.pending(1), classroomDeleted: revoked }, active: recording, flows: {
+      update({ ...state, scenario, currentClassroomId: scope.classSessionId, captureScope: scope, leaseValid: !revoked, tasks: Object.fromEntries(tasks), eventProjection: { ...emptyProjection(), mayHaveCharged: projected.risk, portCaptureState: capture.state, uploadPending: !revoked && upload.pending(1), classroomDeleted: revoked }, active: recording, flows: {
         capture: recording ? 'recording' : 'idle',
         upload: scenario === '04' ? 'failed' : 'pending',
         asr: recording ? 'streaming' : 'idle',

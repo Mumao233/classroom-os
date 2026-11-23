@@ -238,6 +238,15 @@ describe('revocation, isolated tasks and segment projection', () => {
     expect(runtime.getState()).toMatchObject({ active: false, leaseValid: false, eventProjection: { classroomDeleted: true } });
     expect(runtime.start()).toBe(false);
   });
+  it('a revoked scenario classroom gets no staged upload (merged-review R2)', () => {
+    const runtime = createMockRuntime();
+    runtime.start(); runtime.runEventScript('classroomDeletion');
+    const before = runtime.getState().uploadHistory.length;
+    runtime.chooseScenario('03', { keepDeleted: true });
+    runtime.chooseScenario('04', { keepDeleted: true });
+    expect(runtime.getState().uploadHistory).toHaveLength(before);
+    expect(runtime.getState().eventProjection.uploadPending).toBe(false);
+  });
   it('isolates tasks by classroom and retains unknown cost risk until that task is reconciled', () => {
     const runtime = createMockRuntime();
     const original = eventScripts.taskUnknown[0];

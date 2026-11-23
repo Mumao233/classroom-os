@@ -164,8 +164,12 @@ export function createApiClient(scope: Scope, transportOrOptions: typeof fetch |
     allClassSessions: (query: { course_id: string }, signal?: AbortSignal) => allPages<S['ClassSession']>('/class-sessions', signal, query),
     /** Every course of a semester, archived ones included, read to the last page. */
     allCourses: async (query: { semester_id: string }, signal?: AbortSignal) => {
-      const [active, archived] = await Promise.all([allPages<S['Course']>('/courses', signal, { ...query, archived: false }), allPages<S['Course']>('/courses', signal, { ...query, archived: true })]);
-      return { items: [...active.items, ...archived.items], next_cursor: null };
+      // Both outcomes first: an expired session wins over a sibling's transport failure.
+      const results = await Promise.allSettled([allPages<S['Course']>('/courses', signal, { ...query, archived: false }), allPages<S['Course']>('/courses', signal, { ...query, archived: true })]);
+      const failures = results.flatMap(result => result.status === 'rejected' ? [result.reason as unknown] : []);
+      if (failures.length) throw failures.find(error => error instanceof ApiClientError && error.kind === 'http' && error.status === 401) ?? failures[0];
+      const [active, archived] = results.map(result => (result as PromiseFulfilledResult<{ items: S['Course'][] }>).value);
+      return { items: [...active!.items, ...archived!.items], next_cursor: null };
     },
     updateClassSession: (id: string, body: S['ClassSessionPatch']) => patch<S['ClassSession']>(`/class-sessions/${segment(id)}`, body),
     reviewDocuments: (query: { course_id?: string; kind?: 'summary' | 'card' | 'note'; understood?: boolean }, signal?: AbortSignal) => get<S['ReviewDocumentPage']>('/review-documents', { ...query, limit: 100 }, signal),
