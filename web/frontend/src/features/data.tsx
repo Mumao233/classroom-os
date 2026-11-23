@@ -48,7 +48,8 @@ export function readableCache<T>(query: { data: T | undefined; isError: boolean;
 /** While a page shows a cached fallback after a failed refresh, every server write below it is disabled like offline. */
 export function ReadOnlyWhile({ stale, children }: { stale: boolean; children: ReactNode }) {
   const app = useAppData();
-  return stale ? <Context.Provider value={{ ...app, online: false }}>{children}</Context.Provider> : <>{children}</>;
+  // Always the same provider element: switching read-only on or off must not remount (and reset) drafts below.
+  return <Context.Provider value={stale ? { ...app, online: false } : app}>{children}</Context.Provider>;
 }
 
 export function useAccountQuery<T>(parts: readonly unknown[], fn: (api: ApiClient, signal: AbortSignal) => Promise<T>, enabled = true) {

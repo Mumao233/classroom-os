@@ -21,8 +21,13 @@ export type RevocationHooks = {
   boundClassId?: () => string | null;
   /** A classroom is revoked (confirmed): stop a capture bound to it and drop its unconfirmed commands. */
   onClassRevoked?: (classId: string) => void;
-  /** A bound capture may belong to a deleted scope but that is not confirmed: stop capturing locally only. */
+  /**
+   * A bound capture may belong to a deleted scope but that is not confirmed: stop it through the normal
+   * (retryable) stop path, without a deletion event; it is revoked only once confirmed.
+   */
   onCaptureSuspended?: (classId: string) => void;
+  /** The server no longer authenticates this session: retire the whole account epoch. */
+  onUnauthenticated?: () => void;
 };
 
 export type RevocationLedger = {
@@ -52,16 +57,32 @@ export async function submitScopeDeletion(api: Pick<ApiClient, 'deleteCourse' | 
   const scope: ScopeDeletion = { kind: submitted.kind, id: submitted.id, mode: submitted.mode, ...(submitted.mode === 'move_children' ? { destination: submitted.destination } : {}) };
   const prepared = await revocation?.prepareScopeDeletion(scope);
   const body = { base_revision: submitted.revision, mode: submitted.mode, confirmation_token: submitted.token, ...(submitted.mode === 'move_children' ? { destination_id: submitted.destination } : {}) };
+  let receipt: unknown;
   try {
-    const receipt = await (submitted.kind === 'course' ? api.deleteCourse(submitted.id, body) : api.deleteSemester(submitted.id, body));
-    revocation?.applyScopeReceipt(scope, prepared);
-    return receipt;
+    receipt = await (submitted.kind === 'course' ? api.deleteCourse(submitted.id, body) : api.deleteSemester(submitted.id, body));
   } catch (error) {
-    // The server may have deleted it although its reply was lost or unreadable: hide what it may have
-    // removed until a read says otherwise. A definitive refusal changes nothing.
-    if (error instanceof ApiClientError && (error.kind === 'network' || error.kind === 'invalid_response')) revocation?.applyAmbiguousScopeDeletion(scope);
+    // The server may have deleted it although its reply was lost, unreadable or indeterminate: hide what it
+    // may have removed until a read says otherwise. A definitive refusal changes nothing.
+    if (isIndeterminate(error)) revocation?.applyAmbiguousScopeDeletion(scope);
     throw error;
   }
+  // Only a receipt for exactly the submitted scope confirms the deletion; anything else is an unknown outcome.
+  const value = receipt as { scope_type?: unknown; scope_id?: unknown; state?: unknown } | null;
+  const states = ['access_revoked', 'pending_delete', 'delete_failed', 'deleted'];
+  if (!value || typeof value !== 'object' || value.scope_type !== submitted.kind || value.scope_id !== submitted.id || !states.includes(String(value.state))) {
+    revocation?.applyAmbiguousScopeDeletion(scope);
+    throw new ApiClientError('invalid_response');
+  }
+  revocation?.applyScopeReceipt(scope, prepared);
+  return receipt;
+}
+
+/** A failed write whose effect on the server is unknown (not a definitive refusal, not a retired account epoch). */
+export function isIndeterminate(error: unknown): boolean {
+  if (!(error instanceof ApiClientError)) return false;
+  if (error.kind === 'network' || error.kind === 'invalid_response') return true;
+  if (error.kind !== 'http') return false;
+  return error.code === 'RESULT_UNKNOWN' || (error.status !== undefined && (error.status >= 500 || error.status === 408));
 }
 
 type Tri = boolean | 'unknown';
@@ -103,26 +124,30 @@ export function revokedError() {
   return new ApiClientError('http', 410, { error: { code: 'GONE', message: '内容已被删除', request_id: 'local-revocation', retryable: false, retry_after_seconds: null, current_revision: null, conflict_id: null, task_id: null } });
 }
 
-/** One parent link per child; the newest entity revision wins, and equal revisions that disagree are unknown. */
-type Link = { parent: string; revision: number; conflict: boolean };
+/**
+ * One parent link per child; the newest entity revision wins, equal revisions that disagree are unknown,
+ * and a link seen only in invalidated (not yet re-read) queries is unknown too: never proof for a tombstone.
+ */
+type Link = { parent: string; revision: number; conflict: boolean; stale: boolean };
 type Links = Map<string, Link>;
 type Membership = { classCourse: Links; courseSemester: Links; docClass: Links; versionClass: Links };
 const record = (value: unknown): Record<string, unknown> | null => typeof value === 'object' && value !== null ? value as Record<string, unknown> : null;
 const str = (value: unknown): string | undefined => typeof value === 'string' && value ? value : undefined;
 const items = (data: unknown): unknown[] | null => { const items = record(data)?.items; return Array.isArray(items) ? items : null; };
 
-function link(map: Links, id: string, parent: string, revision: number) {
+function link(map: Links, id: string, parent: string, revision: number, stale: boolean) {
   const old = map.get(id);
-  if (!old || revision > old.revision) map.set(id, { parent, revision, conflict: false });
-  else if (revision === old.revision && parent !== old.parent) old.conflict = true;
+  if (!old || revision > old.revision) map.set(id, { parent, revision, conflict: false, stale });
+  else if (revision === old.revision) { if (parent !== old.parent) old.conflict = true; else old.stale = old.stale && stale; }
 }
-const parentOf = (map: Links, id: string): string | undefined => { const value = map.get(id); return value && !value.conflict ? value.parent : undefined; };
+const parentOf = (map: Links, id: string): string | undefined => { const value = map.get(id); return value && !value.conflict && !value.stale ? value.parent : undefined; };
 
 function readMembership(client: QueryClient): Membership {
   const m: Membership = { classCourse: new Map(), courseSemester: new Map(), docClass: new Map(), versionClass: new Map() };
+  let stale = false;
   const add = (map: Links, field: string) => (value: unknown) => {
     const v = record(value); const id = str(v?.id); const parent = str(v?.[field]);
-    if (id && parent) link(map, id, parent, typeof v?.revision === 'number' ? v.revision : 0);
+    if (id && parent) link(map, id, parent, typeof v?.revision === 'number' ? v.revision : 0, stale);
   };
   const course = add(m.courseSemester, 'semester_id');
   const session = add(m.classCourse, 'course_id');
@@ -131,6 +156,7 @@ function readMembership(client: QueryClient): Membership {
   for (const query of client.getQueryCache().getAll()) {
     const data = query.state.data;
     if (data === undefined || query.queryKey[0] !== 'account') continue;
+    stale = query.state.isInvalidated;
     switch (query.queryKey[2]) {
       case 'courses': items(data)?.forEach(course); break;
       case 'course': course(data); break;
@@ -159,8 +185,11 @@ export function createRevocationLedger({ client, accountKey, api, hooks = {} }: 
   const served = new Set<string>();
   /** Requests in flight during a new revocation started before it: their replies are judged strictly once. */
   let strictOnArrival = new WeakMap<Query, NonNullable<Strict>>();
-  /** Projections shown as revoked: a later transport failure (offline refetch) must not relabel them as merely unreachable. */
-  let revokedQueries = new WeakSet<Query>();
+  /** Projections shown as revoked or denied: a later transport failure (offline refetch) must not relabel them as merely unreachable. */
+  let revokedQueries = new WeakMap<Query, unknown>();
+  /** Projections a revocation dropped as unknown: only a fresh read may fill them again, not a late mutation reply. */
+  let droppedQueries = new WeakSet<Query>();
+  let unauthenticated = false;
 
   const hasSemesterCascade = () => [...semesters.values()].includes('cascade');
   const hasCascade = () => hasSemesterCascade() || [...courses.values()].includes('cascade');
@@ -213,8 +242,9 @@ export function createRevocationLedger({ client, accountKey, api, hooks = {} }: 
     if (CLASS_KEYED.has(kind) && typeof arg === 'string') {
       const gone = classGone(arg, m, strict);
       if (gone !== false || kind !== 'audio-manifests') return tri(gone);
+      // A manifest traversal may never silently skip an epoch: one revoked epoch makes the whole projection unavailable.
       const epochs = audio.get(arg);
-      return epochs ? filterList(data, item => epochs.has(String(item.capture_epoch_id))) : KEEP;
+      return epochs && items(data)?.some(item => epochs.has(String(record(item)?.capture_epoch_id))) ? GONE : KEEP;
     }
     switch (kind) {
       case 'semesters': return filterList(data, item => semesters.has(String(item.id)));
@@ -242,6 +272,7 @@ export function createRevocationLedger({ client, accountKey, api, hooks = {} }: 
   const reset = (query: Query) => {
     // Resetting cancels any old request; what is read afterwards postdates the revocation.
     strictOnArrival.delete(query);
+    droppedQueries.add(query);
     void client.resetQueries({ queryKey: query.queryKey, exact: true });
   };
 
@@ -261,7 +292,7 @@ export function createRevocationLedger({ client, accountKey, api, hooks = {} }: 
       if (query.state.data === undefined) return;
       if (query.state.fetchStatus === 'fetching') void query.cancel({ revert: true });
       query.setState({ data: undefined, dataUpdatedAt: 0, status: 'error', error: revokedError(), errorUpdatedAt: Date.now(), fetchStatus: 'idle', isInvalidated: false });
-      revokedQueries.add(query);
+      revokedQueries.set(query, query.state.error);
       return;
     }
     if (query.state.data === undefined && query.state.fetchStatus !== 'fetching') return;
@@ -274,21 +305,34 @@ export function createRevocationLedger({ client, accountKey, api, hooks = {} }: 
     hooks.onClassRevoked?.(classId);
   };
 
+  /**
+   * Remember every confirmed revoked ID by itself: once filtered out of the cache its membership is no
+   * longer readable, and a late or repeated reply must still be recognised. Returns whether anything new
+   * was learned.
+   */
+  const learn = (m: Membership) => {
+    const before = classes.size + documents.size + versions.size;
+    for (const id of m.classCourse.keys()) if (classGone(id, m, null) === true) classes.add(id);
+    for (const id of m.docClass.keys()) if (docGone(id, m, null) === true) documents.add(id);
+    for (const id of m.versionClass.keys()) { const parent = parentOf(m.versionClass, id); if (parent !== undefined && classGone(parent, m, null) === true) versions.add(id); }
+    return classes.size + documents.size + versions.size !== before;
+  };
+
   /** Sweep every cached projection of this account; then tell the shell which classrooms are revoked. */
   const sweep = ({ strict, tentative = false }: { strict: Strict; tentative?: boolean }) => {
     const m = readMembership(client);
-    if (!tentative) {
-      // Remember every revoked ID by itself: once filtered out of the cache, its membership is no longer readable,
-      // and a late or repeated reply must still be recognised.
-      for (const id of m.classCourse.keys()) if (classGone(id, m, null) === true) classes.add(id);
-      for (const id of m.docClass.keys()) if (docGone(id, m, null) === true) documents.add(id);
-      for (const [id, value] of m.versionClass) if (!value.conflict && classGone(value.parent, m, null) === true) versions.add(id);
-    }
+    if (!tentative) learn(m);
     for (const query of client.getQueryCache().getAll()) {
       const kind = query.queryKey[2];
       if (query.queryKey[0] === 'account' && typeof kind === 'string' && REVOCABLE.has(kind) && query.state.fetchStatus === 'fetching') {
-        // A read started before an unknown outcome must not land: cancel it (the page reads again afterwards).
-        if (tentative && strict) { reset(query); continue; }
+        if (tentative && strict) {
+          // A read started before an unknown outcome must not land. A snapshot proven unaffected stays
+          // (the read is cancelled back to it); anything else is dropped.
+          const verdict = judge(query, m, strict);
+          if (verdict.type === 'keep' && query.state.data !== undefined) { void query.cancel({ revert: true }); continue; }
+          reset(query);
+          continue;
+        }
         if (strict) { const previous = strictOnArrival.get(query); strictOnArrival.set(query, previous ? mergeStrict(previous, strict) : strict); }
       }
       apply(query, judge(query, m, strict), tentative);
@@ -312,7 +356,7 @@ export function createRevocationLedger({ client, accountKey, api, hooks = {} }: 
   // needing the course → semester link again.
   const expandSemester = (semesterId: string) => {
     const m = readMembership(client);
-    for (const [courseId, value] of m.courseSemester) if (!value.conflict && follow(movedSemester, value.parent) === semesterId && courses.get(courseId) !== 'cascade') courses.set(courseId, 'cascade');
+    for (const courseId of m.courseSemester.keys()) { const parent = parentOf(m.courseSemester, courseId); if (parent !== undefined && follow(movedSemester, parent) === semesterId && courses.get(courseId) !== 'cascade') courses.set(courseId, 'cascade'); }
   };
 
   const onCacheEvent = (event: QueryCacheNotifyEvent) => {
@@ -325,12 +369,19 @@ export function createRevocationLedger({ client, accountKey, api, hooks = {} }: 
     const resourceKey = typeof kind === 'string' && SERVED_KINDS.has(kind) && typeof id === 'string' && id ? `${kind}:${id}` : null;
     if (event.type === 'updated' && event.action.type === 'error') {
       const error = event.action.error;
-      if (revokedQueries.has(query) && !isAuthoritativeDenial(error) && !isUnauthenticated(error)) { query.setState({ error: revokedError() }); return; }
-      if (isUnauthenticated(error)) { if (state.data !== undefined) query.setState({ data: undefined, dataUpdatedAt: 0 }); return; }
+      if (isUnauthenticated(error)) {
+        // Authentication is lost for the session, not for one object: strip this query now and retire the epoch.
+        if (state.data !== undefined) query.setState({ data: undefined, dataUpdatedAt: 0 });
+        if (!unauthenticated) { unauthenticated = true; queueMicrotask(() => hooks.onUnauthenticated?.()); }
+        return;
+      }
+      if (revokedQueries.has(query) && !isAuthoritativeDenial(error)) { query.setState({ error: revokedQueries.get(query) }); return; }
       if (!isAuthoritativeDenial(error)) return;
-      // A resource the server served before is now refused: stop showing it, and revoke what it identifies.
+      // A resource the server served before (in a detail or a list) is now refused: stop showing it, and
+      // revoke what it identifies.
       const servedBefore = state.data !== undefined || (resourceKey !== null && served.has(resourceKey));
       if (state.data !== undefined) query.setState({ data: undefined, dataUpdatedAt: 0 });
+      revokedQueries.set(query, error);
       if (!servedBefore || typeof id !== 'string' || !id) return;
       if (kind === 'class-session') revokeClass(id);
       else if (kind === 'course' && !courses.has(id)) { courses.set(id, 'self'); sweep({ strict: null }); }
@@ -338,11 +389,34 @@ export function createRevocationLedger({ client, accountKey, api, hooks = {} }: 
       return;
     }
     if (state.data === undefined) return;
-    if (resourceKey && state.status === 'success') served.add(resourceKey);
-    if (isEmpty()) return;
-    const strict = event.type === 'updated' && event.action.type === 'success' ? strictOnArrival.get(query) ?? null : null;
+    const success = event.type === 'updated' && event.action.type === 'success';
+    const manual = event.type === 'updated' && event.action.type === 'success' && event.action.manual === true;
+    if (success && state.status === 'success') recordServed(query);
+    if (isEmpty()) { if (success && !manual) droppedQueries.delete(query); return; }
+    if (success && manual && droppedQueries.has(query)) {
+      // A mutation reply that predates the revocation which dropped this projection: require a fresh read.
+      reset(query);
+      return;
+    }
+    if (success && !manual) droppedQueries.delete(query);
+    const strict = success ? strictOnArrival.get(query) ?? null : null;
     if (strict) strictOnArrival.delete(query);
-    apply(query, judge(query, readMembership(client), strict), false);
+    // Membership first seen in this reply may confirm more revocations: record and propagate them first.
+    if (learn(readMembership(client))) {
+      for (const classId of classes) notifyClass(classId);
+      sweep({ strict: null });
+    }
+    if (query.state.data !== undefined) apply(query, judge(query, readMembership(client), strict), false);
+  };
+
+  /** A successful read lists or shows resources: their later denial is evidence of revocation. */
+  const recordServed = (query: Query) => {
+    const kind = query.queryKey[2];
+    const id = query.queryKey[3];
+    const data = query.state.data;
+    if (typeof kind === 'string' && SERVED_KINDS.has(kind) && typeof id === 'string' && id) served.add(`${kind}:${id}`);
+    const listed = kind === 'class-sessions' ? 'class-session' : kind === 'courses' ? 'course' : kind === 'review-library' || kind === 'review-documents' ? 'review-document' : null;
+    if (listed) for (const item of items(data) ?? []) { const itemId = str(record(item)?.id); if (itemId) served.add(`${listed}:${itemId}`); }
   };
 
   function revokeClass(classId: string) {
@@ -398,7 +472,7 @@ export function createRevocationLedger({ client, accountKey, api, hooks = {} }: 
     reset() {
       semesters.clear(); courses.clear(); classes.clear(); documents.clear(); versions.clear(); audio.clear();
       notified.clear(); movedCourse.clear(); movedSemester.clear(); served.clear();
-      strictOnArrival = new WeakMap(); revokedQueries = new WeakSet();
+      strictOnArrival = new WeakMap(); revokedQueries = new WeakMap(); droppedQueries = new WeakSet(); unauthenticated = false;
     },
     install() {
       return client.getQueryCache().subscribe(onCacheEvent);

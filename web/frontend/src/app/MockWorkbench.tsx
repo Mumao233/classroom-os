@@ -84,7 +84,7 @@ function MockWorkbenchContent({ runtime }: { runtime: ReturnType<typeof useMockR
   const [feed] = useState(createTranscriptFeed);
   // One revocation ledger per account epoch: deletion receipts, deletion events and authoritative
   // denials revoke cached content and the bound capture at once, without relying on a refetch.
-  const { revokeClassroomAccess } = runtime;
+  const { revokeClassroomAccess, revokeAccount: revokeRuntimeAccount } = runtime;
   const [revocation] = useState(() => createRevocationLedger({ client: queryClient, accountKey: `${account}:${epoch}`, api, hooks: {
     boundClassId: () => classroomShell.capture.bound()?.classId ?? null,
     onClassRevoked: classId => {
@@ -94,9 +94,16 @@ function MockWorkbenchContent({ runtime }: { runtime: ReturnType<typeof useMockR
       classroomShell.pendingStops.set(classId, null);
       classroomShell.pendingCommands.set(classId, null);
     },
-    // Unconfirmed: stop capturing on this device only (no deletion event, no server tombstone); the
-    // local audio stays guarded and the classroom is revoked only once a read or receipt confirms it.
-    onCaptureSuspended: classId => { const bound = classroomShell.capture.bound(); if (bound?.active && bound.classId === classId) classroomShell.capture.stopLocal(); },
+    // Unconfirmed: the normal stop path (local stop now, server stop sent; kept as a retryable pending
+    // stop if it cannot be confirmed). No deletion event and no server tombstone: the classroom is
+    // revoked only once a read or receipt confirms it, which then discards the pending stop.
+    onCaptureSuspended: classId => {
+      const bound = classroomShell.capture.bound();
+      if (!bound?.active || bound.classId !== classId) return;
+      void stopCapture(api, classroomShell, classId, () => crypto.randomUUID()).then(() => queryClient.invalidateQueries()).catch(() => undefined);
+    },
+    // An expired session retires the whole account epoch (runtime, events, capture and every cached page).
+    onUnauthenticated: () => { revokeRuntimeAccount(); setMockAccount(null); void queryClient.cancelQueries(); queryClient.clear(); navigate('/dashboard'); },
   } }));
   useEffect(() => revocation.install(), [revocation]);
   const classQueries = (ids: ReadonlySet<unknown>) => ({ predicate: (query: { queryKey: readonly unknown[] }) => query.queryKey.some(part => ids.has(part)) });
