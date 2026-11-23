@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef } from 'react';
 import { Link, useParams } from 'react-router';
-import { describeError, useAppData, useCourse } from '../../features/data';
+import { describeError, readableCache, ReadOnlyWhile, useAppData, useCourse } from '../../features/data';
 import { useClassQuestions, useClassSession, useClassroomShell, useMarks, useTranscript } from '../../features/classroom';
 import { buildTimeline, TASK_STATE_LABEL } from '../../domain/classroom';
 import { DataSourceNote } from '../common';
@@ -27,16 +27,16 @@ export function ClassroomRecord() {
   const heading = useRef<HTMLHeadingElement>(null);
   useEffect(() => { heading.current?.focus({ preventScroll: true }); }, [classId]);
   if (session.isPending) return <main id="main-content" className={styles.page}><p role="status" className={styles.muted}>正在读取课堂记录…</p></main>;
-  // Only data the account still holds is shown: an authoritative denial has already removed it
-  // (revocation ledger); a transport failure keeps the loaded record readable.
-  if (!session.data) return <main id="main-content" className={styles.page}><div className={`${styles.banner} ${styles.bannerDanger}`} role="alert"><div>{describeError(session.error)} <Link to="/classrooms">返回课堂入口</Link></div></div></main>;
-  const data = session.data;
+  // Only data the account still holds is shown, and only after a transport failure: a denial removed
+  // it (revocation ledger), an expired session or unreadable reply shows nothing.
+  const data = readableCache(session);
+  if (!data) return <main id="main-content" className={styles.page}><div className={`${styles.banner} ${styles.bannerDanger}`} role="alert"><div>{describeError(session.error)} <Link to="/classrooms">返回课堂入口</Link></div></div></main>;
   const expires = data.audio_expires_at ? Date.parse(data.audio_expires_at) : null;
   const audio = data.capture_ended_at === null ? '课堂尚未结束。'
     : expires === null ? '原音不可用（已删除或未保存），字幕保留原时间位置，不能播放。'
       : expires <= app.now() ? '原音已过期，不能播放或重新识别；字幕保留原时间位置。'
         : `原音保留至 ${data.audio_expires_at!.slice(0, 10)}。开发预览不提供播放。`;
-  return <main id="main-content" className={styles.page}>
+  return <ReadOnlyWhile stale={session.isError}><main id="main-content" className={styles.page}>
     <header className={styles.header}>
       <div><p className={styles.eyebrow}>{course.data?.name ?? '课程'} · 课堂记录</p><h1 ref={heading} tabIndex={-1}>{data.title || '未命名课堂'}</h1><p className={`${styles.small} ${styles.muted}`} data-testid="audio-status">{audio}</p></div>
       <FlowStrip flows={data.flows} />
@@ -63,5 +63,5 @@ export function ClassroomRecord() {
       {data.capture_ended_at !== null && <Link className={styles.buttonSecondary} to={`/classrooms/${classId}/processing`}>课后处理</Link>}
       <Link className={styles.buttonGhost} to={`/courses/${data.course_id}/classrooms`}>回到课程</Link>
     </nav>
-  </main>;
+  </main></ReadOnlyWhile>;
 }

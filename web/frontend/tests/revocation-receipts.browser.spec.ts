@@ -134,6 +134,9 @@ test.describe('revocation on receipt (offline after the reply)', () => {
     // The re-read after the write fails at the transport: the content stays, with a warning.
     await expect(page.getByTestId('document-refresh-error')).toContainText('无法连接服务');
     await expect(page.getByTestId('reader')).toContainText('特征值');
+    // The fallback is read-only: no server write is offered until a refresh succeeds.
+    await expect(page.getByTestId('toggle-understood')).toBeDisabled();
+    await expect(page.getByTestId('edit-personal')).toBeDisabled();
   });
 
   test('scenario 5 · one receipt revokes the course everywhere: dashboard, course, classroom record, classroom review and review pages', async ({ page }) => {

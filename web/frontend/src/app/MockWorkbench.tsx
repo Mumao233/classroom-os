@@ -94,6 +94,9 @@ function MockWorkbenchContent({ runtime }: { runtime: ReturnType<typeof useMockR
       classroomShell.pendingStops.set(classId, null);
       classroomShell.pendingCommands.set(classId, null);
     },
+    // Unconfirmed: stop capturing on this device only (no deletion event, no server tombstone); the
+    // local audio stays guarded and the classroom is revoked only once a read or receipt confirms it.
+    onCaptureSuspended: classId => { const bound = classroomShell.capture.bound(); if (bound?.active && bound.classId === classId) classroomShell.capture.stopLocal(); },
   } }));
   useEffect(() => revocation.install(), [revocation]);
   const classQueries = (ids: ReadonlySet<unknown>) => ({ predicate: (query: { queryKey: readonly unknown[] }) => query.queryKey.some(part => ids.has(part)) });
@@ -131,8 +134,10 @@ function MockWorkbenchContent({ runtime }: { runtime: ReturnType<typeof useMockR
     if (account !== 'A' || appliedDataset.current === dataset) return;
     appliedDataset.current = dataset;
     setMockDataset('A', dataset);
+    // The fixtures behind the same IDs were replaced wholesale: earlier revocations no longer apply.
+    revocation.reset();
     void queryClient.invalidateQueries();
-  }, [account, dataset, queryClient]);
+  }, [account, dataset, queryClient, revocation]);
   const toggleOffline = (value: boolean) => { setMockOffline(value); setMockOfflineState(value); };
   const localRisk: LocalRisk = ['write_failed', 'locked', 'quota'].includes(runtime.state.localWriteResult) || flows.sync === 'failed'
     ? { kind: 'unsaved', detail: '模拟本地写入未成功：内容尚未安全保存，只在当前页面。请先处理再离开。' }

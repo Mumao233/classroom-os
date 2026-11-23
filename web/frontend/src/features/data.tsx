@@ -37,6 +37,20 @@ export function useAppData() {
   return value;
 }
 
+export const isTransportFailure = (error: unknown) => error instanceof ApiClientError && error.kind === 'network';
+/**
+ * Cached data a page may still show: only while its latest failure (if any) was the transport. Any
+ * other failure (denial, expired session, unreadable reply) shows no private content.
+ */
+export function readableCache<T>(query: { data: T | undefined; isError: boolean; error: unknown }): T | undefined {
+  return query.data !== undefined && (!query.isError || isTransportFailure(query.error)) ? query.data : undefined;
+}
+/** While a page shows a cached fallback after a failed refresh, every server write below it is disabled like offline. */
+export function ReadOnlyWhile({ stale, children }: { stale: boolean; children: ReactNode }) {
+  const app = useAppData();
+  return stale ? <Context.Provider value={{ ...app, online: false }}>{children}</Context.Provider> : <>{children}</>;
+}
+
 export function useAccountQuery<T>(parts: readonly unknown[], fn: (api: ApiClient, signal: AbortSignal) => Promise<T>, enabled = true) {
   const { api, accountKey } = useAppData();
   return useQuery({ queryKey: ['account', accountKey, ...parts], queryFn: ({ signal }) => fn(api, signal), enabled });

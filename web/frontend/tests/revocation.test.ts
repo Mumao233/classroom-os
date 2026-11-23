@@ -92,7 +92,7 @@ describe('scenario 2 · a confirmed cascade revokes the bound capture at once', 
     ledger.applyScopeReceipt({ kind: 'course', id: 'k1', mode: 'cascade' });
     expect(revoked).toEqual([]);
   });
-  it('prepare resolves the bound membership first; an unresolvable one is revoked conservatively', async () => {
+  it('prepare resolves the bound membership first; an unresolvable one only suspends the capture', async () => {
     const known = setup('c1');
     const api = { classSession: () => Promise.resolve({ id: 'c1', course_id: 'k9' }), course: () => Promise.resolve({ id: 'k9', semester_id: 's9' }) };
     const ledger = createRevocationLedger({ client: known.client, accountKey: A, api: api as never, hooks: { boundClassId: () => 'c1', onClassRevoked: id => known.revoked.push(id) } });
@@ -101,10 +101,13 @@ describe('scenario 2 · a confirmed cascade revokes the bound capture at once', 
     expect(known.revoked).toEqual([]);
 
     const unknown = setup();
-    const failing = createRevocationLedger({ client: unknown.client, accountKey: A, api: { classSession: () => Promise.reject(networkError()) } as never, hooks: { boundClassId: () => 'c1', onClassRevoked: id => unknown.revoked.push(id) } });
-    await failing.prepareScopeDeletion({ kind: 'course', id: 'k1' });
-    failing.applyScopeReceipt({ kind: 'course', id: 'k1', mode: 'cascade' });
-    expect(unknown.revoked).toEqual(['c1']);
+    const suspended: string[] = [];
+    const failing = createRevocationLedger({ client: unknown.client, accountKey: A, api: { classSession: () => Promise.reject(networkError()) } as never, hooks: { boundClassId: () => 'c1', onClassRevoked: id => unknown.revoked.push(id), onCaptureSuspended: id => suspended.push(id) } });
+    const prepared = await failing.prepareScopeDeletion({ kind: 'course', id: 'k1' });
+    failing.applyScopeReceipt({ kind: 'course', id: 'k1', mode: 'cascade' }, prepared);
+    // Not a confirmed deletion of c1: no tombstone or deletion event; the capture stops locally only.
+    expect(unknown.revoked).toEqual([]);
+    expect(suspended).toEqual(['c1']);
   });
   it('an earlier cascade does not make a later, unrelated revocation stop a capture of unknown membership', () => {
     const client = new QueryClient();
@@ -118,10 +121,15 @@ describe('scenario 2 · a confirmed cascade revokes the bound capture at once', 
   });
   it('a bound classroom the server does not know (unregistered demo) is not inside any deleted scope', async () => {
     const { client, revoked } = setup();
-    const ledger = createRevocationLedger({ client, accountKey: A, api: { classSession: () => Promise.reject(httpError(404, 'NOT_FOUND')) } as never, hooks: { boundClassId: () => 'demo', onClassRevoked: id => revoked.push(id) } });
-    await ledger.prepareScopeDeletion({ kind: 'course', id: 'k1' });
-    ledger.applyScopeReceipt({ kind: 'course', id: 'k1', mode: 'cascade' });
+    const suspended: string[] = [];
+    const ledger = createRevocationLedger({ client, accountKey: A, api: { classSession: () => Promise.reject(httpError(404, 'NOT_FOUND')) } as never, hooks: { boundClassId: () => 'demo', onClassRevoked: id => revoked.push(id), onCaptureSuspended: id => suspended.push(id) } });
+    const prepared = await ledger.prepareScopeDeletion({ kind: 'course', id: 'k1' });
+    ledger.applyScopeReceipt({ kind: 'course', id: 'k1', mode: 'cascade' }, prepared);
     expect(revoked).toEqual([]);
+    expect(suspended).toEqual([]);
+    // The exemption belongs to that deletion only: a later cascade without one suspends the unknown capture.
+    ledger.applyScopeReceipt({ kind: 'course', id: 'k2', mode: 'cascade' });
+    expect(suspended).toEqual(['demo']);
   });
 });
 
@@ -304,5 +312,100 @@ describe('a revoked projection stays revoked when an offline refetch fails', () 
     await fetchInto(client, ['class-session', 'c1'], () => Promise.reject(networkError()));
     expect((client.getQueryState(key('class-session', 'c1'))?.error as ApiClientError).code).toBe('GONE');
     expect(client.getQueryData(key('class-session', 'c1'))).toBeUndefined();
+  });
+});
+
+describe('round-0 review regressions', () => {
+  it('a classroom denial after an ambiguous deletion reset its cached detail still revokes it', async () => {
+    const { client, ledger, revoked } = setup('c1');
+    client.setQueryData(key('class-session', 'c1'), { id: 'c1', course_id: 'k1' });
+    ledger.applyAmbiguousScopeDeletion({ kind: 'course', id: 'k1', mode: 'cascade' });
+    expect(client.getQueryData(key('class-session', 'c1'))).toBeUndefined();
+    await fetchInto(client, ['class-session', 'c1'], () => Promise.reject(httpError(404, 'NOT_FOUND')));
+    expect(revoked).toEqual(['c1']);
+  });
+  it('a later cascade of the move destination revokes the classrooms moved into it', () => {
+    const { client, ledger, revoked } = setup();
+    client.setQueryData(key('class-session', 'c1'), { id: 'c1', course_id: 'kA', revision: 1 });
+    client.setQueryData(key('review-document', 'd1'), { id: 'd1', class_session_id: 'c1' });
+    ledger.applyScopeReceipt({ kind: 'course', id: 'kA', mode: 'move_children', destination: 'kB' });
+    expect(client.getQueryData(key('class-session', 'c1'))).toBeDefined();
+    ledger.applyScopeReceipt({ kind: 'course', id: 'kB', mode: 'cascade' });
+    expect(client.getQueryData(key('class-session', 'c1'))).toBeUndefined();
+    expect(client.getQueryData(key('review-document', 'd1'))).toBeUndefined();
+    expect(revoked).toEqual(['c1']);
+  });
+  it('a later semester cascade follows courses moved into it', () => {
+    const { client, ledger } = setup();
+    client.setQueryData(key('course', 'k1'), { id: 'k1', semester_id: 'sA' });
+    ledger.applyScopeReceipt({ kind: 'semester', id: 'sA', mode: 'move_children', destination: 'sB' });
+    expect(client.getQueryData(key('course', 'k1'))).toBeDefined();
+    ledger.applyScopeReceipt({ kind: 'semester', id: 'sB', mode: 'cascade' });
+    expect(client.getQueryData(key('course', 'k1'))).toBeUndefined();
+  });
+  it('membership comes from the newest revision; a stale list entry cannot revoke a moved classroom', () => {
+    const { client, ledger, revoked } = setup();
+    client.setQueryData(key('class-session', 'c1'), { id: 'c1', course_id: 'kB', revision: 2 });
+    client.setQueryData(key('class-sessions', 'kA'), page([{ id: 'c1', course_id: 'kA', revision: 1 }]));
+    ledger.applyScopeReceipt({ kind: 'course', id: 'kA', mode: 'cascade' });
+    expect(client.getQueryData(key('class-session', 'c1'))).toBeDefined();
+    expect(revoked).toEqual([]);
+  });
+  it('equal revisions that disagree are unknown: dropped, never tombstoned', () => {
+    const { client, ledger, revoked } = setup();
+    client.setQueryData(key('class-session', 'c1'), { id: 'c1', course_id: 'kB', revision: 1 });
+    client.setQueryData(key('class-sessions', 'kA'), page([{ id: 'c1', course_id: 'kA', revision: 1 }]));
+    ledger.applyScopeReceipt({ kind: 'course', id: 'kA', mode: 'cascade' });
+    expect(client.getQueryData(key('class-session', 'c1'))).toBeUndefined();
+    expect(ledger.isClassRevoked('c1')).toBe(false);
+    expect(revoked).toEqual([]);
+  });
+  it('an ambiguous deletion cancels reads already in flight, so their pre-deletion reply never lands', async () => {
+    const { client, ledger } = setup();
+    const late = deferred<unknown>();
+    const inFlight = fetchInto(client, ['review-library', {}], () => late.promise);
+    ledger.applyAmbiguousScopeDeletion({ kind: 'course', id: 'k1', mode: 'cascade' });
+    late.resolve(page([{ id: 'd1', class_session_id: 'c1' }]));
+    await inFlight;
+    expect(client.getQueryData(key('review-library', {}))).toBeUndefined();
+  });
+  it('a 401 refetch removes cached private content (not an offline read)', async () => {
+    const { client } = setup();
+    client.setQueryData(key('review-document', 'd1'), { id: 'd1', class_session_id: 'c1', title: '旧' });
+    await fetchInto(client, ['review-document', 'd1'], () => Promise.reject(httpError(401, 'UNAUTHENTICATED')));
+    expect(client.getQueryData(key('review-document', 'd1'))).toBeUndefined();
+  });
+  it('a request spanning two revocations is judged by both when it lands', async () => {
+    const { client, ledger } = setup();
+    const late = deferred<unknown>();
+    const inFlight = fetchInto(client, ['review-library', {}], () => late.promise);
+    ledger.applyScopeReceipt({ kind: 'course', id: 'k1', mode: 'cascade' });
+    ledger.revokeClass('c-other');
+    // c-known's course is unknown: the cascade alone drops the reply; the class event must not weaken that.
+    late.resolve(page([{ id: 'd1', class_session_id: 'c-known' }]));
+    await inFlight;
+    expect(client.getQueryData(key('review-library', {}))).toBeUndefined();
+  });
+  it('an unreadable 2xx deletion reply is treated as ambiguous', async () => {
+    const { client, ledger } = setup();
+    client.setQueryData(key('class-session', 'c1'), { id: 'c1', course_id: 'k1' });
+    await expect(submitScopeDeletion({ deleteCourse: () => Promise.reject(new ApiClientError('invalid_response')), deleteSemester: () => Promise.reject(new Error('unused')) }, ledger, { kind: 'course', id: 'k1', mode: 'cascade', destination: '', revision: 1, token: 't' })).rejects.toBeInstanceOf(ApiClientError);
+    expect(client.getQueryData(key('class-session', 'c1'))).toBeUndefined();
+  });
+  it('a definitive refusal of the deletion changes nothing', async () => {
+    const { client, ledger } = setup();
+    client.setQueryData(key('class-session', 'c1'), { id: 'c1', course_id: 'k1' });
+    await expect(submitScopeDeletion({ deleteCourse: () => Promise.reject(httpError(409, 'PLAN_EXPIRED')), deleteSemester: () => Promise.reject(new Error('unused')) }, ledger, { kind: 'course', id: 'k1', mode: 'cascade', destination: '', revision: 1, token: 't' })).rejects.toBeInstanceOf(ApiClientError);
+    expect(client.getQueryData(key('class-session', 'c1'))).toBeDefined();
+  });
+  it('replacing the data set forgets earlier revocations', async () => {
+    const { client, ledger } = setup();
+    client.setQueryData(key('course', 'k1'), { id: 'k1', semester_id: 's1' });
+    await fetchInto(client, ['course', 'k1'], () => Promise.reject(httpError(404, 'NOT_FOUND')));
+    client.setQueryData(key('course', 'k1'), { id: 'k1', semester_id: 's1' });
+    expect(client.getQueryData(key('course', 'k1'))).toBeUndefined();
+    ledger.reset();
+    client.setQueryData(key('course', 'k1'), { id: 'k1', semester_id: 's1' });
+    expect(client.getQueryData(key('course', 'k1'))).toBeDefined();
   });
 });
