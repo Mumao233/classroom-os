@@ -142,7 +142,8 @@ describe('PR-11b user status, quota and switches', () => {
     const saved = write('adminUpdateSwitches', null, 'PATCH', '/admin/switches', { base_revision: switches.revision, asr_enabled: false, reason: '合成：供应商维护' }).reply;
     expect(saved.body).toMatchObject({ revision: switches.revision + 1, asr_enabled: false, ai_enabled: true });
     expect((call('A', 'GET', '/me/quota').body as S['QuotaView']).asr_enabled).toBe(false);
-    expect((call('C', 'GET', `/admin/users/${PENDING}/quota`).body as S['QuotaView']).asr_enabled).toBe(false);
+    // An active platform user who is not a Mock account (inactive owners have no quota projection).
+    expect((call('C', 'GET', '/admin/users/d0000000-0000-4000-8000-000000000001/quota').body as S['QuotaView']).asr_enabled).toBe(false);
     const stale = write('adminUpdateSwitches', null, 'PATCH', '/admin/switches', { base_revision: switches.revision, ai_enabled: false, reason: '旧版本' }).reply;
     expect(err(stale)).toBe('REVISION_CONFLICT');
     expect((stale.body as S['Error']).error.current_revision).toBe(switches.revision + 1);
