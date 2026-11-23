@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { evictScopeFromReview } from '../../features/review';
 import type { components } from '../../generated/openapi';
 import { Dialog } from '../../ui';
 import { describeError, useAppData, useInvalidateAccount } from '../../features/data';
@@ -18,6 +19,7 @@ export function DeleteDialog({ open, onOpenChange, target, destinations, onDelet
 }) {
   const { api, online } = useAppData();
   const invalidate = useInvalidateAccount();
+  const client = useQueryClient();
   const [preview, setPreview] = useState<S['DeletionPreview'] | null>(null);
   const [previewError, setPreviewError] = useState<unknown>(null);
   const [mode, setMode] = useState<'cascade' | 'move_children'>('cascade');
@@ -34,7 +36,11 @@ export function DeleteDialog({ open, onOpenChange, target, destinations, onDelet
       const body: S['DeleteScopeRequest'] = { base_revision: preview!.revision, mode, confirmation_token: preview!.confirmation_token, ...(mode === 'move_children' ? { destination_id: destination } : {}) };
       return target.kind === 'course' ? api.deleteCourse(target.id, body) : api.deleteSemester(target.id, body);
     },
-    onSuccess: async () => { onOpenChange(false); onDeleted(); await invalidate(); },
+    onSuccess: async () => {
+      // Cascade deletion revokes the contained classrooms: their review content leaves the cache now, before any refetch (which may fail offline).
+      if (mode === 'cascade') evictScopeFromReview(client, { kind: target.kind, id: target.id });
+      onOpenChange(false); onDeleted(); await invalidate();
+    },
   });
   const moveInvalid = mode === 'move_children' && !destination;
   return <Dialog open={open} onOpenChange={value => { if (!value) remove.reset(); onOpenChange(value); }} title={`删除${target.kind === 'course' ? '课程' : '学期'}「${target.name}」`} description="删除前请核对影响范围。归档可以保留全部内容；删除会先撤销访问，再由服务端清理。">

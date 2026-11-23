@@ -1,5 +1,6 @@
 import type { components } from '../generated/openapi';
-import { advanceTask, ensureDemoClassroom, finishAsr, handleClassroom, expireManifestCursors, persistFinal, projectTask, recordDurable, releaseAccountLeases, releaseLease, revokeAudio, revokeClassroom, seedClassroom, seedHistoricalManifests, setManifestDev, type ClassroomHelpers, type ClassroomHost, type ClassroomStore, type TaskOutcome } from './classroom-backend';
+import { advanceTask, ensureDemoClassroom, finishAsr, handleClassroom, expireManifestCursors, persistFinal, projectTask, recordDurable, releaseAccountLeases, releaseLease, revokeAudio, revokeClassroom, seedClassroom, seedHistoricalManifests, setManifestDev, setRetranscribeDev, activeVersionIds, type ClassroomHelpers, type ClassroomHost, type ClassroomStore, type TaskOutcome } from './classroom-backend';
+import { addCandidate, handleReview, seedReview, type ReviewHelpers, type ReviewHost, type ReviewStore } from './review-backend';
 
 /**
  * Development-only, in-memory synthetic backend for endpoints that the real backend does not
@@ -91,7 +92,7 @@ function seedA(dataset: MockDataset): Store {
       material(uuid('d0000000', 4), ids.laSpring, '2026-02-24T08:00:00Z'), material(uuid('d0000000', 5), ids.writing, '2026-09-03T08:00:00Z'),
     ],
     documents: [
-      { ...base(uuid('e0000000', 1), '2026-10-27T08:00:00Z'), class_session_id: s(1), kind: 'summary', title: '特征值与特征向量 · 课堂总结', adopted_revision_id: uuid('e1000000', 1), latest_personal_revision_id: null, candidate_revision_ids: [], understood: false, source_status: 'unchanged' },
+      { ...base(uuid('e0000000', 1), '2026-10-27T08:00:00Z'), class_session_id: s(1), kind: 'summary', title: '特征值与特征向量 · 课堂总结', adopted_revision_id: uuid('e1000000', 1), latest_personal_revision_id: null, candidate_revision_ids: [uuid('e1000000', 5)], understood: false, source_status: 'unchanged' },
       { ...base(uuid('e0000000', 2), '2026-10-27T08:10:00Z'), class_session_id: s(1), kind: 'card', title: '特征多项式', adopted_revision_id: uuid('e1000000', 2), latest_personal_revision_id: null, candidate_revision_ids: [], understood: false, source_status: 'unchanged' },
       { ...base(uuid('e0000000', 3), '2026-10-23T12:00:00Z'), class_session_id: s(2), kind: 'note', title: '矩阵对角化 · 个人补充', adopted_revision_id: null, latest_personal_revision_id: uuid('e1000000', 3), candidate_revision_ids: [], understood: true, source_status: 'unchanged' },
       { ...base(uuid('e0000000', 4), '2026-10-25T05:00:00Z'), class_session_id: s(4), kind: 'summary', title: '红黑树的插入 · 候选总结', adopted_revision_id: null, latest_personal_revision_id: null, candidate_revision_ids: [uuid('e1000000', 4)], understood: false, source_status: 'new_material_not_included' },
@@ -133,6 +134,7 @@ function quota(): S['QuotaView'] {
       { kind: 'asr_day_ms', period_start: '2026-10-28T00:00:00Z', period_end: '2026-10-29T00:00:00Z', limit: 14400000, reserved: 0, submitted: 0, settled: 0, unknown: 0, remaining: 14400000 },
       { kind: 'interactive_month_count', ...period, limit: 300, reserved: 0, submitted: 0, settled: 42, unknown: 1, remaining: 257 },
       { kind: 'summary_month_count', ...period, limit: 60, reserved: 0, submitted: 0, settled: 6, unknown: 0, remaining: 54 },
+      { kind: 'retranscribe_month_ms', ...period, limit: 14400000, reserved: 0, submitted: 0, settled: 0, unknown: 0, remaining: 14400000 },
     ],
   };
 }
@@ -147,6 +149,7 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
   // Historical classrooms with retained audio also have their recorded epoch.
   const withHistory = (account: MockAccountKey, store: ClassroomStore) => seedHistoricalManifests(store, stores[account].sessions);
   const classrooms: Record<MockAccountKey, ClassroomStore> = { A: withHistory('A', seededClassroom()), B: withHistory('B', seedClassroom(null)) };
+  const reviews: Record<MockAccountKey, ReviewStore> = { A: seedReview(true), B: seedReview(false) };
 
   const error = (status: number, code: ErrorCode, message: string, currentRevision: number | null = null): MockReply =>
     ({ status, body: { error: { code, message, request_id: newId(), retryable: false, retry_after_seconds: null, current_revision: currentRevision, conflict_id: null, task_id: null } } });
@@ -229,7 +232,34 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
       updateQuestion: (taskId, change) => { store.questions = store.questions.map(item => item.task_id === taskId ? { ...item, ...change, revision: item.revision + 1, updated_at: now() } : item); },
       addDocument: document => { store.documents = [...store.documents, document]; },
       document: id => store.documents.find(item => item.id === id),
+      addCandidate: input => addCandidate(reviews[account], input),
     };
+  }
+  function reviewHost(account: MockAccountKey): ReviewHost {
+    const store = stores[account];
+    return {
+      documents: () => store.documents,
+      saveDocument: next => { store.documents = store.documents.map(item => item.id === next.id ? next : item); },
+      addDocument: next => { store.documents = [...store.documents, next]; },
+      visibleSessions: () => liveSessions(store).flatMap(session => { const course = findCourse(store, session.course_id); return course ? [{ session, courseId: course.id, semesterId: course.semester_id }] : []; }),
+      questions: () => store.questions,
+      saveQuestion: next => { store.questions = store.questions.map(item => item.id === next.id ? next : item); },
+      sourceState: ref => {
+        const room = classrooms[account];
+        if (ref.kind === 'transcript_segment') {
+          const segment = room.segments.find(item => item.id === ref.id);
+          if (!segment) return 'missing';
+          // A source outside the transcript generation now reads (another version was adopted) also counts as changed.
+          const session = store.sessions.find(item => item.id === segment.class_session_id);
+          return segment.segment_revision_id === ref.revision_id && (!session || activeVersionIds(room, session).has(segment.transcript_version_id)) ? 'current' : 'changed';
+        }
+        if (ref.kind === 'slide_version') { const slide = room.slides.find(item => item.id === ref.id); return !slide || slide.removed ? 'missing' : slide.version_id === ref.revision_id ? 'current' : 'changed'; }
+        return room.marks.some(item => item.id === ref.id) ? 'current' : 'missing';
+      },
+    };
+  }
+  function reviewHelpers(account: MockAccountKey): ReviewHelpers {
+    return { now, newId, error, idempotent: (key, scope, body, run) => idempotent(stores[account], key, scope, body, run) };
   }
   function classroomHelpers(account: MockAccountKey): ClassroomHelpers {
     return { now, newId, error, idempotent: (key, scope, body, run) => idempotent(stores[account], key, scope, body, run) };
@@ -418,21 +448,14 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
         store.sessions = store.sessions.map(item => item.id === id ? next : item);
         return ok(next);
       }
-      case 'GET /review-documents': {
-        const course = query.get('course_id');
-        const kind = query.get('kind');
-        const understood = query.get('understood');
-        const sessions = new Map(liveSessions(store).filter(item => findCourse(store, item.course_id)).map(item => [item.id, item]));
-        return page(store.documents.filter(item => sessions.has(item.class_session_id) && (!course || sessions.get(item.class_session_id)!.course_id === course)
-          && (!kind || item.kind === kind) && (understood === null || String(item.understood) === understood)));
-      }
       case 'GET /questions': {
         const sessionId = query.get('class_session_id');
         const sessions = new Set(liveSessions(store).filter(item => findCourse(store, item.course_id)).map(item => item.id));
         return page(store.questions.filter(item => sessions.has(item.class_session_id) && (!sessionId || item.class_session_id === sessionId)));
       }
       case 'GET /notifications': return page(store.notifications);
-      default: return handleClassroom(classrooms[account], classroomHost(account), classroomHelpers(account), method, route, id, query, body, key);
+      default: return handleReview(reviews[account], reviewHost(account), reviewHelpers(account), method, route, id, query, body, key)
+        ?? handleClassroom(classrooms[account], classroomHost(account), classroomHelpers(account), method, route, id, query, body, key);
     }
   }
 
@@ -441,10 +464,16 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
     reset(account: MockAccountKey, dataset: MockDataset = 'seeded') {
       stores[account] = account === 'A' ? seedA(dataset) : seedB();
       classrooms[account] = withHistory(account, account === 'A' && dataset === 'seeded' ? seededClassroom() : seedClassroom(null));
+      reviews[account] = seedReview(account === 'A' && dataset === 'seeded');
     },
     /** PR-10a development helpers; none of them is an HTTP route. */
     advanceTask: (account: MockAccountKey, taskId: string, outcome: TaskOutcome) => advanceTask(classrooms[account], classroomHost(account), classroomHelpers(account), taskId, outcome),
-    finishAsr: (account: MockAccountKey, classId: string, state: 'succeeded' | 'failed' | 'unknown') => finishAsr(classroomHost(account), classroomHelpers(account), classId, state),
+    finishAsr: (account: MockAccountKey, classId: string, state: 'succeeded' | 'failed' | 'unknown') => {
+      const done = finishAsr(classroomHost(account), classroomHelpers(account), classId, state);
+      // A finished realtime stream seals its versions, so they can be adopted (switched back to) later.
+      if (done && state === 'succeeded') classrooms[account].versions = classrooms[account].versions.map(item => item.class_session_id === classId && item.kind === 'realtime' && item.state === 'open' ? { ...item, state: 'sealed', revision: item.revision + 1, updated_at: now() } : item);
+      return done;
+    },
     persistFinal: (account: MockAccountKey, input: Parameters<typeof persistFinal>[3]) => persistFinal(classrooms[account], classroomHost(account), classroomHelpers(account), input),
     ensureDemoClassroom: (account: MockAccountKey, input: Parameters<typeof ensureDemoClassroom>[3]) => ensureDemoClassroom(classrooms[account], classroomHost(account), classroomHelpers(account), input),
     setDurable: (account: MockAccountKey, classId: string, captureEpochId: string, seqs: number[]) => recordDurable(classrooms[account], classroomHost(account), classroomHelpers(account), classId, captureEpochId, seqs),
@@ -453,6 +482,9 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
     projectTask: (account: MockAccountKey, input: Parameters<typeof projectTask>[3]) => projectTask(classrooms[account], classroomHost(account), classroomHelpers(account), input),
     revokeClassroom: (account: MockAccountKey, classId: string) => revokeClassroom(classrooms[account], classroomHost(account), classroomHelpers(account), classId),
     classroomStore: (account: MockAccountKey) => classrooms[account],
+    reviewStore: (account: MockAccountKey) => reviews[account],
+    /** PR-10b development panel: retranscription refusals by original-audio state and quota. */
+    setRetranscribeDev: (account: MockAccountKey, value: Parameters<typeof setRetranscribeDev>[1]) => setRetranscribeDev(classrooms[account], value),
     expireManifestCursors: (account: MockAccountKey) => expireManifestCursors(classrooms[account]),
     setManifestDev: (account: MockAccountKey, value: Parameters<typeof setManifestDev>[1]) => setManifestDev(classrooms[account], value),
     revokeAudio: (account: MockAccountKey, classId: string, captureEpochId: string) => revokeAudio(classrooms[account], classId, captureEpochId),

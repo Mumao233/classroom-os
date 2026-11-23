@@ -42,7 +42,10 @@ export function revokeMockClassroom(classId: string) { return mockAccount ? back
 // Development/test hook only (this module never ships in production builds).
 export function setMockManifestDev(value: { pageSize?: number | null; failContinuations?: boolean }) { return mockAccount ? backend.setManifestDev(mockAccount, value) : null; }
 
-(globalThis as { __classroomMock?: unknown }).__classroomMock = { bump: bumpMockRecord, advanceTask: advanceMockTask, finishAsr: finishMockAsr, manifestDev: setMockManifestDev };
+/** PR-10b development panel: retranscription refusals (original audio expired/deleted, session or month quota). */
+export function setMockRetranscribe(value: { classId?: string; audio?: 'ok' | 'expired' | 'deleted'; quota?: 'ok' | 'session' | 'month'; approve?: boolean; approvePlan?: string; approveTask?: string }) { return mockAccount ? backend.setRetranscribeDev(mockAccount, value) : null; }
+
+(globalThis as { __classroomMock?: unknown }).__classroomMock = { bump: bumpMockRecord, advanceTask: advanceMockTask, finishAsr: finishMockAsr, manifestDev: setMockManifestDev, retranscribe: setMockRetranscribe };
 function viteAsset(request: Request) {
   const url = new URL(request.url);
   return url.origin === location.origin && request.method === 'GET' &&
@@ -75,6 +78,9 @@ const worker = setupWorker(
     // Computed for the account that sent the request; a switch meanwhile is rejected by the client epoch.
     const reply = backend.handle(requestAccount, request.method, path, url.searchParams, body, request.headers.get('Idempotency-Key'));
     if (!reply) return HttpResponse.error();
+    // Browser-test-only: the server processed the request but its reply is lost once (path suffix match).
+    const drop = localStorage.getItem('mock-test-drop-reply');
+    if (drop && request.method !== 'GET' && path.endsWith(drop)) { localStorage.removeItem('mock-test-drop-reply'); return HttpResponse.error(); }
     return HttpResponse.json(reply.body as Record<string, unknown>, { status: reply.status, headers });
   }),
   // Explicit catch-all is essential: throwing in onUnhandledRequest alone can
