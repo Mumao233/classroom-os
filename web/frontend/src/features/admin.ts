@@ -1,0 +1,149 @@
+import { useRef, useState } from 'react';
+import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { ApiClientError, type ApiClient } from '../api/client';
+import { canonicalJson } from '../domain/admin';
+import type { components } from '../generated/openapi';
+import { isDefinitiveRejection } from './classroom';
+import { useAccountQuery, useAppData } from './data';
+
+type S = components['schemas'];
+
+export type AdminOperationId = 'adminUpdateUser' | 'adminCreateInvitation' | 'adminRevokeInvitation' | 'adminReissueInvitation' | 'adminAdjustQuota' | 'adminUpdateSwitches';
+export type AdminReauthBinding = { operationId: AdminOperationId; targetId: string | null; idempotencyKey: string; body: unknown };
+
+/** Why a reauthentication proof could not be issued. */
+export class AdminReauthError extends Error {
+  constructor(readonly kind: 'unavailable' | 'failed' | 'forbidden' | 'mfa' | 'network') { super(`admin reauth: ${kind}`); this.name = 'AdminReauthError'; }
+}
+/**
+ * Issues a purpose-bound proof for one admin write (operation, target, Idempotency-Key, exact body).
+ * The 0.3.0 contract has no admin reauth purpose (PR11B-SCOPE-GAPS.md §1): only the Mock supplies one.
+ * Password and code are passed through once and never kept.
+ */
+export type AdminReauthPort = { issue(binding: AdminReauthBinding, password: string, code: string): Promise<{ token: string; expires_at: string }> };
+/** The real-API port until the contract adds admin reauth purposes: every admin write stays disabled. */
+export const unavailableAdminReauth: AdminReauthPort = { issue: () => Promise.reject(new AdminReauthError('unavailable')) };
+
+const adminKey = (...parts: unknown[]) => ['admin', ...parts];
+export const useAdminUsers = (enabled = true) => useAccountQuery(adminKey('users'), (api, signal) => api.adminUsers(signal), enabled);
+export const useAdminUserQuota = (userId: string | null) => useAccountQuery(adminKey('user-quota', userId), (api, signal) => api.adminUserQuota(userId ?? '', signal), userId !== null);
+export const useAdminInvitations = () => useAccountQuery(adminKey('invitations'), (api, signal) => api.adminInvitations(signal));
+export const useAdminUsage = (periodStart: string | null) => useAccountQuery(adminKey('usage', periodStart), (api, signal) => api.adminUsage(periodStart, signal));
+export const useAdminHealth = () => useAccountQuery(adminKey('health'), (api, signal) => api.adminHealth(signal));
+export const useAdminSwitches = () => useAccountQuery(adminKey('switches'), (api, signal) => api.adminSwitches(signal));
+export function useAdminAudit() {
+  const { api, accountKey } = useAppData();
+  return useInfiniteQuery({
+    queryKey: ['account', accountKey, 'admin', 'audit'],
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam, signal }) => api.adminAudit(pageParam, signal),
+    getNextPageParam: (last: S['AuditRecordPage']) => last.next_cursor,
+  });
+}
+
+export type AdminWriteStage = 'idle' | 'reauth' | 'sending' | 'unconfirmed' | 'failed';
+type Pending<B> = { body: B; key: string; token: string | null; expires: number };
+
+/**
+ * One admin write intent: reason and body first, then a purpose-bound reauthentication, then the request.
+ * The Idempotency-Key (and its proof, while valid) is kept until a definitive reply, so a lost reply is
+ * recovered by sending the very same request again; a changed body is a new intent with a new key.
+ */
+export function useAdminWrite<B, R>(spec: {
+  operationId: AdminOperationId;
+  targetId: (body: B) => string | null;
+  send: (api: ApiClient, body: B, key: string, token: string) => Promise<R>;
+  onSuccess?: (result: R, body: B) => void;
+}) {
+  const { api, accountKey, adminReauth = unavailableAdminReauth } = useAppData();
+  // Proof expiry is wall-clock time (the page's data clock may be a fixed synthetic one).
+  const wall = () => Date.now();
+  const client = useQueryClient();
+  const [stage, setStage] = useState<AdminWriteStage>('idle');
+  const [error, setError] = useState<unknown>(null);
+  const pending = useRef<Pending<B> | null>(null);
+  // The reply may carry a one-time secret (an invitation token): it is handed to the page once and never
+  // kept in the mutation cache. The mutation itself stays, so a 401 still retires the account session.
+  const reply = useRef<{ value: R } | null>(null);
+  const mutation = useMutation({
+    mutationFn: async ({ body, key, token }: { body: B; key: string; token: string }) => { reply.current = { value: await spec.send(api, body, key, token) }; return null; },
+  });
+  const refresh = () => client.invalidateQueries({ queryKey: ['account', accountKey, 'admin'] });
+
+  async function send() {
+    const intent = pending.current;
+    if (!intent?.token) { setStage('reauth'); return; }
+    setStage('sending'); setError(null);
+    try {
+      await mutation.mutateAsync({ body: intent.body, key: intent.key, token: intent.token });
+      const result = reply.current;
+      reply.current = null;
+      pending.current = null;
+      setStage('idle');
+      if (result) spec.onSuccess?.(result.value, intent.body);
+    } catch (failure) {
+      setError(failure);
+      if (failure instanceof ApiClientError && failure.code === 'REAUTH_REQUIRED') {
+        // Same key and body: only the proof is renewed.
+        if (pending.current === intent) intent.token = null;
+        setStage('reauth');
+        return;
+      }
+      if (isDefinitiveRejection(failure)) { pending.current = null; setStage('failed'); }
+      // No definitive reply: the write may have been applied. Keep key and proof for a replay.
+      else setStage('unconfirmed');
+    } finally { void refresh(); }
+  }
+
+  return {
+    stage, error, operationId: spec.operationId,
+    pendingBody: () => pending.current?.body ?? null,
+    /** Starts (or resumes, for the same body) an intent; a different body never reuses an older key. */
+    start(body: B) {
+      setError(null);
+      const current = pending.current;
+      if (!current || canonicalJson(current.body) !== canonicalJson(body)) pending.current = { body, key: crypto.randomUUID(), token: null, expires: 0 };
+      else if (current.token && current.expires <= wall()) current.token = null;
+      setStage('reauth');
+    },
+    async verify(password: string, code: string) {
+      const intent = pending.current;
+      if (!intent) return;
+      setError(null);
+      try {
+        const proof = await adminReauth.issue({ operationId: spec.operationId, targetId: spec.targetId(intent.body), idempotencyKey: intent.key, body: intent.body }, password, code);
+        if (pending.current !== intent) return;
+        intent.token = proof.token;
+        intent.expires = Date.parse(proof.expires_at);
+      } catch (failure) { setError(failure); return; }
+      await send();
+    },
+    retry: () => { const intent = pending.current; if (intent?.token && intent.expires <= wall()) intent.token = null; void send(); },
+    /** Leaves the intent. An unconfirmed one is re-read from the server, never assumed to have failed. */
+    cancel() { pending.current = null; setStage('idle'); setError(null); void refresh(); },
+  };
+}
+export type AdminWrite<B> = { stage: AdminWriteStage; error: unknown; operationId: AdminOperationId; pendingBody: () => B | null; start(body: B): void; verify(password: string, code: string): Promise<void>; retry(): void; cancel(): void };
+
+const reauthMessages: Record<AdminReauthError['kind'], string> = {
+  unavailable: '管理写操作暂不可用：接口契约还没有定义管理员再认证用途。',
+  failed: '密码或验证码不正确，请重新输入。',
+  forbidden: '当前账号无权执行管理操作。',
+  mfa: '管理员需要先启用双重验证。',
+  network: '无法连接服务，验证没有完成。',
+};
+const adminMessages: Partial<Record<NonNullable<ApiClientError['code']>, string>> = {
+  REAUTH_REQUIRED: '验证已失效，请重新输入密码和验证码。',
+  MFA_REQUIRED: '管理员需要先启用双重验证，才能使用运营后台。',
+  FORBIDDEN: '当前账号无权执行这项管理操作。',
+  INVITATION_UNAVAILABLE: '这个邀请已被使用或撤销，不能执行该操作。',
+  SECRET_ALREADY_ISSUED: '操作已经完成，但一次性令牌不会再次显示。请刷新列表，对该邀请执行“重新签发”获取新令牌。',
+  REVISION_CONFLICT: '数据已被其他管理员更新。已重新读取最新状态，请核对后再操作。',
+  GONE: '该账号正在注销，不能再修改。',
+  CURSOR_EXPIRED: '分页位置已失效，请重新读取列表。',
+};
+export function describeAdminError(error: unknown, fallback: (error: unknown) => string): string {
+  if (error instanceof AdminReauthError) return reauthMessages[error.kind];
+  if (error instanceof ApiClientError && error.code && adminMessages[error.code]) return adminMessages[error.code]!;
+  return fallback(error);
+}

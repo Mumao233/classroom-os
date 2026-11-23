@@ -9,7 +9,7 @@ type Asr = 'idle' | 'streaming' | 'catching_up' | 'draining' | 'succeeded' | 'fa
 type Ai = 'idle' | 'queued' | 'running' | 'succeeded' | 'failed' | 'unknown' | 'cancel_requested' | 'cancelled';
 type Sync = 'synced' | 'local_only' | 'syncing' | 'failed' | 'conflict';
 export type Flows = { capture: Capture; upload: Upload; asr: Asr; ai: Ai; sync: Sync };
-export type MockAccount = 'A' | 'B';
+export type MockAccount = 'A' | 'B' | 'C';
 /** A live transcript segment as delivered by events; time fields keep late results in place. */
 export type LiveSegment = { classroomId: string; streamId: string; segmentId: string; sequence: number; revision: number; text: string; status: 'partial' | 'final'; startMs: number | null; endMs: number | null; segmentRevisionId: string | null; versionId: string | null };
 type Projection = { portCaptureState: Capture; uploadPending: boolean; partial: string | null; finalText: string | null; finalRevision: number; frameReceived: boolean; chunkDurable: boolean; audioDeleted: boolean; classroomDeleted: boolean; leaseLost: boolean; mayHaveCharged: boolean; delivered: number };

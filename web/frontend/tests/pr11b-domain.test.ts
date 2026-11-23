@@ -1,0 +1,80 @@
+import { describe, expect, it } from 'vitest';
+import { additionalUnits, formatBasisPoints, formatUnits, formatYuan, healthWarnings, parseMicro, reasonError, recentMonths, usageView } from '../src/domain/admin';
+import { beijingMonthStart } from '../src/mock/admin-backend';
+import type { components } from '../src/generated/openapi';
+
+type S = components['schemas'];
+const usage = (over: Partial<S['AdminUsage']> = {}): S['AdminUsage'] => ({
+  period_start: '2026-09-30T16:00:00Z', period_end: '2026-10-31T16:00:00Z', budget_microyuan: '1000000000', fixed_and_accrued_microyuan: '300000000',
+  settled_microyuan: '200000000', reserved_microyuan: '50000000', unknown_microyuan: '0', safety_reserve_microyuan: '100000000',
+  price_version: 'p', ledger_reconciled_at: null, ...over,
+});
+
+describe('PR-11b admin domain', () => {
+  it('a reason is required, not only whitespace, at most 500 code points', () => {
+    expect(reasonError('')).not.toBeNull();
+    expect(reasonError('   \n')).not.toBeNull();
+    expect(reasonError('学生申请')).toBeNull();
+    expect(reasonError('字'.repeat(500))).toBeNull();
+    expect(reasonError('字'.repeat(501))).not.toBeNull();
+    // Astral characters count once (JSON Schema maxLength counts code points).
+    expect(reasonError('😀'.repeat(500))).toBeNull();
+  });
+
+  it('money stays in integer microyuan and is rounded half up only for display', () => {
+    expect(parseMicro('0')).toBe(0n);
+    expect(parseMicro('012')).toBeNull();
+    expect(parseMicro('1.5')).toBeNull();
+    expect(parseMicro(12)).toBeNull();
+    expect(parseMicro('-1')).toBeNull();
+    expect(formatYuan(0n)).toBe('¥0.00');
+    expect(formatYuan(1_234_565_000n)).toBe('¥1,234.57');
+    expect(formatYuan(4_999n)).toBe('¥0.00');
+    expect(formatYuan(5_000n)).toBe('¥0.01');
+    // Far beyond Number precision.
+    expect(formatYuan(90_071_992_547_409_930_000_000n)).toBe('¥90,071,992,547,409,930.00');
+    expect(formatYuan(-1_000_000n)).toBe('-¥1.00');
+  });
+
+  it('exposure is fixed + settled + reserved + unknown; levels at 60/80/100 %', () => {
+    const view = usageView(usage())!;
+    expect(view.exposure).toBe(550_000_000n);
+    expect(view.basisPoints).toBe(5_500);
+    expect(view.level).toBe('normal');
+    expect(view.admissible).toBe(350_000_000n);
+    expect(usageView(usage({ unknown_microyuan: '50000000' }))!.level).toBe('warning60');
+    expect(usageView(usage({ unknown_microyuan: '250000000' }))!.level).toBe('warning80');
+    expect(usageView(usage({ unknown_microyuan: '450000000' }))!.level).toBe('blocked100');
+    expect(usageView(usage({ unknown_microyuan: '449999999' }))!.level).toBe('warning80');
+    expect(usageView(usage({ budget_microyuan: '0' }))!.level).toBe('blocked100');
+    expect(usageView(usage({ settled_microyuan: '1e9' }))).toBeNull();
+    expect(formatBasisPoints(5_507)).toBe('55.07%');
+  });
+
+  it('months follow Beijing time, also across the UTC day boundary', () => {
+    // 2026-10-31T17:00Z is already 1 November in Beijing.
+    expect(recentMonths(Date.parse('2026-10-31T17:00:00Z'), 2)).toEqual([
+      { start: '2026-10-31T16:00:00Z', label: '2026 年 11 月' }, { start: '2026-09-30T16:00:00Z', label: '2026 年 10 月' },
+    ]);
+    expect(recentMonths(Date.parse('2026-01-15T00:00:00Z'), 2)[1]).toEqual({ start: '2025-11-30T16:00:00Z', label: '2025 年 12 月' });
+    expect(beijingMonthStart('2026-10-28T08:00:00Z')).toBe('2026-09-30T16:00:00Z');
+    expect(beijingMonthStart('2026-10-28T08:00:00Z', -1)).toBe('2026-10-31T16:00:00Z');
+  });
+
+  it('quota units: whole minutes for time buckets, whole times for counted ones', () => {
+    expect(additionalUnits('asr_month_ms', '30')).toBe(1_800_000);
+    expect(additionalUnits('summary_month_count', '5')).toBe(5);
+    for (const bad of ['', '0', '-3', '1.5', '1e3', '12345678', 'abc']) expect(additionalUnits('asr_month_ms', bad)).toBeNull();
+    expect(formatUnits('asr_month_ms', 5_400_000)).toBe('1 小时 30 分钟');
+    expect(formatUnits('asr_day_ms', 59_999)).toBe('0 分钟');
+    expect(formatUnits('interactive_month_count', 3)).toBe('3 次');
+  });
+
+  it('health readings that need attention are named', () => {
+    const fine: S['AdminHealth'] = { checked_at: '2026-10-28T08:00:00Z', database: 'healthy', objects: 'healthy', worker_heartbeat_at: '2026-10-28T07:59:50Z', oldest_queued_seconds: 3, unknown_task_count: 0, pending_delete_count: 2, failed_delete_count: 0, active_asr_streams: 1, last_backup_at: '2026-10-28T02:00:00Z' };
+    expect(healthWarnings(fine)).toEqual([]);
+    const bad = healthWarnings({ ...fine, database: 'unavailable', worker_heartbeat_at: null, oldest_queued_seconds: 900, unknown_task_count: 2, failed_delete_count: 1, last_backup_at: null });
+    expect(bad).toEqual(['数据库不可用', '后台处理进程没有心跳记录', '最早的排队任务已等待 15 分钟', '2 个任务结果未知，需要核对', '1 项删除失败，需要处理', '超过 48 小时没有成功备份']);
+    expect(healthWarnings({ ...fine, worker_heartbeat_at: '2026-10-28T07:50:00Z' })).toEqual(['后台处理进程已 10 分钟没有心跳']);
+  });
+});

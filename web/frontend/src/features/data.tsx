@@ -4,6 +4,7 @@ import { ApiClientError, type ApiClient } from '../api/client';
 import type { CaptureView, LocalRisk } from '../domain/dashboard';
 import type { ClassroomShell } from './classroom';
 import type { RevocationLedger } from './revocation';
+import type { AdminReauthPort } from './admin';
 
 /**
  * Everything a page needs from the authenticated account shell. Pages never import fetch,
@@ -27,6 +28,8 @@ export type AppData = {
   classroom?: ClassroomShell;
   /** Account-shell revocation ledger: deletion receipts revoke cached content at once (REVOCATION-DESIGN.md). */
   revocation?: RevocationLedger;
+  /** PR-11b: purpose-bound reauthentication for admin writes; absent means admin writes are unavailable. */
+  adminReauth?: AdminReauthPort;
 };
 
 const Context = createContext<AppData | null>(null);

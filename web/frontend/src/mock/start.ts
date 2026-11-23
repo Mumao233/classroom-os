@@ -1,14 +1,15 @@
 import { delay, http, HttpResponse, passthrough } from 'msw';
 import { setupWorker } from 'msw/browser';
 import { meta, unauthenticated } from './fixtures';
-import { createMockBackend, type MockDataset } from './backend';
+import { createMockBackend, type MockAccountKey, type MockDataset } from './backend';
+import type { AdminHealthDev, AdminReauthBinding } from './admin-backend';
 
 const headers = { 'Cache-Control': 'no-store' };
 // Development-only in-memory session identity; never a new HTTP field or real credential.
-let mockAccount: 'A' | 'B' | null = 'A';
+let mockAccount: MockAccountKey | null = 'A';
 let mockOffline = false;
 const backend = createMockBackend();
-export function setMockAccount(account: 'A' | 'B' | null) { mockAccount = account; }
+export function setMockAccount(account: MockAccountKey | null) { mockAccount = account; }
 /** Simulated loss of connectivity: every business request fails like a network error. */
 export function setMockOffline(offline: boolean) { mockOffline = offline; }
 export function isMockOffline() { return mockOffline; }
@@ -32,7 +33,7 @@ export function setMockDurable(classId: string, captureEpochId: string, seqs: nu
 export function releaseMockLease(classId: string) { return mockAccount ? backend.releaseLease(mockAccount, classId) : false; }
 
 /** Account teardown: the outgoing account's leases are retired explicitly (the transport may already point elsewhere). */
-export function releaseMockAccountLeases(account: 'A' | 'B') { return backend.releaseAccountLeases(account); }
+export function releaseMockAccountLeases(account: MockAccountKey) { return backend.releaseAccountLeases(account); }
 
 export function projectMockTask(input: Parameters<typeof backend.projectTask>[1]) { return mockAccount ? backend.projectTask(mockAccount, input) : false; }
 
@@ -48,7 +49,19 @@ export function setMockRetranscribe(value: { classId?: string; audio?: 'ok' | 'e
 /** Browser-test hook: a document's revision reads are refused from now on (its metadata stays readable). */
 export function denyMockReviewRevisions(documentId: string) { if (mockAccount) backend.denyReviewRevisions(mockAccount, documentId); }
 
-(globalThis as { __classroomMock?: unknown }).__classroomMock = { bump: bumpMockRecord, advanceTask: advanceMockTask, finishAsr: finishMockAsr, manifestDev: setMockManifestDev, retranscribe: setMockRetranscribe, denyRevisions: denyMockReviewRevisions };
+/**
+ * PR-11b: development stand-in for a purpose-bound admin reauthentication (PR11B-SCOPE-GAPS.md §1). The
+ * contract has no admin reauth purpose yet, so this is an in-process call, never an HTTP route.
+ */
+export function issueMockAdminProof(binding: AdminReauthBinding, password: string, code: string) {
+  if (mockOffline) return { error: 'NETWORK' as const };
+  return mockAccount ? backend.issueAdminProof(mockAccount, binding, password, code) : { error: 'FORBIDDEN' as const };
+}
+/** PR-11b development panel: runtime health readings and whether the administrator has MFA. */
+export function setMockAdminHealth(value: AdminHealthDev) { backend.setAdminHealth(value); }
+export function setMockAdminMfa(enabled: boolean) { backend.setAdminMfa(enabled); }
+
+(globalThis as { __classroomMock?: unknown }).__classroomMock = { bump: bumpMockRecord, advanceTask: advanceMockTask, finishAsr: finishMockAsr, manifestDev: setMockManifestDev, retranscribe: setMockRetranscribe, denyRevisions: denyMockReviewRevisions, adminHealth: setMockAdminHealth, adminMfa: setMockAdminMfa };
 function viteAsset(request: Request) {
   const url = new URL(request.url);
   return url.origin === location.origin && request.method === 'GET' &&
@@ -88,7 +101,7 @@ const worker = setupWorker(
       try { body = await request.json(); } catch { body = undefined; }
     }
     // Computed for the account that sent the request; a switch meanwhile is rejected by the client epoch.
-    const reply = backend.handle(requestAccount, request.method, path, url.searchParams, body, request.headers.get('Idempotency-Key'));
+    const reply = backend.handle(requestAccount, request.method, path, url.searchParams, body, request.headers.get('Idempotency-Key'), request.headers.get('X-Reauth-Token'));
     if (!reply) return HttpResponse.error();
     // Browser-test-only: the server processed the request but its reply is lost once (path suffix match).
     const drop = localStorage.getItem('mock-test-drop-reply');

@@ -65,7 +65,7 @@ export function createApiClient(scope: Scope, transportOrOptions: typeof fetch |
   const newKey = options.newKey ?? (() => crypto.randomUUID());
   const assertCurrent = () => { if (!scope.isCurrent(scope.epoch)) throw new ApiClientError('stale'); };
 
-  async function request<T>(method: 'GET' | 'POST' | 'PATCH', url: string, body?: unknown, signal?: AbortSignal, key?: string): Promise<T> {
+  async function request<T>(method: 'GET' | 'POST' | 'PATCH', url: string, body?: unknown, signal?: AbortSignal, key?: string, reauth?: string): Promise<T> {
     assertCurrent();
     let response: Response;
     try {
@@ -75,6 +75,8 @@ export function createApiClient(scope: Scope, transportOrOptions: typeof fetch |
         const headers: Record<string, string> = { 'Content-Type': 'application/json', 'Idempotency-Key': key ?? newKey() };
         const csrf = options.csrfToken?.();
         if (csrf) headers['X-CSRF-Token'] = csrf;
+        // Purpose-bound proof for a sensitive write; held in memory by the caller only, never persisted.
+        if (reauth) headers['X-Reauth-Token'] = reauth;
         response = await transport(url, { method, credentials: 'same-origin', cache: 'no-store', signal, headers, body: JSON.stringify(body ?? {}) });
       }
     } catch (error) {
@@ -128,8 +130,25 @@ export function createApiClient(scope: Scope, transportOrOptions: typeof fetch |
   }
   const post = <T>(path: string, body: unknown, key?: string) => request<T>('POST', withQuery(path), body, undefined, key);
   const patch = <T>(path: string, body: unknown, key?: string) => request<T>('PATCH', withQuery(path), body, undefined, key);
+  /** PR-11b admin writes: always an explicit Idempotency-Key and the reauthentication proof bound to it. */
+  const adminWrite = <T>(method: 'POST' | 'PATCH', path: string, body: unknown, key: string, reauth: string) => request<T>(method, withQuery(path), body, undefined, key, reauth);
 
   return {
+    // PR-11b operations console: metadata projections only (no study content, no impersonation route).
+    adminUsers: (signal?: AbortSignal) => allPages<S['User']>('/admin/users', signal),
+    adminUserQuota: (userId: string, signal?: AbortSignal) => get<S['QuotaView']>(`/admin/users/${segment(userId)}/quota`, undefined, signal),
+    adminUpdateUser: (userId: string, body: S['AdminUserPatch'], key: string, reauth: string) => adminWrite<S['User']>('PATCH', `/admin/users/${segment(userId)}`, body, key, reauth),
+    adminInvitations: (signal?: AbortSignal) => allPages<S['Invitation']>('/admin/invitations', signal),
+    adminCreateInvitation: (body: S['InvitationCreate'], key: string, reauth: string) => adminWrite<S['InvitationCreated']>('POST', '/admin/invitations', body, key, reauth),
+    adminRevokeInvitation: (invitationId: string, key: string, reauth: string) => adminWrite<S['Invitation']>('POST', `/admin/invitations/${segment(invitationId)}/revoke`, {}, key, reauth),
+    adminReissueInvitation: (invitationId: string, key: string, reauth: string) => adminWrite<S['InvitationCreated']>('POST', `/admin/invitations/${segment(invitationId)}/reissue`, {}, key, reauth),
+    adminAdjustQuota: (body: S['QuotaAdjustment'], key: string, reauth: string) => adminWrite<S['QuotaView']>('POST', '/admin/quota-adjustments', body, key, reauth),
+    adminUsage: (periodStart: string | null, signal?: AbortSignal) => get<S['AdminUsage']>('/admin/usage', { period_start: periodStart }, signal),
+    adminHealth: (signal?: AbortSignal) => get<S['AdminHealth']>('/admin/health', undefined, signal),
+    adminSwitches: (signal?: AbortSignal) => get<S['AdminSwitches']>('/admin/switches', undefined, signal),
+    adminUpdateSwitches: (body: S['AdminSwitchesPatch'], key: string, reauth: string) => adminWrite<S['AdminSwitches']>('PATCH', '/admin/switches', body, key, reauth),
+    adminAudit: (cursor: string | null, signal?: AbortSignal) => get<S['AuditRecordPage']>('/admin/audit', { limit: 50, cursor }, signal),
+
     /** Retained PR-09a entry: unfiltered first page. */
     getCourses: (signal?: AbortSignal) => request<S['CoursePage']>('GET', `${PREFIX}/courses`, undefined, signal),
     meta: (signal?: AbortSignal) => get<S['Meta']>('/meta', undefined, signal),

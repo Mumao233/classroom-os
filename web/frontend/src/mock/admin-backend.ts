@@ -1,0 +1,279 @@
+import type { components } from '../generated/openapi';
+
+/**
+ * PR-11b development-only operations backend (PR11B-SCOPE-GAPS.md). It returns only the metadata
+ * projections of the 0.3.0 `/admin/*` routes: no study content, no impersonation, no secrets in
+ * the audit trail. One instance is shared by every Mock account (it is the platform, not a tenant).
+ */
+type S = components['schemas'];
+type ErrorCode = S['Error']['error']['code'];
+export type AdminReply = { status: number; body: unknown };
+
+/** Admin write operations that need a purpose-bound reauthentication proof (contract gap §1). */
+export type AdminOperationId = 'adminUpdateUser' | 'adminCreateInvitation' | 'adminRevokeInvitation' | 'adminReissueInvitation' | 'adminAdjustQuota' | 'adminUpdateSwitches';
+/** What a development proof is bound to: operation, target, the future Idempotency-Key and the exact body. */
+export type AdminReauthBinding = { operationId: AdminOperationId; targetId: string | null; idempotencyKey: string; body: unknown };
+export type AdminHealthDev = 'healthy' | 'degraded' | 'stalled';
+
+/** The account-side hooks the admin backend needs; it never reads any account's study records. */
+export type AdminHost = {
+  now: () => string;
+  /** Wall clock (ms) for proof expiry; independent of the fixed synthetic data clock. */
+  clockMs: () => number;
+  newId: () => string;
+  /** The tenant user record when the id belongs to a Mock account (A/B/C), so its status takes effect there. */
+  accountUser: (userId: string) => S['User'] | null;
+  setAccountUser: (user: S['User']) => void;
+  /** A Mock account's own quota view (its buckets carry its real usage); other users get a synthetic one. */
+  accountQuota: (userId: string) => S['QuotaView'] | null;
+  setAccountQuota: (userId: string, quota: S['QuotaView']) => void;
+  /** Platform switches also gate every account's own quota view. */
+  applySwitches: (switches: S['AdminSwitches']) => void;
+};
+
+const BEIJING = 8 * 3600_000;
+/** Start of the Beijing calendar month containing `iso`, as a UTC instant (11a: billing months are Beijing time). */
+export function beijingMonthStart(iso: string, monthsBack = 0) {
+  const local = new Date(Date.parse(iso) + BEIJING);
+  return new Date(Date.UTC(local.getUTCFullYear(), local.getUTCMonth() - monthsBack, 1) - BEIJING).toISOString().replace('.000Z', 'Z');
+}
+
+const base = (id: string, created: string, revision = 1) => ({ id, revision, created_at: created, updated_at: created });
+const synthetic = (n: number) => `d0000000-0000-4000-8000-${n.toString(16).padStart(12, '0')}`;
+const token = () => { const bytes = crypto.getRandomValues(new Uint8Array(32)); return btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); };
+const canonical = (value: unknown): string => Array.isArray(value) ? `[${value.map(canonical).join(',')}]`
+  : typeof value === 'object' && value !== null ? `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${canonical((value as Record<string, unknown>)[key])}`).join(',')}}` : JSON.stringify(value);
+const maskEmail = (email: string) => { const [name, domain] = email.split('@'); return `${name!.slice(0, 1)}***@${domain}`; };
+const isEmail = (value: unknown) => typeof value === 'string' && value.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+const isUuid = (value: unknown) => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
+const reasonOk = (value: unknown) => typeof value === 'string' && value.length >= 1 && value.length <= 500 && value.trim().length > 0;
+const only = (body: Record<string, unknown>, keys: string[]) => Object.keys(body).every(key => keys.includes(key));
+const PROOF_MS = 300_000;
+
+export function syntheticQuota(now: string, settledAsrMs = 0): S['QuotaView'] {
+  const month = { period_start: beijingMonthStart(now), period_end: beijingMonthStart(now, -1) };
+  const dayStart = new Date(Math.floor((Date.parse(now) + BEIJING) / 86_400_000) * 86_400_000 - BEIJING).toISOString().replace('.000Z', 'Z');
+  const day = { period_start: dayStart, period_end: new Date(Date.parse(dayStart) + 86_400_000).toISOString().replace('.000Z', 'Z') };
+  const bucket = (kind: S['QuotaBucket']['kind'], period: typeof month, limit: number, settled = 0): S['QuotaBucket'] => ({ kind, ...period, limit, reserved: 0, submitted: 0, settled, unknown: 0, remaining: Math.max(0, limit - settled) });
+  return { platform_billing_state: 'normal', asr_enabled: true, ai_enabled: true, buckets: [
+    bucket('asr_month_ms', month, 72_000_000, settledAsrMs), bucket('asr_day_ms', day, 14_400_000), bucket('interactive_month_count', month, 300),
+    bucket('summary_month_count', month, 60), bucket('retranscribe_month_ms', month, 14_400_000),
+  ] };
+}
+
+export function createAdminBackend(host: AdminHost, accountUsers: S['User'][]) {
+  const extra: S['User'][] = [
+    { ...base(synthetic(1), '2026-09-12T02:00:00Z'), email: 'student-c@example.invalid', nickname: '周同学', school: '', major: '', role: 'student', status: 'active', mfa_enabled: false },
+    { ...base(synthetic(2), '2026-10-02T09:30:00Z', 3), email: 'student-d@example.invalid', nickname: '吴同学', school: '', major: '', role: 'student', status: 'disabled', mfa_enabled: false },
+    { ...base(synthetic(3), '2026-10-25T11:00:00Z'), email: 'student-e@example.invalid', nickname: '', school: '', major: '', role: 'student', status: 'pending', mfa_enabled: false },
+    { ...base(synthetic(4), '2026-10-05T01:00:00Z', 2), email: 'student-f@example.invalid', nickname: '郑同学', school: '', major: '', role: 'student', status: 'deleting', mfa_enabled: true },
+  ];
+  // Platform-held users that are not Mock accounts; Mock account users always come from their own store.
+  const others = new Map(extra.map(user => [user.id, user]));
+  const accountIds = accountUsers.map(user => user.id);
+  const otherQuotas = new Map<string, S['QuotaView']>();
+  const user = (id: string) => host.accountUser(id) ?? others.get(id) ?? null;
+  const users = () => [...accountIds.map(id => host.accountUser(id)).filter((item): item is S['User'] => item !== null), ...others.values()]
+    .sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id));
+  const saveUser = (next: S['User']) => { if (host.accountUser(next.id)) host.setAccountUser(next); else others.set(next.id, next); };
+  const quotaOf = (id: string) => host.accountQuota(id) ?? otherQuotas.get(id) ?? (() => { const quota = applyGates(syntheticQuota(host.now())); otherQuotas.set(id, quota); return quota; })();
+  const saveQuota = (id: string, quota: S['QuotaView']) => { if (host.accountQuota(id)) host.setAccountQuota(id, quota); else otherQuotas.set(id, quota); };
+
+  const expiresIn = (days: number) => new Date(Date.parse(host.now()) + days * 86_400_000).toISOString().replace('.000Z', 'Z');
+  let invitations: S['Invitation'][] = [
+    { ...base(synthetic(0x101), '2026-10-27T03:00:00Z'), kind: 'email_bound', email_hint: 's***@example.invalid', state: 'issued', expires_at: '2026-11-03T03:00:00Z' },
+    { ...base(synthetic(0x102), '2026-10-10T03:00:00Z', 2), kind: 'single_use', email_hint: null, state: 'consumed', expires_at: '2026-10-17T03:00:00Z' },
+    { ...base(synthetic(0x103), '2026-10-12T03:00:00Z', 2), kind: 'email_bound', email_hint: 'w***@example.invalid', state: 'revoked', expires_at: '2026-10-19T03:00:00Z' },
+    { ...base(synthetic(0x104), '2026-10-01T03:00:00Z'), kind: 'single_use', email_hint: null, state: 'expired', expires_at: '2026-10-08T03:00:00Z' },
+  ];
+  let switches: S['AdminSwitches'] = { revision: 1, registration_enabled: true, asr_enabled: true, ai_enabled: true, max_active_users: '10' };
+  const adminId = accountUsers.find(item => item.role === 'admin')?.id ?? synthetic(0xfff);
+  const audit: S['AuditRecord'][] = [
+    { id: synthetic(0x201), actor_id: adminId, operation: 'adminUpdateUser', target_type: 'user', target_id: synthetic(2), reason: '学生本人申请暂停使用（合成记录）', created_at: '2026-10-20T06:00:00Z' },
+    { id: synthetic(0x202), actor_id: adminId, operation: 'adminRevokeInvitation', target_type: 'invitation', target_id: synthetic(0x103), reason: '邮箱填写错误（合成记录）', created_at: '2026-10-12T05:00:00Z' },
+  ];
+  const usage = new Map<string, S['AdminUsage']>();
+  const period = (start: string, values: Omit<S['AdminUsage'], 'period_start' | 'period_end' | 'price_version' | 'ledger_reconciled_at'>, reconciled: string | null) => {
+    const end = beijingMonthStart(new Date(Date.parse(start) + 20 * 86_400_000).toISOString(), -1);
+    usage.set(start, { period_start: start, period_end: end, ...values, price_version: 'synthetic-2026-10', ledger_reconciled_at: reconciled });
+  };
+  const current = beijingMonthStart(host.now());
+  period(current, { budget_microyuan: '1000000000', fixed_and_accrued_microyuan: '300000000', settled_microyuan: '312450000', reserved_microyuan: '41200000', unknown_microyuan: '3800000', safety_reserve_microyuan: '100000000' }, '2026-10-28T07:30:00Z');
+  period(beijingMonthStart(host.now(), 1), { budget_microyuan: '1000000000', fixed_and_accrued_microyuan: '300000000', settled_microyuan: '268000000', reserved_microyuan: '0', unknown_microyuan: '0', safety_reserve_microyuan: '100000000' }, '2026-10-01T02:00:00Z');
+  let healthDev: AdminHealthDev = 'healthy';
+  const proofs = new Map<string, { binding: string; actor: string; expires: number; used: boolean }>();
+  const receipts = new Map<string, { body: string; reply: AdminReply }>();
+
+  const fail = (status: number, code: ErrorCode, message: string, currentRevision: number | null = null): AdminReply =>
+    ({ status, body: { error: { code, message, request_id: host.newId(), retryable: false, retry_after_seconds: null, current_revision: currentRevision, conflict_id: null, task_id: null } } });
+  const ok = (body: unknown, status = 200): AdminReply => ({ status, body });
+  const touch = <T extends { revision: number; updated_at: string }>(value: T): T => ({ ...value, revision: value.revision + 1, updated_at: host.now() });
+  function applyGates(quota: S['QuotaView']): S['QuotaView'] { return { ...quota, asr_enabled: switches.asr_enabled, ai_enabled: switches.ai_enabled }; }
+
+  function paged<T>(list: T[], query: URLSearchParams): AdminReply {
+    const limitText = query.get('limit');
+    const limit = limitText === null ? 50 : Number(limitText);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) return fail(422, 'VALIDATION_FAILED', '分页大小无效');
+    const cursor = query.get('cursor');
+    let offset = 0;
+    if (cursor !== null) {
+      const match = /^o:(\d+)$/.exec(cursor);
+      if (!match || Number(match[1]) > list.length) return fail(400, 'CURSOR_EXPIRED', '分页位置已失效，请从头读取');
+      offset = Number(match[1]);
+    }
+    const items = list.slice(offset, offset + limit);
+    return ok({ items, next_cursor: offset + limit < list.length ? `o:${offset + limit}` : null });
+  }
+
+  /** Development stand-in for a purpose-bound admin reauthentication (contract gap §1); never an HTTP route. */
+  function issueProof(actorId: string, binding: AdminReauthBinding, password: string, code: string): { token: string; expires_at: string } | { error: 'FORBIDDEN' | 'MFA_REQUIRED' | 'REAUTH_FAILED' } {
+    const actor = user(actorId);
+    if (!actor || actor.role !== 'admin' || actor.status !== 'active') return { error: 'FORBIDDEN' };
+    if (!actor.mfa_enabled) return { error: 'MFA_REQUIRED' };
+    // Synthetic factors: any non-empty password; any six digits except 000000 (the Mock's "wrong code").
+    if (!password || !/^[0-9]{6}$/.test(code) || code === '000000') return { error: 'REAUTH_FAILED' };
+    const value = token();
+    const expires = host.clockMs() + PROOF_MS;
+    proofs.set(value, { binding: canonical({ ...binding }), actor: actorId, expires, used: false });
+    return { token: value, expires_at: new Date(expires).toISOString() };
+  }
+
+  /** Replay first (a lost reply is recovered with the same key), then the single-use proof, then the write. */
+  function write(actorId: string, operationId: AdminOperationId, targetId: string | null, key: string | null, reauth: string | null, body: Record<string, unknown>, secret: boolean, run: () => AdminReply): AdminReply {
+    if (!isUuid(key)) return fail(422, 'VALIDATION_FAILED', '缺少幂等键');
+    const scope = `${actorId}:${operationId}:${key}`;
+    const serialized = canonical(body);
+    const prior = receipts.get(scope);
+    if (prior) {
+      if (prior.body !== serialized) return fail(422, 'IDEMPOTENCY_MISMATCH', '同一操作键对应了不同内容');
+      // A secret-bearing reply is never replayed: the token was shown once (or lost) and must be reissued.
+      return secret && prior.reply.status < 300 ? fail(409, 'SECRET_ALREADY_ISSUED', '该操作已完成，一次性令牌不会再次显示') : prior.reply;
+    }
+    const proof = reauth ? proofs.get(reauth) : undefined;
+    const binding = canonical({ operationId, targetId, idempotencyKey: key, body });
+    if (!proof || proof.used || proof.actor !== actorId || proof.expires <= host.clockMs() || proof.binding !== binding) return fail(403, 'REAUTH_REQUIRED', '请重新验证密码和验证码');
+    proof.used = true;
+    const reply = run();
+    receipts.set(scope, { body: serialized, reply });
+    return reply;
+  }
+  function record(actorId: string, operation: AdminOperationId, targetType: string, targetId: string | null, reason: string) {
+    audit.unshift({ id: host.newId(), actor_id: actorId, operation, target_type: targetType, target_id: targetId, reason, created_at: host.now() });
+  }
+
+  function health(): S['AdminHealth'] {
+    const at = host.now();
+    const minus = (seconds: number) => new Date(Date.parse(at) - seconds * 1000).toISOString().replace('.000Z', 'Z');
+    if (healthDev === 'stalled') return { checked_at: at, database: 'healthy', objects: 'degraded', worker_heartbeat_at: minus(900), oldest_queued_seconds: 1260, unknown_task_count: 3, pending_delete_count: 14, failed_delete_count: 2, active_asr_streams: 0, last_backup_at: minus(3 * 86_400) };
+    if (healthDev === 'degraded') return { checked_at: at, database: 'degraded', objects: 'healthy', worker_heartbeat_at: minus(40), oldest_queued_seconds: 180, unknown_task_count: 1, pending_delete_count: 3, failed_delete_count: 0, active_asr_streams: 2, last_backup_at: minus(26 * 3600) };
+    return { checked_at: at, database: 'healthy', objects: 'healthy', worker_heartbeat_at: minus(8), oldest_queued_seconds: 4, unknown_task_count: 0, pending_delete_count: 0, failed_delete_count: 0, active_asr_streams: 1, last_backup_at: minus(5 * 3600) };
+  }
+
+  /** `/admin/*` for the authenticated caller. Role and factor come from the server-side user, never the request. */
+  function handle(actorId: string, method: string, parts: string[], query: URLSearchParams, rawBody: unknown, key: string | null, reauth: string | null): AdminReply {
+    const actor = user(actorId);
+    if (!actor || actor.role !== 'admin') return fail(403, 'FORBIDDEN', '当前账号无权访问运营后台');
+    if (!actor.mfa_enabled) return fail(403, 'MFA_REQUIRED', '管理员需要先启用双重验证');
+    const body = (typeof rawBody === 'object' && rawBody !== null && !Array.isArray(rawBody) ? rawBody : {}) as Record<string, unknown>;
+    const route = `${method} /${parts.map(part => (isUuid(part) ? ':id' : part)).join('/')}`;
+    const id = parts.find(isUuid) ?? '';
+    switch (route) {
+      case 'GET /admin/users': return paged(users(), query);
+      case 'GET /admin/users/:id/quota': {
+        const target = user(id);
+        return target ? ok(quotaOf(target.id)) : fail(404, 'NOT_FOUND', '用户不存在');
+      }
+      case 'PATCH /admin/users/:id': {
+        if (!only(body, ['base_revision', 'status', 'reason']) || !Number.isInteger(body.base_revision) || (body.base_revision as number) < 1 || !['active', 'disabled'].includes(body.status as string) || !reasonOk(body.reason)) return fail(422, 'VALIDATION_FAILED', '状态变更无效：需要基础版本、目标状态和理由');
+        return write(actorId, 'adminUpdateUser', id, key, reauth, body, false, () => {
+          const target = user(id);
+          if (!target) return fail(404, 'NOT_FOUND', '用户不存在');
+          if (target.id === actorId) return fail(403, 'FORBIDDEN', '不能修改自己的账号状态');
+          if (target.status === 'deleting') return fail(410, 'GONE', '该账号正在注销');
+          if (target.revision !== body.base_revision) return fail(409, 'REVISION_CONFLICT', '账号状态已被更新', target.revision);
+          if (target.status === 'pending') return fail(422, 'VALIDATION_FAILED', '账号尚未完成注册，不能修改状态');
+          const next = touch({ ...target, status: body.status as 'active' | 'disabled' });
+          saveUser(next);
+          record(actorId, 'adminUpdateUser', 'user', next.id, body.reason as string);
+          return ok(next);
+        });
+      }
+      case 'GET /admin/invitations': return paged([...invitations].sort((a, b) => b.created_at.localeCompare(a.created_at) || a.id.localeCompare(b.id)), query);
+      case 'POST /admin/invitations': {
+        const kind = body.kind;
+        if (!only(body, ['kind', 'email']) || !['email_bound', 'single_use'].includes(kind as string) || (kind === 'email_bound' ? !isEmail(body.email) : 'email' in body)) return fail(422, 'VALIDATION_FAILED', '邮箱邀请需要有效邮箱；单次邀请不填写邮箱');
+        return write(actorId, 'adminCreateInvitation', null, key, reauth, body, true, () => {
+          const created: S['Invitation'] = { ...base(host.newId(), host.now()), kind: kind as S['Invitation']['kind'], email_hint: kind === 'email_bound' ? maskEmail(body.email as string) : null, state: 'issued', expires_at: expiresIn(7) };
+          invitations = [created, ...invitations];
+          record(actorId, 'adminCreateInvitation', 'invitation', created.id, kind === 'email_bound' ? '创建邮箱邀请' : '创建单次邀请');
+          return ok({ invitation: created, one_time_token: token() } satisfies S['InvitationCreated'], 201);
+        });
+      }
+      case 'POST /admin/invitations/:id/revoke':
+      case 'POST /admin/invitations/:id/reissue': {
+        const reissue = parts[3] === 'reissue';
+        if (Object.keys(body).length) return fail(422, 'VALIDATION_FAILED', '请求体必须为空');
+        return write(actorId, reissue ? 'adminReissueInvitation' : 'adminRevokeInvitation', id, key, reauth, body, reissue, () => {
+          const target = invitations.find(item => item.id === id);
+          if (!target) return fail(404, 'NOT_FOUND', '邀请不存在');
+          if (reissue ? !['issued', 'expired'].includes(target.state) : target.state !== 'issued') return fail(409, 'INVITATION_UNAVAILABLE', reissue ? '已使用或已撤销的邀请不能重新签发' : '只有未使用的邀请可以撤销');
+          const next = touch({ ...target, state: reissue ? 'issued' as const : 'revoked' as const, ...(reissue ? { expires_at: expiresIn(7) } : {}) });
+          invitations = invitations.map(item => item.id === id ? next : item);
+          record(actorId, reissue ? 'adminReissueInvitation' : 'adminRevokeInvitation', 'invitation', id, reissue ? '重新签发邀请，旧令牌失效' : '撤销邀请');
+          return reissue ? ok({ invitation: next, one_time_token: token() } satisfies S['InvitationCreated']) : ok(next);
+        });
+      }
+      case 'POST /admin/quota-adjustments': {
+        const kinds = ['asr_month_ms', 'asr_day_ms', 'retranscribe_month_ms', 'interactive_month_count', 'summary_month_count'];
+        if (!only(body, ['user_id', 'bucket_kind', 'period_start', 'additional_units', 'reason']) || !isUuid(body.user_id) || !kinds.includes(body.bucket_kind as string) || typeof body.period_start !== 'string'
+          || !Number.isSafeInteger(body.additional_units) || (body.additional_units as number) < 1 || !reasonOk(body.reason)) return fail(422, 'VALIDATION_FAILED', '额度调整无效：需要用户、额度类型、周期、追加数量和理由');
+        return write(actorId, 'adminAdjustQuota', body.user_id as string, key, reauth, body, false, () => {
+          const target = user(body.user_id as string);
+          if (!target) return fail(404, 'NOT_FOUND', '用户不存在');
+          const quota = quotaOf(target.id);
+          const bucket = quota.buckets.find(item => item.kind === body.bucket_kind && Date.parse(item.period_start) === Date.parse(body.period_start as string));
+          if (!bucket) return fail(422, 'VALIDATION_FAILED', '该周期没有对应的额度桶');
+          const units = body.additional_units as number;
+          const next = { ...quota, buckets: quota.buckets.map(item => item === bucket ? { ...item, limit: item.limit + units, remaining: item.remaining + units } : item) };
+          saveQuota(target.id, next);
+          record(actorId, 'adminAdjustQuota', 'user', target.id, body.reason as string);
+          return ok(next, 201);
+        });
+      }
+      case 'GET /admin/usage': {
+        const start = query.get('period_start');
+        const found = start === null ? usage.get(current) : [...usage.values()].find(item => Date.parse(item.period_start) === Date.parse(start));
+        if (start !== null && Number.isNaN(Date.parse(start))) return fail(422, 'VALIDATION_FAILED', '周期起点无效');
+        return found ? ok(found) : fail(404, 'NOT_FOUND', '该周期没有用量记录');
+      }
+      case 'GET /admin/health': return ok(health());
+      case 'GET /admin/switches': return ok(switches);
+      case 'PATCH /admin/switches': {
+        const fields = ['registration_enabled', 'asr_enabled', 'ai_enabled', 'max_active_users'];
+        if (!only(body, ['base_revision', 'reason', ...fields]) || !Number.isInteger(body.base_revision) || (body.base_revision as number) < 1 || !reasonOk(body.reason)
+          || !fields.some(field => field in body) || fields.slice(0, 3).some(field => field in body && typeof body[field] !== 'boolean')
+          || ('max_active_users' in body && !['10', '30'].includes(body.max_active_users as string))) return fail(422, 'VALIDATION_FAILED', '开关变更无效：需要基础版本、至少一项变更和理由');
+        return write(actorId, 'adminUpdateSwitches', null, key, reauth, body, false, () => {
+          if (switches.revision !== body.base_revision) return fail(409, 'REVISION_CONFLICT', '平台开关已被其他管理员更新', switches.revision);
+          const change = Object.fromEntries(fields.filter(field => field in body).map(field => [field, body[field]]));
+          switches = { ...switches, ...change, revision: switches.revision + 1 };
+          host.applySwitches(switches);
+          for (const [userId, quota] of otherQuotas) otherQuotas.set(userId, applyGates(quota));
+          record(actorId, 'adminUpdateSwitches', 'platform', null, body.reason as string);
+          return ok(switches);
+        });
+      }
+      case 'GET /admin/audit': return paged(audit, query);
+      default: return fail(404, 'NOT_FOUND', '接口不存在');
+    }
+  }
+
+  return {
+    handle,
+    issueProof,
+    setHealthDev: (value: AdminHealthDev) => { healthDev = value; },
+    switches: () => switches,
+    /** Test helper: the audit trail as stored. */
+    audit: () => audit,
+  };
+}
