@@ -116,9 +116,12 @@ export function createApiClient(scope: Scope, transportOrOptions: typeof fetch |
     const items: T[] = [];
     let cursor: string | null = null;
     for (let pages = 0; pages < 1000; pages++) {
-      const page: { items: T[]; next_cursor: string | null } = await get(path, cursor ? { ...filter, limit: 100, cursor } : { ...filter, limit: 100 }, signal);
-      items.push(...page.items);
-      if (!page.next_cursor) return { items, next_cursor: null };
+      const page: { items?: unknown; next_cursor?: unknown } = await get(path, cursor ? { ...filter, limit: 100, cursor } : { ...filter, limit: 100 }, signal);
+      // A malformed page never ends a traversal as "complete": only an explicit null cursor does.
+      if (!Array.isArray(page.items)) throw new ApiClientError('invalid_response');
+      items.push(...page.items as T[]);
+      if (page.next_cursor === null) return { items, next_cursor: null };
+      if (typeof page.next_cursor !== 'string' || !page.next_cursor) throw new ApiClientError('invalid_response');
       cursor = page.next_cursor;
     }
     throw new ApiClientError('invalid_response');

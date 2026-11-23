@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { QueryClient } from '@tanstack/react-query';
 import { ApiClientError } from '../src/api/client';
 import { createRevocationLedger, isAuthoritativeDenial, personalEditorAccess, submitScopeDeletion } from '../src/features/revocation';
@@ -611,25 +611,26 @@ describe('round-2 review regressions', () => {
 
 describe('merged-review regressions (round 3)', () => {
   const receipt = (scope: 'course' | 'semester', id: string) => ({ id: 'del-1', revision: 1, created_at: '2026-11-20T00:00:00Z', updated_at: '2026-11-20T00:00:00Z', scope_type: scope, scope_id: id, state: 'access_revoked', access_revoked_at: '2026-11-20T00:00:00Z', physical_completed_at: null, failure_code: null });
-  function listed(lists: { classes?: Record<string, Array<{ id: string; course_id: string }>>; courses?: Record<string, Array<{ id: string; semester_id: string }>>; fail?: boolean }, bound: string | null = null) {
+  function listed(lists: { classes?: Record<string, Array<{ id: string; course_id: string }>>; courses?: Record<string, Array<{ id: string; semester_id: string }>>; fail?: boolean | ApiClientError; details?: Record<string, unknown> }, bound: string | null = null) {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
     const revoked: string[] = [];
     const suspended: string[] = [];
     const api = {
-      allClassSessions: ({ course_id }: { course_id: string }) => lists.fail ? Promise.reject(networkError()) : Promise.resolve(page(lists.classes?.[course_id] ?? [])),
-      allCourses: ({ semester_id }: { semester_id: string }) => lists.fail ? Promise.reject(networkError()) : Promise.resolve(page(lists.courses?.[semester_id] ?? [])),
-      classSession: () => Promise.reject(networkError()),
-      deleteCourse: (id: string) => Promise.resolve(receipt('course', id)),
+      allClassSessions: ({ course_id }: { course_id: string }) => lists.fail ? Promise.reject(lists.fail === true ? networkError() : lists.fail) : Promise.resolve(page(lists.classes?.[course_id] ?? [])),
+      allCourses: ({ semester_id }: { semester_id: string }) => lists.fail ? Promise.reject(lists.fail === true ? networkError() : lists.fail) : Promise.resolve(page(lists.courses?.[semester_id] ?? [])),
+      classSession: (id: string) => { const detail = lists.details?.[id]; return detail instanceof ApiClientError ? Promise.reject(detail) : detail ? Promise.resolve(detail) : Promise.reject(networkError()); },
+      deleteCourse: vi.fn((id: string) => Promise.resolve(receipt('course', id))),
       deleteSemester: (id: string) => Promise.resolve(receipt('semester', id)),
     };
     const ledger = createRevocationLedger({ client, accountKey: A, api: api as never, hooks: { boundClassId: () => bound, onClassRevoked: id => revoked.push(id), onCaptureSuspended: id => suspended.push(id) } });
     ledger.install();
     const remove = (kind: 'course' | 'semester', id: string) => submitScopeDeletion(api as never, ledger, { kind, id, mode: 'cascade', destination: '', revision: 1, token: 't' });
-    return { client, ledger, revoked, suspended, remove };
+    return { client, ledger, revoked, suspended, remove, api };
   }
 
   it('P1-1 · a classroom moved away on another device is not revoked by its stale cached link; the server listing decides', async () => {
-    const { client, ledger, revoked, remove } = listed({ classes: { kA: [{ id: 'c2', course_id: 'kA' }] } });
+    // Missing from the listing although cached under kA: read again, and the server places it in kB.
+    const { client, ledger, revoked, remove } = listed({ classes: { kA: [{ id: 'c2', course_id: 'kA' }] }, details: { c1: { id: 'c1', course_id: 'kB', revision: 2 } } });
     client.setQueryData(key('class-sessions', null), page([{ id: 'c1', course_id: 'kA', revision: 1 }, { id: 'c2', course_id: 'kA', revision: 1 }]));
     client.setQueryData(key('class-session', 'c1'), { id: 'c1', course_id: 'kA', revision: 1 });
     client.setQueryData(key('tasks', 'c1'), page([{ id: 't1' }]));
@@ -768,5 +769,48 @@ describe('merged-review regressions (round 3)', () => {
     expect(ledger.isClassRevoked('c1')).toBe(true);
     expect(revoked).toEqual(['c1']);
     expect(client.getQueryData(key('tasks', 'c1'))).toBeUndefined();
+  });
+
+  it('R1 · a bound classroom missing from the listing is read again: a denial revokes it, a failure suspends it', async () => {
+    const gone = listed({ classes: { kA: [] }, details: { c1: httpError(404, 'NOT_FOUND') } }, 'c1');
+    await fetchInto(gone.client, ['tasks', 'c1'], () => Promise.resolve(page([{ id: 't1', class_session_id: 'c1' }])));
+    await gone.remove('course', 'kA');
+    expect(gone.ledger.isClassRevoked('c1')).toBe(true);
+    expect(gone.revoked).toEqual(['c1']);
+    expect(gone.client.getQueryData(key('tasks', 'c1'))).toBeUndefined();
+
+    const unreachable = listed({ classes: { kA: [] } }, 'c1');
+    unreachable.client.setQueryData(key('class-session', 'c1'), { id: 'c1', course_id: 'kA', revision: 1 });
+    unreachable.client.setQueryData(key('tasks', 'c1'), page([{ id: 't1' }]));
+    await unreachable.remove('course', 'kA');
+    expect(unreachable.ledger.isClassRevoked('c1')).toBe(false);
+    expect(unreachable.suspended).toEqual(['c1']);
+    expect(unreachable.client.getQueryData(key('tasks', 'c1'))).toBeUndefined();
+  });
+  it('R1 · an expired session during the listing ends the deletion before it is sent', async () => {
+    const { api, remove } = listed({ fail: httpError(401, 'UNAUTHENTICATED') });
+    await expect(remove('course', 'kA')).rejects.toMatchObject({ status: 401 });
+    expect(api.deleteCourse).not.toHaveBeenCalled();
+  });
+  it('R1 · a listed classroom counts as served: after a lost deletion reply its later NOT_FOUND revokes it', async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
+    const revoked: string[] = [];
+    const api = { allClassSessions: () => Promise.resolve(page([{ id: 'c7', course_id: 'kA' }])), deleteCourse: () => Promise.reject(networkError()), deleteSemester: () => Promise.reject(new Error('unused')) };
+    const ledger = createRevocationLedger({ client, accountKey: A, api: api as never, hooks: { onClassRevoked: id => revoked.push(id) } });
+    ledger.install();
+    await expect(submitScopeDeletion(api as never, ledger, { kind: 'course', id: 'kA', mode: 'cascade', destination: '', revision: 1, token: 't' })).rejects.toBeInstanceOf(ApiClientError);
+    expect(ledger.isClassRevoked('c7')).toBe(false);
+    await fetchInto(client, ['class-session', 'c7'], () => Promise.reject(httpError(404, 'NOT_FOUND')));
+    expect(revoked).toEqual(['c7']);
+  });
+  it('R1 · a read in flight during an unlisted cascade that fails does not pass its strict marker to the retry', async () => {
+    const { client, remove } = listed({ fail: true });
+    const late = deferred<unknown>();
+    const inFlight = fetchInto(client, ['class-sessions', null], () => late.promise);
+    await remove('course', 'kA');
+    late.reject(networkError());
+    await inFlight;
+    await fetchInto(client, ['class-sessions', null], () => Promise.resolve(page([{ id: 'c9', course_id: 'kB' }])));
+    expect(ids(client, 'class-sessions', null)).toEqual(['c9']);
   });
 });

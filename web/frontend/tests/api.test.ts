@@ -30,4 +30,15 @@ describe('account-scoped HTTP client', () => {
     const offline = createApiClient(scope, async () => { throw new TypeError('network details'); });
     await expect(offline.getCourses()).rejects.toEqual(new ApiClientError('network'));
   });
+
+  it('a full traversal never treats a page without an explicit null cursor as the last one (revocation R1)', async () => {
+    const scope = { epoch: 1, isCurrent: () => true };
+    for (const page of [{ items: [] }, { items: [], next_cursor: false }, { items: [], next_cursor: '' }, { next_cursor: null }]) {
+      const client = createApiClient(scope, async () => new Response(JSON.stringify(page), { status: 200 }));
+      await expect(client.allClassSessions({ course_id: 'k1' })).rejects.toMatchObject({ kind: 'invalid_response' });
+    }
+    const pages = [{ items: [{ id: 'c1' }], next_cursor: 'p2' }, { items: [{ id: 'c2' }], next_cursor: null }];
+    const client = createApiClient(scope, async () => new Response(JSON.stringify(pages.shift()), { status: 200 }));
+    expect((await client.allClassSessions({ course_id: 'k1' })).items.map(item => item.id)).toEqual(['c1', 'c2']);
+  });
 });

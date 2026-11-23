@@ -203,9 +203,18 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
     if ('icon_token' in body && !str(body.icon_token, 64)) return false;
     return true;
   }
+  /** What a scope deletion would remove right now: its courses (semester) and classrooms. */
+  function impactOf(store: Store, scope: 'semester' | 'course', id: string) {
+    const courseIds = scope === 'course' ? [id] : liveCourses(store).filter(course => course.semester_id === id).map(course => course.id);
+    const sessionIds = liveSessions(store).filter(item => courseIds.includes(item.course_id)).map(item => item.id);
+    return JSON.stringify([[...courseIds].sort(), sessionIds.sort()]);
+  }
+  /** The confirmation token is bound to the object's revision and its impact scope (04-CONTRACTS-FLOWS: 删除). */
+  const previewImpact = new WeakMap<S['DeletionPreview'], string>();
   function issuePreview(store: Store, scope: 'semester' | 'course', id: string, revision: number, sessionCount: number): MockReply {
     const preview: S['DeletionPreview'] = { scope_type: scope, scope_id: id, revision, class_session_count: sessionCount, media_bytes: sessionCount * 48000000, confirmation_token: `mock-confirm-${newId()}`, expires_at: new Date(Date.parse(now()) + 10 * 60000).toISOString().replace('.000Z', 'Z') };
     store.previews.set(`${scope}:${id}`, preview);
+    previewImpact.set(preview, impactOf(store, scope, id));
     return ok(preview);
   }
   function deletion(scope: 'semester' | 'course', id: string): S['Deletion'] {
@@ -214,6 +223,8 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
   function checkDeleteBody(store: Store, scope: 'semester' | 'course', id: string, current: { revision: number }, body: Record<string, unknown>): MockReply | null {
     const preview = store.previews.get(`${scope}:${id}`);
     if (!preview || preview.confirmation_token !== body.confirmation_token) return error(409, 'PLAN_EXPIRED', '删除确认已失效，请重新查看影响范围');
+    // A classroom or course moved into or out of the scope since the preview changes what would be removed.
+    if (previewImpact.get(preview) !== impactOf(store, scope, id)) return error(409, 'PLAN_EXPIRED', '删除范围已变化，请重新查看影响范围');
     if (body.base_revision !== current.revision) return error(409, 'REVISION_CONFLICT', '内容已在其他地方更新', current.revision);
     if (body.mode !== 'cascade' && body.mode !== 'move_children') return error(400, 'VALIDATION_FAILED', '删除方式无效');
     return null;

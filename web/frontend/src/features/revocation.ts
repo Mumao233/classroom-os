@@ -22,9 +22,11 @@ export type ScopeMembers = { courses: string[]; classes: string[] };
  * - `unverifiedLinks`: that listing failed, so no cached classroom/course parent link is proof for this
  *   deletion (except the `verified` ones read fresh): affected projections are hidden, nothing is
  *   tombstoned from such a link, and a bound capture is only suspended.
+ * - `unresolved`: classrooms missing from the listing that may still belong to it (the bound one, or one cached
+ *   under the scope) and whose fresh detail read failed: hidden and, if bound, suspended for this deletion.
  * Neither (a ledger without an API, e.g. unit tests of the cache machinery): cached links are used.
  */
-export type PreparedDeletion = { exempt: string | null; members?: ScopeMembers; unverifiedLinks?: boolean; verified?: string[] };
+export type PreparedDeletion = { exempt: string | null; members?: ScopeMembers; unverifiedLinks?: boolean; verified?: string[]; unresolved?: string[] };
 
 export type RevocationHooks = {
   /** The classroom the account-level capture is bound to (active or stopped here), if any. */
@@ -101,8 +103,9 @@ type Tri = boolean | 'unknown';
  * "unknown" (and are dropped); earlier revocations were already applied by their own sweeps.
  * `exempt`: a bound classroom the server reported as nonexistent just before this deletion.
  * `distrust`: the deletion's children could not be listed, so no parent link (except `verified` ones) is proof.
+ * `unresolved`: classrooms whose membership in this deletion could not be established either way.
  */
-type Strict = { cascade: boolean; semesterCascade: boolean; classes: boolean; exempt: string | null; distrust: boolean; verified: ReadonlySet<string> } | null;
+type Strict = { cascade: boolean; semesterCascade: boolean; classes: boolean; exempt: string | null; distrust: boolean; verified: ReadonlySet<string>; unresolved: ReadonlySet<string> } | null;
 type Verdict = { type: 'keep' } | { type: 'gone' } | { type: 'unknown' } | { type: 'filter'; data: unknown };
 const KEEP: Verdict = { type: 'keep' };
 const GONE: Verdict = { type: 'gone' };
@@ -113,9 +116,10 @@ const mergeStrict = (a: NonNullable<Strict>, b: NonNullable<Strict>): NonNullabl
   cascade: a.cascade || b.cascade, semesterCascade: a.semesterCascade || b.semesterCascade, classes: a.classes || b.classes, exempt: a.exempt === b.exempt ? a.exempt : null,
   distrust: a.distrust || b.distrust,
   verified: a.distrust && b.distrust ? new Set([...a.verified].filter(id => b.verified.has(id))) : a.distrust ? a.verified : b.verified,
+  unresolved: new Set([...a.unresolved, ...b.unresolved]),
 });
 /** A single classroom revoked by ID (event or denial): only projections whose classroom is unknown are affected. */
-const CLASS_ONLY: NonNullable<Strict> = { cascade: false, semesterCascade: false, classes: true, exempt: null, distrust: false, verified: NO_IDS };
+const CLASS_ONLY: NonNullable<Strict> = { cascade: false, semesterCascade: false, classes: true, exempt: null, distrust: false, verified: NO_IDS, unresolved: NO_IDS };
 
 /** Queries whose fourth key part is a classroom ID and whose whole content belongs to it. */
 const CLASS_KEYED = new Set(['audio-manifests', 'marks', 'slides', 'tasks', 'questions', 'transcript', 'transcript-versions', 'class-segments']);
@@ -264,6 +268,7 @@ export function createRevocationLedger({ client, accountKey, api, hooks = {} }: 
   const courseCascaded = (courseId: string, m: Membership, strict: Strict): Tri => courses.get(courseId) === 'cascade' ? true : courses.has(courseId) ? false : semesterOf(courseId, m, strict);
   const classGone = (classId: string, m: Membership, strict: Strict, courseHint?: string): Tri => {
     if (classes.has(classId)) return true;
+    if (strict?.unresolved.has(classId)) return 'unknown';
     if (!hasCascade()) return false;
     if (distrusted(classId, unverified, strict)) return strict?.cascade && strict.exempt !== classId ? 'unknown' : false;
     const cached = m.classCourse.has(classId) ? parentOf(m.classCourse, classId) : courseHint;
@@ -414,14 +419,14 @@ export function createRevocationLedger({ client, accountKey, api, hooks = {} }: 
     // A bound capture whose classroom cannot be placed outside the newly deleted scope stops capturing
     // locally; it is revoked only once its membership or a denial confirms it.
     const bound = hooks.boundClassId?.() ?? null;
-    if (bound && strict?.cascade && classGone(bound, m, strict) === 'unknown') hooks.onCaptureSuspended?.(bound);
+    if (bound && (strict?.cascade || strict?.unresolved.has(bound)) && classGone(bound, m, strict) === 'unknown') hooks.onCaptureSuspended?.(bound);
   };
 
   const scopeStrict = (scope: ScopeDeletion, prepared?: PreparedDeletion): Strict => scope.mode === 'cascade'
-    ? { cascade: true, semesterCascade: scope.kind === 'semester', classes: true, exempt: prepared?.exempt ?? null, distrust: prepared?.unverifiedLinks === true, verified: new Set(prepared?.verified ?? []) }
+    ? { cascade: true, semesterCascade: scope.kind === 'semester', classes: true, exempt: prepared?.exempt ?? null, distrust: prepared?.unverifiedLinks === true, verified: new Set(prepared?.verified ?? []), unresolved: new Set(prepared?.unresolved ?? []) }
     : null;
   /** A listed cascade: its children are revoked by ID; content whose classroom is unknown is unknown. */
-  const listedStrict = (prepared?: PreparedDeletion): Strict => ({ ...CLASS_ONLY, exempt: prepared?.exempt ?? null });
+  const listedStrict = (prepared?: PreparedDeletion): Strict => ({ ...CLASS_ONLY, exempt: prepared?.exempt ?? null, unresolved: new Set(prepared?.unresolved ?? []) });
   const listedMembers = (scope: ScopeDeletion, prepared?: PreparedDeletion): ScopeMembers | null => scope.mode === 'cascade' && prepared?.members ? prepared.members : null;
 
   const recordScope = (scope: ScopeDeletion, members: ScopeMembers | null) => {
@@ -463,6 +468,9 @@ export function createRevocationLedger({ client, accountKey, api, hooks = {} }: 
     if (quiet) return;
     const query = event.query;
     if (query.queryKey[0] !== 'account') return;
+    // A strict marker belongs to the read that was in flight when a revocation was applied: a failed read, or a
+    // new one started after it, does not inherit it.
+    if (event.type === 'updated' && (event.action.type === 'fetch' || event.action.type === 'error')) strictOnArrival.delete(query);
     const state = query.state;
     const kind = query.queryKey[2];
     const id = query.queryKey[3];
@@ -579,16 +587,44 @@ export function createRevocationLedger({ client, accountKey, api, hooks = {} }: 
     async prepareScopeDeletion(scope) {
       // Moved children survive: nothing to establish. Without an API the cached links are all there is.
       if (!api || scope.mode === 'move_children') return { exempt: null };
+      const fresh = async <T>(kind: string, id: string, read: (signal: AbortSignal) => Promise<T>) => client.fetchQuery({ queryKey: ['account', accountKey, kind, id], queryFn: ({ signal }) => read(signal), staleTime: 0 });
+      let members: ScopeMembers | null = null;
       try {
         // The server's own listing, just before the deletion, is its membership (a cached link may predate a
-        // move made on another device, in either direction).
-        return { exempt: null, members: await listMembers(api, scope) };
-      } catch {
-        // Unlisted: no cached link is proof for this deletion; the bound classroom is read fresh.
+        // move made on another device, in either direction). The confirmation token binds the scope, so a
+        // change after the preview makes the server refuse the deletion instead.
+        members = await listMembers(api, scope);
+      } catch (error) {
+        // An expired session ends here (the deletion is not sent); otherwise no cached link is proof.
+        if (isUnauthenticated(error)) throw error;
+      }
+      if (members) {
+        // Listed by the server: visible to this account (evidence for a later denial, whatever the outcome).
+        for (const id of members.classes) served.add(`class-session:${id}`);
+        for (const id of members.courses) served.add(`course:${id}`);
+        // Missing from the listing is not proof of a move: the bound classroom and children cached under the
+        // scope are read again. A denial revokes them (guard); a read elsewhere confirms a move; a failure leaves
+        // them unresolved (hidden, a bound capture suspended).
+        const listed = new Set(members.classes);
+        const parents = new Set(scope.kind === 'course' ? [scope.id] : members.courses);
+        const candidates = new Set<string>();
+        const bound = hooks.boundClassId?.() ?? null;
+        if (bound && !listed.has(bound)) candidates.add(bound);
+        for (const [classId, link] of readMembership(client).classCourse) if (!listed.has(classId) && parents.has(link.parent)) candidates.add(classId);
+        const unresolved: string[] = [];
+        await Promise.all([...candidates].map(async classId => {
+          try {
+            const session = await fresh('class-session', classId, signal => api.classSession(classId, signal));
+            if (parents.has(session.course_id)) unresolved.push(classId);
+          } catch (error) {
+            if (isUnauthenticated(error)) throw error;
+            if (!isAuthoritativeDenial(error)) unresolved.push(classId);
+          }
+        }));
+        return { exempt: null, members, ...(unresolved.length ? { unresolved } : {}) };
       }
       const bound = hooks.boundClassId?.() ?? null;
       if (!bound) return { exempt: null, unverifiedLinks: true };
-      const fresh = async <T>(kind: string, id: string, read: (signal: AbortSignal) => Promise<T>) => client.fetchQuery({ queryKey: ['account', accountKey, kind, id], queryFn: ({ signal }) => read(signal), staleTime: 0 });
       try {
         const session = await fresh('class-session', bound, signal => api.classSession(bound, signal));
         const verified = [bound];
@@ -596,6 +632,7 @@ export function createRevocationLedger({ client, accountKey, api, hooks = {} }: 
         unverified.delete(bound);
         return { exempt: null, unverifiedLinks: true, verified };
       } catch (error) {
+        if (isUnauthenticated(error)) throw error;
         // The server does not know this classroom right now (e.g. the demo classroom before registration, with
         // nothing served that names it): this deletion cannot contain it. Other failures leave it unknown.
         const unknownToServer = error instanceof ApiClientError && error.kind === 'http' && (error.code === 'NOT_FOUND' || error.code === 'GONE') && !served.has(`class-session:${bound}`);
