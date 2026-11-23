@@ -483,6 +483,8 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
     revokeClassroom: (account: MockAccountKey, classId: string) => revokeClassroom(classrooms[account], classroomHost(account), classroomHelpers(account), classId),
     classroomStore: (account: MockAccountKey) => classrooms[account],
     reviewStore: (account: MockAccountKey) => reviews[account],
+    /** Test helper: refuse a document's revision reads (FORBIDDEN) while its metadata stays readable. */
+    denyReviewRevisions: (account: MockAccountKey, documentId: string) => { (reviews[account].deniedRevisionDocs ??= new Set()).add(documentId); },
     /** PR-10b development panel: retranscription refusals by original-audio state and quota. */
     setRetranscribeDev: (account: MockAccountKey, value: Parameters<typeof setRetranscribeDev>[1]) => setRetranscribeDev(classrooms[account], value),
     expireManifestCursors: (account: MockAccountKey) => expireManifestCursors(classrooms[account]),

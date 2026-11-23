@@ -45,7 +45,10 @@ export function setMockManifestDev(value: { pageSize?: number | null; failContin
 /** PR-10b development panel: retranscription refusals (original audio expired/deleted, session or month quota). */
 export function setMockRetranscribe(value: { classId?: string; audio?: 'ok' | 'expired' | 'deleted'; quota?: 'ok' | 'session' | 'month'; approve?: boolean; approvePlan?: string; approveTask?: string }) { return mockAccount ? backend.setRetranscribeDev(mockAccount, value) : null; }
 
-(globalThis as { __classroomMock?: unknown }).__classroomMock = { bump: bumpMockRecord, advanceTask: advanceMockTask, finishAsr: finishMockAsr, manifestDev: setMockManifestDev, retranscribe: setMockRetranscribe };
+/** Browser-test hook: a document's revision reads are refused from now on (its metadata stays readable). */
+export function denyMockReviewRevisions(documentId: string) { if (mockAccount) backend.denyReviewRevisions(mockAccount, documentId); }
+
+(globalThis as { __classroomMock?: unknown }).__classroomMock = { bump: bumpMockRecord, advanceTask: advanceMockTask, finishAsr: finishMockAsr, manifestDev: setMockManifestDev, retranscribe: setMockRetranscribe, denyRevisions: denyMockReviewRevisions };
 function viteAsset(request: Request) {
   const url = new URL(request.url);
   return url.origin === location.origin && request.method === 'GET' &&
@@ -62,6 +65,12 @@ const worker = setupWorker(
     const path = url.pathname.slice('/api/web/v1'.length);
     // Browser-test-only timing control; it never changes the HTTP contract.
     if (path === '/courses' && localStorage.getItem('mock-test-delay') === '1') await delay(1200);
+    // Browser-test-only: reads under a path prefix fail like a lost connection (a list that never loaded).
+    const failGet = localStorage.getItem('mock-test-fail-get');
+    if (failGet && request.method === 'GET' && path.startsWith(failGet)) return HttpResponse.error();
+    // Browser-test-only: hold requests to a path (suffix match) so an in-flight change can be attempted.
+    const slow = localStorage.getItem('mock-test-delay-path');
+    if (slow && request.method !== 'GET' && path.endsWith(slow)) await delay(1500);
     // Same rule as the media service: raw upload bytes must be sent as application/octet-stream.
     if (request.method === 'PUT' && request.headers.get('Content-Type') !== 'application/octet-stream') {
       return HttpResponse.json({ error: { code: 'VALIDATION_FAILED', message: '上传内容类型必须为 application/octet-stream', request_id: crypto.randomUUID(), retryable: false, retry_after_seconds: null, current_revision: null, conflict_id: null, task_id: null } }, { status: 422, headers });
@@ -81,6 +90,10 @@ const worker = setupWorker(
     // Browser-test-only: the server processed the request but its reply is lost once (path suffix match).
     const drop = localStorage.getItem('mock-test-drop-reply');
     if (drop && request.method !== 'GET' && path.endsWith(drop)) { localStorage.removeItem('mock-test-drop-reply'); return HttpResponse.error(); }
+    // Browser-test-only: connectivity is lost right after this reply (path suffix match), before any
+    // refetch it triggers can succeed. The page's own offline toggle is not told (a silent loss).
+    const cut = localStorage.getItem('mock-test-offline-after');
+    if (cut && request.method !== 'GET' && path.endsWith(cut)) { localStorage.removeItem('mock-test-offline-after'); mockOffline = true; }
     return HttpResponse.json(reply.body as Record<string, unknown>, { status: reply.status, headers });
   }),
   // Explicit catch-all is essential: throwing in onUnhandledRequest alone can

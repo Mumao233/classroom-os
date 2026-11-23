@@ -7,7 +7,7 @@ import {
   audioState, formatMs, kindLabel, lineDiff, markdownBlocks, newestFirst, readingRevision, resolveSource, revisionRole, revisionText, roleLabel, sourceStatusText,
   type Block, type Doc, type Revision,
 } from '../../domain/review';
-import { describeError, isConflict, useAppData, useCourse, useInvalidateAccount, usePreferences } from '../../features/data';
+import { describeError, isConflict, isTransportFailure, readableCache, ReadOnlyWhile, useAppData, useCourse, useInvalidateAccount, usePreferences } from '../../features/data';
 import { isDefinitiveRejection, useClassSession, useClassroomShell, useDraft, useMarks, useSlides } from '../../features/classroom';
 import { useClassSegments, useReadingMemory, useReviewDocument, useReviewRevisions, useSourceSnapshot } from '../../features/review';
 import { DataSourceNote, OfflineBanner } from '../common';
@@ -32,7 +32,10 @@ export function ReviewReader() {
   const invalidate = useInvalidateAccount();
   const document = useReviewDocument(documentId);
   const revisions = useReviewRevisions(documentId);
-  const doc = document.data;
+  // Cached content stays readable only after a transport failure, and then read-only (no server writes).
+  const doc = readableCache(document);
+  const stale = document.isError || revisions.isError;
+  const online = app.online && !stale;
   const session = useClassSession(doc?.class_session_id ?? '');
   const course = useCourse(session.data?.course_id ?? '', Boolean(session.data));
   const memory = useReadingMemory();
@@ -43,7 +46,10 @@ export function ReviewReader() {
   const heading = useRef<HTMLHeadingElement>(null);
   useEffect(() => { heading.current?.focus({ preventScroll: true }); }, [documentId]);
 
-  const list = useMemo(() => [...(revisions.data?.items ?? [])].sort(newestFirst), [revisions.data]);
+  const readableRevisions = readableCache(revisions);
+  // Revisions refused by the server (not merely unreachable): nothing copied from them may stay on screen.
+  const revisionsDenied = revisions.isError && !isTransportFailure(revisions.error);
+  const list = useMemo(() => [...(readableRevisions?.items ?? [])].sort(newestFirst), [readableRevisions]);
   const opening = doc ? readingRevision(doc, list) : null;
   const shown = list.find(item => item.id === selectedId) ?? opening?.revision ?? null;
   const back = (location.state as { from?: string } | null)?.from;
@@ -75,7 +81,7 @@ export function ReviewReader() {
   });
 
   if (document.isPending) return <main id="main-content" className={styles.page}><p role="status" className={pages.muted}>正在读取复习资料…</p></main>;
-  if (document.isError || !doc) return <main id="main-content" className={styles.page}><div className={`${pages.banner} ${pages.bannerDanger}`} role="alert"><div>{describeError(document.error)} <Link to="/review">返回复习</Link></div></div></main>;
+  if (!doc) return <main id="main-content" className={styles.page}><div className={`${pages.banner} ${pages.bannerDanger}`} role="alert"><div>{describeError(document.error)} <Link to="/review">返回复习</Link></div></div></main>;
 
   const role = shown ? revisionRole(doc, shown) : null;
   const sourceNote = sourceStatusText[doc.source_status];
@@ -89,11 +95,12 @@ export function ReviewReader() {
       <div className={pages.row}>
         {back ? <button type="button" className={pages.buttonGhost} onClick={() => navigate(-1)}>返回上一页</button> : <Link className={pages.buttonGhost} to="/review">返回复习</Link>}
         <Link className={pages.buttonSecondary} to={`/classrooms/${doc.class_session_id}/review`}>本课复习</Link>
-        <button type="button" className={pages.buttonSecondary} aria-pressed={doc.understood} disabled={!app.online || understood.isPending} onClick={() => understood.mutate(!doc.understood)} data-testid="toggle-understood">
+        <button type="button" className={pages.buttonSecondary} aria-pressed={doc.understood} disabled={!online || understood.isPending} onClick={() => understood.mutate(!doc.understood)} data-testid="toggle-understood">
           {doc.understood ? '改回尚未理解' : '标记为已理解'}</button>
       </div>
     </div>
     <DataSourceNote />
+    {document.isError && <div className={`${pages.banner} ${pages.bannerWarning}`} role="status" data-testid="document-refresh-error">{describeError(document.error)}</div>}
     <OfflineBanner scope="复习资料仍可阅读已加载的内容；" />
     {sourceNote && <div className={`${pages.banner} ${pages.bannerWarning}`} role="status" data-testid="source-status">{sourceNote}</div>}
     {notice && <div className={`${pages.banner} ${notice.tone === 'danger' ? pages.bannerDanger : notice.tone === 'warning' ? pages.bannerWarning : ''}`} role={notice.tone === 'success' ? 'status' : 'alert'} data-testid="review-notice">{notice.text}</div>}
@@ -102,23 +109,25 @@ export function ReviewReader() {
       <div className={pages.sectionHead}><h2 id="versions-heading">版本</h2>
         <div className={pages.row}><button type="button" className={pages.buttonSecondary} aria-pressed={comparing} onClick={() => setComparing(value => !value)} disabled={list.length < 2}>比较版本</button></div></div>
       <p className={`${pages.small} ${pages.muted}`}>AI 生成的内容都是候选，只有你选择“采用”后才会成为采用版本；保存个人稿不会覆盖任何版本。</p>
-      {revisions.isError ? <p role="alert" className={pages.error}>{describeError(revisions.error)}</p> : revisions.isPending ? <p role="status" className={pages.muted}>正在读取版本…</p> :
+      {revisions.isError && <p role="alert" className={pages.error}>{describeError(revisions.error)}</p>}
+      {!readableRevisions && revisions.isError ? null : revisions.isPending ? <p role="status" className={pages.muted}>正在读取版本…</p> :
         <ul className={styles.versions} data-testid="version-list">{list.map(item => {
           const itemRole = revisionRole(doc, item);
           return <li key={item.id} className={styles.version} aria-current={shown?.id === item.id} data-revision-id={item.id} data-role={itemRole}>
             <span><strong>{roleLabel[itemRole]}</strong> · {item.created_at.slice(0, 16).replace('T', ' ')}{item.source_snapshot_id ? ' · 有冻结来源' : ''}</span>
             <button type="button" className={pages.buttonGhost} onClick={() => setSelectedId(item.id)} aria-label={`查看${roleLabel[itemRole]}（${item.created_at.slice(0, 16).replace('T', ' ')}）`}>查看</button>
-            {itemRole !== 'adopted' && <button type="button" className={pages.buttonSecondary} disabled={!app.online || adopt.isPending} onClick={() => adopt.mutate(item)} data-testid={`adopt-${item.id}`}>采用此版本</button>}
+            {itemRole !== 'adopted' && <button type="button" className={pages.buttonSecondary} disabled={!online || adopt.isPending} onClick={() => adopt.mutate(item)} data-testid={`adopt-${item.id}`}>采用此版本</button>}
           </li>;
         })}</ul>}
       {comparing && <Compare revisions={list} doc={doc} />}
     </section>
 
-    {shown ? <ReadingArea key={shown.id} doc={doc} revision={shown} role={role!} showSources={showSources} setShowSources={setShowSources} memory={memory} session={session.data} />
+    <ReadOnlyWhile stale={stale}>{shown ? <ReadingArea key={shown.id} doc={doc} revision={shown} role={role!} showSources={showSources} setShowSources={setShowSources} memory={memory} session={session.data} />
       : <div className={pages.empty}><h3>还没有可阅读的版本</h3><p>生成的候选或保存的个人稿会出现在这里。</p></div>}
 
+    {revisionsDenied ? <div className={pages.empty} data-testid="editor-hidden"><h3>个人稿编辑暂不可用</h3><p>版本来源已不可访问，从版本复制的内容不再显示。你写的草稿保留在本机，恢复访问后可继续编辑。</p></div> :
     <PersonalEditor doc={doc} basis={shown} onSaved={revision => { setSelectedId(revision.id); setNotice({ tone: 'success', text: '个人稿已保存为新版本；采用版本和 AI 候选保持不变。' }); }}
-      onConflict={() => { void document.refetch(); void revisions.refetch(); setNotice({ tone: 'warning', text: '这份资料已在其他地方更新。你提交的内容已另存为未生效的个人稿（见版本列表），编辑框里的草稿也保留；看过最新版本后，可以选择基于最新版本再保存。' }); }} />
+      onConflict={() => { void document.refetch(); void revisions.refetch(); setNotice({ tone: 'warning', text: '这份资料已在其他地方更新。你提交的内容已另存为未生效的个人稿（见版本列表），编辑框里的草稿也保留；看过最新版本后，可以选择基于最新版本再保存。' }); }} />}</ReadOnlyWhile>
   </main>;
 }
 

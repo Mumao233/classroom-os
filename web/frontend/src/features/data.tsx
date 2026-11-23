@@ -3,6 +3,7 @@ import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ApiClientError, type ApiClient } from '../api/client';
 import type { CaptureView, LocalRisk } from '../domain/dashboard';
 import type { ClassroomShell } from './classroom';
+import type { RevocationLedger } from './revocation';
 
 /**
  * Everything a page needs from the authenticated account shell. Pages never import fetch,
@@ -24,6 +25,8 @@ export type AppData = {
   classroomRevoked?: boolean;
   /** PR-10a classroom shell (capture port, drafts, layout memory); absent where not provided. */
   classroom?: ClassroomShell;
+  /** Account-shell revocation ledger: deletion receipts revoke cached content at once (REVOCATION-DESIGN.md). */
+  revocation?: RevocationLedger;
 };
 
 const Context = createContext<AppData | null>(null);
@@ -32,6 +35,21 @@ export function useAppData() {
   const value = useContext(Context);
   if (!value) throw new Error('AppDataProvider missing');
   return value;
+}
+
+export const isTransportFailure = (error: unknown) => error instanceof ApiClientError && error.kind === 'network';
+/**
+ * Cached data a page may still show: only while its latest failure (if any) was the transport. Any
+ * other failure (denial, expired session, unreadable reply) shows no private content.
+ */
+export function readableCache<T>(query: { data: T | undefined; isError: boolean; error: unknown }): T | undefined {
+  return query.data !== undefined && (!query.isError || isTransportFailure(query.error)) ? query.data : undefined;
+}
+/** While a page shows a cached fallback after a failed refresh, every server write below it is disabled like offline. */
+export function ReadOnlyWhile({ stale, children }: { stale: boolean; children: ReactNode }) {
+  const app = useAppData();
+  // Always the same provider element: switching read-only on or off must not remount (and reset) drafts below.
+  return <Context.Provider value={stale ? { ...app, online: false } : app}>{children}</Context.Provider>;
 }
 
 export function useAccountQuery<T>(parts: readonly unknown[], fn: (api: ApiClient, signal: AbortSignal) => Promise<T>, enabled = true) {

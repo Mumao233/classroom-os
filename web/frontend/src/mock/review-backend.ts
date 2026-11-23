@@ -14,6 +14,8 @@ export type ReviewReply = { status: number; body: unknown };
 export type ReviewStore = {
   revisions: S['ReviewRevision'][];
   snapshots: S['SourceSnapshot'][];
+  /** Test helper: documents whose revision reads are refused (a revoked source) while metadata stays readable. */
+  deniedRevisionDocs?: Set<string>;
 };
 
 /** What the review routes need from the owning account store. */
@@ -169,6 +171,7 @@ export function handleReview(store: ReviewStore, host: ReviewHost, h: ReviewHelp
     });
     case 'GET /review-documents/:id/revisions': {
       const doc = findDocument(id); if (!doc) return notFound();
+      if (store.deniedRevisionDocs?.has(id)) return h.error(403, 'FORBIDDEN', '版本来源已不可访问');
       return page(store.revisions.filter(item => item.document_id === id).sort((a, b) => b.created_at.localeCompare(a.created_at) || b.id.localeCompare(a.id)));
     }
     case 'GET /review-revisions/:id': {

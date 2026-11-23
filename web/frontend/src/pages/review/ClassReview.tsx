@@ -5,7 +5,7 @@ import type { components } from '../../generated/openapi';
 import { ApiClientError } from '../../api/client';
 import { alignTranscripts, audioState, formatMs, kindLabel, retranscribeErrors } from '../../domain/review';
 import { formatYuan, TASK_STATE_LABEL } from '../../domain/classroom';
-import { describeError, isConflict, useAppData, useCourse, useInvalidateAccount } from '../../features/data';
+import { describeError, isConflict, readableCache, ReadOnlyWhile, useAppData, useCourse, useInvalidateAccount } from '../../features/data';
 import { isDefinitiveRejection, useClassSession, useDraft, useTasks } from '../../features/classroom';
 import { useReviewLibrary, useTranscriptSegments, useTranscriptVersions } from '../../features/review';
 import { DataSourceNote, Empty, Loading, OfflineBanner, QueryError } from '../common';
@@ -31,15 +31,17 @@ export function ClassReview() {
   const heading = useRef<HTMLHeadingElement>(null);
   useEffect(() => { heading.current?.focus({ preventScroll: true }); }, [classId]);
   if (session.isPending) return <main id="main-content" className={styles.page}><Loading label="正在读取课堂…" /></main>;
-  if (session.isError || !session.data) return <main id="main-content" className={styles.page}><QueryError error={session.error} /><Link to="/review">返回复习</Link></main>;
-  const data = session.data;
+  // Cached content stays readable only after a transport failure, and then read-only (no server writes).
+  const data = readableCache(session);
+  if (!data) return <main id="main-content" className={styles.page}><QueryError error={session.error} /><Link to="/review">返回复习</Link></main>;
   const from = `${location.pathname}${location.search}`;
-  return <main id="main-content" className={styles.page}>
+  return <ReadOnlyWhile stale={session.isError}><main id="main-content" className={styles.page}>
     <div className={pages.heading}>
       <div className={pages.wrap}><p>{course.data?.name ?? '课程'} · 课堂复习</p><h1 ref={heading} tabIndex={-1}>{data.title || '未命名课堂'}</h1></div>
       <div className={pages.row}><Link className={pages.buttonSecondary} to={`/classrooms/${classId}/record`}>课堂记录</Link><Link className={pages.buttonGhost} to="/review">全部复习</Link></div>
     </div>
     <DataSourceNote />
+    {session.isError && <div className={`${pages.banner} ${pages.bannerWarning}`} role="status" data-testid="class-refresh-error">{describeError(session.error)} 以下为上次读取的内容，暂不能提交。</div>}
     <OfflineBanner scope="已加载的复习资料可以阅读；" />
     <section className={pages.panel} aria-labelledby="class-docs"><h2 id="class-docs">本课资料</h2>
       {documents.isError && !documents.data ? <QueryError error={documents.error} retry={() => void documents.refetch()} /> : documents.isPending ? <Loading label="正在读取资料…" /> :
@@ -51,7 +53,7 @@ export function ClassReview() {
     </section>
     <TranscriptVersions session={data} />
     <Retranscribe session={data} />
-  </main>;
+  </main></ReadOnlyWhile>;
 }
 
 function NewNote({ classId }: { classId: string }) {
@@ -247,7 +249,7 @@ function Retranscribe({ session }: { session: S['ClassSession'] }) {
           <div><button type="button" className={pages.buttonSecondary} disabled={!app.online || execute.isPending} onClick={() => execute.mutate({ current: prepared!, original: executeKey.current?.intent.endsWith(':true') ?? false })}>用同一操作再确认</button></div></div></div>
           : sourceChanged ? <div className={`${pages.banner} ${pages.bannerWarning}`} role="alert" data-testid="retranscribe-source-changed"><div className={pages.stack}>
           <span>原音在准备后有变化（例如又有分片上传完成）。可以重新准备，或明确选择按准备时冻结的原音提交。</span>
-          <div className={pages.row}><button type="button" className={pages.buttonSecondary} disabled={execute.isPending} onClick={() => prepare.mutate()}>重新准备</button>
+          <div className={pages.row}><button type="button" className={pages.buttonSecondary} disabled={!app.online || execute.isPending || prepare.isPending} onClick={() => prepare.mutate()}>重新准备</button>
             <button type="button" className={pages.buttonSecondary} disabled={!app.online || execute.isPending} onClick={() => execute.mutate({ current: prepared!, original: true })}>按准备时的原音提交</button></div></div></div>
           : <div className={pages.row}><button type="button" className={pages.button} disabled={!app.online || execute.isPending} onClick={() => execute.mutate({ current: prepared!, original: false })} data-testid="retranscribe-confirm">确认并提交</button>
             {/* The submitted plan, body and key stay until a definitive reply: no cancel while it is pending. */}
