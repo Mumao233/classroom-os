@@ -93,6 +93,8 @@ export function useAdminWrite<B, R>(spec: {
   async function send() {
     const intent = pending.current;
     if (!intent?.token) { setStage('reauth'); return; }
+    // Registered before dispatch: a dialog opened while this request is in flight joins the same key.
+    intentsOf(client).set(intent.slot, intent as Pending<unknown>);
     setStage('sending'); setError(null);
     try {
       await mutation.mutateAsync(spec.operationId);
@@ -111,7 +113,7 @@ export function useAdminWrite<B, R>(spec: {
       }
       if (isDefinitiveRejection(failure)) { settle(intent); setStage('failed'); }
       // No definitive reply: the write may have been applied. Keep key and proof for a replay.
-      else { intentsOf(client).set(intent.slot, intent as Pending<unknown>); setStage('unconfirmed'); }
+      else setStage('unconfirmed');
     } finally { void refresh(); }
   }
 

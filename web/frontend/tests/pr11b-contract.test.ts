@@ -59,7 +59,8 @@ describe('PR-11b admin mock responses conform to contract 0.3.0', () => {
     ok('Invitation', write('adminRevokeInvitation', invitationId, 'POST', `/admin/invitations/${invitationId}/revoke`, {}));
     const quota = get(`/admin/users/${A_ID}/quota`).body as { buckets: Array<{ kind: string; period_start: string }> };
     ok('QuotaView', write('adminAdjustQuota', A_ID, 'POST', '/admin/quota-adjustments', { user_id: A_ID, bucket_kind: 'summary_month_count', period_start: quota.buckets.find(item => item.kind === 'summary_month_count')!.period_start, additional_units: 10, reason: '合成' }));
-    ok('AdminSwitches', write('adminUpdateSwitches', null, 'PATCH', '/admin/switches', { base_revision: switches.revision, registration_enabled: false, max_active_users: '30', reason: '合成' }));
+    ok('AdminSwitches', write('adminUpdateSwitches', null, 'PATCH', '/admin/switches', { base_revision: switches.revision, registration_enabled: false, reason: '合成' }));
+    fail(write('adminUpdateSwitches', null, 'PATCH', '/admin/switches', { base_revision: (switches.revision as number) + 1, max_active_users: '30', reason: '合成' }));
     ok('AuditRecordPage', get('/admin/audit'));
     ok('AuditRecordPage', get('/admin/audit', 'limit=1'));
 

@@ -10,10 +10,18 @@ let mockAccount: MockAccountKey | null = 'A';
 let mockOffline = false;
 const backend = createMockBackend();
 export function setMockAccount(account: MockAccountKey | null) {
-  // The outgoing session ends here; proofs it obtained cannot authorise a write that arrives later.
-  if (mockAccount && mockAccount !== account) backend.retireSession(mockAccount);
+  // Every call is a session change (sign-in, switch, sign-out): the outgoing session ends here, also on a
+  // repeated sign-in of the same account, so proofs it obtained cannot authorise a write that arrives later.
+  if (mockAccount) backend.retireSession(mockAccount);
+  if (account) backend.beginSession(account);
   mockAccount = account;
+  mockCsrf = account ? `mock-csrf-${crypto.randomUUID()}` : null;
 }
+/** Synthetic CSRF token bound to the current Mock session (rotated on every session change). */
+let mockCsrf: string | null = `mock-csrf-${crypto.randomUUID()}`;
+export function mockCsrfToken() { return mockCsrf; }
+/** PR-11b: whether the platform ASR switch admits a live stream (new streams are refused while it is off). */
+export function mockAsrAdmits(streamId: string) { return mockAccount ? backend.asrAdmits(mockAccount, streamId) : false; }
 /** Simulated loss of connectivity: every business request fails like a network error. */
 export function setMockOffline(offline: boolean) { mockOffline = offline; }
 export function isMockOffline() { return mockOffline; }
@@ -91,6 +99,10 @@ const worker = setupWorker(
     // Browser-test-only: hold reads under a path prefix, so a page can be observed while its re-read is pending.
     const slowGet = localStorage.getItem('mock-test-delay-get');
     if (slowGet && request.method === 'GET' && path.startsWith(slowGet)) await delay(1500);
+    // Admin writes require the session-bound CSRF token (frozen contract); a stale session's token is refused.
+    if (request.method !== 'GET' && path.startsWith('/admin/') && request.headers.get('X-CSRF-Token') !== mockCsrf) {
+      return HttpResponse.json({ error: { code: 'FORBIDDEN', message: '请求校验失败，请刷新页面后重试', request_id: crypto.randomUUID(), retryable: false, retry_after_seconds: null, current_revision: null, conflict_id: null, task_id: null } }, { status: 403, headers });
+    }
     // Same rule as the media service: raw upload bytes must be sent as application/octet-stream.
     if (request.method === 'PUT' && request.headers.get('Content-Type') !== 'application/octet-stream') {
       return HttpResponse.json({ error: { code: 'VALIDATION_FAILED', message: '上传内容类型必须为 application/octet-stream', request_id: crypto.randomUUID(), retryable: false, retry_after_seconds: null, current_revision: null, conflict_id: null, task_id: null } }, { status: 422, headers });

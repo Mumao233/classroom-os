@@ -103,7 +103,7 @@ describe('PR-11b admin writes need a purpose-bound, single-use proof', () => {
 
 describe('PR-11b user status, quota and switches', () => {
   it('disabling ends the account\'s sessions at once; restoring lets it back; self and deleting accounts are refused', () => {
-    const { call, write } = harness();
+    const { backend, call, write } = harness();
     expect(call('A', 'GET', '/me').status).toBe(200);
     expect(write('adminUpdateUser', A_ID, 'PATCH', `/admin/users/${A_ID}`, { base_revision: 1, status: 'disabled', reason: '合成：停用检查' }).reply.status).toBe(200);
     expect(err(call('A', 'GET', '/me'))).toBe('UNAUTHENTICATED');
@@ -112,7 +112,11 @@ describe('PR-11b user status, quota and switches', () => {
     expect(stale.status).toBe(409);
     expect((stale.body as S['Error']).error.current_revision).toBe(2);
     expect(write('adminUpdateUser', A_ID, 'PATCH', `/admin/users/${A_ID}`, { base_revision: 2, status: 'active', reason: '合成：恢复' }).reply.status).toBe(200);
+    // Restoring does not revive the sessions that disabling ended: only a fresh sign-in is admitted.
+    expect(err(call('A', 'GET', '/me'))).toBe('UNAUTHENTICATED');
+    backend.beginSession('A');
     expect(call('A', 'GET', '/me').status).toBe(200);
+    expect(items<S['DeviceSession']>(call('A', 'GET', '/me/sessions')).every(item => item.revoked_at !== null)).toBe(true);
     expect(err(write('adminUpdateUser', C_ID, 'PATCH', `/admin/users/${C_ID}`, { base_revision: 1, status: 'disabled', reason: '自己' }).reply)).toBe('FORBIDDEN');
     expect(err(write('adminUpdateUser', DELETING, 'PATCH', `/admin/users/${DELETING}`, { base_revision: 2, status: 'disabled', reason: 'x' }).reply)).toBe('GONE');
     expect(err(write('adminUpdateUser', PENDING, 'PATCH', `/admin/users/${PENDING}`, { base_revision: 1, status: 'disabled', reason: 'x' }).reply)).toBe('VALIDATION_FAILED');
@@ -149,6 +153,9 @@ describe('PR-11b user status, quota and switches', () => {
     expect((stale.body as S['Error']).error.current_revision).toBe(switches.revision + 1);
     expect(err(call('C', 'PATCH', '/admin/switches', { base_revision: 2, reason: '没有变更' }))).toBe('VALIDATION_FAILED');
     expect(err(call('C', 'PATCH', '/admin/switches', { base_revision: 2, reason: 'x', max_active_users: '20' }))).toBe('VALIDATION_FAILED');
+    // Stage transitions wait for the approved stage rule (11a): refused, nothing changes.
+    expect(err(write('adminUpdateSwitches', null, 'PATCH', '/admin/switches', { base_revision: switches.revision + 1, max_active_users: '30', reason: '合成' }).reply)).toBe('SERVICE_DISABLED');
+    expect((call('C', 'GET', '/admin/switches').body as S['AdminSwitches']).max_active_users).toBe('10');
   });
 });
 
@@ -257,5 +264,35 @@ describe('PR-11b review round 0 regressions (mock)', () => {
     const { write } = harness();
     expect(write('adminUpdateUser', B_ID, 'PATCH', `/admin/users/${B_ID}`, { base_revision: 1, status: 'disabled', reason: '😀'.repeat(500) }).reply.status).toBe(200);
     expect(err(write('adminUpdateUser', B_ID, 'PATCH', `/admin/users/${B_ID}`, { base_revision: 2, status: 'active', reason: '😀'.repeat(501) }).reply)).toBe('VALIDATION_FAILED');
+  });
+});
+
+describe('PR-11b review round 1 regressions (mock)', () => {
+  it('an audit continuation is stable when newer records are added before it', () => {
+    const { call, write } = harness();
+    const first = call('C', 'GET', '/admin/audit', undefined, 'limit=1').body as S['AuditRecordPage'];
+    write('adminUpdateSwitches', null, 'PATCH', '/admin/switches', { base_revision: 1, registration_enabled: false, reason: '合成：新记录' });
+    const second = call('C', 'GET', '/admin/audit', undefined, `limit=1&cursor=${encodeURIComponent(first.next_cursor!)}`).body as S['AuditRecordPage'];
+    expect(second.items[0]!.id).not.toBe(first.items[0]!.id);
+    expect(second.next_cursor).toBeNull();
+    expect(err(call('C', 'GET', '/admin/audit', undefined, 'cursor=a:00000000-0000-4000-8000-00000000ffff'))).toBe('CURSOR_EXPIRED');
+  });
+
+  it('platform-only users start from the stage-10 limits', () => {
+    const { call } = harness();
+    const quota = call('C', 'GET', '/admin/users/d0000000-0000-4000-8000-000000000001/quota').body as S['QuotaView'];
+    expect(Object.fromEntries(quota.buckets.map(item => [item.kind, item.limit]))).toEqual({ asr_month_ms: 43_200_000, asr_day_ms: 10_800_000, retranscribe_month_ms: 8_640_000, interactive_month_count: 20, summary_month_count: 8 });
+  });
+
+  it('the ASR switch refuses new live streams but keeps an admitted one', () => {
+    const { backend, write } = harness();
+    const ENDED = 'c0000000-0000-4000-8000-000000000001';
+    const final = (streamId: string, n: number) => ({ classId: ENDED, streamId, segmentId: `5e000000-0000-4000-8000-00000000000${n}`, segmentRevisionId: `5f000000-0000-4000-8000-00000000000${n}`, versionId: '5d000000-0000-4000-8000-000000000001', text: '合成', startMs: 0, endMs: 1, revision: 1 });
+    backend.persistFinal('A', final('5c000000-0000-4000-8000-000000000001', 1));
+    write('adminUpdateSwitches', null, 'PATCH', '/admin/switches', { base_revision: 1, asr_enabled: false, reason: '合成：维护' });
+    expect(backend.asrAdmits('A', '5c000000-0000-4000-8000-000000000001')).toBe(true);
+    expect(backend.asrAdmits('A', '5c000000-0000-4000-8000-000000000002')).toBe(false);
+    backend.persistFinal('A', final('5c000000-0000-4000-8000-000000000002', 2));
+    expect(backend.classroomStore('A').segments.some(item => item.stream_id === '5c000000-0000-4000-8000-000000000002')).toBe(false);
   });
 });

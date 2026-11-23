@@ -39,7 +39,8 @@ export function usageView(usage: S['AdminUsage']): UsageView | null {
   const [budget, fixed, settled, reserved, unknown, safetyReserve] = values as bigint[];
   const exposure = fixed! + settled! + reserved! + unknown!;
   const basisPoints = budget! > 0n ? Number((exposure * 10_000n) / budget!) : exposure > 0n ? 10_000 : 0;
-  const level = basisPoints >= 10_000 ? 'blocked100' : basisPoints >= 8_000 ? 'warning80' : basisPoints >= 6_000 ? 'warning60' : 'normal';
+  // As billing_state(): a zero budget is blocked even with no exposure.
+  const level = budget! === 0n || basisPoints >= 10_000 ? 'blocked100' : basisPoints >= 8_000 ? 'warning80' : basisPoints >= 6_000 ? 'warning60' : 'normal';
   return { budget: budget!, fixed: fixed!, settled: settled!, reserved: reserved!, unknown: unknown!, safetyReserve: safetyReserve!, exposure, basisPoints, admissible: budget! - safetyReserve! - exposure, level };
 }
 export const formatBasisPoints = (value: number) => `${Math.floor(value / 100)}.${String(value % 100).padStart(2, '0')}%`;
@@ -88,6 +89,8 @@ export const operationLabel: Record<string, string> = {
   adminAdjustQuota: '追加额度', adminUpdateSwitches: '修改平台开关',
 };
 export const targetTypeLabel: Record<string, string> = { user: '用户', invitation: '邀请', platform: '平台' };
+/** Short, stable, non-secret reference of an invitation, shown in its list row and in audit records. */
+export const invitationRef = (id: string) => `#${id.replace(/-/g, '').slice(-6)}`;
 
 /** Seconds between the worker's last heartbeat and the health check; null when it never reported. */
 export function heartbeatAge(health: Pick<S['AdminHealth'], 'checked_at' | 'worker_heartbeat_at'>): number | null {

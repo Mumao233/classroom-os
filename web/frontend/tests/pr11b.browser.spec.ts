@@ -160,6 +160,8 @@ test.describe('PR-11b operations console', () => {
     expect(await page.content()).not.toContain(token);
     // Nothing of it was persisted by the page.
     expect(await page.evaluate(value => JSON.stringify({ ...localStorage }).includes(value) || JSON.stringify({ ...sessionStorage }).includes(value), token)).toBe(false);
+    // An admin write without the session's CSRF token is refused at the boundary.
+    expect(await page.evaluate(async () => (await fetch('/api/web/v1/admin/invitations', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Idempotency-Key': crypto.randomUUID() }, body: JSON.stringify({ kind: 'single_use' }) })).status)).toBe(403);
     // Nor logged (the Mock transport is quiet): neither the token nor a reauthentication header.
     expect(consoleText.join(' ')).not.toContain(token);
     expect(consoleText.join(' ')).not.toContain('X-Reauth-Token');
@@ -180,13 +182,13 @@ test.describe('PR-11b operations console', () => {
   test('usage shows exact amounts, the risk level and an empty month', async ({ page }) => {
     await asAdmin(page, '/admin/usage');
     const usage = page.getByTestId('admin-usage');
-    await expect(usage).toContainText('¥1,000.00');
-    await expect(usage).toContainText('¥657.45');
+    await expect(usage).toContainText('¥500.00');
+    await expect(usage).toContainText('¥304.40');
     await expect(usage).toContainText('已过 60% 提醒线');
-    await expect(usage).toContainText('65.74%');
+    await expect(usage).toContainText('60.88%');
     await shot(page, 'admin-usage');
     await page.getByLabel('月份').selectOption({ label: '2026 年 9 月' });
-    await expect(usage).toContainText('¥568.00');
+    await expect(usage).toContainText('¥268.00');
     await page.getByLabel('月份').selectOption({ label: '2026 年 8 月' });
     await expect(page.getByText('这个月没有用量记录')).toBeVisible();
   });
@@ -207,6 +209,9 @@ test.describe('PR-11b operations console', () => {
     await verify(page);
     await expect(page.getByTestId('admin-action')).toHaveCount(0);
     await expect(switches.getByLabel(/AI 问答、讲解与总结/)).not.toBeChecked();
+    // The active-user stage is shown read-only until stage transitions are approved.
+    await expect(page.getByTestId('active-user-stage')).toHaveText('10 人');
+    await expect(switches.getByRole('combobox')).toHaveCount(0);
     await expect(page.getByTestId('admin-audit').locator('tbody tr').first()).toContainText('修改平台开关');
     await shot(page, 'admin-runtime');
 

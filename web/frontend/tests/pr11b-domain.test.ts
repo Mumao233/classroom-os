@@ -47,6 +47,8 @@ describe('PR-11b admin domain', () => {
     expect(usageView(usage({ unknown_microyuan: '450000000' }))!.level).toBe('blocked100');
     expect(usageView(usage({ unknown_microyuan: '449999999' }))!.level).toBe('warning80');
     expect(usageView(usage({ budget_microyuan: '0' }))!.level).toBe('blocked100');
+    // billing_state(0, 0): a zero budget is blocked even with no exposure at all.
+    expect(usageView(usage({ budget_microyuan: '0', fixed_and_accrued_microyuan: '0', settled_microyuan: '0', reserved_microyuan: '0', unknown_microyuan: '0', safety_reserve_microyuan: '0' }))!.level).toBe('blocked100');
     expect(usageView(usage({ settled_microyuan: '1e9' }))).toBeNull();
     expect(formatBasisPoints(5_507)).toBe('55.07%');
   });

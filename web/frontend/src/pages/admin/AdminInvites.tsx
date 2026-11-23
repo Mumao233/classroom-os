@@ -1,6 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import type { components } from '../../generated/openapi';
-import { invitationKindLabel, invitationStateLabel } from '../../domain/admin';
+import { invitationKindLabel, invitationRef, invitationStateLabel } from '../../domain/admin';
+import { isAuthoritativeDenial, isUnauthenticated } from '../../features/revocation';
 import { formatDateTime } from '../../domain/dashboard';
 import { useAdminInvitations, useAdminWrite } from '../../features/admin';
 import { ReadOnlyWhile, readableCache, useAppData } from '../../features/data';
@@ -23,18 +25,28 @@ function InvitesBody() {
   const [creating, setCreating] = useState(false);
   const [action, setAction] = useState<{ kind: 'revoke' | 'reissue'; invitation: S['Invitation'] } | null>(null);
   const [issued, setIssued] = useState<Issued | null>(null);
+  const client = useQueryClient();
+  const { accountKey } = useAppData();
+  // A denial (or an ended session) withdraws the secret for good; a later transport failure cannot show it again.
+  const denied = invitations.isError && (isAuthoritativeDenial(invitations.error) || isUnauthenticated(invitations.error));
+  useEffect(() => { if (denied) setIssued(null); }, [denied]);
+  /** The confirmed receipt supersedes an older cached row (metadata only; the token never enters the cache). */
+  const issue = (created: Created, reissued: boolean) => {
+    client.setQueryData<S['InvitationPage']>(['account', accountKey, 'admin', 'invitations'], page => page && ({ ...page, items: page.items.some(item => item.id === created.invitation.id) ? page.items.map(item => item.id === created.invitation.id && item.revision <= created.invitation.revision ? created.invitation : item) : [created.invitation, ...page.items] }));
+    setIssued({ ...created, reissued });
+  };
   // A token is offered only while its invitation is still the issued revision the token belongs to.
   const listed = readableCache(invitations)?.items.find(item => item.id === issued?.invitation.id);
-  const tokenCurrent = issued !== null && (listed === undefined || (listed.state === 'issued' && listed.revision === issued.invitation.revision));
+  const tokenCurrent = issued !== null && !denied && (listed === undefined || (listed.state === 'issued' && listed.revision === issued.invitation.revision));
   return <ReadOnlyWhile stale={invitations.isError}>
-    {issued && tokenCurrent && <TokenPanel issued={issued} onDismiss={() => setIssued(null)} />}
+    {issued && tokenCurrent && <TokenPanel key={`${issued.invitation.id}:${issued.invitation.revision}`} issued={issued} onDismiss={() => setIssued(null)} />}
     <section className={styles.panel} aria-labelledby="admin-invites-title">
       <div className={styles.sectionHead}><h2 id="admin-invites-title">邀请</h2><button type="button" className={styles.button} disabled={!online} onClick={() => setCreating(true)}>创建邀请</button></div>
       <AdminData query={invitations} label="正在读取邀请…">{page => page.items.length === 0 ? <Empty title="还没有邀请" description="创建邀请后，把一次性令牌通过可信渠道交给受邀人。" /> :
         <div className={styles.tableWrap}><table className={styles.table} data-testid="admin-invitations">
-          <thead><tr><th>类型</th><th>邮箱</th><th>状态</th><th>创建时间</th><th>有效至</th><th>操作</th></tr></thead>
+          <thead><tr><th>编号</th><th>类型</th><th>邮箱</th><th>状态</th><th>创建时间</th><th>有效至</th><th>操作</th></tr></thead>
           <tbody>{page.items.map(item => <tr key={item.id} data-testid={`admin-invitation-${item.id}`}>
-            <td>{invitationKindLabel[item.kind]}</td><td>{item.email_hint ?? '—'}</td>
+            <td>{invitationRef(item.id)}</td><td>{invitationKindLabel[item.kind]}</td><td>{item.email_hint ?? '—'}</td>
             <td><Badge tone={stateTone[item.state]}>{invitationStateLabel[item.state]}</Badge></td>
             <td>{formatDateTime(item.created_at)}</td><td>{formatDateTime(item.expires_at)}</td>
             <td><div className={styles.row}>
@@ -45,9 +57,9 @@ function InvitesBody() {
         </table></div>}
       </AdminData>
     </section>
-    {creating && <CreateDialog onClose={() => setCreating(false)} onIssued={created => { setCreating(false); setIssued({ ...created, reissued: false }); }} />}
+    {creating && <CreateDialog onClose={() => setCreating(false)} onIssued={created => { setCreating(false); issue(created, false); }} />}
     {action?.kind === 'revoke' && <RevokeDialog key={action.invitation.id} invitation={action.invitation} onClose={() => setAction(null)} onRevoked={id => { setAction(null); setIssued(current => current?.invitation.id === id ? null : current); }} />}
-    {action?.kind === 'reissue' && <ReissueDialog key={action.invitation.id} invitation={action.invitation} onClose={() => setAction(null)} onIssued={created => { setAction(null); setIssued({ ...created, reissued: true }); }} />}
+    {action?.kind === 'reissue' && <ReissueDialog key={action.invitation.id} invitation={action.invitation} onClose={() => setAction(null)} onIssued={created => { setAction(null); issue(created, true); }} />}
   </ReadOnlyWhile>;
 }
 
@@ -106,7 +118,7 @@ function TokenPanel({ issued, onDismiss }: { issued: Issued; onDismiss: () => vo
   const copy = () => { navigator.clipboard.writeText(issued.token).then(() => setCopied('yes'), () => setCopied('failed')); };
   return <section className={`${styles.banner} ${styles.bannerWarning}`} role="status" aria-labelledby="invite-token-title" data-testid="invite-token">
     <div className={styles.stack}>
-      <strong id="invite-token-title">{issued.reissued ? '新的一次性令牌' : '邀请已创建'}：只显示这一次</strong>
+      <strong id="invite-token-title">{issued.reissued ? '新的一次性令牌' : '邀请已创建'}（{invitationRef(issued.invitation.id)}）：只显示这一次</strong>
       <span>{invitationKindLabel[issued.invitation.kind]}{issued.invitation.email_hint ? `（${issued.invitation.email_hint}）` : ''}，有效至 {formatDateTime(issued.invitation.expires_at)}。请通过可信渠道交给受邀人；关闭后无法再次查看，只能重新签发。</span>
       <div className={styles.field}><label htmlFor="invite-token-value">一次性令牌</label><input id="invite-token-value" readOnly value={issued.token} onFocus={event => event.target.select()} /></div>
       <div className={styles.row}>

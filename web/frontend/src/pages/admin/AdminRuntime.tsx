@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import type { components } from '../../generated/openapi';
-import { healthLabel, healthWarnings, heartbeatAge, operationLabel, reasonError, targetTypeLabel } from '../../domain/admin';
+import { healthLabel, healthWarnings, heartbeatAge, invitationRef, operationLabel, reasonError, targetTypeLabel } from '../../domain/admin';
 import { formatDateTime } from '../../domain/dashboard';
 import { describeAdminError, useAdminAudit, useAdminHealth, useAdminSwitches, useAdminUsers, useAdminWrite } from '../../features/admin';
 import { describeError, ReadOnlyWhile, readableCache, useAppData } from '../../features/data';
@@ -56,40 +56,43 @@ function Switches() {
   const switches = useAdminSwitches();
   const { online } = useAppData();
   const current = readableCache(switches);
-  // The draft survives a refetch (a conflict re-reads the server state without discarding the edit).
-  const [draft, setDraft] = useState<SwitchDraft | null>(null);
-  const [confirming, setConfirming] = useState<{ base: S['AdminSwitches']; draft: SwitchDraft } | null>(null);
-  const shown = draft ?? current;
-  const changed = current && draft ? switchKeys.filter(key => draft[key] !== current[key]) : [];
+  // Only explicitly edited fields, with the revision they were edited against. A refetch never turns an
+  // untouched field into a requested change; a newer server revision makes the save a CAS conflict.
+  const [draft, setDraft] = useState<{ base: S['AdminSwitches']; edits: Partial<SwitchDraft> } | null>(null);
+  const [confirming, setConfirming] = useState<{ base: S['AdminSwitches']; edits: Partial<SwitchDraft> } | null>(null);
+  const shown = current ? { ...current, ...draft?.edits } : null;
+  const edit = (change: Partial<SwitchDraft>) => current && setDraft({ base: draft?.base ?? current, edits: { ...draft?.edits, ...change } });
+  const changed = draft ? switchKeys.filter(key => key in draft.edits && draft.edits[key] !== draft.base[key]) : [];
+  const rebased = draft !== null && current !== undefined && current.revision !== draft.base.revision;
   return <ReadOnlyWhile stale={switches.isError}><section className={styles.panel} aria-labelledby="admin-switches-title">
     <h2 id="admin-switches-title">平台开关</h2>
     {!shown ? (switches.isError ? <QueryError error={switches.error} retry={() => void switches.refetch()} /> : <Loading label="正在读取平台开关…" />) : <div className={styles.stack} data-testid="admin-switches">
       {switches.isError && <div className={`${styles.banner} ${styles.bannerWarning}`} role="status"><div>刷新失败：{describeError(switches.error)} 以下为上次读取的开关。</div></div>}
       {switchFields.map(field => <label key={field.key} className={styles.choice}>
-        <input type="checkbox" checked={shown[field.key]} disabled={!online || !current} onChange={event => setDraft({ ...(draft ?? draftOf(current!)), [field.key]: event.target.checked })} />
+        <input type="checkbox" checked={shown[field.key]} disabled={!online || !current} onChange={event => edit({ [field.key]: event.target.checked })} />
         <span><strong>{field.label}</strong><br /><span className={styles.hint}>{field.hint}</span></span>
       </label>)}
-      <div className={styles.field}><label htmlFor="max-active-users">活跃用户上限</label>
-        <select id="max-active-users" value={shown.max_active_users} disabled={!online || !current} onChange={event => setDraft({ ...(draft ?? draftOf(current!)), max_active_users: event.target.value as SwitchDraft['max_active_users'] })}>
-          <option value="10">10 人</option><option value="30">30 人</option></select>
-        <span className={styles.hint}>上限只影响新账号的激活，不会停用已有账号。</span></div>
+      <dl className={styles.dl}><dt>活跃用户阶段</dt><dd data-testid="active-user-stage">{shown.max_active_users} 人</dd></dl>
+      <p className={`${styles.small} ${styles.muted}`}>阶段切换（10 人 / 30 人）要等阶段切换规则确定后才开放，这里只显示当前阶段。</p>
+      {rebased && <div className={`${styles.banner} ${styles.bannerWarning}`} role="status" data-testid="switches-rebased"><div>开关已被其他管理员更新。保存会被拒绝，请放弃修改后按最新状态重新编辑。</div></div>}
       <div className={styles.row}>
-        <button type="button" className={styles.button} disabled={!online || !current || changed.length === 0} onClick={() => current && draft && setConfirming({ base: current, draft })}>保存变更</button>
+        <button type="button" className={styles.button} disabled={!online || !current || changed.length === 0} onClick={() => draft && setConfirming({ base: draft.base, edits: draft.edits })}>保存变更</button>
         {draft && <button type="button" className={styles.buttonSecondary} onClick={() => setDraft(null)}>放弃修改</button>}
       </div>
     </div>}
-    {confirming && <SwitchDialog key={confirming.base.revision} base={confirming.base} draft={confirming.draft} onClose={() => setConfirming(null)} onSaved={() => { setConfirming(null); setDraft(null); }} />}
+    {confirming && <SwitchDialog key={confirming.base.revision} base={confirming.base} edits={confirming.edits} onClose={() => setConfirming(null)} onSaved={() => { setConfirming(null); setDraft(null); }} />}
   </section></ReadOnlyWhile>;
 }
 
-function SwitchDialog({ base, draft, onClose, onSaved }: { base: S['AdminSwitches']; draft: SwitchDraft; onClose: () => void; onSaved: () => void }) {
+function SwitchDialog({ base, edits, onClose, onSaved }: { base: S['AdminSwitches']; edits: Partial<SwitchDraft>; onClose: () => void; onSaved: () => void }) {
+  const draft = { ...draftOf(base), ...edits };
   const [reason, setReason] = useState('');
   const write = useAdminWrite<S['AdminSwitchesPatch'], S['AdminSwitches']>({
     operationId: 'adminUpdateSwitches', targetId: () => null,
     send: (api, body, key, token) => api.adminUpdateSwitches(body, key, token),
     onSuccess: onSaved,
   });
-  const changes = switchKeys.filter(key => draft[key] !== base[key]);
+  const changes = switchKeys.filter(key => key in edits && draft[key] !== base[key]);
   const describe = (key: keyof SwitchDraft) => key === 'max_active_users' ? `活跃用户上限：${base.max_active_users} 人 → ${draft.max_active_users} 人` : `${switchFields.find(field => field.key === key)!.label}：${base[key] ? '开' : '关'} → ${draft[key] ? '开' : '关'}`;
   const error = reasonError(reason);
   return <AdminActionDialog open onClose={onClose} write={write} danger={changes.some(key => key !== 'max_active_users' && draft[key] === false)}
@@ -117,7 +120,7 @@ function Audit() {
           <tbody>{items.map(item => <tr key={item.id}>
             <td>{formatDateTime(item.created_at)}</td>
             <td>{operationLabel[item.operation] ?? item.operation}</td>
-            <td>{targetTypeLabel[item.target_type] ?? item.target_type}{item.target_type === 'user' && item.target_id ? `：${who(item.target_id)}` : ''}</td>
+            <td>{targetTypeLabel[item.target_type] ?? item.target_type}{item.target_type === 'user' && item.target_id ? `：${who(item.target_id)}` : item.target_type === 'invitation' && item.target_id ? ` ${invitationRef(item.target_id)}` : ''}</td>
             <td className={styles.wrap}>{item.reason}</td>
             <td>{who(item.actor_id)}</td>
           </tr>)}</tbody>

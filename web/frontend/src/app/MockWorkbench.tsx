@@ -30,7 +30,7 @@ import { isMockOffline, setMockAccount, setMockDataset, setMockOffline } from '.
 import { eventScripts, type EventScriptName } from '../mock/event-scripts';
 import { createApiClient } from '../api/client';
 import { AdminReauthError, type AdminReauthPort } from '../features/admin';
-import { issueMockAdminProof, setMockAdminHealth, setMockAdminMfa } from '../mock/start';
+import { issueMockAdminProof, mockAsrAdmits, mockCsrfToken, setMockAdminHealth, setMockAdminMfa } from '../mock/start';
 import { AdminUsers } from '../pages/admin/AdminUsers';
 import { AdminInvites } from '../pages/admin/AdminInvites';
 import { AdminUsage } from '../pages/admin/AdminUsage';
@@ -97,7 +97,7 @@ function MockWorkbenchContent({ runtime }: { runtime: ReturnType<typeof useMockR
   // service is reachable (02 §9 ConnectivityPort). Real reachability is per request.
   const { scenario, active, account, epoch, flows } = runtime.state;
   const { acceptAccountResponse, isCurrent } = runtime;
-  const api = useMemo(() => createApiClient({ epoch, isCurrent }), [epoch, isCurrent]);
+  const api = useMemo(() => createApiClient({ epoch, isCurrent }, { csrfToken: mockCsrfToken }), [epoch, isCurrent]);
   // This component remounts per account epoch, so drafts, pending stops and the feed never cross accounts.
   const [classroomShell] = useState(() => createMockClassroomShell(runtime, () => MOCK_NOW));
   const [feed] = useState(createTranscriptFeed);
@@ -219,6 +219,8 @@ function MockWorkbenchContent({ runtime }: { runtime: ReturnType<typeof useMockR
   };
   const emitFeed = (event: ClassroomOSWebV1EventEnvelope | null) => {
     if (!event) return;
+    // The simulated server sends no captions for a new stream while the platform ASR switch is off.
+    if ((event.type === 'transcript.partial' || event.type === 'transcript.final') && !mockAsrAdmits(event.data.stream_id)) return;
     runtime.getEventClient().emit(event);
   };
   const feedClassId = active ? boundClassId : null;

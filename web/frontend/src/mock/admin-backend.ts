@@ -31,6 +31,8 @@ export type AdminHost = {
   applySwitches: (switches: S['AdminSwitches']) => void;
   /** Current session generation of a user's Mock session; a proof is valid only within the one that issued it. */
   sessionGeneration: (userId: string) => number;
+  /** Disabling a Mock account ends every existing session of it (restoring never revives them). */
+  revokeSessions: (userId: string) => void;
 };
 
 const BEIJING = 8 * 3600_000;
@@ -56,14 +58,16 @@ const reasonOk = (value: unknown) => typeof value === 'string' && value.trim().l
 const only = (body: Record<string, unknown>, keys: string[]) => Object.keys(body).every(key => keys.includes(key));
 const PROOF_MS = 300_000;
 
+/** Stage-10 personal limits (domain/billing.py quota_limits(10)); a larger allowance is an explicit adjustment. */
+const STAGE10 = { asr_month_ms: 12 * 3_600_000, asr_day_ms: 3 * 3_600_000, retranscribe_month_ms: 2_400 * 3_600, interactive_month_count: 20, summary_month_count: 8 } as const;
 export function syntheticQuota(now: string, settledAsrMs = 0): S['QuotaView'] {
   const month = { period_start: beijingMonthStart(now), period_end: beijingMonthStart(now, -1) };
   const dayStart = new Date(Math.floor((Date.parse(now) + BEIJING) / 86_400_000) * 86_400_000 - BEIJING).toISOString().replace('.000Z', 'Z');
   const day = { period_start: dayStart, period_end: new Date(Date.parse(dayStart) + 86_400_000).toISOString().replace('.000Z', 'Z') };
   const bucket = (kind: S['QuotaBucket']['kind'], period: typeof month, limit: number, settled = 0): S['QuotaBucket'] => ({ kind, ...period, limit, reserved: 0, submitted: 0, settled, unknown: 0, remaining: Math.max(0, limit - settled) });
   return { platform_billing_state: 'normal', asr_enabled: true, ai_enabled: true, buckets: [
-    bucket('asr_month_ms', month, 72_000_000, settledAsrMs), bucket('asr_day_ms', day, 14_400_000), bucket('interactive_month_count', month, 300),
-    bucket('summary_month_count', month, 60), bucket('retranscribe_month_ms', month, 14_400_000),
+    bucket('asr_month_ms', month, STAGE10.asr_month_ms, settledAsrMs), bucket('asr_day_ms', day, STAGE10.asr_day_ms), bucket('interactive_month_count', month, STAGE10.interactive_month_count),
+    bucket('summary_month_count', month, STAGE10.summary_month_count), bucket('retranscribe_month_ms', month, STAGE10.retranscribe_month_ms),
   ] };
 }
 
@@ -111,8 +115,9 @@ export function createAdminBackend(host: AdminHost, accountUsers: S['User'][]) {
     usage.set(start, { period_start: start, period_end: end, ...values, price_version: 'synthetic-2026-10', ledger_reconciled_at: reconciled });
   };
   const current = beijingMonthStart(host.now());
-  period(current, { budget_microyuan: '1000000000', fixed_and_accrued_microyuan: '300000000', settled_microyuan: '312450000', reserved_microyuan: '41200000', unknown_microyuan: '3800000', safety_reserve_microyuan: '100000000' }, '2026-10-28T07:30:00Z');
-  period(beijingMonthStart(host.now(), 1), { budget_microyuan: '1000000000', fixed_and_accrued_microyuan: '300000000', settled_microyuan: '268000000', reserved_microyuan: '0', unknown_microyuan: '0', safety_reserve_microyuan: '100000000' }, '2026-10-01T02:00:00Z');
+  // Stage-10 platform pool (platform_limits(10)): ¥500 in total, ¥100 safety reserve, ¥100 fixed.
+  period(current, { budget_microyuan: '500000000', fixed_and_accrued_microyuan: '100000000', settled_microyuan: '180000000', reserved_microyuan: '20600000', unknown_microyuan: '3800000', safety_reserve_microyuan: '100000000' }, '2026-10-28T07:30:00Z');
+  period(beijingMonthStart(host.now(), 1), { budget_microyuan: '500000000', fixed_and_accrued_microyuan: '100000000', settled_microyuan: '168000000', reserved_microyuan: '0', unknown_microyuan: '0', safety_reserve_microyuan: '100000000' }, '2026-10-01T02:00:00Z');
   let healthDev: AdminHealthDev = 'healthy';
   const proofs = new Map<string, { binding: string; actor: string; generation: number; expires: number; used: boolean }>();
   const receipts = new Map<string, { body: string; reply: AdminReply }>();
@@ -124,19 +129,24 @@ export function createAdminBackend(host: AdminHost, accountUsers: S['User'][]) {
   const touch = <T extends { revision: number; updated_at: string }>(value: T): T => ({ ...value, revision: value.revision + 1, updated_at: host.now() });
   function applyGates(quota: S['QuotaView']): S['QuotaView'] { return { ...quota, asr_enabled: switches.asr_enabled, ai_enabled: switches.ai_enabled }; }
 
-  function paged<T>(list: T[], query: URLSearchParams): AdminReply {
+  /**
+   * Cursor = the id of the last record returned, scoped to the list. Records added before it (newer audit
+   * entries) never shift a continuation; an unknown key is an expired cursor.
+   */
+  function paged<T extends { id: string }>(scope: string, list: T[], query: URLSearchParams): AdminReply {
     const limitText = query.get('limit');
     const limit = limitText === null ? 50 : Number(limitText);
     if (!Number.isInteger(limit) || limit < 1 || limit > 100) return fail(422, 'VALIDATION_FAILED', '分页大小无效');
     const cursor = query.get('cursor');
     let offset = 0;
     if (cursor !== null) {
-      const match = /^o:(\d+)$/.exec(cursor);
-      if (!match || Number(match[1]) > list.length) return fail(400, 'CURSOR_EXPIRED', '分页位置已失效，请从头读取');
-      offset = Number(match[1]);
+      const match = new RegExp(`^${scope}:([0-9a-f-]{36})$`).exec(cursor);
+      const index = match ? list.findIndex(item => item.id === match[1]) : -1;
+      if (index < 0) return fail(400, 'CURSOR_EXPIRED', '分页位置已失效，请从头读取');
+      offset = index + 1;
     }
     const items = list.slice(offset, offset + limit);
-    return ok({ items, next_cursor: offset + limit < list.length ? `o:${offset + limit}` : null });
+    return ok({ items, next_cursor: offset + limit < list.length ? `${scope}:${items[items.length - 1]!.id}` : null });
   }
 
   /** Development stand-in for a purpose-bound admin reauthentication (contract gap §1); never an HTTP route. */
@@ -194,7 +204,7 @@ export function createAdminBackend(host: AdminHost, accountUsers: S['User'][]) {
     const route = `${method} /${parts.map(part => (isUuid(part) ? ':id' : part)).join('/')}`;
     const id = parts.find(isUuid) ?? '';
     switch (route) {
-      case 'GET /admin/users': return paged(users(), query);
+      case 'GET /admin/users': return paged('u', users(), query);
       case 'GET /admin/users/:id/quota': {
         // Like the billing backend: only an active owner has a quota projection.
         const target = user(id);
@@ -211,11 +221,12 @@ export function createAdminBackend(host: AdminHost, accountUsers: S['User'][]) {
           if (target.status === 'pending') return fail(422, 'VALIDATION_FAILED', '账号尚未完成注册，不能修改状态');
           const next = touch({ ...target, status: body.status as 'active' | 'disabled' });
           saveUser(next);
+          if (next.status === 'disabled') host.revokeSessions(next.id);
           record(actorId, 'adminUpdateUser', 'user', next.id, body.reason as string);
           return ok(next);
         });
       }
-      case 'GET /admin/invitations': return paged([...invitations].sort((a, b) => b.created_at.localeCompare(a.created_at) || a.id.localeCompare(b.id)), query);
+      case 'GET /admin/invitations': return paged('i', [...invitations].sort((a, b) => b.created_at.localeCompare(a.created_at) || a.id.localeCompare(b.id)), query);
       case 'POST /admin/invitations': {
         const kind = body.kind;
         if (!only(body, ['kind', 'email']) || !['email_bound', 'single_use'].includes(kind as string) || (kind === 'email_bound' ? !isEmail(body.email) : 'email' in body)) return fail(422, 'VALIDATION_FAILED', '邮箱邀请需要有效邮箱；单次邀请不填写邮箱');
@@ -236,7 +247,7 @@ export function createAdminBackend(host: AdminHost, accountUsers: S['User'][]) {
           if (reissue ? !['issued', 'expired'].includes(target.state) : target.state !== 'issued') return fail(409, 'INVITATION_UNAVAILABLE', reissue ? '已使用或已撤销的邀请不能重新签发' : '只有未使用的邀请可以撤销');
           const next = touch({ ...target, state: reissue ? 'issued' as const : 'revoked' as const, ...(reissue ? { expires_at: expiresIn(7) } : {}) });
           invitations = invitations.map(item => item.id === id ? next : item);
-          record(actorId, reissue ? 'adminReissueInvitation' : 'adminRevokeInvitation', 'invitation', id, reissue ? '重新签发邀请，旧令牌失效' : '撤销邀请');
+          record(actorId, reissue ? 'adminReissueInvitation' : 'adminRevokeInvitation', 'invitation', id, `${reissue ? '重新签发邀请，旧令牌失效' : '撤销邀请'}（#${id.replace(/-/g, '').slice(-6)}）`);
           return reissue ? ok({ invitation: next, one_time_token: token() } satisfies S['InvitationCreated']) : ok(next);
         });
       }
@@ -274,6 +285,7 @@ export function createAdminBackend(host: AdminHost, accountUsers: S['User'][]) {
           || ('max_active_users' in body && !['10', '30'].includes(body.max_active_users as string))) return fail(422, 'VALIDATION_FAILED', '开关变更无效：需要基础版本、至少一项变更和理由');
         return write(actorId, 'adminUpdateSwitches', null, key, reauth, body, false, () => {
           if (switches.revision !== body.base_revision) return fail(409, 'REVISION_CONFLICT', '平台开关已被其他管理员更新', switches.revision);
+          if ('max_active_users' in body && body.max_active_users !== switches.max_active_users) return fail(503, 'SERVICE_DISABLED', '活跃用户阶段切换尚未开放');
           const change = Object.fromEntries(fields.filter(field => field in body).map(field => [field, body[field]]));
           switches = { ...switches, ...change, revision: switches.revision + 1 };
           host.applySwitches(switches);
@@ -282,7 +294,7 @@ export function createAdminBackend(host: AdminHost, accountUsers: S['User'][]) {
           return ok(switches);
         });
       }
-      case 'GET /admin/audit': return paged(audit, query);
+      case 'GET /admin/audit': return paged('a', audit, query);
       default: return fail(404, 'NOT_FOUND', '接口不存在');
     }
   }
