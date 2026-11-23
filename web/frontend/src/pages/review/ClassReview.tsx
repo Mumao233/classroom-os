@@ -249,7 +249,7 @@ function Retranscribe({ session }: { session: S['ClassSession'] }) {
           <div><button type="button" className={pages.buttonSecondary} disabled={!app.online || execute.isPending} onClick={() => execute.mutate({ current: prepared!, original: executeKey.current?.intent.endsWith(':true') ?? false })}>用同一操作再确认</button></div></div></div>
           : sourceChanged ? <div className={`${pages.banner} ${pages.bannerWarning}`} role="alert" data-testid="retranscribe-source-changed"><div className={pages.stack}>
           <span>原音在准备后有变化（例如又有分片上传完成）。可以重新准备，或明确选择按准备时冻结的原音提交。</span>
-          <div className={pages.row}><button type="button" className={pages.buttonSecondary} disabled={execute.isPending} onClick={() => prepare.mutate()}>重新准备</button>
+          <div className={pages.row}><button type="button" className={pages.buttonSecondary} disabled={!app.online || execute.isPending || prepare.isPending} onClick={() => prepare.mutate()}>重新准备</button>
             <button type="button" className={pages.buttonSecondary} disabled={!app.online || execute.isPending} onClick={() => execute.mutate({ current: prepared!, original: true })}>按准备时的原音提交</button></div></div></div>
           : <div className={pages.row}><button type="button" className={pages.button} disabled={!app.online || execute.isPending} onClick={() => execute.mutate({ current: prepared!, original: false })} data-testid="retranscribe-confirm">确认并提交</button>
             {/* The submitted plan, body and key stay until a definitive reply: no cancel while it is pending. */}

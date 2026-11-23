@@ -122,6 +122,8 @@ test.describe('revocation on receipt (offline after the reply)', () => {
     await expect(page.getByTestId('document-state')).toContainText('已理解');
     await expect(page.getByTestId('reader')).toHaveCount(0);
     await expect(page.getByText('当前账号无权执行此操作。')).toBeVisible();
+    // Nothing copied from the refused versions stays visible in the personal editor either.
+    await expect(page.getByTestId('editor-hidden')).toBeVisible();
     await shot(page, 'scenario4-denied-revisions');
   });
 

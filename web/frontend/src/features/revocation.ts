@@ -1,4 +1,4 @@
-import type { Query, QueryCacheNotifyEvent, QueryClient } from '@tanstack/react-query';
+import type { MutationCacheNotifyEvent, Query, QueryCacheNotifyEvent, QueryClient } from '@tanstack/react-query';
 import { ApiClientError, type ApiClient } from '../api/client';
 
 /**
@@ -183,6 +183,11 @@ export function createRevocationLedger({ client, accountKey, api, hooks = {} }: 
   const movedSemester = new Map<string, string>();
   /** Resources the server served in this account epoch (a later denial of them is evidence, even without cached data). */
   const served = new Set<string>();
+  /**
+   * Bound classrooms whose fresh membership read failed before a deletion: their cached parent links may
+   * predate a move, so they are never proof (unknown until a fresh detail read succeeds).
+   */
+  const unverified = new Set<string>();
   /** Requests in flight during a new revocation started before it: their replies are judged strictly once. */
   let strictOnArrival = new WeakMap<Query, NonNullable<Strict>>();
   /** Projections shown as revoked or denied: a later transport failure (offline refetch) must not relabel them as merely unreachable. */
@@ -190,6 +195,8 @@ export function createRevocationLedger({ client, accountKey, api, hooks = {} }: 
   /** Projections a revocation dropped as unknown: only a fresh read may fill them again, not a late mutation reply. */
   let droppedQueries = new WeakSet<Query>();
   let unauthenticated = false;
+  /** True while a tentative (unknown-outcome) sweep runs: cache events it causes must not learn from its temporary scope. */
+  let tentativeActive = false;
 
   const hasSemesterCascade = () => [...semesters.values()].includes('cascade');
   const hasCascade = () => hasSemesterCascade() || [...courses.values()].includes('cascade');
@@ -211,6 +218,7 @@ export function createRevocationLedger({ client, accountKey, api, hooks = {} }: 
   const classGone = (classId: string, m: Membership, strict: Strict, courseHint?: string): Tri => {
     if (classes.has(classId)) return true;
     if (!hasCascade()) return false;
+    if (unverified.has(classId)) return strict?.cascade && strict.exempt !== classId ? 'unknown' : false;
     const cached = m.classCourse.has(classId) ? parentOf(m.classCourse, classId) : courseHint;
     if (cached === undefined) return strict?.cascade && strict.exempt !== classId ? 'unknown' : false;
     return courseCascaded(follow(movedCourse, cached), m, strict);
@@ -311,11 +319,13 @@ export function createRevocationLedger({ client, accountKey, api, hooks = {} }: 
    * was learned.
    */
   const learn = (m: Membership) => {
-    const before = classes.size + documents.size + versions.size;
+    const before = courses.size + classes.size + documents.size + versions.size;
+    // Courses inside a cascaded semester first: their classrooms are judged through them below.
+    if (hasSemesterCascade()) for (const id of m.courseSemester.keys()) { const parent = parentOf(m.courseSemester, id); if (parent !== undefined && semesters.get(follow(movedSemester, parent)) === 'cascade' && courses.get(id) !== 'cascade') courses.set(id, 'cascade'); }
     for (const id of m.classCourse.keys()) if (classGone(id, m, null) === true) classes.add(id);
     for (const id of m.docClass.keys()) if (docGone(id, m, null) === true) documents.add(id);
     for (const id of m.versionClass.keys()) { const parent = parentOf(m.versionClass, id); if (parent !== undefined && classGone(parent, m, null) === true) versions.add(id); }
-    return classes.size + documents.size + versions.size !== before;
+    return courses.size + classes.size + documents.size + versions.size !== before;
   };
 
   /** Sweep every cached projection of this account; then tell the shell which classrooms are revoked. */
@@ -361,6 +371,7 @@ export function createRevocationLedger({ client, accountKey, api, hooks = {} }: 
 
   const onCacheEvent = (event: QueryCacheNotifyEvent) => {
     if (event.type !== 'updated' && event.type !== 'added') return;
+    if (tentativeActive) return;
     const query = event.query;
     if (query.queryKey[0] !== 'account') return;
     const state = query.state;
@@ -372,11 +383,15 @@ export function createRevocationLedger({ client, accountKey, api, hooks = {} }: 
       if (isUnauthenticated(error)) {
         // Authentication is lost for the session, not for one object: strip this query now and retire the epoch.
         if (state.data !== undefined) query.setState({ data: undefined, dataUpdatedAt: 0 });
-        if (!unauthenticated) { unauthenticated = true; queueMicrotask(() => hooks.onUnauthenticated?.()); }
+        retireOnce();
         return;
       }
       if (revokedQueries.has(query) && !isAuthoritativeDenial(error)) { query.setState({ error: revokedQueries.get(query) }); return; }
-      if (!isAuthoritativeDenial(error)) return;
+      if (!isAuthoritativeDenial(error)) {
+        // A first (offline) visit to something already confirmed revoked reports it as deleted, not unreachable.
+        if (tombstoned(query)) { const gone = revokedError(); query.setState({ error: gone }); revokedQueries.set(query, gone); }
+        return;
+      }
       // A resource the server served before (in a detail or a list) is now refused: stop showing it, and
       // revoke what it identifies.
       const servedBefore = state.data !== undefined || (resourceKey !== null && served.has(resourceKey));
@@ -392,13 +407,14 @@ export function createRevocationLedger({ client, accountKey, api, hooks = {} }: 
     const success = event.type === 'updated' && event.action.type === 'success';
     const manual = event.type === 'updated' && event.action.type === 'success' && event.action.manual === true;
     if (success && state.status === 'success') recordServed(query);
-    if (isEmpty()) { if (success && !manual) droppedQueries.delete(query); return; }
-    if (success && manual && droppedQueries.has(query)) {
-      // A mutation reply that predates the revocation which dropped this projection: require a fresh read.
-      reset(query);
-      return;
+    // Checked before anything else (even with an empty ledger, e.g. after an ambiguous deletion restored it):
+    // a mutation reply that predates the revocation which dropped this projection needs a fresh read instead.
+    if (success && manual && droppedQueries.has(query)) { reset(query); return; }
+    if (success && !manual) {
+      droppedQueries.delete(query); revokedQueries.delete(query);
+      if (kind === 'class-session' && typeof id === 'string') unverified.delete(id);
     }
-    if (success && !manual) droppedQueries.delete(query);
+    if (isEmpty()) return;
     const strict = success ? strictOnArrival.get(query) ?? null : null;
     if (strict) strictOnArrival.delete(query);
     // Membership first seen in this reply may confirm more revocations: record and propagate them first.
@@ -407,6 +423,24 @@ export function createRevocationLedger({ client, accountKey, api, hooks = {} }: 
       sweep({ strict: null });
     }
     if (query.state.data !== undefined) apply(query, judge(query, readMembership(client), strict), false);
+  };
+
+  /** The query's key names something this ledger confirmed revoked. */
+  const tombstoned = (query: Query) => {
+    const kind = query.queryKey[2];
+    const id = query.queryKey[3];
+    if (typeof kind !== 'string' || typeof id !== 'string') return false;
+    if (kind === 'class-session' || CLASS_KEYED.has(kind)) return classes.has(id);
+    if (kind === 'review-document' || kind === 'review-revisions') return documents.has(id);
+    if (kind === 'course' || kind === 'materials') return courses.has(id);
+    if (kind === 'transcript-segments') return versions.has(id);
+    return false;
+  };
+
+  const retireOnce = () => { if (!unauthenticated) { unauthenticated = true; queueMicrotask(() => hooks.onUnauthenticated?.()); } };
+  /** A write refused with 401 means the session is gone just as much as a read refused with 401. */
+  const onMutationEvent = (event: MutationCacheNotifyEvent) => {
+    if (event.type === 'updated' && event.action.type === 'error' && isUnauthenticated(event.action.error)) retireOnce();
   };
 
   /** A successful read lists or shows resources: their later denial is evidence of revocation. */
@@ -431,15 +465,18 @@ export function createRevocationLedger({ client, accountKey, api, hooks = {} }: 
     async prepareScopeDeletion(scope) {
       const bound = hooks.boundClassId?.() ?? null;
       if (!bound || !api) return { exempt: null };
-      const ensure = async <T>(kind: string, id: string, read: (signal: AbortSignal) => Promise<T>) => client.ensureQueryData({ queryKey: ['account', accountKey, kind, id], queryFn: ({ signal }) => read(signal) });
+      // Always a fresh read: a cached link may predate a move made on another device.
+      const fresh = async <T>(kind: string, id: string, read: (signal: AbortSignal) => Promise<T>) => client.fetchQuery({ queryKey: ['account', accountKey, kind, id], queryFn: ({ signal }) => read(signal), staleTime: 0 });
       try {
-        const session = await ensure('class-session', bound, signal => api.classSession(bound, signal));
-        if (scope.kind === 'semester') await ensure('course', session.course_id, signal => api.course(session.course_id, signal));
+        const session = await fresh('class-session', bound, signal => api.classSession(bound, signal));
+        if (scope.kind === 'semester') await fresh('course', session.course_id, signal => api.course(session.course_id, signal));
+        unverified.delete(bound);
         return { exempt: null };
       } catch (error) {
         // The server does not know this classroom right now (e.g. the demo classroom before registration):
-        // this deletion cannot contain it. Other failures leave it unknown for this deletion.
+        // this deletion cannot contain it. Other failures leave its membership unknown (not the cached link).
         const unknownToServer = error instanceof ApiClientError && error.kind === 'http' && (error.code === 'NOT_FOUND' || error.code === 'GONE') && !served.has(`class-session:${bound}`);
+        if (!unknownToServer) unverified.add(bound);
         return { exempt: unknownToServer ? bound : null };
       }
     },
@@ -456,9 +493,15 @@ export function createRevocationLedger({ client, accountKey, api, hooks = {} }: 
       const savedMovedSemester = new Map(movedSemester);
       recordScope(scope);
       if (scope.kind === 'semester' && scope.mode === 'cascade') expandSemester(scope.id);
-      sweep({ strict: scopeStrict(scope) ?? { cascade: false, semesterCascade: false, classes: false, exempt: null }, tentative: true });
       const restore = <K, V>(target: Map<K, V>, saved: Map<K, V>) => { target.clear(); for (const [key, value] of saved) target.set(key, value); };
-      restore(courses, savedCourses); restore(semesters, savedSemesters); restore(movedCourse, savedMovedCourse); restore(movedSemester, savedMovedSemester);
+      // Cache events the sweep causes synchronously (cancel-and-revert, resets) must not learn tombstones or
+      // call revocation hooks from this temporary scope.
+      tentativeActive = true;
+      try { sweep({ strict: scopeStrict(scope) ?? { cascade: false, semesterCascade: false, classes: false, exempt: null }, tentative: true }); }
+      finally {
+        restore(courses, savedCourses); restore(semesters, savedSemesters); restore(movedCourse, savedMovedCourse); restore(movedSemester, savedMovedSemester);
+        tentativeActive = false;
+      }
     },
     revokeClass,
     revokeAudio(classId, captureEpochId) {
@@ -471,11 +514,13 @@ export function createRevocationLedger({ client, accountKey, api, hooks = {} }: 
     isClassRevoked: classId => classes.has(classId),
     reset() {
       semesters.clear(); courses.clear(); classes.clear(); documents.clear(); versions.clear(); audio.clear();
-      notified.clear(); movedCourse.clear(); movedSemester.clear(); served.clear();
+      notified.clear(); movedCourse.clear(); movedSemester.clear(); served.clear(); unverified.clear();
       strictOnArrival = new WeakMap(); revokedQueries = new WeakMap(); droppedQueries = new WeakSet(); unauthenticated = false;
     },
     install() {
-      return client.getQueryCache().subscribe(onCacheEvent);
+      const stopQueries = client.getQueryCache().subscribe(onCacheEvent);
+      const stopMutations = client.getMutationCache().subscribe(onMutationEvent);
+      return () => { stopQueries(); stopMutations(); };
     },
   };
 }

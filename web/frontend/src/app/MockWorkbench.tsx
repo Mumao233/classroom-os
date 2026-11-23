@@ -22,7 +22,7 @@ import { ClassroomLive } from '../pages/classroom/ClassroomLive';
 import { ClassroomProcessing } from '../pages/classroom/ClassroomProcessing';
 import { ClassroomRecord } from '../pages/classroom/ClassroomRecord';
 import { ReviewHub } from '../pages/review/ReviewHub';
-import { createRevocationLedger } from '../features/revocation';
+import { createRevocationLedger, type RevocationLedger } from '../features/revocation';
 import { ReviewReader } from '../pages/review/ReviewReader';
 import { ClassReview } from '../pages/review/ClassReview';
 import type { ClassroomOSWebV1EventEnvelope } from '../generated/events';
@@ -85,7 +85,7 @@ function MockWorkbenchContent({ runtime }: { runtime: ReturnType<typeof useMockR
   // One revocation ledger per account epoch: deletion receipts, deletion events and authoritative
   // denials revoke cached content and the bound capture at once, without relying on a refetch.
   const { revokeClassroomAccess, revokeAccount: revokeRuntimeAccount } = runtime;
-  const [revocation] = useState(() => createRevocationLedger({ client: queryClient, accountKey: `${account}:${epoch}`, api, hooks: {
+  const [revocation] = useState(() => { const ledger: RevocationLedger = createRevocationLedger({ client: queryClient, accountKey: `${account}:${epoch}`, api, hooks: {
     boundClassId: () => classroomShell.capture.bound()?.classId ?? null,
     onClassRevoked: classId => {
       // Stops a capture bound to it, rejects its unconfirmed uploads and clears its live transcript.
@@ -100,11 +100,15 @@ function MockWorkbenchContent({ runtime }: { runtime: ReturnType<typeof useMockR
     onCaptureSuspended: classId => {
       const bound = classroomShell.capture.bound();
       if (!bound?.active || bound.classId !== classId) return;
-      void stopCapture(api, classroomShell, classId, () => crypto.randomUUID()).then(() => queryClient.invalidateQueries()).catch(() => undefined);
+      void stopCapture(api, classroomShell, classId, () => crypto.randomUUID()).then(() => {
+        // Revoked while the stop was being prepared: nothing of it can be confirmed any more.
+        if (ledger.isClassRevoked(classId)) { classroomShell.pendingStops.set(classId, null); classroomShell.pendingCommands.set(classId, null); }
+        return queryClient.invalidateQueries();
+      }).catch(() => undefined);
     },
     // An expired session retires the whole account epoch (runtime, events, capture and every cached page).
     onUnauthenticated: () => { revokeRuntimeAccount(); setMockAccount(null); void queryClient.cancelQueries(); queryClient.clear(); navigate('/dashboard'); },
-  } }));
+  } }); return ledger; });
   useEffect(() => revocation.install(), [revocation]);
   const classQueries = (ids: ReadonlySet<unknown>) => ({ predicate: (query: { queryKey: readonly unknown[] }) => query.queryKey.some(part => ids.has(part)) });
   const location = useLocation();
