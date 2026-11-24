@@ -1,0 +1,5 @@
+.page { inline-size: min(100%, 54rem); margin-inline: auto; }
+.list { display: grid; gap: .75rem; list-style: none; margin: 0 0 1rem; padding: 0; }
+.notice { display: flex; justify-content: space-between; align-items: start; flex-wrap: wrap; gap: 1rem; }
+.notice h2 { margin: .5rem 0 .25rem; font-size: 1rem; }
+.actions { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; }

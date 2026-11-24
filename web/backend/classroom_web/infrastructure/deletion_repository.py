@@ -246,6 +246,11 @@ class _SystemIdentity:
     def audit(self):
         return self._call('SELECT classroom_web_deletion_audit() AS audit')[0]['audit']
 
+    @staticmethod
+    def _feedback_admission(connection, ready):
+        if connection.scalar(text("SELECT to_regprocedure('public.classroom_web_feedback_admit(boolean)')")) is not None:
+            connection.execute(text('SELECT public.classroom_web_feedback_admit(:ready)'), {'ready': ready})
+
     def dispose(self):
         self.engine.dispose()
 
@@ -253,6 +258,10 @@ class _SystemIdentity:
 class PgDeletionQueue(_SystemIdentity):
     """Lease-fenced physical deletion queue; sees identifiers and object keys only."""
     GROUP = 'classroom_web_deletion_worker'
+
+    def publish_feedback_admission(self, ready):
+        with self._session() as connection:
+            self._feedback_admission(connection, ready)
 
     def portable_maintenance(self):
         return dict(self._call('SELECT * FROM classroom_web_portable_gate()')[0])
@@ -329,7 +338,9 @@ class PgRestoreOperator(_SystemIdentity):
     GROUP = 'classroom_web_restore_operator'
 
     def seal(self):
-        return self._call('SELECT classroom_web_restore_seal() AS sealed')[0]['sealed']
+        with self._session() as connection:
+            self._feedback_admission(connection, False)
+            return connection.scalar(text('SELECT classroom_web_restore_seal()'))
 
     def block(self, owners):
         return self._call('SELECT classroom_web_restore_block(CAST(:owners AS uuid[])) AS blocked',

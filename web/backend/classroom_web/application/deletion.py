@@ -73,6 +73,11 @@ class DeletionService:
         # Closed until reconcile() has verified the ledger and found nothing unapplied.
         self.ready = False
 
+    def _set_ready(self, ready):
+        self.ready = False
+        self.queue.publish_feedback_admission(ready)
+        self.ready = ready
+
     @property
     def settle_seconds(self):
         return int(self.policy.write_settle.total_seconds())
@@ -177,7 +182,7 @@ class DeletionService:
             except LedgerUnavailable:
                 entry = None
             except (LedgerCorrupt, LedgerConflict):
-                self.ready = False
+                self._set_ready(False)
                 raise AuthRejected('STORAGE_UNAVAILABLE', 503) from None
             if entry is None:
                 # Not durably accepted. Deny access locally now, in this same transaction,
@@ -254,7 +259,7 @@ class DeletionService:
         recorded outside the ledger store; with it a ledger that lost its newest entries
         is refused. ``admit=False`` never opens the service, whatever the outcome.
         """
-        self.ready = False
+        self._set_ready(False)
         # Local state first: a deletion accepted between the two reads is then already in
         # the ledger read (and replayed idempotently), never local-only and "ahead".
         local = {row['intent_id']: row for row in self.queue.ledger_state()}
@@ -314,7 +319,7 @@ class DeletionService:
                 except (InactiveOwner, DBAPIError, ScopeExpanded, ValueError) as error:
                     report['unresolved'].append(dict(generation=None, reason=type(error).__name__))
         if admit:
-            self.ready = not report['unresolved']
+            self._set_ready(not report['unresolved'])
         return report
 
     def expire_due(self, batch=50, rounds=20):
@@ -425,7 +430,7 @@ class RestoreCoordinator:
         The service is admitted only by the last line, after every step succeeded.
         """
         service = self.service
-        service.ready = False
+        service._set_ready(False)
         revoked = list(revoked_owners)
         report = {}
         # 1. The live ledger must be readable, intact and at least as long as its witness.
@@ -447,7 +452,7 @@ class RestoreCoordinator:
                                and report['audit']['unaccepted_requests'] == 0
                                and report['audit']['dispatchable_tasks'] == 0
                                and report['orphans']['failed'] == 0)
-        service.ready = report['ready']
+        service._set_ready(report['ready'])
         return report
 
 

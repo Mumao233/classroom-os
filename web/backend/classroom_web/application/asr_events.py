@@ -29,7 +29,7 @@ class AsrEvents:
         with self.service.database.authorized_transaction(principal) as tx:
             return tx.events.watermark(), self.sequence
 
-    def poll(self, ctx, cursor, seen_partial):
+    def poll(self, ctx, cursor, seen_partial, *, include_notifications=False):
         principal = self.service.auth.principal(ctx)
         with self.lock:
             fresh = monotonic() - 5
@@ -42,9 +42,16 @@ class AsrEvents:
         with self.service.database.authorized_transaction(principal) as tx:
             repo = PgAsrRepository(tx, principal.user_id)
             page = tx.events.replay(cursor)
+            visible_notices = set()
+            if include_notifications:
+                from ..infrastructure.operations_repository import PgOperationsRepository
+                notifications = PgOperationsRepository(tx).visible_notification_events(page.events)
+                visible_notices = {event['event_id'] for event in notifications}
             events = []
             for event in page.events:
-                if event['type'] == 'transcript.final':
+                if event['event_id'] in visible_notices:
+                    events.append(event)
+                elif event['type'] == 'transcript.final':
                     data = repo.final_event(UUID(event['data']['segment_revision_id']))
                     if data is not None:
                         events.append({**event, 'data': data})
