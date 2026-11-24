@@ -1,6 +1,6 @@
 # PR-11c 第一阶段验证与复审报告（2026-11-24 第四次更新）
 
-负责人林珈诚。工作树 `J:\class-assistant\worktrees\web-pr11c-search`，分支 `feature/web-pr11c-search`，基线 `origin/main` `80d2204`，契约 OpenAPI 0.3.0。全部改动**未提交**，等待负责人决定。
+负责人林珈诚。工作树 `J:\class-assistant\worktrees\web-pr11c-search`，分支 `feature/web-pr11c-search`，基线 `origin/main` `80d2204`，契约 OpenAPI 0.3.0。第一阶段改动已于 2026-11-24 由负责人决定在本地分支提交（`06ad428`，未推送、未开 PR）；Astra r0–r5 以未提交工作区为范围复审，内容与该提交一致。
 
 ## 范围与分工
 
@@ -64,5 +64,5 @@ full 证据：`outputs/pr11c/pr11c-20261124-195006-0bdcb51d/evidence.zip`，SHA-
 ## 待负责人决定
 
 - 跨进程放行是否转为 04b 独立事项；反馈请求体上限等 P2 是否修复。
-- 是否在当前状态提交到 `feature/web-pr11c-search`（本地，不推送）。
+- 是否推送分支并开 Draft PR。
 - 预算告警映射、复习文档独立删除、持续故障解决信号等契约问题需 Astra 定（见交接）。
