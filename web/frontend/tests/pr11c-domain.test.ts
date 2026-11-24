@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { feedbackPayload } from '../src/domain/feedback';
-import { needsAttention, orderNotifications, type Notification } from '../src/domain/notifications';
+import { needsAttention, notificationTitle, orderNotifications, type Notification } from '../src/domain/notifications';
 import { normalizeQuery, revokeSearchResult, searchResultRoute, searchScopeNotice } from '../src/domain/search';
 import { searchFixture, seedSearchBackend } from '../src/mock/search-backend';
 
@@ -39,6 +39,15 @@ describe('PR-11c domain', () => {
     const resolved = { ...fault, resolved_at: at };
     expect(orderNotifications([resolved, { ...fault, read_at: null }])).toEqual([resolved]);
     expect(needsAttention(resolved)).toBe(false);
+  });
+
+  it('titles a resolved conflict as resolved, never as pending', () => {
+    const at = '2026-11-23T00:00:00Z';
+    const conflict: Notification = { id: searchFixture.a.document, object_id: searchFixture.a.course, kind: 'conflict',
+      severity: 'warning', message_code: 'SYNC_CONFLICT', created_at: at, read_at: null, resolved_at: null };
+    expect(notificationTitle(conflict)).toBe('有一项同步冲突待处理');
+    expect(notificationTitle({ ...conflict, resolved_at: at })).toBe('同步冲突已解决');
+    expect(notificationTitle({ ...conflict, message_code: 'UNKNOWN_CODE' })).toBe('课堂助手通知');
   });
 
   it('keeps PostgreSQL microsecond order across paged results and read updates', () => {

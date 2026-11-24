@@ -157,8 +157,11 @@ def main():
         if args.suite == 'full':
             run('frontend-build', args.node, modules / 'vite/bin/vite.js', 'build', '--mode', 'production',
                 cwd=FRONTEND, job_owned=True)
+            # Keep the handle before start(): a failed readiness probe can leave the process
+            # running, and the finally block below must still be able to stop it.
             media = ObjectService(WORK / 'objects', 'pr04a-media', access='pr04a-synthetic',
-                                  secret='pr04a-synthetic-secret', volumes=512).start()
+                                  secret='pr04a-synthetic-secret', volumes=512)
+            media.start()
             env.update(PR03B_REAL_BROWSER='1', PR08B_SYNC_INTEGRATION='1',
                        PR04A_OBJECT_INTEGRATION='1', PR04A_S3_ENDPOINT=media.endpoint)
             selected = ['tests']

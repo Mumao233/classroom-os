@@ -15,6 +15,13 @@ def route_paths(scope):
     return candidates
 
 
+def route_path(scope):
+    """The path Starlette routes on: ``path`` without a leading ``root_path`` mount prefix."""
+    path = scope.get('path', '')
+    root = scope.get('root_path', '').rstrip('/')
+    return path[len(root):] if root and path.startswith(root + '/') else path
+
+
 def path_is(scope, route):
     return any(candidate.rstrip('/') == route for candidate in route_paths(scope))
 

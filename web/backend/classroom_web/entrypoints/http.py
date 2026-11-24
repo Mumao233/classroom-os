@@ -74,6 +74,7 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
     if contract.get('info', {}).get('version') not in ('0.2.0', '0.2.1', '0.3.0'):
         raise ValueError('approved contract 0.2.0, 0.2.1 or 0.3.0 required')
     from .operations_http import OperationsRoutes, SearchQueryRedaction
+    from .asgi_paths import route_path
     operation_routes = OperationsRoutes(operations, auth, contract, deletion, business, asr, filetrans, review)
     if asr is not None and (asr.capture is not capture or asr.auth is not auth):
         raise ValueError('ASR requires the same capture and auth services')
@@ -158,12 +159,14 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
 
     async def body_for(request,schema):
         if request.headers.get('content-type','').split(';')[0].strip().lower()!='application/json' or request.headers.get('content-encoding','identity')!='identity':raise AuthRejected('VALIDATION_FAILED',422)
-        limit=131072 if request.url.path==PREFIX+'/feedback' else 32768 if request.url.path==PREFIX+'/auth/reauth' else 16384
-        if review is not None and (request.url.path == PREFIX+'/review-documents'
-                or re.fullmatch(re.escape(PREFIX)+r'/review-documents/[0-9a-fA-F-]{36}/personal-revisions', request.url.path)):
+        # Route-relative path: under an ASGI root_path, request.url.path carries the mount prefix.
+        route=route_path(request.scope)
+        limit=131072 if route==PREFIX+'/feedback' else 32768 if route==PREFIX+'/auth/reauth' else 16384
+        if review is not None and (route == PREFIX+'/review-documents'
+                or re.fullmatch(re.escape(PREFIX)+r'/review-documents/[0-9a-fA-F-]{36}/personal-revisions', route)):
             limit=2_000_000
-        if sync is not None and (request.url.path == PREFIX+'/sync/operations'
-                or re.fullmatch(re.escape(PREFIX)+r'/sync/conflicts/[0-9a-fA-F-]{36}/resolve', request.url.path)):
+        if sync is not None and (route == PREFIX+'/sync/operations'
+                or re.fullmatch(re.escape(PREFIX)+r'/sync/conflicts/[0-9a-fA-F-]{36}/resolve', route)):
             limit=8_000_000
         capacity_limited = limit == 8_000_000
         length=request.headers.get('content-length')

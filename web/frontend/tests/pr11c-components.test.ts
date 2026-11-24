@@ -79,23 +79,40 @@ it('renders a read capture failure as pending', async () => {
   expect(screen.queryByText('已解决')).toBeNull();
 });
 
-it('ignores a refresh already in flight when a newer mark-read completes', async () => {
-  const item: Notification = { id: a.document, kind: 'capture_failure', severity: 'warning',
-    object_id: a.classroom, read_at: null, resolved_at: null, created_at: '2026-11-23T00:00:00Z', message_code: 'CAPTURE_LEASE_LOST' };
-  const list = async () => ({ items: [item], next_cursor: null });
-  const markRead = vi.fn(async () => ({ ...item, read_at: item.created_at }));
-  let completeRefresh!: (page: NotificationPage) => void;
-  const refresh = new Promise<NotificationPage>(resolve => { completeRefresh = resolve; });
-  const view = render(createElement(NotificationCenter, { accountKey: a.owner, list, markRead }));
-  await screen.findByRole('button', { name: '标为已读' });
-  view.rerender(createElement(NotificationCenter, { accountKey: a.owner, list: () => refresh, markRead }));
-  expect(screen.getByRole('list', { name: '通知列表' }).getAttribute('aria-busy')).toBe('true');
-  await userEvent.click(screen.getByRole('button', { name: '标为已读' }));
-  expect(await screen.findByText('已读')).toBeTruthy();
-  await act(async () => { completeRefresh({ items: [item], next_cursor: 'superseded-cursor' }); });
-  expect(screen.getByText('已读')).toBeTruthy();
-  expect(screen.queryByRole('button', { name: '更多通知' })).toBeNull();
-});
+it.each(['read', 'gone'] as const)(
+  'drops a stale refresh but reissues it after a newer mark-read outcome (%s)', async outcome => {
+    const item: Notification = { id: a.document, kind: 'capture_failure', severity: 'warning',
+      object_id: a.classroom, read_at: null, resolved_at: null, created_at: '2026-11-23T00:00:00Z', message_code: 'CAPTURE_LEASE_LOST' };
+    const arrived: Notification = { id: b.document, kind: 'task_completed', severity: 'info', object_id: null,
+      read_at: null, resolved_at: null, created_at: '2026-11-23T00:00:01Z', message_code: 'TASK_COMPLETED' };
+    const markRead = outcome === 'read'
+      ? vi.fn(async () => ({ ...item, read_at: item.created_at }))
+      : vi.fn(async () => { throw { status: 404 }; });
+    let completeStale!: (page: NotificationPage) => void;
+    const stale = new Promise<NotificationPage>(resolve => { completeStale = resolve; });
+    const fresh: NotificationPage = {
+      items: outcome === 'read' ? [{ ...item, read_at: item.created_at }, arrived] : [arrived],
+      next_cursor: 'fresh-cursor' };
+    const refresh = vi.fn().mockReturnValueOnce(stale).mockResolvedValueOnce(fresh);
+    const view = render(createElement(NotificationCenter, {
+      accountKey: a.owner, list: async () => ({ items: [item], next_cursor: null }), markRead }));
+    await screen.findByRole('button', { name: '标为已读' });
+    view.rerender(createElement(NotificationCenter, { accountKey: a.owner, list: refresh, markRead }));
+    expect(screen.getByRole('list', { name: '通知列表' }).getAttribute('aria-busy')).toBe('true');
+    await userEvent.click(screen.getByRole('button', { name: '标为已读' }));
+    // The interrupted first-page request is reissued after the write and its result applied.
+    expect(await screen.findByText('任务已完成')).toBeTruthy();
+    expect(refresh).toHaveBeenCalledTimes(2);
+    expect(refresh.mock.calls[1][0]).toBeNull();
+    expect(screen.getByRole('button', { name: '更多通知' })).toBeTruthy();
+    if (outcome === 'read') expect(screen.getByText('已读')).toBeTruthy();
+    else expect(screen.queryByText('采集已中断')).toBeNull();
+    // The superseded response arriving late changes nothing.
+    await act(async () => { completeStale({ items: [item], next_cursor: 'stale-cursor' }); });
+    expect(screen.getByText('任务已完成')).toBeTruthy();
+    expect(screen.queryAllByRole('button', { name: '标为已读' }).length).toBe(1);
+  },
+);
 
 it.each([
   { action: 'refresh', error: { status: 403 } },

@@ -246,6 +246,23 @@ def test_media_admission_and_query_redaction_apply_under_either_mount_convention
         slots.release()
 
 
+@pytest.mark.parametrize('mount', ['', '/pilot'])
+def test_feedback_body_limit_follows_the_route_under_a_mount_prefix(d, mount):
+    def mounted(app):
+        async def wrapped(scope, receive, send):
+            if mount and scope['type'] in ('http', 'websocket'):
+                scope = dict(scope, root_path=mount, path=mount + scope['path'])
+            await app(scope, receive, send)
+        return wrapped
+
+    text = '合成反馈' * 1250  # 5000 characters, the contract maximum for both fields
+    body = dict(category='other', build_id='synthetic-mounted', description=text, request_id=None,
+                confirmed_excerpt=text, confirm_send_excerpt=True)
+    assert len(json.dumps(body, ensure_ascii=False).encode()) > 16384
+    with browser(d, app_wrapper=mounted) as member:
+        assert result(post(member, '/feedback', body, member.csrf), 202)['accepted'] is True
+
+
 def test_search_isolated_readable_literal_paged_and_deleted(d):
     marker = '甲课堂%_独有字号'
     owner = OwnerContext(d.uid)

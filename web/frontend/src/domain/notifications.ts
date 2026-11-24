@@ -38,3 +38,13 @@ export const notificationMessages: Record<string, string> = {
   SAVE_FAILED: '保存失败',
   PERMISSION_REVOKED: '访问权限已失效',
 };
+
+const resolvedMessages: Record<string, string> = {
+  SYNC_CONFLICT: '同步冲突已解决',
+};
+
+/** Heading for a notification; a resolved item never reads as still pending. */
+export function notificationTitle(item: Notification): string {
+  return (item.resolved_at !== null ? resolvedMessages[item.message_code] : undefined)
+    ?? notificationMessages[item.message_code] ?? '课堂助手通知';
+}

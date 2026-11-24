@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { needsAttention, notificationMessages, notificationSeverity, orderNotifications,
+import { needsAttention, notificationSeverity, notificationTitle, orderNotifications,
   type Notification, type NotificationPage } from '../../domain/notifications';
 import { Button, Panel, StatusBadge } from '../../ui';
 import styles from './NotificationCenter.module.css';
@@ -32,9 +32,12 @@ function Center({ list, markRead }: Props) {
   const listing = useRef<AbortController | null>(null);
   const marking = useRef<AbortController | null>(null);
   const listSequence = useRef(0);
+  // The cursor of the list request currently in flight, so a superseding read can reissue it.
+  const inflight = useRef<{ cursor: string | null } | null>(null);
   const keys = useRef(new Map<string, string>());
   const clearAuthorization = useCallback(() => {
     listSequence.current += 1;
+    inflight.current = null;
     listing.current?.abort();
     marking.current?.abort();
     keys.current.clear();
@@ -49,6 +52,7 @@ function Center({ list, markRead }: Props) {
     listing.current = run;
     const sequence = ++listSequence.current;
     const isCurrent = () => sequence === listSequence.current && !run.signal.aborted;
+    inflight.current = { cursor: next };
     setBusy(true); setNotice('');
     try {
       const page = await list(next, run.signal);
@@ -60,7 +64,7 @@ function Center({ list, markRead }: Props) {
       if (isAuthorizationFailure(error)) clearAuthorization();
       else setNotice('通知暂不可用，请重试。');
     } finally {
-      if (isCurrent()) setBusy(false);
+      if (isCurrent()) { setBusy(false); inflight.current = null; }
     }
   }, [list, clearAuthorization]);
 
@@ -73,10 +77,16 @@ function Center({ list, markRead }: Props) {
     return () => listing.current?.abort();
   }, [load]);
 
+  // Drop a list response that predates a completed write. The caller reissues the
+  // interrupted request afterwards, so new rows, removals and the cursor are not lost;
+  // the server's read state is monotonic, so the reissued page cannot undo the write.
   function supersedeList() {
+    const interrupted = inflight.current;
+    inflight.current = null;
     listSequence.current += 1;
     listing.current?.abort();
     setBusy(false);
+    return interrupted;
   }
 
   async function read(id: string) {
@@ -88,20 +98,22 @@ function Center({ list, markRead }: Props) {
     try {
       const item = await markRead(id, key, run.signal);
       if (run.signal.aborted) return;
-      supersedeList();
+      const interrupted = supersedeList();
       keys.current.delete(id);
       setItems(previous => previous.some(row => row.id === id) ? orderNotifications([...previous, item]) : previous);
+      if (interrupted) void load(interrupted.cursor);
     } catch (error) {
       if (run.signal.aborted) return;
       if (isAuthorizationFailure(error)) { clearAuthorization(); return; }
       const { status, code } = typeof error === 'object' && error !== null
         ? error as { status?: number; code?: string } : {};
       if (status === 404 || status === 410 || code === 'NOT_FOUND' || code === 'GONE') {
-        supersedeList();
+        const interrupted = supersedeList();
         keys.current.delete(id);
         setItems(previous => previous.filter(item => item.id !== id));
         setNotice('这条通知已无法访问，已从列表移除。');
         heading.current?.focus({ preventScroll: true });
+        if (interrupted) void load(interrupted.cursor);
       } else setNotice('暂时无法标为已读，请重试。');
     } finally {
       if (!run.signal.aborted) setWriting(false);
@@ -117,7 +129,7 @@ function Center({ list, markRead }: Props) {
         const severity = notificationSeverity[item.severity];
         return <li key={item.id}><Panel className={styles.notice}>
           <div><StatusBadge tone={severity.tone}>{severity.label}</StatusBadge>
-            <h2>{notificationMessages[item.message_code] ?? '课堂助手通知'}</h2>
+            <h2>{notificationTitle(item)}</h2>
             <time dateTime={item.created_at}>{new Date(item.created_at).toLocaleString('zh-CN')}</time>
           </div>
           <div className={styles.actions}>

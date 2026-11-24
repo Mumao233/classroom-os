@@ -28,6 +28,29 @@ if ($unexpected.Count) { throw "Unlisted paths outside HEAD. Archive refused: $(
 $branch = & git -C $root branch --show-current
 if ($LASTEXITCODE -ne 0) { throw 'Branch could not be read' }
 
+# Before any file is opened, reject reparse points on every directory between the worktree
+# root and each source file, and any path that resolves outside the root: a junction must not
+# pull content from outside the reviewed checkout into the guest archive.
+$rootFull = [IO.Path]::GetFullPath($root).TrimEnd('\') + '\'
+$checkedDirs = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+foreach ($file in ($files | Sort-Object -Unique)) {
+    $full = [IO.Path]::GetFullPath((Join-Path $root $file))
+    if (-not $full.StartsWith($rootFull, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Source path resolves outside the worktree: $file"
+    }
+    $parts = $file -split '/'
+    $cursor = $root
+    for ($i = 0; $i -lt $parts.Count - 1; $i++) {
+        $cursor = Join-Path $cursor $parts[$i]
+        if ($checkedDirs.Add($cursor)) {
+            $dir = Get-Item -LiteralPath $cursor -Force
+            if (-not $dir.PSIsContainer -or ($dir.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+                throw "Reparse point or non-directory on a source path: $file"
+            }
+        }
+    }
+}
+
 $null = New-Item -ItemType Directory -Path $work, $transfer
 Add-Type -AssemblyName System.IO.Compression
 $archive = Join-Path $work 'source.zip'

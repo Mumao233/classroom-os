@@ -100,6 +100,8 @@ function parseFeedback(value: unknown): Feedback | null {
       || (body.request_id !== null && (typeof body.request_id !== 'string' || !uuid.test(body.request_id)))
       || (body.confirmed_excerpt !== null && (typeof body.confirmed_excerpt !== 'string' || [...body.confirmed_excerpt].length > 5000))
       || typeof body.confirm_send_excerpt !== 'boolean') return null;
+  // Mirrors OperationsService: any NUL in the stored text fields is rejected with 422.
+  if ([body.description, body.build_id, body.confirmed_excerpt].some(text => text?.includes('\u0000'))) return null;
   return body;
 }
 

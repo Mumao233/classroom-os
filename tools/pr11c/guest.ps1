@@ -2,7 +2,12 @@
 $ErrorActionPreference = 'Stop'
 $machine = Get-CimInstance Win32_ComputerSystem
 if ($machine.Manufacturer -notmatch 'VMware' -and $machine.Model -notmatch 'VMware') { throw 'VMware TEST guest required' }
+# The TEST guest has a single C: volume; its established workspace (shared with the PR-03b, 04b,
+# 06c and 11a runners) is J: substituted for C:\j. Map it when absent, then verify the mapping
+# before creating anything, so a different J: never receives data and the broker's C:\j
+# evidence path always names the files written here.
 if (-not (Test-Path -LiteralPath 'J:\')) { & subst.exe J: C:\j }
+if (@(& subst.exe) -notcontains 'J:\: => C:\j') { throw 'Guest J: must be the C:\j workspace substitution' }
 if ($SnapshotTag -notmatch '^pr11c-[0-9]{8}-[0-9]{6}-[a-f0-9]{8}$' -or $Suite -notin @('targeted', 'full')) {
     throw 'Invalid PR-11c job'
 }
