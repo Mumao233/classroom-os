@@ -56,6 +56,36 @@ describe('PR-11b admin write and reauthentication contracts', () => {
 });
 
 describe('mock HTTP fixtures', () => {
+  it('validates the shared write-key fixtures before mutating mock records', () => {
+    const backend = createMockBackend();
+    const query = new URLSearchParams();
+    const semesters = () => backend.handle('A', 'GET', '/semesters', query, undefined, null)!.body as {items: unknown[]};
+    const me = () => backend.handle('A', 'GET', '/me', query, undefined, null)!.body as {revision: number};
+    const before = structuredClone(semesters());
+    const profile = structuredClone(me());
+    const validate = ajv.compile({ $ref: 'https://classroom.invalid/openapi#/components/parameters/IdempotencyKey/schema' });
+    const header = (name: string) => {
+      const fixture = cases.find(item => item.name === name);
+      if (typeof fixture?.value !== 'string') throw new Error('Missing write-key fixture ' + name);
+      expect(validate(fixture.value)).toBe(fixture.expected_valid);
+      return fixture.value;
+    };
+    const invalid = header('pr11b_r0_header_uppercase');
+    const body = { name: 'Synthetic semester' };
+    const rejected = { status: 422, body: { error: { code: 'VALIDATION_FAILED' } } };
+    expect(backend.handle('A', 'POST', '/semesters', query, body, invalid)).toMatchObject(rejected);
+    expect(semesters()).toEqual(before);
+    // Profile updates use CAS directly and must pass the same header check as receipt-backed creates.
+    expect(backend.handle('A', 'PATCH', '/me', query, { base_revision: profile.revision, nickname: 'Updated' }, invalid)).toMatchObject(rejected);
+    expect(me()).toEqual(profile);
+
+    const valid = header('pr11b_r0_header_lowercase');
+    const created = backend.handle('A', 'POST', '/semesters', query, body, valid);
+    expect(created?.status).toBe(201);
+    expect(backend.handle('A', 'POST', '/semesters', query, body, valid)).toEqual(created);
+    expect(semesters().items).toHaveLength(before.items.length + 1);
+  });
+
   for (const [name, schema, fixture] of [['empty', 'CoursePage', coursePage], ['account A', 'CoursePage', coursePages.A], ['account B', 'CoursePage', coursePages.B], ['session revoked', 'Error', unauthenticated], ['semesters', 'SemesterPage', semesterPage], ['meta', 'Meta', meta]] as const) {
     it(`${name}: ${schema} conforms`, () => {
       const validate = ajv.compile({ $ref: `https://classroom.invalid/openapi#/components/schemas/${schema}` });

@@ -84,12 +84,12 @@ export class AuthClient {
       this.clear(); throw new AuthError('AUTH_CONTEXT_EXPIRED',401);
     }
   }
-  async request<T>(path: string, body?: unknown, options: { key?: string; reauth?: string } = {}): Promise<T> {
+  async request<T>(path: string, body?: unknown, options: { key?: string; reauth?: string; method?: 'POST' | 'PATCH' } = {}): Promise<T> {
     const generation = this.generation;
     const sentCsrf = this.csrf;
     let response: Response;
     try {
-      response = await this.transport.call(globalThis, '/api/web/v1' + path, { method: body === undefined ? 'GET' : 'POST', credentials: 'same-origin', cache: 'no-store', redirect: 'error',
+      response = await this.transport.call(globalThis, '/api/web/v1' + path, { method: body === undefined ? 'GET' : options.method ?? 'POST', credentials: 'same-origin', cache: 'no-store', redirect: 'error',
         headers: body === undefined ? {} : { 'Content-Type': 'application/json', 'X-CSRF-Token': sentCsrf, 'Idempotency-Key': options.key ?? crypto.randomUUID(), ...(options.reauth ? {'X-Reauth-Token': options.reauth} : {}) },
         body: body === undefined ? undefined : JSON.stringify(body) });
     } catch {
@@ -190,7 +190,8 @@ export class AuthClient {
     const proof=await this.request<S['ReauthResult']>('/auth/reauth',{password,...(mfa_code?{mfa_code}:{}),operation});
     if (!path) throw new AuthError('VALIDATION_FAILED');
     // No automatic retries: secret responses and unknown commits are not replayable.
-    return this.request<unknown>(path,body,{key,reauth:proof.reauth_token});
+    const method = purpose === 'adminUpdateUser' || purpose === 'adminUpdateSwitches' ? 'PATCH' : 'POST';
+    return this.request<unknown>(path,body,{key,reauth:proof.reauth_token,method});
   }
   async logout() { this.publishSession(null); try { await this.request('/auth/logout',{}); } finally { this.clear(); } }
 }

@@ -3798,12 +3798,10 @@ export interface components {
             kind: "email_bound" | "single_use";
             /** Format: email */
             email?: string;
-            /** @description Operator-supplied audit reason. Include at least one non-whitespace character. Bind the exact submitted text to the write. */
-            reason: string;
+            reason: components["schemas"]["AdminWriteReason"];
         };
         InvitationAction: {
-            /** @description Operator-supplied audit reason. Include at least one non-whitespace character. Bind the exact submitted text to the write. */
-            reason: string;
+            reason: components["schemas"]["AdminWriteReason"];
         };
         InvitationCreated: {
             invitation: components["schemas"]["Invitation"];
@@ -3813,7 +3811,7 @@ export interface components {
             base_revision: number;
             /** @enum {string} */
             status: "active" | "disabled";
-            reason: string;
+            reason: components["schemas"]["AdminWriteReason"];
         };
         QuotaAdjustment: {
             /** Format: uuid */
@@ -3823,7 +3821,7 @@ export interface components {
             /** Format: date-time */
             period_start: string;
             additional_units: number;
-            reason: string;
+            reason: components["schemas"]["AdminWriteReason"];
         };
         AdminSwitches: {
             revision: number;
@@ -3840,7 +3838,7 @@ export interface components {
             ai_enabled?: boolean;
             /** @enum {string} */
             max_active_users?: "10" | "30";
-            reason: string;
+            reason: components["schemas"]["AdminWriteReason"];
         };
         /** @description Platform ledger totals for one budget period. Amounts are nonnegative decimal integer strings in microyuan (1 CNY = 1000000 microyuan). Risk = fixed_and_accrued_microyuan + settled_microyuan + reserved_microyuan + unknown_microyuan. Compare risk to the gross budget for thresholds. Ordinary admission also enforces the budget less the safety reserve and the individual pool limit. */
         AdminUsage: {
@@ -4035,8 +4033,7 @@ export interface components {
             };
             /** @description Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned. */
             candidate_parameters: {
-                /** Format: uuid */
-                idempotency_key: string;
+                idempotency_key: components["schemas"]["CanonicalIdempotencyKey"];
                 body: components["schemas"]["Empty"];
             };
         } | {
@@ -4051,8 +4048,7 @@ export interface components {
             };
             /** @description Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned. */
             candidate_parameters: {
-                /** Format: uuid */
-                idempotency_key: string;
+                idempotency_key: components["schemas"]["CanonicalIdempotencyKey"];
                 body: components["schemas"]["Empty"];
             };
         } | {
@@ -4067,8 +4063,7 @@ export interface components {
             };
             /** @description Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned. */
             candidate_parameters: {
-                /** Format: uuid */
-                idempotency_key: string;
+                idempotency_key: components["schemas"]["CanonicalIdempotencyKey"];
                 body: components["schemas"]["Empty"];
             };
         } | {
@@ -4083,8 +4078,7 @@ export interface components {
             };
             /** @description Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned. */
             candidate_parameters: {
-                /** Format: uuid */
-                idempotency_key: string;
+                idempotency_key: components["schemas"]["CanonicalIdempotencyKey"];
                 body: components["schemas"]["TrustDeviceRequest"];
             };
         } | {
@@ -4099,8 +4093,7 @@ export interface components {
             };
             /** @description Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned. */
             candidate_parameters: {
-                /** Format: uuid */
-                idempotency_key: string;
+                idempotency_key: components["schemas"]["CanonicalIdempotencyKey"];
                 body: components["schemas"]["PasswordChangeRequest"];
             };
         } | {
@@ -4115,8 +4108,7 @@ export interface components {
             };
             /** @description Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned. */
             candidate_parameters: {
-                /** Format: uuid */
-                idempotency_key: string;
+                idempotency_key: components["schemas"]["CanonicalIdempotencyKey"];
                 body: components["schemas"]["EmailChangeRequest"];
             };
         } | {
@@ -4131,8 +4123,7 @@ export interface components {
             };
             /** @description Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned. */
             candidate_parameters: {
-                /** Format: uuid */
-                idempotency_key: string;
+                idempotency_key: components["schemas"]["CanonicalIdempotencyKey"];
                 body: components["schemas"]["Empty"];
             };
         } | {
@@ -4147,8 +4138,7 @@ export interface components {
             };
             /** @description Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned. */
             candidate_parameters: {
-                /** Format: uuid */
-                idempotency_key: string;
+                idempotency_key: components["schemas"]["CanonicalIdempotencyKey"];
                 body: components["schemas"]["MfaEnrollmentConfirm"];
             };
         } | {
@@ -4163,8 +4153,7 @@ export interface components {
             };
             /** @description Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned. */
             candidate_parameters: {
-                /** Format: uuid */
-                idempotency_key: string;
+                idempotency_key: components["schemas"]["CanonicalIdempotencyKey"];
                 body: components["schemas"]["Empty"];
             };
         } | {
@@ -4179,8 +4168,7 @@ export interface components {
             };
             /** @description Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned. */
             candidate_parameters: {
-                /** Format: uuid */
-                idempotency_key: string;
+                idempotency_key: components["schemas"]["CanonicalIdempotencyKey"];
                 body: components["schemas"]["Empty"];
             };
         } | {
@@ -4195,8 +4183,7 @@ export interface components {
             };
             /** @description Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned. */
             candidate_parameters: {
-                /** Format: uuid */
-                idempotency_key: string;
+                idempotency_key: components["schemas"]["CanonicalIdempotencyKey"];
                 body: components["schemas"]["DeletionSubmit"];
             };
         } | {
@@ -4271,8 +4258,7 @@ export interface components {
             };
             /** @description Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned. */
             candidate_parameters: {
-                /** Format: uuid */
-                idempotency_key: string;
+                idempotency_key: components["schemas"]["CanonicalIdempotencyKey"];
                 body: components["schemas"]["CacheUnlockRequest"];
             };
         } | {
@@ -4287,8 +4273,7 @@ export interface components {
             };
             /** @description Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned. */
             candidate_parameters: {
-                /** Format: uuid */
-                idempotency_key: string;
+                idempotency_key: components["schemas"]["CanonicalIdempotencyKey"];
                 body: components["schemas"]["AdminUserPatch"];
             };
         } | {
@@ -4303,8 +4288,7 @@ export interface components {
             };
             /** @description Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned. */
             candidate_parameters: {
-                /** Format: uuid */
-                idempotency_key: string;
+                idempotency_key: components["schemas"]["CanonicalIdempotencyKey"];
                 body: components["schemas"]["InvitationCreate"];
             };
         } | {
@@ -4319,8 +4303,7 @@ export interface components {
             };
             /** @description Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned. */
             candidate_parameters: {
-                /** Format: uuid */
-                idempotency_key: string;
+                idempotency_key: components["schemas"]["CanonicalIdempotencyKey"];
                 body: components["schemas"]["InvitationAction"];
             };
         } | {
@@ -4335,8 +4318,7 @@ export interface components {
             };
             /** @description Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned. */
             candidate_parameters: {
-                /** Format: uuid */
-                idempotency_key: string;
+                idempotency_key: components["schemas"]["CanonicalIdempotencyKey"];
                 body: components["schemas"]["InvitationAction"];
             };
         } | {
@@ -4351,8 +4333,7 @@ export interface components {
             };
             /** @description Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned. */
             candidate_parameters: {
-                /** Format: uuid */
-                idempotency_key: string;
+                idempotency_key: components["schemas"]["CanonicalIdempotencyKey"];
                 body: components["schemas"]["QuotaAdjustment"];
             };
         } | {
@@ -4367,8 +4348,7 @@ export interface components {
             };
             /** @description Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned. */
             candidate_parameters: {
-                /** Format: uuid */
-                idempotency_key: string;
+                idempotency_key: components["schemas"]["CanonicalIdempotencyKey"];
                 body: components["schemas"]["AdminSwitchesPatch"];
             };
         };
@@ -4415,10 +4395,17 @@ export interface components {
             items: components["schemas"]["AudioManifest"][];
             next_cursor: string | null;
         };
+        /**
+         * Format: uuid
+         * @description Lowercase hyphenated UUID, in the representation required by the write endpoint.
+         */
+        CanonicalIdempotencyKey: string;
+        /** @description Operator-supplied audit reason, 1 to 500 Unicode code points. Include a character outside Unicode White_Space, U+001C through U+001F and U+FEFF. Bind the exact submitted text. */
+        AdminWriteReason: string;
     };
     responses: never;
     parameters: {
-        IdempotencyKey: string;
+        IdempotencyKey: components["schemas"]["CanonicalIdempotencyKey"];
         /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
         CsrfToken: string;
         /** @description Existing X-Reauth-Token header, carrying an opaque server-issued proof for the exact purpose, target, candidate parameters and future Idempotency-Key. R3 at most 120 seconds from real verified_at and single-use; R1/R2 use the documented role window. Recheck current session/device/epoch and deadline after all locks. This header cannot grant ordinary admin permissions or authorize an unreviewed operation. Producer generates at least 32 random bytes, canonical unpadded base64url, 43..256 characters; parser decodes/re-encodes and rejects noncanonical or insufficient-byte values. Same token is accepted by control StudentExecutorEvidence via its Secret envelope; shape alone does not prove entropy or authorization. */

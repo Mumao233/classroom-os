@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import sys
 from types import SimpleNamespace
+from unittest.mock import patch
 from uuid import uuid4
 
 import pyotp
@@ -513,6 +514,63 @@ def test_formal_admin_reauth_and_switch_projection(fee_api):
     assert changed.status_code == 200, changed.text
     assert set(changed.json()) == public_fields and changed.json()['ai_enabled'] is False
     assert api.client.get(BASE + '/admin/switches').json() == changed.json()
+
+
+@pytest.mark.parametrize('fee_api', ['formal'], indirect=True)
+def test_formal_invalid_admin_candidates_are_rejected_before_password_or_totp(fee_api):
+    api = fee_api
+    session, seed = sign_in(api, administrator=True)
+    current = api.client.get(BASE + '/admin/switches').json()
+    user_id = str(api.a.uid)
+    key = 'ab' + str(uuid4())[2:]
+    reason = ' \ufeff Preserve the original reason.\u0085 '
+    switch = dict(base_revision=current['revision'], ai_enabled=False, reason=reason)
+    quota = dict(user_id=user_id, bucket_kind='interactive_month_count', period_start='2026-11-01T00:00:00+08:00',
+                additional_units=1, reason=reason)
+    invalid = (
+        ('adminUpdateSwitches', 'account', key.upper(), switch),
+        ('adminUpdateSwitches', 'account', key, switch | {'reason': '\u0085\u001c'}),
+        ('adminUpdateSwitches', 'account', key, switch | {'reason': '\ufeff'}),
+        ('adminUpdateSwitches', 'account', key, switch | {'base_revision': 2**53}),
+        ('adminAdjustQuota', 'account', key, quota | {'reason': '\u001d\u001e\u001f'}),
+        ('adminAdjustQuota', 'account', key, quota | {'additional_units': 2**53}),
+        ('adminUpdateUser', 'user', key, dict(base_revision=2**63, status='active', reason=reason)),
+        ('adminCreateInvitation', 'account', key, dict(kind='single_use', reason='\u2028\u2029')),
+        ('adminRevokeInvitation', 'invitation', key + '\n', dict(reason=reason)),
+        ('adminReissueInvitation', 'invitation', key, dict(reason='\u0085\ufeff')),
+    )
+    step_query = sa.text('SELECT last_accepted_step FROM mfa_credentials WHERE owner_id=:id')
+    with api.c.pg.admin.connect() as db:
+        before = db.scalar(step_query, {'id': api.a.uid})
+    code = pyotp.TOTP(seed).at(datetime.now(timezone.utc) + timedelta(seconds=30))
+    with patch.object(api.a.service, 'check_current_password', wraps=api.a.service.check_current_password) as password_check:
+        for purpose, kind, future_key, body in invalid:
+            operation = dict(purpose=purpose, target=dict(kind=kind, id=user_id),
+                             candidate_parameters=dict(idempotency_key=future_key, body=body))
+            response = api.client.post(BASE + '/auth/reauth', json=dict(password=PASSWORD, mfa_code=code, operation=operation),
+                                       headers=headers(session))
+            assert response.status_code == 422 and response.json()['error']['code'] == 'VALIDATION_FAILED', (purpose, response.text)
+        password_check.assert_not_called()
+    with api.c.pg.admin.connect() as db:
+        assert db.scalar(step_query, {'id': api.a.uid}) == before
+        assert db.scalar(sa.text('SELECT count(*) FROM reauth_proofs WHERE owner_id=:id'), {'id': api.a.uid}) == 0
+
+    # Exercise the mounted write validators with a real, still usable proof.
+    proof = prove(api, session, seed, 'adminUpdateSwitches', switch, key)
+    for purpose, _, future_key, body in invalid:
+        if purpose == 'adminUpdateSwitches':
+            method, path = 'PATCH', '/admin/switches'
+        elif purpose == 'adminAdjustQuota':
+            method, path = 'POST', '/admin/quota-adjustments'
+        else:
+            continue
+        write_headers = headers(session, **{**proof, 'Idempotency-Key': future_key})
+        response = api.client.request(method, BASE + path, json=body, headers=write_headers)
+        assert response.status_code == 422 and response.json()['error']['code'] == 'VALIDATION_FAILED', response.text
+    changed = api.client.patch(BASE + '/admin/switches', json=switch, headers=headers(session, **proof))
+    assert changed.status_code == 200, changed.text
+    with api.c.pg.admin.connect() as db:
+        assert db.scalar(sa.text('SELECT reason FROM billing_control.audit WHERE op_id=:id'), {'id': key}) == reason
 
 
 @pytest.mark.parametrize('fee_api', ['formal'], indirect=True)

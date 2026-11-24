@@ -289,10 +289,13 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
   }
 
   function handle(account: MockAccountKey, method: string, path: string, query: URLSearchParams, rawBody: unknown, key: string | null): MockReply | null {
+    const isId = (part: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(part);
+    if (['POST', 'PATCH', 'PUT', 'DELETE'].includes(method) && (!key || !isId(key))) {
+      return error(422, 'VALIDATION_FAILED', 'Idempotency-Key 必须为小写且带连字符的 UUID');
+    }
     const store = stores[account];
     const body = (typeof rawBody === 'object' && rawBody !== null && !Array.isArray(rawBody) ? rawBody : {}) as Record<string, unknown>;
     const parts = path.split('/').filter(Boolean);
-    const isId = (part: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(part);
     const route = `${method} /${parts.map(part => (isId(part) ? ':id' : part)).join('/')}`;
     const id = parts.find(isId) ?? '';
 

@@ -2855,6 +2855,298 @@
         "ledger_reconciled_at": null
       },
       "reason": "Risk is 220 microyuan, gross budget 1000, ordinary platform limit 800."
+    },
+    {
+      "name": "pr11b_r0_header_lowercase",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/parameters/IdempotencyKey/schema",
+      "expected_valid": true,
+      "value": "abcdabcd-abcd-4def-8abc-abcdefabcdef",
+      "reason": "Future key and write header use the identical lowercase UUID representation."
+    },
+    {
+      "name": "pr11b_r0_proof_key_lowercase",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/ReauthOperation",
+      "expected_valid": true,
+      "value": {
+        "purpose": "adminUpdateSwitches",
+        "target": {
+          "kind": "account",
+          "id": "11111111-1111-4111-8111-111111111111"
+        },
+        "candidate_parameters": {
+          "idempotency_key": "abcdabcd-abcd-4def-8abc-abcdefabcdef",
+          "body": {
+            "base_revision": 1,
+            "registration_enabled": false,
+            "reason": "Synthetic registration pause"
+          }
+        }
+      },
+      "reason": "The signed key must match the exact future header."
+    },
+    {
+      "name": "pr11b_r0_header_uppercase",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/parameters/IdempotencyKey/schema",
+      "expected_valid": false,
+      "value": "ABCDABCD-ABCD-4DEF-8ABC-ABCDEFABCDEF",
+      "reason": "Future key and write header use the identical lowercase UUID representation."
+    },
+    {
+      "name": "pr11b_r0_proof_key_uppercase",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/ReauthOperation",
+      "expected_valid": false,
+      "value": {
+        "purpose": "adminUpdateSwitches",
+        "target": {
+          "kind": "account",
+          "id": "11111111-1111-4111-8111-111111111111"
+        },
+        "candidate_parameters": {
+          "idempotency_key": "ABCDABCD-ABCD-4DEF-8ABC-ABCDEFABCDEF",
+          "body": {
+            "base_revision": 1,
+            "registration_enabled": false,
+            "reason": "Synthetic registration pause"
+          }
+        }
+      },
+      "reason": "The signed key must match the exact future header."
+    },
+    {
+      "name": "pr11b_r0_invitation_reason_nel",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/InvitationCreate",
+      "expected_valid": false,
+      "value": {
+        "kind": "single_use",
+        "reason": "\u0085"
+      },
+      "reason": "This code point alone is blank in the shared audit reason schema."
+    },
+    {
+      "name": "pr11b_r0_invitation_reason_bom",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/InvitationCreate",
+      "expected_valid": false,
+      "value": {
+        "kind": "single_use",
+        "reason": "\uFEFF"
+      },
+      "reason": "This code point alone is blank in the shared audit reason schema."
+    },
+    {
+      "name": "pr11b_r0_invitation_reason_mixed",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/InvitationAction",
+      "expected_valid": true,
+      "value": {
+        "reason": "\u0085来源已确认\uFEFF"
+      },
+      "reason": "Visible text may be surrounded by whitespace. The original text stays in the commitment."
+    },
+    {
+      "name": "pr11b_r0_adminAdjustQuota_blank_reason",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/ReauthOperation",
+      "expected_valid": false,
+      "value": {
+        "purpose": "adminAdjustQuota",
+        "target": {
+          "kind": "account",
+          "id": "11111111-1111-4111-8111-111111111111"
+        },
+        "candidate_parameters": {
+          "idempotency_key": "22222222-2222-4222-8222-222222222222",
+          "body": {
+            "user_id": "33333333-3333-4333-8333-333333333333",
+            "bucket_kind": "asr_month_ms",
+            "period_start": "2026-11-01T00:00:00+08:00",
+            "additional_units": 1000,
+            "reason": " \t "
+          }
+        }
+      },
+      "reason": "Billing must reject blank reasons before verifying credentials."
+    },
+    {
+      "name": "pr11b_r0_adminUpdateSwitches_blank_reason",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/ReauthOperation",
+      "expected_valid": false,
+      "value": {
+        "purpose": "adminUpdateSwitches",
+        "target": {
+          "kind": "account",
+          "id": "11111111-1111-4111-8111-111111111111"
+        },
+        "candidate_parameters": {
+          "idempotency_key": "22222222-2222-4222-8222-222222222222",
+          "body": {
+            "base_revision": 1,
+            "registration_enabled": false,
+            "reason": " \t "
+          }
+        }
+      },
+      "reason": "Billing must reject blank reasons before verifying credentials."
+    },
+    {
+      "name": "pr11b_r0_adminAdjustQuota_max",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/ReauthOperation",
+      "expected_valid": true,
+      "value": {
+        "purpose": "adminAdjustQuota",
+        "target": {
+          "kind": "account",
+          "id": "11111111-1111-4111-8111-111111111111"
+        },
+        "candidate_parameters": {
+          "idempotency_key": "22222222-2222-4222-8222-222222222222",
+          "body": {
+            "user_id": "33333333-3333-4333-8333-333333333333",
+            "bucket_kind": "asr_month_ms",
+            "period_start": "2026-11-01T00:00:00+08:00",
+            "additional_units": 9007199254740991,
+            "reason": "Synthetic adjustment"
+          }
+        }
+      },
+      "reason": "Canonical JSON commitment uses the interoperable integer range."
+    },
+    {
+      "name": "pr11b_r0_adminAdjustQuota_overflow",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/ReauthOperation",
+      "expected_valid": false,
+      "value": {
+        "purpose": "adminAdjustQuota",
+        "target": {
+          "kind": "account",
+          "id": "11111111-1111-4111-8111-111111111111"
+        },
+        "candidate_parameters": {
+          "idempotency_key": "22222222-2222-4222-8222-222222222222",
+          "body": {
+            "user_id": "33333333-3333-4333-8333-333333333333",
+            "bucket_kind": "asr_month_ms",
+            "period_start": "2026-11-01T00:00:00+08:00",
+            "additional_units": 9007199254740992,
+            "reason": "Synthetic adjustment"
+          }
+        }
+      },
+      "reason": "Canonical JSON commitment uses the interoperable integer range."
+    },
+    {
+      "name": "pr11b_r0_adminUpdateSwitches_max",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/ReauthOperation",
+      "expected_valid": true,
+      "value": {
+        "purpose": "adminUpdateSwitches",
+        "target": {
+          "kind": "account",
+          "id": "11111111-1111-4111-8111-111111111111"
+        },
+        "candidate_parameters": {
+          "idempotency_key": "22222222-2222-4222-8222-222222222222",
+          "body": {
+            "base_revision": 9007199254740991,
+            "registration_enabled": false,
+            "reason": "Synthetic registration pause"
+          }
+        }
+      },
+      "reason": "Canonical JSON commitment uses the interoperable integer range."
+    },
+    {
+      "name": "pr11b_r0_adminUpdateSwitches_overflow",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/ReauthOperation",
+      "expected_valid": false,
+      "value": {
+        "purpose": "adminUpdateSwitches",
+        "target": {
+          "kind": "account",
+          "id": "11111111-1111-4111-8111-111111111111"
+        },
+        "candidate_parameters": {
+          "idempotency_key": "22222222-2222-4222-8222-222222222222",
+          "body": {
+            "base_revision": 9007199254740992,
+            "registration_enabled": false,
+            "reason": "Synthetic registration pause"
+          }
+        }
+      },
+      "reason": "Canonical JSON commitment uses the interoperable integer range."
+    },
+    {
+      "name": "pr11b_r0_adminUpdateUser_max",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/ReauthOperation",
+      "expected_valid": true,
+      "value": {
+        "purpose": "adminUpdateUser",
+        "target": {
+          "kind": "user",
+          "id": "33333333-3333-4333-8333-333333333333"
+        },
+        "candidate_parameters": {
+          "idempotency_key": "22222222-2222-4222-8222-222222222222",
+          "body": {
+            "base_revision": 9007199254740991,
+            "status": "disabled",
+            "reason": "Synthetic roster change"
+          }
+        }
+      },
+      "reason": "Canonical JSON commitment uses the interoperable integer range."
+    },
+    {
+      "name": "pr11b_r0_adminUpdateUser_overflow",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/ReauthOperation",
+      "expected_valid": false,
+      "value": {
+        "purpose": "adminUpdateUser",
+        "target": {
+          "kind": "user",
+          "id": "33333333-3333-4333-8333-333333333333"
+        },
+        "candidate_parameters": {
+          "idempotency_key": "22222222-2222-4222-8222-222222222222",
+          "body": {
+            "base_revision": 9007199254740992,
+            "status": "disabled",
+            "reason": "Synthetic roster change"
+          }
+        }
+      },
+      "reason": "Canonical JSON commitment uses the interoperable integer range."
+    },
+    {
+      "name": "pr11b_r1_logout_all_uppercase_key",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/ReauthOperation",
+      "expected_valid": false,
+      "value": {
+        "purpose": "logoutAll",
+        "target": {
+          "kind": "account",
+          "id": "11111111-1111-4111-8111-111111111111"
+        },
+        "candidate_parameters": {
+          "idempotency_key": "ABCDABCD-ABCD-4DEF-8ABC-ABCDEFABCDEF",
+          "body": {}
+        }
+      },
+      "reason": "A non-admin proof must carry the exact canonical key accepted by the future HTTP write."
     }
   ],
   "audio_manifest_request_cases": [

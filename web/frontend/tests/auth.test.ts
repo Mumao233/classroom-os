@@ -3,6 +3,7 @@ import {AuthClient,AuthError,parseLogin} from '../src/api/auth-client';
 
 const user={id:crypto.randomUUID(),revision:1,created_at:'2026-11-10T00:00:00Z',updated_at:'2026-11-10T00:00:00Z',email:'synthetic@example.test',nickname:'',school:'',major:'',role:'student',status:'active',mfa_enabled:false};
 const authenticated={state:'authenticated',challenge_id:null,user,device_id:crypto.randomUUID(),csrf_token:'a'.repeat(43)};
+const reauthToken = Buffer.alloc(32, 0xfb).toString('base64url');
 describe('formal authentication consumer',()=>{
   it('accepts only the three disjoint complete login states',()=>{
     expect(parseLogin(authenticated).state).toBe('authenticated');
@@ -40,6 +41,44 @@ describe('formal authentication consumer',()=>{
   });
 });
 
+describe('purpose-bound write transport', () => {
+  const targetId = '00000000-0000-4000-8000-000000000001';
+  const recipient = '00000000-0000-4000-8000-000000000002';
+  const reason = 'Synthetic operator action';
+  it.each([
+    ['adminUpdateUser', 'user', '/admin/users/' + targetId, 'PATCH', { base_revision: 1, status: 'disabled', reason }],
+    ['adminUpdateSwitches', 'account', '/admin/switches', 'PATCH', { base_revision: 1, asr_enabled: false, reason }],
+    ['adminCreateInvitation', 'account', '/admin/invitations', 'POST', { kind: 'single_use', reason }],
+    ['adminRevokeInvitation', 'invitation', '/admin/invitations/' + targetId + '/revoke', 'POST', { reason }],
+    ['adminReissueInvitation', 'invitation', '/admin/invitations/' + targetId + '/reissue', 'POST', { reason }],
+    ['adminAdjustQuota', 'account', '/admin/quota-adjustments', 'POST', {
+      user_id: recipient, bucket_kind: 'summary_month_count', period_start: '2026-11-01T00:00:00Z', additional_units: 1, reason,
+    }],
+    ['logoutAll', 'account', '/auth/logout-all', 'POST', {}],
+  ] as const)('%s posts the proof request and sends the bound write with %s target', async (purpose, kind, path, method, body) => {
+    const fetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json({ reauth_token: reauthToken, expires_at: '2026-11-24T12:05:00Z' }))
+      .mockResolvedValueOnce(Response.json({ accepted: true }));
+    const client = new AuthClient(fetcher);
+    client.csrf = 'c'.repeat(43);
+    const target = { kind, id: targetId };
+    await client.change(purpose, target, body, 'synthetic-password', '123456', path);
+
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    const [[proofPath, proof], [writePath, write]] = fetcher.mock.calls;
+    expect([proofPath, proof?.method]).toEqual(['/api/web/v1/auth/reauth', 'POST']);
+    expect([writePath, write?.method]).toEqual(['/api/web/v1' + path, method]);
+    const writeHeaders = new Headers(write?.headers);
+    const writeKey = writeHeaders.get('Idempotency-Key');
+    expect(writeKey).toBeTruthy();
+    expect(new Headers(proof?.headers).get('Idempotency-Key')).not.toBe(writeKey);
+    expect(JSON.parse(String(proof?.body)).operation).toEqual({ purpose, target, candidate_parameters: { idempotency_key: writeKey, body } });
+    expect(writeHeaders.get('X-Reauth-Token')).toBe(reauthToken);
+    expect(writeHeaders.get('X-CSRF-Token')).toBe(client.csrf);
+    expect(JSON.parse(String(write?.body))).toEqual(body);
+  });
+});
+
 describe('credential rejection keeps only a live authentication context',()=>{
   const csrf='c'.repeat(43), nextCsrf='e'.repeat(43);
   const invalid=()=>Response.json({error:{code:'UNAUTHENTICATED'}},{status:401});
@@ -50,7 +89,7 @@ describe('credential rejection keeps only a live authentication context',()=>{
       if(String(path).endsWith('/auth/csrf'))return bootstrap();
       seen.push(new Headers(options?.headers).get('X-CSRF-Token')??'');posts++;
       if(seen.at(-1)!==csrf)return Response.json({error:{code:'FORBIDDEN'}},{status:403});
-      return posts===1?invalid():Response.json(kind==='reauth'?{reauth_token:'p'.repeat(43)}:authenticated);
+      return posts===1?invalid():Response.json(kind==='reauth'?{reauth_token:reauthToken}:authenticated);
     });
     const client=new AuthClient(fetcher);client.csrf=csrf;const challenge=crypto.randomUUID();
     const submit=(good:boolean)=>kind==='password'?client.login({email:user.email,password:good?'correct-password':'wrong-password',remember_me:false,device_name:'test'}):kind==='totp'?client.totp(challenge,good?'123457':'123456'):client.request('/auth/reauth',{password:'correct-password',mfa_code:good?'123457':'123456'});

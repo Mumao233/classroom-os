@@ -10134,8 +10134,7 @@
         "in": "header",
         "required": true,
         "schema": {
-          "type": "string",
-          "format": "uuid"
+          "$ref": "#/components/schemas/CanonicalIdempotencyKey"
         }
       },
       "CsrfToken": {
@@ -15935,11 +15934,7 @@
             "format": "email"
           },
           "reason": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 500,
-            "pattern": "\\S",
-            "description": "Operator-supplied audit reason. Include at least one non-whitespace character. Bind the exact submitted text to the write."
+            "$ref": "#/components/schemas/AdminWriteReason"
           }
         },
         "required": [
@@ -15952,11 +15947,7 @@
         "type": "object",
         "properties": {
           "reason": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 500,
-            "pattern": "\\S",
-            "description": "Operator-supplied audit reason. Include at least one non-whitespace character. Bind the exact submitted text to the write."
+            "$ref": "#/components/schemas/AdminWriteReason"
           }
         },
         "required": [
@@ -15986,7 +15977,8 @@
         "properties": {
           "base_revision": {
             "type": "integer",
-            "minimum": 1
+            "minimum": 1,
+            "maximum": 9007199254740991
           },
           "status": {
             "type": "string",
@@ -15996,9 +15988,7 @@
             ]
           },
           "reason": {
-            "type": "string",
-            "maxLength": 500,
-            "minLength": 1
+            "$ref": "#/components/schemas/AdminWriteReason"
           }
         },
         "required": [
@@ -16031,12 +16021,11 @@
           },
           "additional_units": {
             "type": "integer",
-            "minimum": 1
+            "minimum": 1,
+            "maximum": 9007199254740991
           },
           "reason": {
-            "type": "string",
-            "maxLength": 500,
-            "minLength": 1
+            "$ref": "#/components/schemas/AdminWriteReason"
           }
         },
         "required": [
@@ -16086,7 +16075,8 @@
         "properties": {
           "base_revision": {
             "type": "integer",
-            "minimum": 1
+            "minimum": 1,
+            "maximum": 9007199254740991
           },
           "registration_enabled": {
             "type": "boolean"
@@ -16105,9 +16095,7 @@
             ]
           },
           "reason": {
-            "type": "string",
-            "maxLength": 500,
-            "minLength": 1
+            "$ref": "#/components/schemas/AdminWriteReason"
           }
         },
         "required": [
@@ -17121,8 +17109,7 @@
                 "type": "object",
                 "properties": {
                   "idempotency_key": {
-                    "type": "string",
-                    "format": "uuid"
+                    "$ref": "#/components/schemas/CanonicalIdempotencyKey"
                   },
                   "body": {
                     "$ref": "#/components/schemas/Empty"
@@ -17171,8 +17158,7 @@
                 "type": "object",
                 "properties": {
                   "idempotency_key": {
-                    "type": "string",
-                    "format": "uuid"
+                    "$ref": "#/components/schemas/CanonicalIdempotencyKey"
                   },
                   "body": {
                     "$ref": "#/components/schemas/Empty"
@@ -17221,8 +17207,7 @@
                 "type": "object",
                 "properties": {
                   "idempotency_key": {
-                    "type": "string",
-                    "format": "uuid"
+                    "$ref": "#/components/schemas/CanonicalIdempotencyKey"
                   },
                   "body": {
                     "$ref": "#/components/schemas/Empty"
@@ -17271,8 +17256,7 @@
                 "type": "object",
                 "properties": {
                   "idempotency_key": {
-                    "type": "string",
-                    "format": "uuid"
+                    "$ref": "#/components/schemas/CanonicalIdempotencyKey"
                   },
                   "body": {
                     "$ref": "#/components/schemas/TrustDeviceRequest"
@@ -17321,8 +17305,7 @@
                 "type": "object",
                 "properties": {
                   "idempotency_key": {
-                    "type": "string",
-                    "format": "uuid"
+                    "$ref": "#/components/schemas/CanonicalIdempotencyKey"
                   },
                   "body": {
                     "$ref": "#/components/schemas/PasswordChangeRequest"
@@ -17371,8 +17354,7 @@
                 "type": "object",
                 "properties": {
                   "idempotency_key": {
-                    "type": "string",
-                    "format": "uuid"
+                    "$ref": "#/components/schemas/CanonicalIdempotencyKey"
                   },
                   "body": {
                     "$ref": "#/components/schemas/EmailChangeRequest"
@@ -17421,8 +17403,7 @@
                 "type": "object",
                 "properties": {
                   "idempotency_key": {
-                    "type": "string",
-                    "format": "uuid"
+                    "$ref": "#/components/schemas/CanonicalIdempotencyKey"
                   },
                   "body": {
                     "$ref": "#/components/schemas/Empty"
@@ -17471,8 +17452,7 @@
                 "type": "object",
                 "properties": {
                   "idempotency_key": {
-                    "type": "string",
-                    "format": "uuid"
+                    "$ref": "#/components/schemas/CanonicalIdempotencyKey"
                   },
                   "body": {
                     "$ref": "#/components/schemas/MfaEnrollmentConfirm"
@@ -17521,8 +17501,7 @@
                 "type": "object",
                 "properties": {
                   "idempotency_key": {
-                    "type": "string",
-                    "format": "uuid"
+                    "$ref": "#/components/schemas/CanonicalIdempotencyKey"
                   },
                   "body": {
                     "$ref": "#/components/schemas/Empty"
@@ -17571,8 +17550,7 @@
                 "type": "object",
                 "properties": {
                   "idempotency_key": {
-                    "type": "string",
-                    "format": "uuid"
+                    "$ref": "#/components/schemas/CanonicalIdempotencyKey"
                   },
                   "body": {
                     "$ref": "#/components/schemas/Empty"
@@ -17621,8 +17599,7 @@
                 "type": "object",
                 "properties": {
                   "idempotency_key": {
-                    "type": "string",
-                    "format": "uuid"
+                    "$ref": "#/components/schemas/CanonicalIdempotencyKey"
                   },
                   "body": {
                     "$ref": "#/components/schemas/DeletionSubmit"
@@ -17883,8 +17860,7 @@
                 "type": "object",
                 "properties": {
                   "idempotency_key": {
-                    "type": "string",
-                    "format": "uuid"
+                    "$ref": "#/components/schemas/CanonicalIdempotencyKey"
                   },
                   "body": {
                     "$ref": "#/components/schemas/CacheUnlockRequest"
@@ -17933,8 +17909,7 @@
                 "type": "object",
                 "properties": {
                   "idempotency_key": {
-                    "type": "string",
-                    "format": "uuid"
+                    "$ref": "#/components/schemas/CanonicalIdempotencyKey"
                   },
                   "body": {
                     "$ref": "#/components/schemas/AdminUserPatch"
@@ -17983,8 +17958,7 @@
                 "type": "object",
                 "properties": {
                   "idempotency_key": {
-                    "type": "string",
-                    "format": "uuid"
+                    "$ref": "#/components/schemas/CanonicalIdempotencyKey"
                   },
                   "body": {
                     "$ref": "#/components/schemas/InvitationCreate"
@@ -18033,8 +18007,7 @@
                 "type": "object",
                 "properties": {
                   "idempotency_key": {
-                    "type": "string",
-                    "format": "uuid"
+                    "$ref": "#/components/schemas/CanonicalIdempotencyKey"
                   },
                   "body": {
                     "$ref": "#/components/schemas/InvitationAction"
@@ -18083,8 +18056,7 @@
                 "type": "object",
                 "properties": {
                   "idempotency_key": {
-                    "type": "string",
-                    "format": "uuid"
+                    "$ref": "#/components/schemas/CanonicalIdempotencyKey"
                   },
                   "body": {
                     "$ref": "#/components/schemas/InvitationAction"
@@ -18133,8 +18105,7 @@
                 "type": "object",
                 "properties": {
                   "idempotency_key": {
-                    "type": "string",
-                    "format": "uuid"
+                    "$ref": "#/components/schemas/CanonicalIdempotencyKey"
                   },
                   "body": {
                     "$ref": "#/components/schemas/QuotaAdjustment"
@@ -18183,8 +18154,7 @@
                 "type": "object",
                 "properties": {
                   "idempotency_key": {
-                    "type": "string",
-                    "format": "uuid"
+                    "$ref": "#/components/schemas/CanonicalIdempotencyKey"
                   },
                   "body": {
                     "$ref": "#/components/schemas/AdminSwitchesPatch"
@@ -18359,6 +18329,19 @@
           "next_cursor"
         ],
         "additionalProperties": false
+      },
+      "CanonicalIdempotencyKey": {
+        "type": "string",
+        "format": "uuid",
+        "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+        "description": "Lowercase hyphenated UUID, in the representation required by the write endpoint."
+      },
+      "AdminWriteReason": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 500,
+        "pattern": "[^\\u0009-\\u000D\\u001C-\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\uFEFF]",
+        "description": "Operator-supplied audit reason, 1 to 500 Unicode code points. Include a character outside Unicode White_Space, U+001C through U+001F and U+FEFF. Bind the exact submitted text."
       }
     }
   },
