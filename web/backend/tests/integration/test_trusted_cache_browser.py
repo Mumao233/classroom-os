@@ -1,4 +1,5 @@
 """PR-08a actual AuthClient, public contract, PostgreSQL and native browser storage."""
+from copy import deepcopy
 import json
 import os
 from pathlib import Path
@@ -10,6 +11,7 @@ import threading
 import time
 from uuid import uuid4
 
+import pytest
 import sqlalchemy as sa
 import uvicorn
 from fastapi.responses import HTMLResponse, Response
@@ -17,10 +19,53 @@ from fastapi.responses import HTMLResponse, Response
 from classroom_web.entrypoints.http import create_app
 from test_auth_browser import _certificate
 from test_authentication import auth, PASSWORD
-from test_cache_keys import cache, cache_schema, pg
+from test_cache_keys import cache, cache_schema, candidate_contract, pg
 
 
 ROOT = Path(__file__).resolve().parents[4]
+
+
+@pytest.fixture
+def cache_contract_base():
+    return json.loads((ROOT / 'docs/web-alpha/architecture/contracts/openapi.json').read_text(encoding='utf-8'))
+
+
+@pytest.mark.parametrize('already_has_unlock', [True, False])
+def test_cache_proofs_follow_device_contract_after_reordering(cache_contract_base, already_has_unlock):
+    branches = cache_contract_base['components']['schemas']['ReauthOperation']['oneOf']
+    branches.sort(key=lambda branch: branch['properties']['purpose']['const'] != 'student_recovery_status')
+    if not already_has_unlock:
+        branches[:] = [branch for branch in branches if branch['properties']['purpose']['const'] != 'unlockCache']
+    original = deepcopy(branches)
+    device = next(branch for branch in original if branch['properties']['purpose']['const'] == 'revokeDevice')
+    schemas = candidate_contract(cache_contract_base)['components']['schemas']
+    composed = schemas['ReauthOperation']['oneOf']
+    assert branches == original
+    cache_device_id = {'$ref': '#/components/schemas/CacheDeviceId'}
+    for purpose, body in [('unlockCache', 'CacheUnlockRequest'), ('recoverCache', 'CacheRecoverRequest')]:
+        assert schemas[body]['properties']['device_id'] == cache_device_id
+        expected = deepcopy(device)
+        expected['properties']['purpose']['const'] = purpose
+        expected['properties']['target']['properties']['id'] = cache_device_id
+        expected['properties']['candidate_parameters']['properties']['body'] = {'$ref': '#/components/schemas/' + body}
+        assert [branch for branch in composed if branch['properties']['purpose']['const'] == purpose] == [expected]
+
+
+@pytest.mark.parametrize('defect', ['duplicate', 'wrong_target', 'wrong_body'])
+def test_cache_overlay_rejects_conflicting_public_unlock(cache_contract_base, defect):
+    branches = cache_contract_base['components']['schemas']['ReauthOperation']['oneOf']
+    unlock = next(branch for branch in branches if branch['properties']['purpose']['const'] == 'unlockCache')
+    # The existing unlock is deliberately first, so a self-comparison could hide corrupt public inputs.
+    branches.remove(unlock)
+    branches.insert(0, unlock)
+    if defect == 'duplicate':
+        branches.append(deepcopy(unlock))
+    elif defect == 'wrong_target':
+        unlock['properties']['target']['properties']['id'] = {'type': 'integer'}
+    else:
+        unlock['properties']['candidate_parameters']['properties']['body'] = {'$ref': '#/components/schemas/Empty'}
+    with pytest.raises(ValueError, match='unlockCache'):
+        candidate_contract(cache_contract_base)
 
 
 def test_formal_authclient_encrypted_cache_and_revocation(cache, tmp_path):

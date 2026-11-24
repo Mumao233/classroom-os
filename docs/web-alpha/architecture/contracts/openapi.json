@@ -11199,8 +11199,7 @@
         "type": "object",
         "properties": {
           "device_id": {
-            "type": "string",
-            "format": "uuid"
+            "$ref": "#/components/schemas/CacheDeviceId"
           },
           "key_epoch": {
             "type": "integer",
@@ -15569,7 +15568,8 @@
           },
           "limit": {
             "type": "integer",
-            "minimum": 0
+            "minimum": 0,
+            "maximum": 9007199254740991
           },
           "reserved": {
             "type": "integer",
@@ -15589,7 +15589,8 @@
           },
           "remaining": {
             "type": "integer",
-            "minimum": 0
+            "minimum": 0,
+            "maximum": 9007199254740991
           }
         },
         "required": [
@@ -15626,10 +15627,12 @@
             ]
           },
           "asr_enabled": {
-            "type": "boolean"
+            "type": "boolean",
+            "description": "True when the billing master and at least one member of the group are enabled. Each service still checks its own switch and other admission rules."
           },
           "ai_enabled": {
-            "type": "boolean"
+            "type": "boolean",
+            "description": "True when the billing master and at least one member of the group are enabled. Each service still checks its own switch and other admission rules."
           }
         },
         "required": [
@@ -16022,7 +16025,8 @@
           "additional_units": {
             "type": "integer",
             "minimum": 1,
-            "maximum": 9007199254740991
+            "maximum": 9007199254740991,
+            "description": "The locked current bucket limit plus this increment must not exceed 9007199254740991."
           },
           "reason": {
             "$ref": "#/components/schemas/AdminWriteReason"
@@ -16048,10 +16052,12 @@
             "type": "boolean"
           },
           "asr_enabled": {
-            "type": "boolean"
+            "type": "boolean",
+            "description": "True when either member is configured on: asr_streaming_enabled and asr_filetrans_enabled. Independent of billing_enabled."
           },
           "ai_enabled": {
-            "type": "boolean"
+            "type": "boolean",
+            "description": "True when either member is configured on: ai_interaction_enabled and ai_summary_enabled. Independent of billing_enabled."
           },
           "max_active_users": {
             "type": "string",
@@ -16059,6 +16065,30 @@
               "10",
               "30"
             ]
+          },
+          "billing_enabled": {
+            "type": "boolean",
+            "description": "Master switch for new billable work."
+          },
+          "new_capture_enabled": {
+            "type": "boolean",
+            "description": "Independent switch for starting a new capture."
+          },
+          "asr_streaming_enabled": {
+            "type": "boolean",
+            "description": "Live ASR configuration."
+          },
+          "asr_filetrans_enabled": {
+            "type": "boolean",
+            "description": "File retranscription configuration."
+          },
+          "ai_interaction_enabled": {
+            "type": "boolean",
+            "description": "AI questions and explanations configuration."
+          },
+          "ai_summary_enabled": {
+            "type": "boolean",
+            "description": "Review summary configuration."
           }
         },
         "required": [
@@ -16066,9 +16096,70 @@
           "registration_enabled",
           "asr_enabled",
           "ai_enabled",
-          "max_active_users"
+          "max_active_users",
+          "billing_enabled",
+          "new_capture_enabled",
+          "asr_streaming_enabled",
+          "asr_filetrans_enabled",
+          "ai_interaction_enabled",
+          "ai_summary_enabled"
         ],
-        "additionalProperties": false
+        "additionalProperties": false,
+        "description": "Configured switches at the returned revision. The billing master and the individual service switch must both permit new billable work; ordinary quota and budget admission also apply.",
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "asr_streaming_enabled": {
+                  "const": false
+                },
+                "asr_filetrans_enabled": {
+                  "const": false
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "asr_enabled": {
+                  "const": false
+                }
+              }
+            },
+            "else": {
+              "properties": {
+                "asr_enabled": {
+                  "const": true
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "ai_interaction_enabled": {
+                  "const": false
+                },
+                "ai_summary_enabled": {
+                  "const": false
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "ai_enabled": {
+                  "const": false
+                }
+              }
+            },
+            "else": {
+              "properties": {
+                "ai_enabled": {
+                  "const": true
+                }
+              }
+            }
+          }
+        ]
       },
       "AdminSwitchesPatch": {
         "type": "object",
@@ -16082,10 +16173,12 @@
             "type": "boolean"
           },
           "asr_enabled": {
-            "type": "boolean"
+            "type": "boolean",
+            "description": "Set both asr_streaming_enabled and asr_filetrans_enabled to the supplied value."
           },
           "ai_enabled": {
-            "type": "boolean"
+            "type": "boolean",
+            "description": "Set both ai_interaction_enabled and ai_summary_enabled to the supplied value."
           },
           "max_active_users": {
             "type": "string",
@@ -16096,13 +16189,73 @@
           },
           "reason": {
             "$ref": "#/components/schemas/AdminWriteReason"
+          },
+          "billing_enabled": {
+            "type": "boolean",
+            "description": "Master switch for new billable work."
+          },
+          "new_capture_enabled": {
+            "type": "boolean",
+            "description": "Independent switch for starting a new capture."
+          },
+          "asr_streaming_enabled": {
+            "type": "boolean",
+            "description": "Live ASR configuration."
+          },
+          "asr_filetrans_enabled": {
+            "type": "boolean",
+            "description": "File retranscription configuration."
+          },
+          "ai_interaction_enabled": {
+            "type": "boolean",
+            "description": "AI questions and explanations configuration."
+          },
+          "ai_summary_enabled": {
+            "type": "boolean",
+            "description": "Review summary configuration."
           }
         },
         "required": [
           "base_revision",
           "reason"
         ],
-        "additionalProperties": false
+        "additionalProperties": false,
+        "description": "Apply the supplied changes atomically against base_revision. Omitted switches keep their values. A group field sets both members; a group and its member cannot appear in the same PATCH. Requires a reason and at least one setting.",
+        "minProperties": 3,
+        "allOf": [
+          {
+            "not": {
+              "required": [
+                "asr_enabled",
+                "asr_streaming_enabled"
+              ]
+            }
+          },
+          {
+            "not": {
+              "required": [
+                "asr_enabled",
+                "asr_filetrans_enabled"
+              ]
+            }
+          },
+          {
+            "not": {
+              "required": [
+                "ai_enabled",
+                "ai_interaction_enabled"
+              ]
+            }
+          },
+          {
+            "not": {
+              "required": [
+                "ai_enabled",
+                "ai_summary_enabled"
+              ]
+            }
+          }
+        ]
       },
       "AdminUsage": {
         "type": "object",
@@ -17094,8 +17247,7 @@
                     "const": "account"
                   },
                   "id": {
-                    "type": "string",
-                    "format": "uuid"
+                    "$ref": "#/components/schemas/CanonicalUuid"
                   }
                 },
                 "required": [
@@ -17290,8 +17442,7 @@
                     "const": "account"
                   },
                   "id": {
-                    "type": "string",
-                    "format": "uuid"
+                    "$ref": "#/components/schemas/CanonicalUuid"
                   }
                 },
                 "required": [
@@ -17339,8 +17490,7 @@
                     "const": "account"
                   },
                   "id": {
-                    "type": "string",
-                    "format": "uuid"
+                    "$ref": "#/components/schemas/CanonicalUuid"
                   }
                 },
                 "required": [
@@ -17388,8 +17538,7 @@
                     "const": "account"
                   },
                   "id": {
-                    "type": "string",
-                    "format": "uuid"
+                    "$ref": "#/components/schemas/CanonicalUuid"
                   }
                 },
                 "required": [
@@ -17486,8 +17635,7 @@
                     "const": "account"
                   },
                   "id": {
-                    "type": "string",
-                    "format": "uuid"
+                    "$ref": "#/components/schemas/CanonicalUuid"
                   }
                 },
                 "required": [
@@ -17535,8 +17683,7 @@
                     "const": "account"
                   },
                   "id": {
-                    "type": "string",
-                    "format": "uuid"
+                    "$ref": "#/components/schemas/CanonicalUuid"
                   }
                 },
                 "required": [
@@ -17584,8 +17731,7 @@
                     "const": "account"
                   },
                   "id": {
-                    "type": "string",
-                    "format": "uuid"
+                    "$ref": "#/components/schemas/CanonicalUuid"
                   }
                 },
                 "required": [
@@ -17845,8 +17991,7 @@
                     "const": "device"
                   },
                   "id": {
-                    "type": "string",
-                    "format": "uuid"
+                    "$ref": "#/components/schemas/CacheDeviceId"
                   }
                 },
                 "required": [
@@ -17943,8 +18088,7 @@
                     "const": "account"
                   },
                   "id": {
-                    "type": "string",
-                    "format": "uuid"
+                    "$ref": "#/components/schemas/CanonicalUuid"
                   }
                 },
                 "required": [
@@ -18090,8 +18234,7 @@
                     "const": "account"
                   },
                   "id": {
-                    "type": "string",
-                    "format": "uuid"
+                    "$ref": "#/components/schemas/CanonicalUuid"
                   }
                 },
                 "required": [
@@ -18139,8 +18282,7 @@
                     "const": "account"
                   },
                   "id": {
-                    "type": "string",
-                    "format": "uuid"
+                    "$ref": "#/components/schemas/CanonicalUuid"
                   }
                 },
                 "required": [
@@ -18331,9 +18473,7 @@
         "additionalProperties": false
       },
       "CanonicalIdempotencyKey": {
-        "type": "string",
-        "format": "uuid",
-        "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+        "$ref": "#/components/schemas/CanonicalUuid",
         "description": "Lowercase hyphenated UUID, in the representation required by the write endpoint."
       },
       "AdminWriteReason": {
@@ -18341,7 +18481,21 @@
         "minLength": 1,
         "maxLength": 500,
         "pattern": "[^\\u0009-\\u000D\\u001C-\\u0020\\u0085\\u00A0\\u1680\\u2000-\\u200A\\u2028\\u2029\\u202F\\u205F\\u3000\\uFEFF]",
-        "description": "Operator-supplied audit reason, 1 to 500 Unicode code points. Include a character outside Unicode White_Space, U+001C through U+001F and U+FEFF. Bind the exact submitted text."
+        "description": "Operator-supplied audit reason, 1 to 500 Unicode code points. Include a character outside Unicode White_Space, U+001C through U+001F and U+FEFF. Bind the exact submitted text. U+0000 is forbidden anywhere.",
+        "not": {
+          "pattern": "\\u0000"
+        }
+      },
+      "CanonicalUuid": {
+        "type": "string",
+        "format": "uuid",
+        "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+      },
+      "CacheDeviceId": {
+        "type": "string",
+        "format": "uuid",
+        "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+        "description": "Canonical lowercase UUIDv4 of the current device. Cache proof targets and the device_id in the bound write use the same value."
       }
     }
   },

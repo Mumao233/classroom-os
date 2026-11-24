@@ -70,17 +70,25 @@ BEGIN
 END $f$;
 ALTER FUNCTION billing_api.execution_metadata(uuid) OWNER TO classroom_billing_control;
 
+-- Derive the two groups from the same snapshot for current reads and stored receipts.
+CREATE FUNCTION billing_api.with_switch_summaries(snapshot jsonb) RETURNS jsonb
+LANGUAGE sql IMMUTABLE STRICT SET search_path=pg_catalog AS $f$
+  SELECT snapshot || jsonb_build_object(
+    'asr_enabled',(snapshot->>'asr_streaming_enabled')::boolean OR (snapshot->>'asr_filetrans_enabled')::boolean,
+    'ai_enabled',(snapshot->>'ai_interaction_enabled')::boolean OR (snapshot->>'ai_summary_enabled')::boolean)
+$f$;
+ALTER FUNCTION billing_api.with_switch_summaries(jsonb) OWNER TO classroom_billing_control;
+
 CREATE FUNCTION billing_api.switch_view() RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog AS $f$
 DECLARE s jsonb;c record;
 BEGIN
   s:=billing_api.lock_switches();SELECT max_active_users,registration_enabled INTO STRICT c FROM public.identity_capacity WHERE id=1;
-  RETURN jsonb_build_object('revision',s->'revision','registration_enabled',c.registration_enabled,
-    'max_active_users',c.max_active_users::text,'asr_enabled',(s->'flags'->>'asr_streaming')::boolean AND (s->'flags'->>'asr_filetrans')::boolean,
-    'ai_enabled',(s->'flags'->>'ai_interaction')::boolean AND (s->'flags'->>'ai_summary')::boolean,
+  RETURN billing_api.with_switch_summaries(jsonb_build_object('revision',s->'revision','registration_enabled',c.registration_enabled,
+    'max_active_users',c.max_active_users::text,
     'billing_enabled',s->'flags'->'billing','new_capture_enabled',s->'flags'->'new_capture',
     'asr_streaming_enabled',s->'flags'->'asr_streaming','asr_filetrans_enabled',s->'flags'->'asr_filetrans',
-    'ai_interaction_enabled',s->'flags'->'ai_interaction','ai_summary_enabled',s->'flags'->'ai_summary');
+    'ai_interaction_enabled',s->'flags'->'ai_interaction','ai_summary_enabled',s->'flags'->'ai_summary'));
 END $f$;
 ALTER FUNCTION billing_api.switch_view() OWNER TO classroom_billing_control;
 
@@ -123,7 +131,7 @@ ALTER FUNCTION billing_api.usage_view(timestamptz) OWNER TO classroom_billing_co
 
 -- Existing identity owner is the only bridge allowed to inspect or consume
 -- password/MFA attestation and bound reauth rows. Gateway logins see JSON only.
-GRANT EXECUTE ON FUNCTION billing_api.switch_view(),billing_api.apply_switch_body(uuid,uuid,jsonb),
+GRANT EXECUTE ON FUNCTION billing_api.with_switch_summaries(jsonb),billing_api.switch_view(),billing_api.apply_switch_body(uuid,uuid,jsonb),
   billing_api.adjust_quota(uuid,uuid,uuid,bigint,text),billing_api.usage_view(timestamptz) TO classroom_web_session_writer;
 GRANT INSERT ON public.quota_periods TO classroom_billing_control;
 CREATE FUNCTION billing_api.adjustment_period(b jsonb) RETURNS uuid
@@ -189,6 +197,7 @@ BEGIN
     AND operation_key=(p->>'operation_key')::uuid FOR UPDATE;
   IF FOUND THEN
     IF old.commitment IS DISTINCT FROM p->>'commitment' THEN RETURN jsonb_build_object('error','IDEMPOTENCY_MISMATCH');END IF;
+    IF action='adminUpdateSwitches' THEN RETURN billing_api.with_switch_summaries(old.result);END IF;
     RETURN old.result;
   END IF;
   SELECT * INTO r FROM public.reauth_proofs WHERE token_hash=p->>'reauth_hash' AND owner_id=uid FOR UPDATE;

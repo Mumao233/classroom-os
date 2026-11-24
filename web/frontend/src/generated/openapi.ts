@@ -2745,8 +2745,7 @@ export interface components {
             trust_confirmed: true;
         };
         CacheUnlockRequest: {
-            /** Format: uuid */
-            device_id: string;
+            device_id: components["schemas"]["CacheDeviceId"];
             key_epoch: number;
             /** @enum {string} */
             scope: "learning" | "drafts" | "recording_recovery";
@@ -3736,7 +3735,9 @@ export interface components {
             buckets: components["schemas"]["QuotaBucket"][];
             /** @enum {string} */
             platform_billing_state: "normal" | "warning60" | "warning80" | "blocked100" | "paused";
+            /** @description True when the billing master and at least one member of the group are enabled. Each service still checks its own switch and other admission rules. */
             asr_enabled: boolean;
+            /** @description True when the billing master and at least one member of the group are enabled. Each service still checks its own switch and other admission rules. */
             ai_enabled: boolean;
         };
         SearchResult: {
@@ -3820,26 +3821,57 @@ export interface components {
             bucket_kind: "asr_month_ms" | "asr_day_ms" | "retranscribe_month_ms" | "interactive_month_count" | "summary_month_count";
             /** Format: date-time */
             period_start: string;
+            /** @description The locked current bucket limit plus this increment must not exceed 9007199254740991. */
             additional_units: number;
             reason: components["schemas"]["AdminWriteReason"];
         };
+        /** @description Configured switches at the returned revision. The billing master and the individual service switch must both permit new billable work; ordinary quota and budget admission also apply. */
         AdminSwitches: {
             revision: number;
             registration_enabled: boolean;
+            /** @description True when either member is configured on: asr_streaming_enabled and asr_filetrans_enabled. Independent of billing_enabled. */
             asr_enabled: boolean;
+            /** @description True when either member is configured on: ai_interaction_enabled and ai_summary_enabled. Independent of billing_enabled. */
             ai_enabled: boolean;
             /** @enum {string} */
             max_active_users: "10" | "30";
-        };
+            /** @description Master switch for new billable work. */
+            billing_enabled: boolean;
+            /** @description Independent switch for starting a new capture. */
+            new_capture_enabled: boolean;
+            /** @description Live ASR configuration. */
+            asr_streaming_enabled: boolean;
+            /** @description File retranscription configuration. */
+            asr_filetrans_enabled: boolean;
+            /** @description AI questions and explanations configuration. */
+            ai_interaction_enabled: boolean;
+            /** @description Review summary configuration. */
+            ai_summary_enabled: boolean;
+        } & (unknown & unknown);
+        /** @description Apply the supplied changes atomically against base_revision. Omitted switches keep their values. A group field sets both members; a group and its member cannot appear in the same PATCH. Requires a reason and at least one setting. */
         AdminSwitchesPatch: {
             base_revision: number;
             registration_enabled?: boolean;
+            /** @description Set both asr_streaming_enabled and asr_filetrans_enabled to the supplied value. */
             asr_enabled?: boolean;
+            /** @description Set both ai_interaction_enabled and ai_summary_enabled to the supplied value. */
             ai_enabled?: boolean;
             /** @enum {string} */
             max_active_users?: "10" | "30";
             reason: components["schemas"]["AdminWriteReason"];
-        };
+            /** @description Master switch for new billable work. */
+            billing_enabled?: boolean;
+            /** @description Independent switch for starting a new capture. */
+            new_capture_enabled?: boolean;
+            /** @description Live ASR configuration. */
+            asr_streaming_enabled?: boolean;
+            /** @description File retranscription configuration. */
+            asr_filetrans_enabled?: boolean;
+            /** @description AI questions and explanations configuration. */
+            ai_interaction_enabled?: boolean;
+            /** @description Review summary configuration. */
+            ai_summary_enabled?: boolean;
+        } & (unknown & unknown & unknown & unknown);
         /** @description Platform ledger totals for one budget period. Amounts are nonnegative decimal integer strings in microyuan (1 CNY = 1000000 microyuan). Risk = fixed_and_accrued_microyuan + settled_microyuan + reserved_microyuan + unknown_microyuan. Compare risk to the gross budget for thresholds. Ordinary admission also enforces the budget less the safety reserve and the individual pool limit. */
         AdminUsage: {
             /** Format: date-time */
@@ -4028,8 +4060,7 @@ export interface components {
             target: {
                 /** @constant */
                 kind: "account";
-                /** Format: uuid */
-                id: string;
+                id: components["schemas"]["CanonicalUuid"];
             };
             /** @description Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned. */
             candidate_parameters: {
@@ -4088,8 +4119,7 @@ export interface components {
             target: {
                 /** @constant */
                 kind: "account";
-                /** Format: uuid */
-                id: string;
+                id: components["schemas"]["CanonicalUuid"];
             };
             /** @description Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned. */
             candidate_parameters: {
@@ -4103,8 +4133,7 @@ export interface components {
             target: {
                 /** @constant */
                 kind: "account";
-                /** Format: uuid */
-                id: string;
+                id: components["schemas"]["CanonicalUuid"];
             };
             /** @description Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned. */
             candidate_parameters: {
@@ -4118,8 +4147,7 @@ export interface components {
             target: {
                 /** @constant */
                 kind: "account";
-                /** Format: uuid */
-                id: string;
+                id: components["schemas"]["CanonicalUuid"];
             };
             /** @description Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned. */
             candidate_parameters: {
@@ -4148,8 +4176,7 @@ export interface components {
             target: {
                 /** @constant */
                 kind: "account";
-                /** Format: uuid */
-                id: string;
+                id: components["schemas"]["CanonicalUuid"];
             };
             /** @description Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned. */
             candidate_parameters: {
@@ -4163,8 +4190,7 @@ export interface components {
             target: {
                 /** @constant */
                 kind: "account";
-                /** Format: uuid */
-                id: string;
+                id: components["schemas"]["CanonicalUuid"];
             };
             /** @description Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned. */
             candidate_parameters: {
@@ -4178,8 +4204,7 @@ export interface components {
             target: {
                 /** @constant */
                 kind: "account";
-                /** Format: uuid */
-                id: string;
+                id: components["schemas"]["CanonicalUuid"];
             };
             /** @description Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned. */
             candidate_parameters: {
@@ -4253,8 +4278,7 @@ export interface components {
             target: {
                 /** @constant */
                 kind: "device";
-                /** Format: uuid */
-                id: string;
+                id: components["schemas"]["CacheDeviceId"];
             };
             /** @description Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned. */
             candidate_parameters: {
@@ -4283,8 +4307,7 @@ export interface components {
             target: {
                 /** @constant */
                 kind: "account";
-                /** Format: uuid */
-                id: string;
+                id: components["schemas"]["CanonicalUuid"];
             };
             /** @description Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned. */
             candidate_parameters: {
@@ -4328,8 +4351,7 @@ export interface components {
             target: {
                 /** @constant */
                 kind: "account";
-                /** Format: uuid */
-                id: string;
+                id: components["schemas"]["CanonicalUuid"];
             };
             /** @description Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned. */
             candidate_parameters: {
@@ -4343,8 +4365,7 @@ export interface components {
             target: {
                 /** @constant */
                 kind: "account";
-                /** Format: uuid */
-                id: string;
+                id: components["schemas"]["CanonicalUuid"];
             };
             /** @description Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned. */
             candidate_parameters: {
@@ -4395,13 +4416,17 @@ export interface components {
             items: components["schemas"]["AudioManifest"][];
             next_cursor: string | null;
         };
+        /** @description Lowercase hyphenated UUID, in the representation required by the write endpoint. */
+        CanonicalIdempotencyKey: components["schemas"]["CanonicalUuid"];
+        /** @description Operator-supplied audit reason, 1 to 500 Unicode code points. Include a character outside Unicode White_Space, U+001C through U+001F and U+FEFF. Bind the exact submitted text. U+0000 is forbidden anywhere. */
+        AdminWriteReason: string;
+        /** Format: uuid */
+        CanonicalUuid: string;
         /**
          * Format: uuid
-         * @description Lowercase hyphenated UUID, in the representation required by the write endpoint.
+         * @description Canonical lowercase UUIDv4 of the current device. Cache proof targets and the device_id in the bound write use the same value.
          */
-        CanonicalIdempotencyKey: string;
-        /** @description Operator-supplied audit reason, 1 to 500 Unicode code points. Include a character outside Unicode White_Space, U+001C through U+001F and U+FEFF. Bind the exact submitted text. */
-        AdminWriteReason: string;
+        CacheDeviceId: string;
     };
     responses: never;
     parameters: {

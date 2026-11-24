@@ -391,5 +391,5 @@ class PgBillingRepository:
             buckets.append(dict(kind=resource, period_start=qstart.isoformat(), period_end=qend.isoformat(),
                                 limit=limit, **values, remaining=max(0, limit - sum(values.values()))))
         return dict(buckets=buckets, platform_billing_state=billing_state(budget['risk'],budget['budget_microyuan'],flags['billing']),
-                    asr_enabled=flags['billing'] and flags['asr_streaming'] and flags['asr_filetrans'],
-                    ai_enabled=flags['billing'] and flags['ai_interaction'] and flags['ai_summary'])
+                    asr_enabled=flags['billing'] and (flags['asr_streaming'] or flags['asr_filetrans']),
+                    ai_enabled=flags['billing'] and (flags['ai_interaction'] or flags['ai_summary']))

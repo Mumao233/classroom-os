@@ -26,6 +26,20 @@ PREFIX='/api/web/v1'
 # Opaque to clients: rank, creation time in microseconds and row id of the last item served.
 PAGE_CURSOR=re.compile(r'[012]\.[0-9]{1,18}\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}')
 COOKIES={'session':'__Host-classroom_session','preauth':'__Host-classroom_preauth','recovery':'__Host-classroom_recovery'}
+ADMIN_INTEGER_FIELDS = {
+    'adminUpdateUser': 'base_revision',
+    'adminUpdateSwitches': 'base_revision',
+    'adminAdjustQuota': 'additional_units',
+}
+
+
+def normalize_admin_write_integer(operation_id, body):
+    """Use the same validated JSON integer in the proof commitment and the PG write."""
+    planned = body['operation'] if operation_id == 'reauthenticate' else None
+    field = ADMIN_INTEGER_FIELDS.get(planned['purpose'] if planned is not None else operation_id)
+    if field is not None:
+        write_body = planned['candidate_parameters']['body'] if planned is not None else body
+        write_body[field] = int(write_body[field])
 
 
 def strict_json(raw):
@@ -382,6 +396,7 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
                         if str(UUID(key))!=key:raise ValueError()
                     except (ValueError,TypeError,AttributeError):raise AuthRejected('VALIDATION_FAILED',422) from None
                     async with asyncio.timeout(max(0,entered+1-time.monotonic())):body=await body_for(request,schema)
+                    normalize_admin_write_integer(operation['operationId'], body)
                 dispatched=True
                 # Cancellation detaches the reply, not the actual worker/hash.
                 # Cross-process slots stay held until computation really exits;
@@ -396,10 +411,6 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
                 async with asyncio.timeout(max(0,deadline-time.monotonic())):
                     reply=await asyncio.shield(asyncio.wrap_future(future))
                 value=reply.body
-                if path == '/admin/switches' and not contract.get('x-pr11a-candidate'):
-                    # The internal ledger also returns candidate-only fine-grained switches.
-                    fields = contract['components']['schemas']['AdminSwitches']['properties']
-                    value = {field: value[field] for field in fields if field in value}
                 if response_schema.get('$ref','').endswith('/Acknowledged'):value=dict(accepted=True,request_id=request_id)
                 check(response_schema,value,response=True)
                 response=JSONResponse(value,status_code=int(success),headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'})

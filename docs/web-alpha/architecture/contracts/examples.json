@@ -3147,6 +3147,317 @@
         }
       },
       "reason": "A non-admin proof must carry the exact canonical key accepted by the future HTTP write."
+    },
+    {
+      "name": "pr11b_r2_mixed_switches",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/AdminSwitches",
+      "expected_valid": true,
+      "value": {
+        "billing_enabled": true,
+        "new_capture_enabled": true,
+        "asr_streaming_enabled": true,
+        "asr_filetrans_enabled": false,
+        "ai_interaction_enabled": true,
+        "ai_summary_enabled": false,
+        "revision": 2,
+        "registration_enabled": true,
+        "max_active_users": "10",
+        "asr_enabled": true,
+        "ai_enabled": true
+      },
+      "reason": "Each group has one enabled service."
+    },
+    {
+      "name": "pr11b_r2_mixed_asr_reported_off",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/AdminSwitches",
+      "expected_valid": false,
+      "value": {
+        "billing_enabled": true,
+        "new_capture_enabled": true,
+        "asr_streaming_enabled": true,
+        "asr_filetrans_enabled": false,
+        "ai_interaction_enabled": true,
+        "ai_summary_enabled": false,
+        "revision": 2,
+        "registration_enabled": true,
+        "max_active_users": "10",
+        "asr_enabled": false,
+        "ai_enabled": true
+      },
+      "reason": "Live ASR is enabled."
+    },
+    {
+      "name": "pr11b_r2_mixed_ai_reported_off",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/AdminSwitches",
+      "expected_valid": false,
+      "value": {
+        "billing_enabled": true,
+        "new_capture_enabled": true,
+        "asr_streaming_enabled": true,
+        "asr_filetrans_enabled": false,
+        "ai_interaction_enabled": true,
+        "ai_summary_enabled": false,
+        "revision": 2,
+        "registration_enabled": true,
+        "max_active_users": "10",
+        "asr_enabled": true,
+        "ai_enabled": false
+      },
+      "reason": "AI interaction is enabled."
+    },
+    {
+      "name": "pr11b_r2_fine_patch",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/AdminSwitchesPatch",
+      "expected_valid": true,
+      "value": {
+        "base_revision": 2,
+        "reason": "Synthetic configuration change",
+        "asr_filetrans_enabled": false,
+        "ai_enabled": true
+      },
+      "reason": "Independent changes across two groups share one revision."
+    },
+    {
+      "name": "pr11b_r2_conflicting_patch",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/AdminSwitchesPatch",
+      "expected_valid": false,
+      "value": {
+        "base_revision": 2,
+        "reason": "Synthetic configuration change",
+        "asr_enabled": true,
+        "asr_filetrans_enabled": false
+      },
+      "reason": "A batch field overlaps a member."
+    },
+    {
+      "name": "pr11b_r2_empty_patch",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/AdminSwitchesPatch",
+      "expected_valid": false,
+      "value": {
+        "base_revision": 2,
+        "reason": "Synthetic configuration change"
+      },
+      "reason": "Supply at least one setting."
+    },
+    {
+      "name": "pr11b_r2_account_uuid",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/ReauthOperation",
+      "expected_valid": true,
+      "value": {
+        "purpose": "adminUpdateSwitches",
+        "target": {
+          "kind": "account",
+          "id": "abcdefab-abcd-4def-8abc-abcdefabcdef"
+        },
+        "candidate_parameters": {
+          "idempotency_key": "abcdabcd-abcd-4def-8abc-abcdefabcdef",
+          "body": {
+            "base_revision": 1,
+            "registration_enabled": false,
+            "reason": "Synthetic registration pause"
+          }
+        }
+      },
+      "reason": "An account locator uses canonical lowercase UUID text."
+    },
+    {
+      "name": "pr11b_r2_account_uuid_uppercase",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/ReauthOperation",
+      "expected_valid": false,
+      "value": {
+        "purpose": "adminUpdateSwitches",
+        "target": {
+          "kind": "account",
+          "id": "ABCDEFAB-ABCD-4DEF-8ABC-ABCDEFABCDEF"
+        },
+        "candidate_parameters": {
+          "idempotency_key": "abcdabcd-abcd-4def-8abc-abcdefabcdef",
+          "body": {
+            "base_revision": 1,
+            "registration_enabled": false,
+            "reason": "Synthetic registration pause"
+          }
+        }
+      },
+      "reason": "Reject the spelling before factor verification."
+    },
+    {
+      "name": "pr11b_r2_nul_in_write",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/AdminSwitchesPatch",
+      "expected_valid": false,
+      "value": {
+        "base_revision": 2,
+        "reason": "Reason before\u0000and after",
+        "asr_enabled": true
+      },
+      "reason": "PostgreSQL text cannot store U+0000."
+    },
+    {
+      "name": "pr11b_r2_nul_in_proof",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/ReauthOperation",
+      "expected_valid": false,
+      "value": {
+        "purpose": "adminUpdateSwitches",
+        "target": {
+          "kind": "account",
+          "id": "11111111-1111-4111-8111-111111111111"
+        },
+        "candidate_parameters": {
+          "idempotency_key": "abcdabcd-abcd-4def-8abc-abcdefabcdef",
+          "body": {
+            "base_revision": 2,
+            "reason": "Reason before\u0000and after",
+            "asr_enabled": true
+          }
+        }
+      },
+      "reason": "Reject the same invalid reason before proof issuance."
+    },
+    {
+      "name": "pr11b_r2_quota_bucket_max",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/QuotaBucket",
+      "expected_valid": true,
+      "value": {
+        "kind": "summary_month_count",
+        "period_start": "2026-11-01T00:00:00+08:00",
+        "period_end": "2026-12-01T00:00:00+08:00",
+        "reserved": 0,
+        "submitted": 0,
+        "settled": 0,
+        "unknown": 0,
+        "limit": 9007199254740991,
+        "remaining": 9007199254740991
+      },
+      "reason": "Adjusted quota values must remain exact in a browser."
+    },
+    {
+      "name": "pr11b_r2_quota_bucket_overflow",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/QuotaBucket",
+      "expected_valid": false,
+      "value": {
+        "kind": "summary_month_count",
+        "period_start": "2026-11-01T00:00:00+08:00",
+        "period_end": "2026-12-01T00:00:00+08:00",
+        "reserved": 0,
+        "submitted": 0,
+        "settled": 0,
+        "unknown": 0,
+        "limit": 9007199254740992,
+        "remaining": 9007199254740992
+      },
+      "reason": "Adjusted quota values must remain exact in a browser."
+    },
+    {
+      "name": "pr11b_r2_cache_device_lowercase_v4",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/ReauthOperation",
+      "expected_valid": true,
+      "value": {
+        "purpose": "unlockCache",
+        "target": {
+          "kind": "device",
+          "id": "abcdefab-abcd-4def-8abc-abcdefabcdef"
+        },
+        "candidate_parameters": {
+          "idempotency_key": "22222222-2222-4222-8222-222222222222",
+          "body": {
+            "device_id": "abcdefab-abcd-4def-8abc-abcdefabcdef",
+            "key_epoch": 1,
+            "scope": "drafts",
+            "class_session_id": null
+          }
+        }
+      },
+      "reason": "Use the same canonical UUIDv4 in the cache target and the write."
+    },
+    {
+      "name": "pr11b_r2_cache_target_uppercase",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/ReauthOperation",
+      "expected_valid": false,
+      "value": {
+        "purpose": "unlockCache",
+        "target": {
+          "kind": "device",
+          "id": "ABCDEFAB-ABCD-4DEF-8ABC-ABCDEFABCDEF"
+        },
+        "candidate_parameters": {
+          "idempotency_key": "22222222-2222-4222-8222-222222222222",
+          "body": {
+            "device_id": "abcdefab-abcd-4def-8abc-abcdefabcdef",
+            "key_epoch": 1,
+            "scope": "drafts",
+            "class_session_id": null
+          }
+        }
+      },
+      "reason": "The cache consumer rebuilds the commitment using the canonical device ID."
+    },
+    {
+      "name": "pr11b_r2_cache_body_uppercase",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/CacheUnlockRequest",
+      "expected_valid": false,
+      "value": {
+        "device_id": "ABCDEFAB-ABCD-4DEF-8ABC-ABCDEFABCDEF",
+        "key_epoch": 1,
+        "scope": "drafts",
+        "class_session_id": null
+      },
+      "reason": "Cache release requires a lowercase UUIDv4 in its body."
+    },
+    {
+      "name": "pr11b_r2_cache_target_v1",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/ReauthOperation",
+      "expected_valid": false,
+      "value": {
+        "purpose": "unlockCache",
+        "target": {
+          "kind": "device",
+          "id": "abcdefab-abcd-1def-8abc-abcdefabcdef"
+        },
+        "candidate_parameters": {
+          "idempotency_key": "22222222-2222-4222-8222-222222222222",
+          "body": {
+            "device_id": "abcdefab-abcd-4def-8abc-abcdefabcdef",
+            "key_epoch": 1,
+            "scope": "drafts",
+            "class_session_id": null
+          }
+        }
+      },
+      "reason": "Cache release requires version four."
+    },
+    {
+      "name": "pr11b_r2_revoke_device_uppercase_target",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/ReauthOperation",
+      "expected_valid": true,
+      "value": {
+        "purpose": "revokeDevice",
+        "target": {
+          "kind": "device",
+          "id": "ABCDEFAB-ABCD-4DEF-8ABC-ABCDEFABCDEF"
+        },
+        "candidate_parameters": {
+          "idempotency_key": "22222222-2222-4222-8222-222222222222",
+          "body": {}
+        }
+      },
+      "reason": "Device revocation binds the UUID spelling in the path."
     }
   ],
   "audio_manifest_request_cases": [

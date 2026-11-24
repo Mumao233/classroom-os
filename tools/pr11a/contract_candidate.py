@@ -15,16 +15,16 @@ def build(base):
     schemas = candidate['components']['schemas']
     for kind in ('AdminSwitches', 'AdminSwitchesPatch'):
         for flag in FINE_SWITCHES:
-            schemas[kind]['properties'][flag+'_enabled'] = dict(type='boolean')
-    # Coarse and fine updates have explicit mutually exclusive semantics.
-    schemas['AdminSwitchesPatch']['allOf'] = [
+            schemas[kind]['properties'].setdefault(flag+'_enabled', dict(type='boolean'))
+    # Older bases need the group conflict rules. The public contract owns them from 0.4.0.
+    schemas['AdminSwitchesPatch'].setdefault('allOf', [
         {'not': {'required': [coarse, fine+'_enabled']}}
         for coarse, names in [('asr_enabled',('asr_streaming','asr_filetrans')),
-                              ('ai_enabled',('ai_interaction','ai_summary'))] for fine in names]
+                              ('ai_enabled',('ai_interaction','ai_summary'))] for fine in names])
     operations = schemas['ReauthOperation']['oneOf']
     public_purposes = {op['properties']['purpose']['const'] for op in operations}
     for purpose, body in [('adminUpdateSwitches','AdminSwitchesPatch'),('adminAdjustQuota','QuotaAdjustment')]:
-        # HTTP 0.4.0 owns these branches. Their body references already pick up the switch overlay.
+        # Public branches already refer to their write DTOs.
         if purpose in public_purposes:
             continue
         target = dict(type='object', additionalProperties=False, required=['kind','id'],
@@ -44,11 +44,14 @@ if __name__ == '__main__':
     base = json.loads(source.read_text(encoding='utf-8'))
     candidate = build(base)
     schemas = candidate['components']['schemas']
-    extensions = {
-        'AdminSwitches': {'properties_append': {flag+'_enabled':dict(type='boolean') for flag in FINE_SWITCHES}},
-        'AdminSwitchesPatch': {'properties_append': {flag+'_enabled':dict(type='boolean') for flag in FINE_SWITCHES},
-                              'allOf_append':schemas['AdminSwitchesPatch']['allOf']},
-    }
+    extensions = {}
+    for name in ('AdminSwitches', 'AdminSwitchesPatch'):
+        original = base['components']['schemas'][name]
+        new_fields = {k:v for k,v in schemas[name]['properties'].items() if k not in original['properties']}
+        if new_fields:
+            extensions[name] = {'properties_append': new_fields}
+        if 'allOf' in schemas[name] and 'allOf' not in original:
+            extensions.setdefault(name, {})['allOf_append'] = schemas[name]['allOf']
     original_count = len(base['components']['schemas']['ReauthOperation']['oneOf'])
     extra_operations = schemas['ReauthOperation']['oneOf'][original_count:]
     if extra_operations:
@@ -57,5 +60,5 @@ if __name__ == '__main__':
         status='unapproved integration candidate',operations=['getQuota','cancelTask','adminGetSwitches','adminUpdateSwitches',
             'adminGetUserQuota','adminAdjustQuota','adminGetUsage','reauthenticate'],
         schema_extensions=extensions,
-        compatibility='Fine-grained switches require explicit candidate composition. HTTP 0.4.0 defines the two billing reauthentication purposes and coarse switches. Build the overlay separately for its consumers.')
+        compatibility='HTTP 0.4.0 owns the billing proof shapes, six independent switch fields, group summaries and PATCH rules. The 11a composition retains its integration marker.')
     (root/'docs/web-alpha/pr11a/CONTRACT-CANDIDATE.json').write_bytes((json.dumps(delta,indent=2,ensure_ascii=False)+'\n').encode('utf-8'))

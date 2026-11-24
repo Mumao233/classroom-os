@@ -45,16 +45,22 @@ def candidate_contract(contract):
     recover["responses"]["200"]["content"]["application/json"]["schema"] = {"$ref": "#/components/schemas/CacheRecoverResult"}
     recover["x-reauth-policy"]["purpose"] = "recoverCache"
     result["paths"]["/me/cache-recover"] = {"post": recover}
+    operations = schemas["ReauthOperation"]["oneOf"]
+    device_operation, = (item for item in operations
+                         if item["properties"]["purpose"]["const"] == "revokeDevice")
+    if device_operation["properties"]["target"]["properties"]["kind"] != {"const": "device"}:
+        raise ValueError("incompatible revokeDevice target")
     for purpose, body in (("unlockCache", "CacheUnlockRequest"), ("recoverCache", "CacheRecoverRequest")):
-        operation = copy.deepcopy(schemas["ReauthOperation"]["oneOf"][0])
+        operation = copy.deepcopy(device_operation)
         operation["properties"]["purpose"] = {"const": purpose}
-        operation["properties"]["target"]["properties"]["kind"] = {"const": "device"}
+        # Cache release reconstructs the target from the validated body device ID.
+        operation["properties"]["target"]["properties"]["id"] = copy.deepcopy(schemas[body]["properties"]["device_id"])
         operation["properties"]["candidate_parameters"]["properties"]["body"] = {"$ref": f"#/components/schemas/{body}"}
-        existing = [item for item in schemas["ReauthOperation"]["oneOf"]
+        existing = [item for item in operations
                     if item.get("properties", {}).get("purpose", {}).get("const") == purpose]
         if existing:
             if len(existing) != 1 or existing[0] != operation:
                 raise ValueError(f"incompatible existing {purpose} contract")
         else:
-            schemas["ReauthOperation"]["oneOf"].append(operation)
+            operations.append(operation)
     return result

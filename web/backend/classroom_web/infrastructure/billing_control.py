@@ -52,6 +52,8 @@ class PgBillingAdminRepository:
             message = getattr(getattr(error.orig, 'diag', None), 'message_primary', '')
             if message == 'IDEMPOTENCY_MISMATCH':
                 raise AuthRejected('IDEMPOTENCY_MISMATCH', 409) from None
+            if state == '22003' and message == 'QUOTA_LIMIT_OUT_OF_RANGE':
+                raise AuthRejected('VALIDATION_FAILED', 422) from None
             if state == 'P0001':
                 raise AuthRejected('REVISION_CONFLICT', 409) from None
             raise AuthRejected('RESULT_UNKNOWN' if state.startswith('08') else 'STORAGE_UNAVAILABLE', 503) from None

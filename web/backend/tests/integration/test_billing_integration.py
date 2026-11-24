@@ -22,7 +22,7 @@ from classroom_web.application.billing_tasks import BillingTaskLifecycle
 from classroom_web.application.qa_browser import QaBrowser
 from classroom_web.application.task_worker import MockProvider, TaskWorker
 from classroom_web.domain.auth import BrowserContext
-from classroom_web.domain.billing import ReservationRequest, Usage
+from classroom_web.domain.billing import BillingBlocked, ReservationRequest, Usage
 from classroom_web.domain.data import OwnerContext
 from classroom_web.entrypoints.http import create_app
 from classroom_web.infrastructure.billing_control import BillingMaintenance, PgBillingAdminRepository
@@ -502,9 +502,11 @@ def test_formal_admin_reauth_and_switch_projection(fee_api):
     session, seed = sign_in(api, administrator=True)
     response = api.client.get(BASE + '/admin/switches')
     assert response.status_code == 200, response.text
-    public_fields = {'revision', 'registration_enabled', 'max_active_users', 'asr_enabled', 'ai_enabled'}
+    public_fields = {'revision', 'registration_enabled', 'max_active_users', 'asr_enabled', 'ai_enabled',
+                     'billing_enabled', 'new_capture_enabled', 'asr_streaming_enabled', 'asr_filetrans_enabled',
+                     'ai_interaction_enabled', 'ai_summary_enabled'}
     assert set(response.json()) == public_fields
-    body = dict(base_revision=response.json()['revision'], ai_enabled=False, reason='Synthetic coarse switch')
+    body = dict(base_revision=response.json()['revision'], asr_enabled=False, ai_enabled=False, reason='Synthetic coarse switch')
     key = str(uuid4())
     proof = prove(api, session, seed, 'adminUpdateSwitches', body, key)
     wrong_key = {**proof, 'Idempotency-Key': str(uuid4())}
@@ -512,8 +514,89 @@ def test_formal_admin_reauth_and_switch_projection(fee_api):
     assert rejected.status_code == 403 and rejected.json()['error']['code'] == 'REAUTH_REQUIRED'
     changed = api.client.patch(BASE + '/admin/switches', json=body, headers=headers(session, **proof))
     assert changed.status_code == 200, changed.text
-    assert set(changed.json()) == public_fields and changed.json()['ai_enabled'] is False
+    assert set(changed.json()) == public_fields
+    for field in ('asr_enabled', 'ai_enabled', 'asr_streaming_enabled', 'asr_filetrans_enabled',
+                  'ai_interaction_enabled', 'ai_summary_enabled'):
+        assert changed.json()[field] is False
     assert api.client.get(BASE + '/admin/switches').json() == changed.json()
+
+
+@pytest.mark.parametrize('fee_api', ['formal'], indirect=True)
+def test_mixed_switch_projection_matches_admission_and_replays_the_original_revision(fee_api):
+    api = fee_api
+    session, seed = sign_in(api, administrator=True)
+    initial = api.client.get(BASE + '/admin/switches').json()
+    body = dict(base_revision=initial['revision'], asr_filetrans_enabled=False, ai_summary_enabled=False,
+                reason='Synthetic pause of two services')
+    key = str(uuid4())
+    proof = prove(api, session, seed, 'adminUpdateSwitches', body, key)
+    response = api.client.patch(BASE + '/admin/switches', json=body, headers=headers(session, **proof))
+    assert response.status_code == 200, response.text
+    mixed = response.json()
+    assert mixed == {**initial, 'revision': initial['revision'] + 1, 'asr_filetrans_enabled': False, 'ai_summary_enabled': False}
+    assert mixed['asr_enabled'] and mixed['ai_enabled'] and mixed['asr_streaming_enabled'] and mixed['ai_interaction_enabled']
+    assert api.client.get(BASE + '/admin/switches').json() == mixed
+    quota = api.client.get(BASE + '/me/quota').json()
+    assert quota['asr_enabled'] and quota['ai_enabled']
+
+    price = uuid4()
+    with api.c.pg.admin.begin() as db:
+        db.execute(sa.text('''INSERT INTO price_catalog(id,provider,model,region,revision,currency,rates,
+                minimum_microyuan,synthetic,effective_at) VALUES(:id,'mock','synthetic','synthetic',:revision,'CNY',
+                cast(:rates AS jsonb),0,true,'2020-01-01T00:00:00Z')'''),
+                   dict(id=price, revision=str(price), rates=json.dumps({'audio_duration_ms': {'microyuan': 1, 'units': 1}})))
+    principal = api.a.service.principal(BrowserContext(session=api.client.cookies.get('__Host-classroom_session')))
+    billing = BillingService(api.c.pg.db)
+
+    def attempt(purpose):
+        audio = purpose.startswith('asr_')
+        return billing.reserve(principal, ReservationRequest(op_id=uuid4(), purpose=purpose, price_id=price if audio else api.c.price,
+                               maximum_units={'audio_duration_ms' if audio else 'input_tokens': 1},
+                               task_max_microyuan=1, input_ref={'schema_version': 1}))
+
+    for enabled in ('asr_live', 'ai_question'):
+        assert attempt(enabled)['state'] == 'reserved'
+    for disabled in ('asr_retranscribe', 'review_summary'):
+        with pytest.raises(BillingBlocked, match='charged operation is paused'):
+            attempt(disabled)
+
+    with api.c.pg.admin.begin() as db:
+        # Historical receipts saved the AND summaries alongside the original member flags.
+        stored = db.execute(sa.text('''UPDATE preauth_receipts SET result=result || cast(:old AS jsonb)
+                WHERE operation='adminUpdateSwitches' AND operation_key=:key RETURNING result'''),
+                            dict(old=json.dumps({'asr_enabled': False, 'ai_enabled': False}), key=key)).scalar_one()
+        assert stored['revision'] == mixed['revision'] and not stored['ai_enabled'] and stored['ai_interaction_enabled']
+        db.execute(sa.text('SELECT billing_api.update_switches(:actor,:op,:revision,cast(:flags AS jsonb),:reason)'),
+                   dict(actor=api.c.actor, op=uuid4(), revision=mixed['revision'], flags=json.dumps({'billing': False}),
+                        reason='Synthetic billing master pause'))
+    live = api.client.get(BASE + '/admin/switches').json()
+    assert live == {**mixed, 'revision': mixed['revision'] + 1, 'billing_enabled': False}
+    quota = api.client.get(BASE + '/me/quota').json()
+    assert not quota['asr_enabled'] and not quota['ai_enabled']
+    for disabled in ('asr_live', 'ai_question'):
+        with pytest.raises(BillingBlocked, match='charged operation is paused'):
+            attempt(disabled)
+    replay = api.client.patch(BASE + '/admin/switches', json=body, headers=headers(session, **proof))
+    assert replay.status_code == 200, replay.text
+    assert replay.json() == mixed
+    assert api.client.get(BASE + '/admin/switches').json() == live
+
+
+@pytest.mark.parametrize('fee_api', ['formal'], indirect=True)
+def test_fine_and_coarse_switches_share_a_revision(fee_api):
+    api = fee_api
+    session, seed = sign_in(api, administrator=True)
+    initial = api.client.get(BASE + '/admin/switches').json()
+    coarse = dict(base_revision=initial['revision'], asr_enabled=False, reason='Synthetic stale batch')
+    proof = prove(api, session, seed, 'adminUpdateSwitches', coarse, str(uuid4()))
+    with api.c.pg.admin.begin() as db:
+        db.execute(sa.text('SELECT billing_api.update_switches(:actor,:op,:revision,cast(:flags AS jsonb),:reason)'),
+                   dict(actor=api.c.actor, op=uuid4(), revision=initial['revision'],
+                        flags=json.dumps({'ai_interaction': False}), reason='Synthetic concurrent service edit'))
+    response = api.client.patch(BASE + '/admin/switches', json=coarse, headers=headers(session, **proof))
+    assert response.status_code == 409 and response.json()['error']['code'] == 'REVISION_CONFLICT', response.text
+    assert api.client.get(BASE + '/admin/switches').json() == {
+        **initial, 'revision': initial['revision'] + 1, 'ai_interaction_enabled': False}
 
 
 @pytest.mark.parametrize('fee_api', ['formal'], indirect=True)
@@ -531,8 +614,13 @@ def test_formal_invalid_admin_candidates_are_rejected_before_password_or_totp(fe
         ('adminUpdateSwitches', 'account', key.upper(), switch),
         ('adminUpdateSwitches', 'account', key, switch | {'reason': '\u0085\u001c'}),
         ('adminUpdateSwitches', 'account', key, switch | {'reason': '\ufeff'}),
+        ('adminUpdateSwitches', 'account', key, switch | {'reason': 'Before\x00after'}),
+        ('adminUpdateSwitches', 'account', key, dict(base_revision=current['revision'], reason=reason)),
+        ('adminUpdateSwitches', 'account', key, switch | {'ai_interaction_enabled': True}),
+        ('adminUpdateSwitches', 'account', key, switch | {'asr_enabled': False, 'asr_streaming_enabled': True}),
         ('adminUpdateSwitches', 'account', key, switch | {'base_revision': 2**53}),
         ('adminAdjustQuota', 'account', key, quota | {'reason': '\u001d\u001e\u001f'}),
+        ('adminAdjustQuota', 'account', key, quota | {'reason': 'Before\x00after'}),
         ('adminAdjustQuota', 'account', key, quota | {'additional_units': 2**53}),
         ('adminUpdateUser', 'user', key, dict(base_revision=2**63, status='active', reason=reason)),
         ('adminCreateInvitation', 'account', key, dict(kind='single_use', reason='\u2028\u2029')),
@@ -544,8 +632,16 @@ def test_formal_invalid_admin_candidates_are_rejected_before_password_or_totp(fe
         before = db.scalar(step_query, {'id': api.a.uid})
     code = pyotp.TOTP(seed).at(datetime.now(timezone.utc) + timedelta(seconds=30))
     with patch.object(api.a.service, 'check_current_password', wraps=api.a.service.check_current_password) as password_check:
-        for purpose, kind, future_key, body in invalid:
-            operation = dict(purpose=purpose, target=dict(kind=kind, id=user_id),
+        invalid_candidates = [(*case, user_id) for case in invalid]
+        # An all-digit UUID has no uppercase spelling. The fallback keeps this format check deterministic.
+        uppercase = user_id.upper() if user_id != user_id.upper() else key.upper()
+        invalid_candidates.extend([
+            ('adminAdjustQuota', 'account', key, quota, uppercase),
+            ('adminUpdateSwitches', 'account', key, switch, uppercase),
+            ('adminCreateInvitation', 'account', key, dict(kind='single_use', reason=reason), uppercase),
+        ])
+        for purpose, kind, future_key, body, target_id in invalid_candidates:
+            operation = dict(purpose=purpose, target=dict(kind=kind, id=target_id),
                              candidate_parameters=dict(idempotency_key=future_key, body=body))
             response = api.client.post(BASE + '/auth/reauth', json=dict(password=PASSWORD, mfa_code=code, operation=operation),
                                        headers=headers(session))
@@ -737,3 +833,118 @@ def test_composed_media_and_billing_migration_candidate(pg,tmp_path):
         if admin is not None:admin.dispose()
         with control.connect() as connection:connection.exec_driver_sql(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
         control.dispose()
+
+
+@pytest.mark.parametrize('fee_api', ['formal'], indirect=True)
+@pytest.mark.parametrize('purpose', ['adminUpdateSwitches', 'adminAdjustQuota'])
+def test_admin_integral_wire_numbers_bind_and_replay_as_integers(fee_api, purpose):
+    api = fee_api
+    session, seed = sign_in(api, administrator=True)
+    user_id = str(api.a.uid)
+    key = str(uuid4())
+    reason = 'Synthetic integral wire number'
+    if purpose == 'adminUpdateSwitches':
+        field, method, path, success = 'base_revision', 'PATCH', '/admin/switches', 200
+        value = api.client.get(BASE + path).json()['revision']
+        body = dict(base_revision=value, ai_enabled=False, reason=reason)
+    else:
+        field, method, path, success = 'additional_units', 'POST', '/admin/quota-adjustments', 201
+        quota = api.client.get(BASE + '/admin/users/' + user_id + '/quota').json()
+        bucket = next(item for item in quota['buckets'] if item['kind'] == 'interactive_month_count')
+        value = 1
+        body = dict(user_id=user_id, bucket_kind=bucket['kind'], period_start=bucket['period_start'],
+                    additional_units=value, reason=reason)
+
+    # Bypass TestClient's JSON encoder to send the exact integer, decimal and exponent spellings.
+    marker = '__raw_json_number__'
+    template = {**body, field: marker}
+    operation = dict(purpose=purpose, target=dict(kind='account', id=user_id),
+                     candidate_parameters=dict(idempotency_key=key, body=template))
+    code = pyotp.TOTP(seed).at(datetime.now(timezone.utc) + timedelta(seconds=30))
+    proof_json = json.dumps(dict(password=PASSWORD, mfa_code=code, operation=operation)).replace(json.dumps(marker), f'{value}.0')
+    with patch.object(api.a.crypto, 'commitment', wraps=api.a.crypto.commitment) as commitment:
+        proof = api.client.post(BASE + '/auth/reauth', content=proof_json,
+                                headers=headers(session, **{'Content-Type': 'application/json'}))
+        assert proof.status_code == 200, proof.text
+        write_headers = headers(session, **{'Content-Type': 'application/json', 'Idempotency-Key': key,
+                                            'X-Reauth-Token': proof.json()['reauth_token']})
+        write_json = json.dumps(template).replace(json.dumps(marker), f'{value}e0')
+        changed = api.client.request(method, BASE + path, content=write_json, headers=write_headers)
+        assert changed.status_code == success, changed.text
+        replay = api.client.request(method, BASE + path, content=json.dumps(body), headers=write_headers)
+        assert replay.status_code == success and replay.json() == changed.json(), replay.text
+        bound_values = [call.args[1]['candidate_parameters']['body'][field] for call in commitment.call_args_list
+                        if call.args[0] == 'operation' and call.args[1]['purpose'] == purpose]
+        assert len(bound_values) >= 3 and all(type(number) is int and number == value for number in bound_values)
+    if purpose == 'adminAdjustQuota':
+        updated = next(item for item in changed.json()['buckets'] if item['kind'] == bucket['kind'])
+        assert updated['limit'] == bucket['limit'] + value
+    else:
+        assert changed.json()['revision'] == value + 1 and changed.json()['ai_enabled'] is False
+    with api.c.pg.admin.connect() as db:
+        assert db.scalar(sa.text('SELECT count(*) FROM billing_control.audit WHERE op_id=:id'), {'id': key}) == 1
+
+
+@pytest.mark.parametrize('fee_api', ['formal'], indirect=True)
+def test_cumulative_quota_overflow_rolls_back_new_period_and_keeps_proof(fee_api):
+    api = fee_api
+    session, seed = sign_in(api, administrator=True)
+    user_id, key = str(api.a.uid), str(uuid4())
+    quota = api.client.get(BASE + '/admin/users/' + user_id + '/quota').json()
+    bucket = next(item for item in quota['buckets'] if item['kind'] == 'interactive_month_count')
+    delta = 2**53 - bucket['limit']  # The delta fits, the proposed total exceeds the maximum by one.
+    body = dict(user_id=user_id, bucket_kind=bucket['kind'], period_start=bucket['period_start'],
+                additional_units=delta, reason='Synthetic cumulative overflow')
+    proof = prove(api, session, seed, 'adminAdjustQuota', body, key)
+    for _ in range(2):
+        response = api.client.post(BASE + '/admin/quota-adjustments', json=body, headers=headers(session, **proof))
+        assert response.status_code == 422 and response.json()['error']['code'] == 'VALIDATION_FAILED', response.text
+    with api.c.pg.admin.connect() as db:
+        assert db.scalar(sa.text('SELECT count(*) FROM quota_periods WHERE owner_id=:id'), {'id': api.a.uid}) == 0
+        assert db.scalar(sa.text('SELECT count(*) FROM quota_adjustments WHERE op_id=:id'), {'id': key}) == 0
+        assert db.scalar(sa.text('SELECT count(*) FROM billing_control.audit WHERE op_id=:id'), {'id': key}) == 0
+        assert db.scalar(sa.text('SELECT count(*) FROM preauth_receipts WHERE operation_key=:id'), {'id': key}) == 0
+        assert db.execute(sa.text('SELECT consumed_at FROM reauth_proofs WHERE operation_key=:id'), {'id': key}).scalar_one() is None
+
+
+@pytest.mark.parametrize('fee_api', ['formal'], indirect=True)
+def test_concurrent_adjustments_only_spend_remaining_safe_integer_headroom_once(fee_api):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    api = fee_api
+    session, _ = sign_in(api, administrator=True)
+    user_id = str(api.a.uid)
+    quota = api.client.get(BASE + '/admin/users/' + user_id + '/quota').json()
+    bucket = next(item for item in quota['buckets'] if item['kind'] == 'interactive_month_count')
+    period_id, ops, maximum = uuid4(), (uuid4(), uuid4()), 2**53 - 1
+    with api.c.pg.admin.begin() as db:
+        db.execute(sa.text('''INSERT INTO quota_periods(id,owner_id,resource,period_start,period_end,limit_value)
+            VALUES(:id,:owner,:resource,:start,:end,:lim)'''),
+            dict(id=period_id, owner=user_id, resource=bucket['kind'], start=bucket['period_start'],
+                 end=bucket['period_end'], lim=maximum - 1))
+
+    def apply(op_id, barrier=None):
+        try:
+            with api.c.operator.begin() as db:
+                db.execute(sa.text("SELECT set_config('app.owner_id',:owner,true)"), {'owner': user_id})
+                if barrier is not None:
+                    barrier.wait(timeout=10)
+                db.execute(sa.text("SELECT billing_api.adjust_quota(:actor,:op,:period,1,'Synthetic last unit')"),
+                           dict(actor=api.c.actor, op=op_id, period=period_id))
+            return True
+        except sa.exc.DBAPIError as error:
+            assert error.orig.sqlstate == '22003' and error.orig.diag.message_primary == 'QUOTA_LIMIT_OUT_OF_RANGE'
+            return False
+
+    barrier = Barrier(2)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(apply, op, barrier) for op in ops]
+        accepted = [future.result(timeout=15) for future in futures]
+    assert sorted(accepted) == [False, True]
+    assert apply(ops[accepted.index(True)])  # An exact audit replay is valid even at the maximum.
+    with api.c.pg.admin.connect() as db:
+        assert db.scalar(sa.text('SELECT limit_value FROM quota_periods WHERE id=:id'), {'id': period_id}) == maximum
+        assert db.scalar(sa.text('SELECT count(*) FROM quota_adjustments WHERE quota_period_id=:id'), {'id': period_id}) == 1
+        assert db.scalar(sa.text('SELECT count(*) FROM billing_control.audit WHERE op_id IN (:a,:b)'),
+                         {'a': ops[0], 'b': ops[1]}) == 1

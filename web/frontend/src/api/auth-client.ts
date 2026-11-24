@@ -8,6 +8,8 @@ import type { OfflineSyncOptions } from '../sync/authenticated-sync';
 type S = components['schemas'];
 type Login = S['LoginResult'];
 type Recovery = S['AutomaticRecoveryContext'];
+type Reauth = S['ReauthOperation'];
+type ChangeInput = [target: Reauth['target'], body: Record<string, unknown>, password: string];
 export class AuthError extends Error {
   constructor(readonly code: string, readonly status = 0) { super(code); this.name = 'AuthError'; }
 }
@@ -182,16 +184,21 @@ export class AuthClient {
     else this.clear();
     return value;
   }
-  async change(purpose:S['ReauthOperation']['purpose'], target:S['ReauthOperation']['target'], body:Record<string,unknown>, password:string, mfa_code?:string, path?:string) {
+  /** Admin callers retain the original target, body and write key until the outcome is known.
+   * Each explicit call obtains a new proof with its own request key. */
+  async change(purpose: Exclude<Reauth['purpose'], `admin${string}`>, ...args: [...ChangeInput, mfa_code?: string, path?: string]): Promise<unknown>;
+  async change(purpose: Reauth['purpose'], ...args: [...ChangeInput, mfa_code: string | undefined, path: string, writeKey: string]): Promise<unknown>;
+  async change(purpose: Reauth['purpose'], target: Reauth['target'], body: Record<string, unknown>, password: string, mfa_code?: string, path?: string, writeKey?: string) {
+    if (!path || (purpose.startsWith('admin') && !writeKey)) throw new AuthError('VALIDATION_FAILED');
     if (['logoutAll', 'changePassword', 'confirmMfa', 'disableMfa'].includes(purpose)
       || (purpose === 'revokeDevice' && target.id === this.session?.device_id)) this.publishSession(null);
-    const key=crypto.randomUUID();
-    const operation={purpose,target,candidate_parameters:{idempotency_key:key,body}};
+    const key = writeKey ?? crypto.randomUUID();
+    const writeBody = structuredClone(body);
+    const operation={purpose,target,candidate_parameters:{idempotency_key:key,body:writeBody}};
     const proof=await this.request<S['ReauthResult']>('/auth/reauth',{password,...(mfa_code?{mfa_code}:{}),operation});
-    if (!path) throw new AuthError('VALIDATION_FAILED');
-    // No automatic retries: secret responses and unknown commits are not replayable.
+    // An explicit retry gets a fresh proof. The write endpoint decides how to replay its receipt.
     const method = purpose === 'adminUpdateUser' || purpose === 'adminUpdateSwitches' ? 'PATCH' : 'POST';
-    return this.request<unknown>(path,body,{key,reauth:proof.reauth_token,method});
+    return this.request<unknown>(path,writeBody,{key,reauth:proof.reauth_token,method});
   }
   async logout() { this.publishSession(null); try { await this.request('/auth/logout',{}); } finally { this.clear(); } }
 }

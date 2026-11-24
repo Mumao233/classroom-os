@@ -1,6 +1,6 @@
 {
   "base_version": "0.4.0",
-  "base_sha256": "f0f5b76d3569c80ef2efcbf8ca297d90ff82ed161508de57a3952f162cbc80e2",
+  "base_sha256": "99b088afd2f4976fcf4a15661f7d789429e41cd9896d44c18a4b04e8429ddc1e",
   "status": "unapproved integration candidate",
   "operations": [
     "getQuota",
@@ -12,85 +12,6 @@
     "adminGetUsage",
     "reauthenticate"
   ],
-  "schema_extensions": {
-    "AdminSwitches": {
-      "properties_append": {
-        "billing_enabled": {
-          "type": "boolean"
-        },
-        "new_capture_enabled": {
-          "type": "boolean"
-        },
-        "asr_streaming_enabled": {
-          "type": "boolean"
-        },
-        "asr_filetrans_enabled": {
-          "type": "boolean"
-        },
-        "ai_interaction_enabled": {
-          "type": "boolean"
-        },
-        "ai_summary_enabled": {
-          "type": "boolean"
-        }
-      }
-    },
-    "AdminSwitchesPatch": {
-      "properties_append": {
-        "billing_enabled": {
-          "type": "boolean"
-        },
-        "new_capture_enabled": {
-          "type": "boolean"
-        },
-        "asr_streaming_enabled": {
-          "type": "boolean"
-        },
-        "asr_filetrans_enabled": {
-          "type": "boolean"
-        },
-        "ai_interaction_enabled": {
-          "type": "boolean"
-        },
-        "ai_summary_enabled": {
-          "type": "boolean"
-        }
-      },
-      "allOf_append": [
-        {
-          "not": {
-            "required": [
-              "asr_enabled",
-              "asr_streaming_enabled"
-            ]
-          }
-        },
-        {
-          "not": {
-            "required": [
-              "asr_enabled",
-              "asr_filetrans_enabled"
-            ]
-          }
-        },
-        {
-          "not": {
-            "required": [
-              "ai_enabled",
-              "ai_interaction_enabled"
-            ]
-          }
-        },
-        {
-          "not": {
-            "required": [
-              "ai_enabled",
-              "ai_summary_enabled"
-            ]
-          }
-        }
-      ]
-    }
-  },
-  "compatibility": "Fine-grained switches require explicit candidate composition. HTTP 0.4.0 defines the two billing reauthentication purposes and coarse switches. Build the overlay separately for its consumers."
+  "schema_extensions": {},
+  "compatibility": "HTTP 0.4.0 owns the billing proof shapes, six independent switch fields, group summaries and PATCH rules. The 11a composition retains its integration marker."
 }

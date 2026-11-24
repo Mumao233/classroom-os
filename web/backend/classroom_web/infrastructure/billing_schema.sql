@@ -289,6 +289,10 @@ BEGIN
     IF old.actor_id<>p_actor OR old.reason<>p_reason OR old.detail<>detail THEN RAISE EXCEPTION 'IDEMPOTENCY_MISMATCH';END IF;
     RETURN;
   END IF;
+  -- The public quota uses JSON safe integers. Check headroom while holding the row lock.
+  IF p_delta > 9007199254740991 - q.limit_value THEN
+    RAISE EXCEPTION 'QUOTA_LIMIT_OUT_OF_RANGE' USING ERRCODE='22003';
+  END IF;
   UPDATE public.quota_periods SET limit_value=limit_value+p_delta WHERE id=p_quota;
   INSERT INTO public.quota_adjustments(id,owner_id,quota_period_id,delta,reason,admin_actor_id,op_id)
     VALUES(gen_random_uuid(),q.owner_id,p_quota,p_delta,p_reason,p_actor,p_op);

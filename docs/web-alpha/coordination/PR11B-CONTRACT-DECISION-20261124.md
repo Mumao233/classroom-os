@@ -30,7 +30,7 @@
 
 **生产者。** `BillingAdmin.issue_reauth/apply` 对整个操作计算 `commitment('operation', operation)`，通过受限的 `PgBillingAdminRepository` 通道调用 SQL。签发核验当前管理员、密码/TOTP 证明、会话及其期限。消费从可信会话和实际路由、写入键、正文重建操作，在事务中核对角色、会话、设备、安全 epoch、凭证期限与承诺，再完成单次消费。已完成的幂等回执沿用各操作既有的重放规则。后续用户/邀请消费者还须比对实际路径 UUID，防止同一凭证改写另一条资源。正文、凭证以及可离线猜测的摘要均不得进入普通日志。
 
-**落地边界。** 已有账本的额度与开关消费者须显式注入；公开 DTO 只返回公开开关字段。11a 候选的额外开关仍在独立组合中。四个用户/邀请写操作尚缺完整的 HTTP 消费者、目标授权、审计和事务回执。有效管理员请求这些用途时，签发入口返回 `503 SERVICE_DISABLED`；学生不得取得管理凭证。前端应分别控制可用操作，不能仅凭 Meta 版本开放整页写入。
+**落地边界。** 已有账本的额度与开关消费者须显式注入。独立开关、组摘要和批量更新见下文第 2 轮裁决。四个用户/邀请写操作尚缺完整的 HTTP 消费者、目标授权、审计和事务回执。有效管理员请求这些用途时，签发入口返回 `503 SERVICE_DISABLED`；学生不得取得管理凭证。前端应分别控制可用操作，不能仅凭 Meta 版本开放整页写入。
 
 [账本浏览器服务](../../../web/backend/classroom_web/application/billing_browser.py) · [受限账本网关](../../../web/backend/classroom_web/infrastructure/billing_control.py) · [签发与消费事务](../../../web/backend/classroom_web/infrastructure/billing_integration.sql) · [HTTP 组合入口](../../../web/backend/classroom_web/entrypoints/http.py)
 
@@ -38,7 +38,7 @@
 
 **问题与选项。** 创建只收 kind/email，撤销与重签使用 `Empty`。可选理由能接纳历史请求，却允许新操作只留下固定动作名。04-CONTRACTS-FLOWS 的运营行已要求“记理由”，AUTH-07 要求管理操作 MFA 与审计，现有用户、额度和开关写入都带操作者理由。因此三项均**必填**，无需新增产品规则。
 
-`InvitationCreate.reason` 和 `InvitationAction.reason` 为 1–500 个 Unicode 码点，至少一个非空白字符。绑定客户端提交的确切文本。旧创建体和旧空对象均与新 schema 不兼容。在已挂载的生产者上，缺失、超长或纯空白均应在写入前返回 `422 VALIDATION_FAILED`。前端须先收集理由，再请求再认证。后续后端须把业务写入与受限审计记录放入同一事务，保存操作者、操作、资源引用、时间和真实理由。邀请 token 只在首次成功响应展示。创建和重签丢响应沿用 `409 SECRET_ALREADY_ISSUED`，不能通过审计或收据取回明文。
+`InvitationCreate.reason` 和 `InvitationAction.reason` 为 1–500 个 Unicode 码点，至少一个非空白字符，任何位置都不能含 U+0000。绑定客户端提交的确切文本。旧创建体和旧空对象均与新 schema 不兼容。在已挂载的生产者上，缺失、超长或纯空白均应在写入前返回 `422 VALIDATION_FAILED`。前端须先收集理由，再请求再认证。后续后端须把业务写入与受限审计记录放入同一事务，保存操作者、操作、资源引用、时间和真实理由。邀请 token 只在首次成功响应展示。创建和重签丢响应沿用 `409 SECRET_ALREADY_ISSUED`，不能通过审计或收据取回明文。
 
 [运营与秘密响应规则](../architecture/04-CONTRACTS-FLOWS.md) · [AUTH-07](../REQUIREMENTS_MATRIX.md)
 
@@ -95,6 +95,52 @@
 | 3 · 成功测试的凭证编码 | 原测试的 43 个 `p` 可解码，但最后一个字符含非零填充位；按后端 `unb64` 的解码再编码规则会被拒绝。成功响应统一使用 32 个确定性合成字节编码成无填充 base64url。 | 保留传输用例对 `X-Reauth-Token` 原样转发的断言。 |
 
 [后端签发与消费](../../../web/backend/classroom_web/application/auth.py) · [Mock 写入入口](../../../web/frontend/src/mock/backend.ts) · [传输测试](../../../web/frontend/tests/auth.test.ts)
+
+## 第 2 轮独立复审核实及开关裁决 · 2026-11-24
+
+复审对象为 `ddf5da7165299313ba9821a9cb0e00f5ececc902`。六项均成立，以下变更归入未发布的 HTTP 0.4.0。
+
+### 1 · 开关分项、组摘要和 PATCH（P1）
+
+**依据与选项。** `billing_api.switch_view()` 原先对组内两项取 AND，HTTP 又过滤了分项。`PgBillingRepository._switches` 的准入条件是总闸和本次用途对应的单项同时开启。改成 OR 可以消除“单项可运行、整组显示关”，但单个布尔仍看不出哪项可用。三态能显示“部分开启”，仍需另一条信息定位具体服务。裁决定为公开现存分项，同时保留组别批量操作。
+
+| 公开字段 | GET / PATCH 的含义 |
+|---|---|
+| `billing_enabled` | 收费总闸。关闭会阻止新的计费准入，保留各分项原配置。 |
+| `new_capture_enabled` | 新采集的独立配置位。改变它只改这一位。 |
+| `asr_streaming_enabled`、`asr_filetrans_enabled` | 分别控制实时 ASR、文件重转写。 |
+| `ai_interaction_enabled`、`ai_summary_enabled` | 分别控制 AI 互动（问答、讲解）和总结。 |
+| `asr_enabled`、`ai_enabled` | 读取为对应组两项配置的 OR。两项都关才显示关，一开一关应按分项显示“部分开启”。PATCH 显式写组字段会把两项都设为该值。 |
+
+六个独立布尔在 GET 和成功 PATCH 响应中均必返。`AdminSwitches` 表达配置，额度视图中的组摘要另与收费总闸取 AND。具体请求还要通过用途、额度和预算检查。读取幂等回执时，从回执自身保存的分项重算摘要，保留当时的版本和配置。
+
+PATCH 只提交有意更改的项，省略项保持原值。一个请求至少指定一项设置；同组的组字段与任一成员混写时，即使二者同值也返回 422。跨组组合允许。整组配置共用一个 `base_revision`，在同一行锁内比对版本、应用所有变更并递增一次。过期版本返回 `409 REVISION_CONFLICT`，同键同体的已完成请求沿用既有回执。注册开关、人数档位沿用现有规则。
+
+**兼容性与前端要求。** 既有组 PATCH 可继续批量启停。旧版严格响应校验器需更新生成类型和 schema，旧 UI 也需按两个分项区分“部分开启”和“全部开启”。#38 编辑单项时只发送该分项，避免回传组摘要连带改动另一项。11a 候选组合沿用公开定义。版本号保持 0.4.0。
+
+### 2–6 · 写入重试、签发输入及额度边界
+
+| 发现 | 判定、代码依据与处理 |
+|---|---|
+| 2 · 结果未知后的键（P2） | 成立。`AuthClient.change` 先前每次调用都生成新键。六项管理员操作现在要求调用方在首次确认时生成并保留目标、正文与键。结果未知后停止，由操作者显式重试。重试使用当次密码/MFA 申请新凭证，绑定并发送相同目标、正文和写入键。更改内容属于新操作。已有秘密响应的回放限制继续生效。 |
+| 3 · 账号目标 UUID（P2） | 成立。签发按原文与 `str(principal.user_id)` 比较，大写可晚于 TOTP 才被拒绝。所有 `kind=account` 的签发目标采用规范小写、含连字符的 UUID schema，在验证因子之前返回 422。共享样例包含有 a–f 字母的大小写对照。 |
+| 4 · 整数的 JSON 写法（P2） | 成立。JSON Schema 接受整值小数，旧路径可将它写为 JSONB 的 `1.0`，之后的 PostgreSQL 文本转 bigint 失败。HTTP 在校验成功后统一规范三个管理 DTO 中的整数域：用户和开关的 `base_revision`、额度的 `additional_units`。签发端与消费端在首次承诺、数据库序列化前完成转换。原始 JSON 集成用例覆盖小数、指数及整数重放。 |
+| 5 · 理由中的 U+0000（P2） | 成立。签发只需承诺，可以放过 PostgreSQL text/jsonb 无法保存的 NUL。共享 `AdminWriteReason` 现在拒绝任何位置出现 U+0000，保留其余有效原文。嵌入正常文字的反例同时覆盖签发 DTO 和写入 DTO，均应在调度前返回 422。 |
+| 6 · 调整后的额度（P3） | 成立。此前只校验增量。数据库锁定同一额度行后，先识别成功回执，再比较增量与 `2^53−1 − 当前上限`。超额返回 `422 VALIDATION_FAILED` 并回滚本次写入；达到上限的成功回执仍可重放。`QuotaBucket.limit` 与 `remaining` 在公开 schema 中明确安全整数上限。并发测试让两个独立事务竞争最后一个单位。 |
+
+[开关与凭证事务](../../../web/backend/classroom_web/infrastructure/billing_integration.sql) · [额度行锁](../../../web/backend/classroom_web/infrastructure/billing_schema.sql) · [准入与用量投影](../../../web/backend/classroom_web/infrastructure/billing_repository.py) · [公开 HTTP 校验](../../../web/backend/classroom_web/entrypoints/http.py) · [客户端显式重试](../../../web/frontend/src/api/auth-client.ts)
+
+### PR-05a 设备目标的兼容处理
+
+可信缓存的消费路径决定了设备 ID 的格式。`CacheKeyService.release` 先校验正文 `device_id` 为规范小写、带连字符的 RFC UUIDv4，并核对当前设备，再从该值重建 `target.id` 和完整写入承诺。公开 `unlockCache` 和 05a 候选 `recoverCache` 的目标 ID 与绑定正文的设备 ID 因此共用 `CacheDeviceId`。同一会话设备在两处须提交相同值。缓存操作中原本就不能消费的大写或非 v4 设备 ID 现在提前返回 422。HTTP 保持未发布的 0.4.0。
+
+`revokeDevice` 按路径中设备 ID 的原始文本重建承诺，数据库按 UUID 值核对设备。因此签发目标与撤销路径必须使用同一拼写，原有 UUID 格式继续有效。`trustDevice` 当前未开放，保留原契约。前端对当前设备可直接复用会话返回的小写 ID。
+
+05a 构建器按用途名选取 `revokeDevice` 的设备操作结构，再从对应缓存写入 DTO 取得设备 ID 约束。既有 `unlockCache` 的唯一性和整分支等值检查继续执行。组合回归覆盖顺序变化、已有或缺失解锁分支，以及重复、篡改目标或篡改正文时的拒绝。
+
+核查了 `tools/`、`web/backend/tests/` 和 `web/frontend/tests/` 中的联合类型构造、顺序索引和间接引用。05a 是唯一按首分支派生再认证操作的构建器。11a 按用途名构造缺失分支，索引切片仅用于导出新追加的分支。07a/07b 复制整个契约以扩展各自 DTO，07b 样例校验完整再认证联合。前端契约测试按用途筛选并要求结果唯一。
+
+[缓存凭证消费](../../../web/backend/classroom_web/application/cache_keys.py) · [05a 候选构建器](../../../tools/pr05a/formal/candidate.py) · [组合与可信缓存回归](../../../web/backend/tests/integration/test_trusted_cache_browser.py)
 
 ## VERIFICATION · 2026-11-24
 
@@ -304,3 +350,73 @@ tests/integration/test_trusted_cache_browser.py
 | evidence.zip | `7942211f27ff2f5b522e399b5829c537f0a53098d5316d4aaf8bbbe21f00fb42` |
 | 包内 commands.json | `54e75b756528897dc9548b7467ffeb2a2dd7890aac0f6904a3178344b30bd0a9` |
 | 包内后端 pytest.xml | `fa28a10d55bb80bc6eed7c10da2df248bd92379cdcf821e2faedb2fd03e4199a` |
+
+### 第 2 轮修复验证 · 后端 1 项准备阶段错误，未提交
+
+2026-11-24，以 `ddf5da7165299313ba9821a9cb0e00f5ececc902` 加本轮改动打包，契约为 0.4.0。打包前宿主执行 `json.loads`（3 个 JSON）、`ast.parse`（5 个 Python 文件）、`node scripts/gen-contracts.mjs --check`、`node node_modules/typescript/bin/tsc --noEmit --pretty false`、`node node_modules/eslint/bin/eslint.js . --max-warnings 0`、`git diff --check`，均退出 0，共 12 项通过、0 失败、0 跳过。另运行 `python -B -X utf8 tools/pr11a/contract_candidate.py`，确认候选文件可逐字节再生成。
+
+宿主投递前查得共享 broker 空闲。VMware 作业 `b11-b08922dbc363` 从 20:37:53 到 20:39:39 UTC 执行，传输成功，来宾退出 1。启动脚本核对 `J:` → `C:\j`，使用 `python -I -B -X utf8 work/pr11b-contract/guest-r2/verify.py`。宿主和来宾逐项核对 1,008 个文件，来宾确认前端依赖锁相符。本轮未重跑。
+
+| 来宾命令 | 退出码 | 通过 | 断言失败 | 错误 | 跳过 |
+|---|---:|---:|---:|---:|---:|
+| `python -I -B -m pip check` | 0 | 1 | 0 | 0 | 0 |
+| `python -I -B tools/overnight/check_contracts.py --output <out>/contracts.json` | 0 | 9 | 0 | 0 | 0 |
+| `python -I -B tools/pr07b/check_contract_candidate.py --output <out>/compositions.json` | 0 | 116 | 0 | 0 | 0 |
+| `node scripts/gen-contracts.mjs --check` | 0 | 1 | 0 | 0 | 0 |
+| `node node_modules/vitest/vitest.mjs run --config tests/vitest.config.ts tests/contract.test.ts tests/pr10a-contract.test.ts tests/pr10b-contract.test.ts` | 0 | 221 | 0 | 0 | 0 |
+| `node node_modules/vitest/vitest.mjs run --config tests/vitest.config.ts` | 0 | 625 | 0 | 0 | 0 |
+| `python -I -B tools/pr11a/run_tests.py --pg-bin <PG17.11-bin>` 加上节列出的全部 11 个 `--test-target` | 1 | 229 | 0 | 1 | 0 |
+
+冻结检查含 186 个共享样例（86 正、100 反）。07b 的两个组合各通过 20 个正例、38 个反例。前端全量覆盖 16 个文件，其中含契约专项的 3 个文件。后端 JUnit 共 230 项，另有 1 条 Starlette TestClient 弃用警告。本轮的混合开关与准入、旧回执、CAS、因子前拒绝、两种原始 JSON 数字写法以及并发额度边界回归均通过。PostgreSQL 17.11 位于 `127.0.0.1:55685`，停库退出 0。出网拒绝探针按预期退出 1，真实供应商调用为 0。
+
+**阻塞项。** `tests/integration/test_trusted_cache_browser.py::test_formal_authclient_encrypted_cache_and_revocation` 在 fixture 准备时抛出 `ValueError: incompatible existing unlockCache contract`，浏览器场景未执行。`tools/pr05a/formal/candidate.py` 从 `ReauthOperation.oneOf[0]`（账号用途 `logoutAll`）复制候选分支，把目标种类改成 `device`，同时继承了本轮只适用于账号的规范小写 UUID。公开 `unlockCache` 的设备 UUID 保留既有格式，两者在第 57 行的结构一致性检查处冲突。根据产品或测试失败的停止条件，保留工作树，未提交。
+
+建议下一步只修正 05a 对设备分支的构造：显式选取设备目标的已知结构，保留对既有 `unlockCache` 定义的独立一致性检查；补组合回归并重跑本轮门禁。此次暂停后获得负责人授权，后续处理见上文“PR-05a 设备目标的兼容处理”。
+
+`copyFrom` 作业 `b11-b08922dbc363-evidence` 于 20:40:00 UTC 完成。宿主验证 ZIP 散列与来宾 stdout 一致，包内 `SOURCE.json` 与送测清单逐字节相同。宿主静态证据位于 `outputs/pr11b-contract/review-r2/host-static.json`，作业回执、原始 stdout/stderr、验证摘要与证据包位于 `outputs/pr11b-contract/b11-b08922dbc363/`。完整路径和 11 个目标的参数顺序见证据包中的 `commands.json`。
+
+| 文件 | SHA-256 |
+|---|---|
+| 独立复审 review.md | `ac0d16e646353eab2fa28a987ca58667d1d9e06ab2d72972fa40f3e47b7844b7` |
+| Claude 判定 final-report.md | `aa119f21bb3e11fca0836352bafbbcf4d168e0300280b2625e87928a9a16946e` |
+| host-static.json | `ad7ef978382fac9a49759447c9eb0eb2600dca56be6b0fcf363530d7bc2783c3` |
+| source.zip | `ca3278bf41512f418b2e036d56e9b067dfa2401b011e6b86ce0c54f33a0f2c0a` |
+| SOURCE.json | `70e5e89d6054d5a47ed9ac0f18c28d2f209a92e21c939ee227fc58f94275cafe` |
+| guest.ps1 | `13a2c7503c9b7d06c619d6e046d2a8dc1db889bb02ab9b4284b76b89bf82abb9` |
+| run 回执 | `6b92e7b3d87e342b3528c25e3056b2253a96730a89de279675302b23eac9d84d` |
+| copyFrom 回执 | `1d07c680f92dbce8f883e78f6de5a63611421d5de1ff75642d4d77b48432fb99` |
+| evidence.zip | `6f07755dedcd6315161f11123b2fbc206d8d55e978649b50fd664babac494d5d` |
+| 包内 commands.json | `8f4a92d09dac28c7ea7b8e01b76bc680ab91e22775ddcf8e4a9a7d203997f94c` |
+| 包内 pytest.xml | `593e6fb924d0d84fd357e3cc1fb02d29a1736f6ec52cdf1f8219d0c60a07953a` |
+
+### 第 2 轮修复复验 · 可信缓存及全部门禁通过
+
+作业 `b11-308edacab34f` 使用 `ddf5da7165299313ba9821a9cb0e00f5ececc902` 加本轮全部改动重新打包。前一次后端 fixture 错误及其证据保留在上一节。投递前已确认共享 broker 空闲，原作业回执记录 20:46:29–20:48:16 UTC。来宾核对 1,008 个文件、前端依赖锁和 `J:` 到 `C:\j` 的映射，以 `python -I -B -X utf8 work/pr11b-contract/guest-r2/verify.py` 调度。作业退出 0。
+
+宿主运行 `json.loads`（3 个 JSON）、`ast.parse`（7 个 Python 文件）、`node scripts/gen-contracts.mjs --check`、`node node_modules/typescript/bin/tsc --noEmit --pretty false`、`node node_modules/eslint/bin/eslint.js . --max-warnings 0` 和 `git diff --check`。共 14 项通过，失败、错误、跳过均为 0。完整命令和工作目录见 `outputs/pr11b-contract/review-r2-cache/host-static.json`。
+
+| 本轮来宾命令 | 退出码 | 通过 | 失败 | 错误 | 跳过 |
+|---|---:|---:|---:|---:|---:|
+| `python -I -B -m pip check` | 0 | 1 | 0 | 0 | 0 |
+| `python -I -B tools/overnight/check_contracts.py --output <out>/contracts.json` | 0 | 9 | 0 | 0 | 0 |
+| `python -I -B tools/pr07b/check_contract_candidate.py --output <out>/compositions.json` | 0 | 116 | 0 | 0 | 0 |
+| `node scripts/gen-contracts.mjs --check` | 0 | 1 | 0 | 0 | 0 |
+| `node node_modules/vitest/vitest.mjs run --config tests/vitest.config.ts tests/contract.test.ts tests/pr10a-contract.test.ts tests/pr10b-contract.test.ts` | 0 | 226 | 0 | 0 | 0 |
+| `node node_modules/vitest/vitest.mjs run --config tests/vitest.config.ts` | 0 | 630 | 0 | 0 | 0 |
+| `python -I -B tools/pr11a/run_tests.py --pg-bin <PG17.11-bin>` 加相同的 11 个 `--test-target` | 0 | 235 | 0 | 0 | 0 |
+
+冻结检查包含 191 个共享样例。07b 的两个组合各通过 20 个正例及 38 个反例。全量 Vitest 包含契约专项。JUnit 确认 5 项新增的 05a 组合与拒绝用例全部通过，`test_formal_authclient_encrypted_cache_and_revocation` 完成实际浏览器缓存及设备撤销验证。后端有 1 条 Starlette TestClient 弃用警告。隔离 PostgreSQL 17.11 在 `127.0.0.1:56575` 启动并正常停止。出网拒绝探针按预期退出 1，真实供应商调用为 0。
+
+`copyFrom` 作业 `b11-308edacab34f-evidence` 于 20:48:30 UTC 成功回收证据。宿主 ZIP 散列与来宾 stdout 相符，包内源码清单和宿主送测清单逐字节一致。从送测包到提交仅追加此验证记录，Git 按仓库属性处理文本行尾。源码包在 `work/pr11b-contract/b11-308edacab34f/`，原始日志、证据 ZIP、运行和回收回执在 `outputs/pr11b-contract/b11-308edacab34f/`。
+
+| 文件 | SHA-256 |
+|---|---|
+| host-static.json | `8a4ac8a85fd908c37a58cbc293aeb049777bb3ce027d1fe640f45925fb9de5b0` |
+| source.zip | `23608a405886fa5fe9e46687e5080aa90ae8c03bc2638caf084b12bc18eb1f34` |
+| SOURCE.json | `bc0062a741fe7c78fdcd2b78beb72d970858a7bb3069e3a823862a82b2d219fb` |
+| guest.ps1 | `e29c297b5f3fea6c3f1ac24009c995d7b54e025cd3833bae00b39ecdec24ef0f` |
+| run 回执 | `8d67e1c07e2e3f71f08fd539a0a27dccb76fcc1ea876ed031d61cfc809b6a115` |
+| copyFrom 回执 | `368d3476ef8211cdc815b660ca2fd44a7022743109099ea49de92dcecec39917` |
+| evidence.zip | `4edeaab68da9aa85c53ff6a5007fe9683779fe6d2e9b687c4d3cab6f0af8f9d2` |
+| commands.json | `99efcb40016adf1c021e8590e689b0fb42a7b28390d5fd5c4c05af45bcda7978` |
+| pr11a/20261124T204649-ee627d3c/pytest.xml | `ad2cd812ed83aed73179d28f67145f2d0b0cadc3734796a46157ea47cb621241` |

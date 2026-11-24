@@ -62,7 +62,8 @@ describe('purpose-bound write transport', () => {
     const client = new AuthClient(fetcher);
     client.csrf = 'c'.repeat(43);
     const target = { kind, id: targetId };
-    await client.change(purpose, target, body, 'synthetic-password', '123456', path);
+    const key = crypto.randomUUID();
+    await client.change(purpose, target, body, 'synthetic-password', '123456', path, key);
 
     expect(fetcher).toHaveBeenCalledTimes(2);
     const [[proofPath, proof], [writePath, write]] = fetcher.mock.calls;
@@ -70,12 +71,56 @@ describe('purpose-bound write transport', () => {
     expect([writePath, write?.method]).toEqual(['/api/web/v1' + path, method]);
     const writeHeaders = new Headers(write?.headers);
     const writeKey = writeHeaders.get('Idempotency-Key');
-    expect(writeKey).toBeTruthy();
+    expect(writeKey).toBe(key);
     expect(new Headers(proof?.headers).get('Idempotency-Key')).not.toBe(writeKey);
     expect(JSON.parse(String(proof?.body)).operation).toEqual({ purpose, target, candidate_parameters: { idempotency_key: writeKey, body } });
     expect(writeHeaders.get('X-Reauth-Token')).toBe(reauthToken);
     expect(writeHeaders.get('X-CSRF-Token')).toBe(client.csrf);
     expect(JSON.parse(String(write?.body))).toEqual(body);
+  });
+
+  it('reuses the original adjustment only on explicit retry and requests a fresh proof', async () => {
+    const key = crypto.randomUUID();
+    const body = { user_id: recipient, bucket_kind: 'summary_month_count', period_start: '2026-11-01T00:00:00Z', additional_units: 1, reason };
+    const target = { kind: 'account', id: targetId } as const;
+    const proof = (value: string) => Response.json({ reauth_token: value, expires_at: '2026-11-24T12:05:00Z' });
+    const freshToken = Buffer.alloc(32, 0xfa).toString('base64url');
+    const receipt = { platform_billing_state: 'normal', asr_enabled: true, ai_enabled: true, buckets: [] };
+    const fetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(proof(reauthToken))
+      .mockRejectedValueOnce(new TypeError('Write response lost'))
+      .mockResolvedValueOnce(proof(freshToken))
+      .mockResolvedValueOnce(Response.json(receipt));
+    const client = new AuthClient(fetcher);
+    const send = (mfaCode: string) => client.change('adminAdjustQuota', target, body, 'synthetic-password', mfaCode, '/admin/quota-adjustments', key);
+
+    await expect(send('123456')).rejects.toMatchObject({ code: 'RESULT_UNKNOWN' });
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    await expect(send('123457')).resolves.toEqual(receipt);
+    expect(fetcher.mock.calls.map(([path]) => path)).toEqual([
+      '/api/web/v1/auth/reauth', '/api/web/v1/admin/quota-adjustments',
+      '/api/web/v1/auth/reauth', '/api/web/v1/admin/quota-adjustments',
+    ]);
+    const headers = fetcher.mock.calls.map(([, request]) => new Headers(request?.headers));
+    const requestBodies = fetcher.mock.calls.map(([, request]) => JSON.parse(String(request?.body)));
+    expect(requestBodies[0].operation).toEqual({ purpose: 'adminAdjustQuota', target, candidate_parameters: { idempotency_key: key, body } });
+    expect(requestBodies[2].operation).toEqual(requestBodies[0].operation);
+    expect(requestBodies[2].mfa_code).toBe('123457');
+    expect(new Set([key, headers[0].get('Idempotency-Key'), headers[2].get('Idempotency-Key')]).size).toBe(3);
+    for (const [index, token] of [[1, reauthToken], [3, freshToken]] as const) {
+      expect(headers[index].get('Idempotency-Key')).toBe(key);
+      expect(headers[index].get('X-Reauth-Token')).toBe(token);
+      expect(requestBodies[index]).toEqual(body);
+    }
+  });
+
+  it('requires an admin caller to supply the write key before requesting a proof', async () => {
+    const fetcher = vi.fn<typeof fetch>();
+    const client = new AuthClient(fetcher);
+    // @ts-expect-error JavaScript callers can omit the required admin write key.
+    const missingKey = client.change('adminAdjustQuota', { kind: 'account', id: targetId }, {}, 'synthetic-password', '123456', '/admin/quota-adjustments');
+    await expect(missingKey).rejects.toMatchObject({ code: 'VALIDATION_FAILED' });
+    expect(fetcher).not.toHaveBeenCalled();
   });
 });
 
