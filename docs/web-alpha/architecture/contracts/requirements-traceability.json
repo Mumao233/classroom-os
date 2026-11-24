@@ -258,7 +258,7 @@
       "design": "05-SECURITY-OFFLINE.md",
       "section": "认证/租户/隐私与生命周期",
       "implementation_pr": "11a、11b",
-      "acceptance": "用户/邀请/用量/运行状态；管理操作MFA审计；日志无正文/密码/Key/恢复码",
+      "acceptance": "用户/邀请/用量/运行状态；管理操作MFA审计；日志无正文/密码/Key/恢复码。六项管理写入逐用途绑定目标、幂等键和完整请求体；邀请创建、撤销、重签须带操作者理由并同事务审计",
       "status": "design mapped; implementation not performed in PR-01"
     },
     {
@@ -951,7 +951,7 @@
       "design": "06-COST-OPERATIONS.md",
       "section": "双账本、预算闸门与资源成本",
       "implementation_pr": "02b、11a",
-      "acceptance": "预留→提交→核对→结算/释放；批次/汇总逐调用记费；unknown不按0或自动退款",
+      "acceptance": "预留→提交→核对→结算/释放；批次/汇总逐调用记费；unknown不按0或自动退款。后台风险为固定占位、已知结算、剩余预留和剩余 unknown 之和，安全预留单列",
       "status": "design mapped; implementation not performed in PR-01"
     },
     {

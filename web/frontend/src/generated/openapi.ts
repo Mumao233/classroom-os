@@ -210,7 +210,7 @@ export interface paths {
         put?: never;
         /**
          * reauthenticate
-         * @description Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Secret-bearing response is never stored in operation_receipts. Recheck identity, authorization, epochs and expiry before reissuing; never replay old key/cookie/ticket. Strict operation binding is mandatory; server derives risk and authorization, verifies current factors, computes an internal keyed canonical-parameter commitment, and never returns or logs low-entropy password SHA/candidate body. Student recovery purposes merely bridge a proof to an independently authorized local broker, never execute public issue/complete/status. The raw-body S2 candidate is 32 KiB here only because current and candidate passwords can both be present.
+         * @description Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Secret-bearing response is never stored in operation_receipts. Recheck identity, authorization, epochs and expiry before reissuing; never replay old key/cookie/ticket. Strict operation binding is mandatory; server derives risk and authorization, verifies current factors, computes an internal keyed canonical-parameter commitment, and never returns or logs low-entropy password SHA/candidate body. Student recovery purposes merely bridge a proof to an independently authorized local broker, never execute public issue/complete/status. The raw-body S2 candidate is 32 KiB here only because current and candidate passwords can both be present. Administrator writes use their exact operationId as purpose and require current password and TOTP. A valid admin session receives 503 SERVICE_DISABLED before proof issuance for an unmounted write.
          */
         post: operations["reauthenticate"];
         delete?: never;
@@ -2190,7 +2190,7 @@ export interface paths {
         head?: never;
         /**
          * adminUpdateUser
-         * @description Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics.
+         * @description Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Use a single-use proof for adminUpdateUser. The user_id path parameter of the future write. Bind the future write key and exact request body, including the reason.
          */
         patch: operations["adminUpdateUser"];
         trace?: never;
@@ -2230,7 +2230,7 @@ export interface paths {
         put?: never;
         /**
          * adminCreateInvitation
-         * @description Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Secret is displayed only in first response, never saved in generic receipts. Lost-response retry returns 409 SECRET_ALREADY_ISSUED; reauthenticate then explicitly rotate/reissue with new operation, invalidating old secret.
+         * @description Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Secret is displayed only in first response, never saved in generic receipts. Lost-response retry returns 409 SECRET_ALREADY_ISSUED; reauthenticate then explicitly rotate/reissue with new operation, invalidating old secret. Use a single-use proof for adminCreateInvitation. The authenticated administrator creating the invitation. Bind the future write key and exact request body, including the reason.
          */
         post: operations["adminCreateInvitation"];
         delete?: never;
@@ -2250,7 +2250,7 @@ export interface paths {
         put?: never;
         /**
          * adminRevokeInvitation
-         * @description Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics.
+         * @description Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Use a single-use proof for adminRevokeInvitation. The invitation_id path parameter of the future write. Bind the future write key and exact request body, including the reason.
          */
         post: operations["adminRevokeInvitation"];
         delete?: never;
@@ -2270,7 +2270,7 @@ export interface paths {
         put?: never;
         /**
          * adminReissueInvitation
-         * @description Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Secret is displayed only in first response, never saved in generic receipts. Lost-response retry returns 409 SECRET_ALREADY_ISSUED; reauthenticate then explicitly rotate/reissue with new operation, invalidating old secret.
+         * @description Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Secret is displayed only in first response, never saved in generic receipts. Lost-response retry returns 409 SECRET_ALREADY_ISSUED; reauthenticate then explicitly rotate/reissue with new operation, invalidating old secret. Use a single-use proof for adminReissueInvitation. The invitation_id path parameter of the future write. Bind the future write key and exact request body, including the reason.
          */
         post: operations["adminReissueInvitation"];
         delete?: never;
@@ -2290,7 +2290,7 @@ export interface paths {
         put?: never;
         /**
          * adminAdjustQuota
-         * @description Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics.
+         * @description Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Use a single-use proof for adminAdjustQuota. The authenticated administrator. The quota recipient is body.user_id. Bind the future write key and exact request body, including the reason.
          */
         post: operations["adminAdjustQuota"];
         delete?: never;
@@ -2358,7 +2358,7 @@ export interface paths {
         head?: never;
         /**
          * adminUpdateSwitches
-         * @description Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics.
+         * @description Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Use a single-use proof for adminUpdateSwitches. The authenticated administrator updating the platform switches. Bind the future write key and exact request body, including the reason.
          */
         patch: operations["adminUpdateSwitches"];
         trace?: never;
@@ -2517,7 +2517,7 @@ export interface components {
             schema_revision: string;
             minimum_client_build: string;
             /** @constant */
-            contract_version: "0.3.0";
+            contract_version: "0.4.0";
             /** Format: date-time */
             server_time: string;
             features: {
@@ -3798,6 +3798,12 @@ export interface components {
             kind: "email_bound" | "single_use";
             /** Format: email */
             email?: string;
+            /** @description Operator-supplied audit reason. Include at least one non-whitespace character. Bind the exact submitted text to the write. */
+            reason: string;
+        };
+        InvitationAction: {
+            /** @description Operator-supplied audit reason. Include at least one non-whitespace character. Bind the exact submitted text to the write. */
+            reason: string;
         };
         InvitationCreated: {
             invitation: components["schemas"]["Invitation"];
@@ -3836,22 +3842,23 @@ export interface components {
             max_active_users?: "10" | "30";
             reason: string;
         };
+        /** @description Platform ledger totals for one budget period. Amounts are nonnegative decimal integer strings in microyuan (1 CNY = 1000000 microyuan). Risk = fixed_and_accrued_microyuan + settled_microyuan + reserved_microyuan + unknown_microyuan. Compare risk to the gross budget for thresholds. Ordinary admission also enforces the budget less the safety reserve and the individual pool limit. */
         AdminUsage: {
             /** Format: date-time */
             period_start: string;
             /** Format: date-time */
             period_end: string;
-            /** @description CNY microyuan (10^-6 yuan); decimal integer string, no floating point. */
+            /** @description Gross platform budget for the period, including the safety reserve. Denominator for the 60%, 80% and 100% risk alerts. */
             budget_microyuan: string;
-            /** @description CNY microyuan (10^-6 yuan); decimal integer string, no floating point. */
+            /** @description Period fixed infrastructure allocation from platform_budgets.fixed_microyuan. Excludes settled, held and unknown charges from exposures. */
             fixed_and_accrued_microyuan: string;
-            /** @description CNY microyuan (10^-6 yuan); decimal integer string, no floating point. */
+            /** @description Sum of known charges posted to exposures, including partial settlement on an open reservation. */
             settled_microyuan: string;
-            /** @description CNY microyuan (10^-6 yuan); decimal integer string, no floating point. */
+            /** @description Sum of the remaining held amount on reserved or submitted work after deducting known settlement (floor zero). */
             reserved_microyuan: string;
-            /** @description CNY microyuan (10^-6 yuan); decimal integer string, no floating point. */
+            /** @description Sum of the unresolved remainder on work marked unknown after deducting known settlement (floor zero). */
             unknown_microyuan: string;
-            /** @description CNY microyuan (10^-6 yuan); decimal integer string, no floating point. */
+            /** @description Budget withheld from ordinary admission. Deduct it from the gross spending limit. It contributes zero to the displayed risk total. */
             safety_reserve_microyuan: string;
             price_version: string;
             ledger_reconciled_at: string | null;
@@ -4015,7 +4022,7 @@ export interface components {
             csrf_token: string;
             receiver_challenge: string;
         };
-        /** @description Closed reviewed purpose set; no arbitrary operation/role/risk or parameters. Target and candidate body are strict. No generic proof for admin/cache/unreviewed routes. Stored server HMAC covers exact validated typed parameters plus current subject/session/device/epoch and operation identity; do not echo a low-entropy password fingerprint. */
+        /** @description Closed set of purpose-specific proofs. The server binds the exact validated operation by keyed commitment and checks the current actor, session, device, security epoch and factors. Each admin purpose requires an active administrator with current password and TOTP. Issue a proof only when its protected write is supported. Keep candidate bodies and commitments out of responses and ordinary logs. */
         ReauthOperation: {
             /** @constant */
             purpose: "logoutAll";
@@ -4267,6 +4274,102 @@ export interface components {
                 /** Format: uuid */
                 idempotency_key: string;
                 body: components["schemas"]["CacheUnlockRequest"];
+            };
+        } | {
+            /** @constant */
+            purpose: "adminUpdateUser";
+            /** @description The user_id path parameter of the future write. */
+            target: {
+                /** @constant */
+                kind: "user";
+                /** Format: uuid */
+                id: string;
+            };
+            /** @description Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned. */
+            candidate_parameters: {
+                /** Format: uuid */
+                idempotency_key: string;
+                body: components["schemas"]["AdminUserPatch"];
+            };
+        } | {
+            /** @constant */
+            purpose: "adminCreateInvitation";
+            /** @description The authenticated administrator creating the invitation. */
+            target: {
+                /** @constant */
+                kind: "account";
+                /** Format: uuid */
+                id: string;
+            };
+            /** @description Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned. */
+            candidate_parameters: {
+                /** Format: uuid */
+                idempotency_key: string;
+                body: components["schemas"]["InvitationCreate"];
+            };
+        } | {
+            /** @constant */
+            purpose: "adminRevokeInvitation";
+            /** @description The invitation_id path parameter of the future write. */
+            target: {
+                /** @constant */
+                kind: "invitation";
+                /** Format: uuid */
+                id: string;
+            };
+            /** @description Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned. */
+            candidate_parameters: {
+                /** Format: uuid */
+                idempotency_key: string;
+                body: components["schemas"]["InvitationAction"];
+            };
+        } | {
+            /** @constant */
+            purpose: "adminReissueInvitation";
+            /** @description The invitation_id path parameter of the future write. */
+            target: {
+                /** @constant */
+                kind: "invitation";
+                /** Format: uuid */
+                id: string;
+            };
+            /** @description Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned. */
+            candidate_parameters: {
+                /** Format: uuid */
+                idempotency_key: string;
+                body: components["schemas"]["InvitationAction"];
+            };
+        } | {
+            /** @constant */
+            purpose: "adminAdjustQuota";
+            /** @description The authenticated administrator. The quota recipient is body.user_id. */
+            target: {
+                /** @constant */
+                kind: "account";
+                /** Format: uuid */
+                id: string;
+            };
+            /** @description Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned. */
+            candidate_parameters: {
+                /** Format: uuid */
+                idempotency_key: string;
+                body: components["schemas"]["QuotaAdjustment"];
+            };
+        } | {
+            /** @constant */
+            purpose: "adminUpdateSwitches";
+            /** @description The authenticated administrator updating the platform switches. */
+            target: {
+                /** @constant */
+                kind: "account";
+                /** Format: uuid */
+                id: string;
+            };
+            /** @description Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned. */
+            candidate_parameters: {
+                /** Format: uuid */
+                idempotency_key: string;
+                body: components["schemas"]["AdminSwitchesPatch"];
             };
         };
         /** @description Only automatic flow. Valid restricted cookie, its CSRF, exact Origin, current target epoch/flow, current password verification and fresh receiver-key PoP are all required. Server records actual verified_at and an operation-specific deadline at most verified_at+120s, intersecting flow/current qualification expiry; recheck after all locks. No new-password minimum, lost old MFA, second recovery-code consumption or flow-TTL extension. Not a manual receiver protocol. */
@@ -9122,7 +9225,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["Empty"];
+                "application/json": components["schemas"]["InvitationAction"];
             };
         };
         responses: {
@@ -9165,7 +9268,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["Empty"];
+                "application/json": components["schemas"]["InvitationAction"];
             };
         };
         responses: {

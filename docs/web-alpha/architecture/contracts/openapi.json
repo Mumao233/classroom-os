@@ -3,7 +3,7 @@
   "jsonSchemaDialect": "https://json-schema.org/draft/2020-12/schema",
   "info": {
     "title": "Classroom OS Web Alpha API",
-    "version": "0.3.0",
+    "version": "0.4.0",
     "description": "PR-03b S2 review candidate; not an implemented or approved service. API prefix remains /api/web/v1. S1 approves experimental inputs only; production parameters, implementation, real enrollment and deployment remain gated. Private and secret responses are no-store; business ownership, unknown-charge and existing idempotency/secret-replay semantics remain in force."
   },
   "servers": [
@@ -722,7 +722,7 @@
         "tags": [
           "auth"
         ],
-        "description": "Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Secret-bearing response is never stored in operation_receipts. Recheck identity, authorization, epochs and expiry before reissuing; never replay old key/cookie/ticket. Strict operation binding is mandatory; server derives risk and authorization, verifies current factors, computes an internal keyed canonical-parameter commitment, and never returns or logs low-entropy password SHA/candidate body. Student recovery purposes merely bridge a proof to an independently authorized local broker, never execute public issue/complete/status. The raw-body S2 candidate is 32 KiB here only because current and candidate passwords can both be present.",
+        "description": "Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Secret-bearing response is never stored in operation_receipts. Recheck identity, authorization, epochs and expiry before reissuing; never replay old key/cookie/ticket. Strict operation binding is mandatory; server derives risk and authorization, verifies current factors, computes an internal keyed canonical-parameter commitment, and never returns or logs low-entropy password SHA/candidate body. Student recovery purposes merely bridge a proof to an independently authorized local broker, never execute public issue/complete/status. The raw-body S2 candidate is 32 KiB here only because current and candidate passwords can both be present. Administrator writes use their exact operationId as purpose and require current password and TOTP. A valid admin session receives 503 SERVICE_DISABLED before proof issuance for an unmounted write.",
         "responses": {
           "200": {
             "description": "Success",
@@ -8871,7 +8871,7 @@
         "tags": [
           "admin"
         ],
-        "description": "Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics.",
+        "description": "Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Use a single-use proof for adminUpdateUser. The user_id path parameter of the future write. Bind the future write key and exact request body, including the reason.",
         "responses": {
           "200": {
             "description": "Success",
@@ -9083,7 +9083,7 @@
         "tags": [
           "admin"
         ],
-        "description": "Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Secret is displayed only in first response, never saved in generic receipts. Lost-response retry returns 409 SECRET_ALREADY_ISSUED; reauthenticate then explicitly rotate/reissue with new operation, invalidating old secret.",
+        "description": "Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Secret is displayed only in first response, never saved in generic receipts. Lost-response retry returns 409 SECRET_ALREADY_ISSUED; reauthenticate then explicitly rotate/reissue with new operation, invalidating old secret. Use a single-use proof for adminCreateInvitation. The authenticated administrator creating the invitation. Bind the future write key and exact request body, including the reason.",
         "responses": {
           "201": {
             "description": "Success",
@@ -9157,7 +9157,7 @@
         "tags": [
           "admin"
         ],
-        "description": "Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics.",
+        "description": "Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Use a single-use proof for adminRevokeInvitation. The invitation_id path parameter of the future write. Bind the future write key and exact request body, including the reason.",
         "responses": {
           "200": {
             "description": "Success",
@@ -9225,7 +9225,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/Empty"
+                "$ref": "#/components/schemas/InvitationAction"
               }
             }
           }
@@ -9239,7 +9239,7 @@
         "tags": [
           "admin"
         ],
-        "description": "Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Secret is displayed only in first response, never saved in generic receipts. Lost-response retry returns 409 SECRET_ALREADY_ISSUED; reauthenticate then explicitly rotate/reissue with new operation, invalidating old secret.",
+        "description": "Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Secret is displayed only in first response, never saved in generic receipts. Lost-response retry returns 409 SECRET_ALREADY_ISSUED; reauthenticate then explicitly rotate/reissue with new operation, invalidating old secret. Use a single-use proof for adminReissueInvitation. The invitation_id path parameter of the future write. Bind the future write key and exact request body, including the reason.",
         "responses": {
           "200": {
             "description": "Success",
@@ -9307,7 +9307,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/Empty"
+                "$ref": "#/components/schemas/InvitationAction"
               }
             }
           }
@@ -9322,7 +9322,7 @@
         "tags": [
           "admin"
         ],
-        "description": "Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics.",
+        "description": "Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Use a single-use proof for adminAdjustQuota. The authenticated administrator. The quota recipient is body.user_id. Bind the future write key and exact request body, including the reason.",
         "responses": {
           "201": {
             "description": "Success",
@@ -9554,7 +9554,7 @@
         "tags": [
           "admin"
         ],
-        "description": "Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics.",
+        "description": "Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Use a single-use proof for adminUpdateSwitches. The authenticated administrator updating the platform switches. Bind the future write key and exact request body, including the reason.",
         "responses": {
           "200": {
             "description": "Success",
@@ -10321,7 +10321,7 @@
             "maxLength": 64
           },
           "contract_version": {
-            "const": "0.3.0"
+            "const": "0.4.0"
           },
           "server_time": {
             "type": "string",
@@ -15933,10 +15933,34 @@
             "type": "string",
             "maxLength": 254,
             "format": "email"
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500,
+            "pattern": "\\S",
+            "description": "Operator-supplied audit reason. Include at least one non-whitespace character. Bind the exact submitted text to the write."
           }
         },
         "required": [
-          "kind"
+          "kind",
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "InvitationAction": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500,
+            "pattern": "\\S",
+            "description": "Operator-supplied audit reason. Include at least one non-whitespace character. Bind the exact submitted text to the write."
+          }
+        },
+        "required": [
+          "reason"
         ],
         "additionalProperties": false
       },
@@ -16106,32 +16130,32 @@
           "budget_microyuan": {
             "type": "string",
             "pattern": "^(0|[1-9][0-9]*)$",
-            "description": "CNY microyuan (10^-6 yuan); decimal integer string, no floating point."
+            "description": "Gross platform budget for the period, including the safety reserve. Denominator for the 60%, 80% and 100% risk alerts."
           },
           "fixed_and_accrued_microyuan": {
             "type": "string",
             "pattern": "^(0|[1-9][0-9]*)$",
-            "description": "CNY microyuan (10^-6 yuan); decimal integer string, no floating point."
+            "description": "Period fixed infrastructure allocation from platform_budgets.fixed_microyuan. Excludes settled, held and unknown charges from exposures."
           },
           "settled_microyuan": {
             "type": "string",
             "pattern": "^(0|[1-9][0-9]*)$",
-            "description": "CNY microyuan (10^-6 yuan); decimal integer string, no floating point."
+            "description": "Sum of known charges posted to exposures, including partial settlement on an open reservation."
           },
           "reserved_microyuan": {
             "type": "string",
             "pattern": "^(0|[1-9][0-9]*)$",
-            "description": "CNY microyuan (10^-6 yuan); decimal integer string, no floating point."
+            "description": "Sum of the remaining held amount on reserved or submitted work after deducting known settlement (floor zero)."
           },
           "unknown_microyuan": {
             "type": "string",
             "pattern": "^(0|[1-9][0-9]*)$",
-            "description": "CNY microyuan (10^-6 yuan); decimal integer string, no floating point."
+            "description": "Sum of the unresolved remainder on work marked unknown after deducting known settlement (floor zero)."
           },
           "safety_reserve_microyuan": {
             "type": "string",
             "pattern": "^(0|[1-9][0-9]*)$",
-            "description": "CNY microyuan (10^-6 yuan); decimal integer string, no floating point."
+            "description": "Budget withheld from ordinary admission. Deduct it from the gross spending limit. It contributes zero to the displayed risk total."
           },
           "price_version": {
             "type": "string",
@@ -16161,7 +16185,8 @@
           "price_version",
           "ledger_reconciled_at"
         ],
-        "additionalProperties": false
+        "additionalProperties": false,
+        "description": "Platform ledger totals for one budget period. Amounts are nonnegative decimal integer strings in microyuan (1 CNY = 1000000 microyuan). Risk = fixed_and_accrued_microyuan + settled_microyuan + reserved_microyuan + unknown_microyuan. Compare risk to the gross budget for thresholds. Ordinary admission also enforces the budget less the safety reserve and the individual pool limit."
       },
       "AdminHealth": {
         "type": "object",
@@ -17879,9 +17904,309 @@
               "candidate_parameters"
             ],
             "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "purpose": {
+                "const": "adminUpdateUser"
+              },
+              "target": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "user"
+                  },
+                  "id": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "id"
+                ],
+                "additionalProperties": false,
+                "description": "The user_id path parameter of the future write."
+              },
+              "candidate_parameters": {
+                "type": "object",
+                "properties": {
+                  "idempotency_key": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "body": {
+                    "$ref": "#/components/schemas/AdminUserPatch"
+                  }
+                },
+                "required": [
+                  "idempotency_key",
+                  "body"
+                ],
+                "additionalProperties": false,
+                "description": "Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned."
+              }
+            },
+            "required": [
+              "purpose",
+              "target",
+              "candidate_parameters"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "purpose": {
+                "const": "adminCreateInvitation"
+              },
+              "target": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "account"
+                  },
+                  "id": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "id"
+                ],
+                "additionalProperties": false,
+                "description": "The authenticated administrator creating the invitation."
+              },
+              "candidate_parameters": {
+                "type": "object",
+                "properties": {
+                  "idempotency_key": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "body": {
+                    "$ref": "#/components/schemas/InvitationCreate"
+                  }
+                },
+                "required": [
+                  "idempotency_key",
+                  "body"
+                ],
+                "additionalProperties": false,
+                "description": "Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned."
+              }
+            },
+            "required": [
+              "purpose",
+              "target",
+              "candidate_parameters"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "purpose": {
+                "const": "adminRevokeInvitation"
+              },
+              "target": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "invitation"
+                  },
+                  "id": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "id"
+                ],
+                "additionalProperties": false,
+                "description": "The invitation_id path parameter of the future write."
+              },
+              "candidate_parameters": {
+                "type": "object",
+                "properties": {
+                  "idempotency_key": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "body": {
+                    "$ref": "#/components/schemas/InvitationAction"
+                  }
+                },
+                "required": [
+                  "idempotency_key",
+                  "body"
+                ],
+                "additionalProperties": false,
+                "description": "Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned."
+              }
+            },
+            "required": [
+              "purpose",
+              "target",
+              "candidate_parameters"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "purpose": {
+                "const": "adminReissueInvitation"
+              },
+              "target": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "invitation"
+                  },
+                  "id": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "id"
+                ],
+                "additionalProperties": false,
+                "description": "The invitation_id path parameter of the future write."
+              },
+              "candidate_parameters": {
+                "type": "object",
+                "properties": {
+                  "idempotency_key": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "body": {
+                    "$ref": "#/components/schemas/InvitationAction"
+                  }
+                },
+                "required": [
+                  "idempotency_key",
+                  "body"
+                ],
+                "additionalProperties": false,
+                "description": "Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned."
+              }
+            },
+            "required": [
+              "purpose",
+              "target",
+              "candidate_parameters"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "purpose": {
+                "const": "adminAdjustQuota"
+              },
+              "target": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "account"
+                  },
+                  "id": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "id"
+                ],
+                "additionalProperties": false,
+                "description": "The authenticated administrator. The quota recipient is body.user_id."
+              },
+              "candidate_parameters": {
+                "type": "object",
+                "properties": {
+                  "idempotency_key": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "body": {
+                    "$ref": "#/components/schemas/QuotaAdjustment"
+                  }
+                },
+                "required": [
+                  "idempotency_key",
+                  "body"
+                ],
+                "additionalProperties": false,
+                "description": "Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned."
+              }
+            },
+            "required": [
+              "purpose",
+              "target",
+              "candidate_parameters"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "purpose": {
+                "const": "adminUpdateSwitches"
+              },
+              "target": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "account"
+                  },
+                  "id": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "id"
+                ],
+                "additionalProperties": false,
+                "description": "The authenticated administrator updating the platform switches."
+              },
+              "candidate_parameters": {
+                "type": "object",
+                "properties": {
+                  "idempotency_key": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "body": {
+                    "$ref": "#/components/schemas/AdminSwitchesPatch"
+                  }
+                },
+                "required": [
+                  "idempotency_key",
+                  "body"
+                ],
+                "additionalProperties": false,
+                "description": "Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned."
+              }
+            },
+            "required": [
+              "purpose",
+              "target",
+              "candidate_parameters"
+            ],
+            "additionalProperties": false
           }
         ],
-        "description": "Closed reviewed purpose set; no arbitrary operation/role/risk or parameters. Target and candidate body are strict. No generic proof for admin/cache/unreviewed routes. Stored server HMAC covers exact validated typed parameters plus current subject/session/device/epoch and operation identity; do not echo a low-entropy password fingerprint."
+        "description": "Closed set of purpose-specific proofs. The server binds the exact validated operation by keyed commitment and checks the current actor, session, device, security epoch and factors. Each admin purpose requires an active administrator with current password and TOTP. Issue a proof only when its protected write is supported. Keep candidate bodies and commitments out of responses and ordinary logs."
       },
       "RecoveryReceiverRequest": {
         "type": "object",

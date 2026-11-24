@@ -1,5 +1,5 @@
 {
-  "contract_version": "0.3.0",
+  "contract_version": "0.4.0",
   "candidate": "pr07b-1",
   "description": "Synthetic positive and negative PR-07b candidate fixtures. Values contain no user records. Runtime ownership, cross-field source membership, transaction and billing behavior are verified by integration tests.",
   "cases": [
@@ -1799,6 +1799,42 @@
         }
       },
       "reason": "The pointer is a UUID string or null."
+    },
+    {
+      "name": "composed_contract_accepts_public_admin_switch_proof_once",
+      "schema_file": "candidate-openapi.json",
+      "schema_pointer": "#/components/schemas/ReauthOperation",
+      "expected_valid": true,
+      "value": {
+        "purpose": "adminUpdateSwitches",
+        "target": {"kind": "account", "id": "00000000-0000-4000-8000-000000000001"},
+        "candidate_parameters": {
+          "idempotency_key": "00000000-0000-4000-8000-000000000002",
+          "body": {"base_revision": 1, "registration_enabled": false, "reason": "Synthetic registration test"}
+        }
+      },
+      "reason": "A duplicate PR-11a branch would match twice and make oneOf reject this public proof."
+    },
+    {
+      "name": "composed_contract_accepts_public_admin_quota_proof_once",
+      "schema_file": "candidate-openapi.json",
+      "schema_pointer": "#/components/schemas/ReauthOperation",
+      "expected_valid": true,
+      "value": {
+        "purpose": "adminAdjustQuota",
+        "target": {"kind": "account", "id": "00000000-0000-4000-8000-000000000001"},
+        "candidate_parameters": {
+          "idempotency_key": "00000000-0000-4000-8000-000000000002",
+          "body": {
+            "user_id": "00000000-0000-4000-8000-000000000003",
+            "bucket_kind": "summary_month_count",
+            "period_start": "2026-11-01T00:00:00Z",
+            "additional_units": 1,
+            "reason": "Synthetic quota test"
+          }
+        }
+      },
+      "reason": "The review and billing overlays must preserve the single public quota proof branch."
     }
   ]
 }

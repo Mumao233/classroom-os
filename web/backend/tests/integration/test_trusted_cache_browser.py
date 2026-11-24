@@ -32,7 +32,7 @@ def test_formal_authclient_encrypted_cache_and_revocation(cache, tmp_path):
         bundle_env = {**os.environ, 'PR08A_OUTPUT': str(output), 'PR08A_FRONTEND_MODULES': str(dependency / 'web/frontend/node_modules')}
         subprocess.run([node, str(ROOT / 'tools/pr08a/build.mjs')], env=bundle_env, check=True, timeout=30, capture_output=True)
     contract = json.loads((ROOT / 'docs/web-alpha/architecture/contracts/openapi.json').read_text(encoding='utf-8'))
-    assert contract['info']['version'] == '0.3.0'
+    assert contract['info']['version'] == '0.4.0'
     cert, key, pin = _certificate(tmp_path, 'pr08a-formal', uuid4().hex[:12])
     with socket.socket() as listener:
         listener.bind(('127.0.0.1', 0))

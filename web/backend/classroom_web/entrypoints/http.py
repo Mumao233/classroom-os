@@ -71,8 +71,9 @@ def failure(error,request_id):
 def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admission=None,cache=None,media=None,media_spool_directory=None,billing=None,billing_admin=None,qa=None,review=None,deletion=None,capture=None,sync=None,portable=None,portable_transfers=None,portable_jobs=None,asr=None,asr_worker=None,filetrans=None,filetrans_worker=None):
     parsed=urlsplit(origin)
     if parsed.scheme!='https' or not parsed.netloc or parsed.path or parsed.query or parsed.fragment or parsed.username:raise ValueError('one exact HTTPS origin is required')
-    if contract.get('info', {}).get('version') not in ('0.2.0', '0.2.1', '0.3.0'):
-        raise ValueError('approved contract 0.2.0, 0.2.1 or 0.3.0 required')
+    contract_version = contract.get('info', {}).get('version')
+    if contract_version not in ('0.2.0', '0.2.1', '0.3.0', '0.4.0'):
+        raise ValueError('approved contract 0.2.0, 0.2.1, 0.3.0 or 0.4.0 required')
     if asr is not None and (asr.capture is not capture or asr.auth is not auth):
         raise ValueError('ASR requires the same capture and auth services')
     if asr_worker is not None and (asr is None or asr_worker.service is not asr or not asr.enabled):
@@ -85,8 +86,8 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
         raise ValueError('Filetrans requires the shared capture, authentication and deletion gate')
     if filetrans_worker is not None and (filetrans is None or filetrans_worker.service is not filetrans):
         raise ValueError('Filetrans worker requires its explicit synthetic service')
-    if billing_admin is not None and not contract.get('x-pr11a-candidate'):
-        raise ValueError('billing administration requires its explicit contract candidate')
+    if billing_admin is not None and contract_version != '0.4.0' and not contract.get('x-pr11a-candidate'):
+        raise ValueError('billing administration requires contract 0.4.0 or its explicit contract candidate')
     if qa is not None and contract.get('x-pr07a-candidate') != 'pr07a-1':
         raise ValueError('QA requires its explicit PR-07a contract candidate')
     if review is not None and contract.get('x-pr07b-candidate') != 'pr07b-1':
@@ -121,10 +122,8 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
     } if review is not None else set()
     from ..application.sync_browser import SYNC_PATHS
     sync_paths = SYNC_PATHS if sync is not None else set()
-    if billing_admin is not None:
-        if auth.admin_reauth is not None and auth.admin_reauth is not billing_admin:
-            raise ValueError('an existing admin reauth delegate must be coordinated')
-        auth.admin_reauth=billing_admin
+    if billing_admin is not None and auth.admin_reauth is not None and auth.admin_reauth is not billing_admin:
+        raise ValueError('an existing admin reauth delegate must be coordinated')
     workers=ThreadPoolExecutor(max_workers=64,thread_name_prefix='auth-ingress');slots=threading.BoundedSemaphore(64)
     @asynccontextmanager
     async def lifespan(app):
@@ -240,7 +239,10 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
         if path=='/auth/login':return auth.login(ctx,body)
         if path=='/auth/login/mfa':return auth.login_mfa(ctx,body,key)
         if path=='/auth/logout':return auth.logout(ctx)
-        if path=='/auth/reauth':return auth.reauthenticate(ctx,body)
+        if path=='/auth/reauth':
+            if body['operation']['purpose'].startswith('admin'):
+                return auth.reauthenticate(ctx,body,admin_reauth=billing_admin)
+            return auth.reauthenticate(ctx,body)
         if path in changes:return auth.change(ctx,body,key,changes[path])
         if path.startswith('/me/sessions/') and path.endswith('/revoke'):return auth.change(ctx,body,key,'revokeSession',target_id=params['session_id'])
         if path.startswith('/me/devices/') and path.endswith('/revoke'):return auth.change(ctx,body,key,'revokeDevice',target_id=params['device_id'])
@@ -394,6 +396,10 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
                 async with asyncio.timeout(max(0,deadline-time.monotonic())):
                     reply=await asyncio.shield(asyncio.wrap_future(future))
                 value=reply.body
+                if path == '/admin/switches' and not contract.get('x-pr11a-candidate'):
+                    # The internal ledger also returns candidate-only fine-grained switches.
+                    fields = contract['components']['schemas']['AdminSwitches']['properties']
+                    value = {field: value[field] for field in fields if field in value}
                 if response_schema.get('$ref','').endswith('/Acknowledged'):value=dict(accepted=True,request_id=request_id)
                 check(response_schema,value,response=True)
                 response=JSONResponse(value,status_code=int(success),headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'})

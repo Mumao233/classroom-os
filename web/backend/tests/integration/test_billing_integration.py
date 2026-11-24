@@ -25,6 +25,7 @@ from classroom_web.domain.billing import ReservationRequest, Usage
 from classroom_web.domain.data import OwnerContext
 from classroom_web.entrypoints.http import create_app
 from classroom_web.infrastructure.billing_control import BillingMaintenance, PgBillingAdminRepository
+from classroom_web.infrastructure.billing_repository import PgBillingRepository
 from classroom_web.infrastructure.billing_schema import candidate_ddl, integration_ddl
 from classroom_web.infrastructure.qa_repository import PgQaRepository
 from classroom_web.infrastructure.task_scheduler import PgTaskScheduler
@@ -87,7 +88,7 @@ def fee_control(pg):
 
 
 @pytest.fixture
-def fee_api(fee_control,auth):
+def fee_api(fee_control,auth,request):
     a,c = auth,fee_control
     with c.pg.admin.begin() as connection:
         revision = connection.scalar(sa.text('SELECT revision FROM billing_control.switches'))
@@ -97,10 +98,10 @@ def fee_api(fee_control,auth):
     browser = BillingBrowser(a.service,c.pg.db,c.lifecycle)
     admin = BillingAdmin(a.service,c.pg.db,c.gateway)
     base=json.loads((ROOT/'docs/web-alpha/architecture/contracts/openapi.json').read_text(encoding='utf-8'))
-    candidate=contract_candidate.build(base)
-    app=create_app(auth=a.service,contract=candidate,origin='https://testserver',billing=browser,billing_admin=admin)
+    contract = base if getattr(request, 'param', 'candidate') == 'formal' else contract_candidate.build(base)
+    app=create_app(auth=a.service,contract=contract,origin='https://testserver',billing=browser,billing_admin=admin)
     with TestClient(app,base_url='https://testserver') as client:
-        yield SimpleNamespace(client=client,a=a,c=c,browser=browser,admin=admin,contract=candidate)
+        yield SimpleNamespace(client=client,a=a,c=c,browser=browser,admin=admin,contract=contract)
     with c.pg.admin.begin() as connection:
         connection.execute(sa.text("UPDATE tasks SET not_before=clock_timestamp()+interval '365 days' WHERE owner_id=:owner"),{'owner':a.uid})
 
@@ -475,6 +476,7 @@ def test_student_and_gateway_cannot_bypass_admin_mfa(fee_api):
             connection.execute(sa.text(query))
 
 
+@pytest.mark.parametrize('fee_api', ['candidate', 'formal'], indirect=True)
 def test_admin_quota_adjustment_binds_target_units_and_key(fee_api):
     api=fee_api;session,seed=sign_in(api,administrator=True)
     assert api.client.get(BASE+'/admin/users/invalid-uuid/quota').status_code==422
@@ -493,6 +495,69 @@ def test_admin_quota_adjustment_binds_target_units_and_key(fee_api):
     assert api.client.post(BASE+'/admin/quota-adjustments',json=body,headers=headers(session,**proof)).status_code==201
 
 
+@pytest.mark.parametrize('fee_api', ['formal'], indirect=True)
+def test_formal_admin_reauth_and_switch_projection(fee_api):
+    api = fee_api
+    session, seed = sign_in(api, administrator=True)
+    response = api.client.get(BASE + '/admin/switches')
+    assert response.status_code == 200, response.text
+    public_fields = {'revision', 'registration_enabled', 'max_active_users', 'asr_enabled', 'ai_enabled'}
+    assert set(response.json()) == public_fields
+    body = dict(base_revision=response.json()['revision'], ai_enabled=False, reason='Synthetic coarse switch')
+    key = str(uuid4())
+    proof = prove(api, session, seed, 'adminUpdateSwitches', body, key)
+    wrong_key = {**proof, 'Idempotency-Key': str(uuid4())}
+    rejected = api.client.patch(BASE + '/admin/switches', json=body, headers=headers(session, **wrong_key))
+    assert rejected.status_code == 403 and rejected.json()['error']['code'] == 'REAUTH_REQUIRED'
+    changed = api.client.patch(BASE + '/admin/switches', json=body, headers=headers(session, **proof))
+    assert changed.status_code == 200, changed.text
+    assert set(changed.json()) == public_fields and changed.json()['ai_enabled'] is False
+    assert api.client.get(BASE + '/admin/switches').json() == changed.json()
+
+
+@pytest.mark.parametrize('fee_api', ['formal'], indirect=True)
+def test_formal_reauth_without_admin_write_handler_stays_disabled(fee_api):
+    api = fee_api
+    session, _ = sign_in(api, administrator=True)
+    reason = {'reason': 'Synthetic administration'}
+    for purpose, kind, body in (
+        ('adminUpdateUser', 'user', dict(base_revision=1, status='disabled', **reason)),
+        ('adminCreateInvitation', 'account', dict(kind='single_use', **reason)),
+        ('adminRevokeInvitation', 'invitation', reason),
+        ('adminReissueInvitation', 'invitation', reason),
+    ):
+        target_id = str(api.a.uid) if kind == 'account' else str(uuid4())
+        operation = dict(purpose=purpose, target=dict(kind=kind, id=target_id),
+                         candidate_parameters=dict(idempotency_key=str(uuid4()), body=body))
+        response = api.client.post(BASE + '/auth/reauth', json=dict(password=PASSWORD, operation=operation),
+                                   headers=headers(session))
+        assert response.status_code == 503 and response.json()['error']['code'] == 'SERVICE_DISABLED', response.text
+    # Both apps share AuthService, but only the billing app mounted a write consumer.
+    api.a.service.admin_reauth = api.admin
+    api.a.client.cookies.update(api.client.cookies)
+    switches = dict(purpose='adminUpdateSwitches', target=dict(kind='account', id=str(api.a.uid)),
+                    candidate_parameters=dict(idempotency_key=str(uuid4()), body=dict(base_revision=1, ai_enabled=False, **reason)))
+    disabled = api.a.client.post(BASE + '/auth/reauth', json=dict(password=PASSWORD, operation=switches), headers=headers(session))
+    assert disabled.status_code == 503 and disabled.json()['error']['code'] == 'SERVICE_DISABLED', disabled.text
+    with api.c.pg.admin.connect() as connection:
+        assert connection.scalar(sa.text('SELECT count(*) FROM reauth_proofs WHERE owner_id=:id'), {'id': api.a.uid}) == 0
+
+
+@pytest.mark.parametrize('fee_api', ['formal'], indirect=True)
+def test_formal_admin_proof_requires_an_admin_session(fee_api):
+    api = fee_api
+    operation = dict(purpose='adminUpdateSwitches', target=dict(kind='account', id=str(api.a.uid)),
+                     candidate_parameters=dict(idempotency_key=str(uuid4()),
+                        body=dict(base_revision=1, ai_enabled=False, reason='Synthetic denial')))
+    payload = dict(password=PASSWORD, operation=operation)
+    csrf = api.client.get(BASE + '/auth/csrf').json()['csrf_token']
+    anonymous = api.client.post(BASE + '/auth/reauth', json=payload, headers=headers({'csrf_token': csrf}))
+    assert anonymous.status_code == 403
+    session, _ = sign_in(api)
+    student = api.client.post(BASE + '/auth/reauth', json=payload, headers=headers(session))
+    assert student.status_code == 403 and student.json()['error']['code'] == 'FORBIDDEN'
+
+
 def test_admin_usage_uses_money_strings_and_calendar_maintenance_is_idempotent(fee_api):
     api=fee_api;session,_=sign_in(api,administrator=True)
     first=api.c.maintenance.run_once();second=api.c.maintenance.run_once()
@@ -501,6 +566,42 @@ def test_admin_usage_uses_money_strings_and_calendar_maintenance_is_idempotent(f
     assert response.status_code==200,response.text
     assert response.json()['budget_microyuan']=='500000000'
     assert isinstance(response.json()['reserved_microyuan'],str)
+
+
+@pytest.mark.parametrize('fee_api', ['formal'], indirect=True)
+def test_formal_usage_risk_includes_settled_once_and_excludes_safety(fee_api, monkeypatch):
+    api = fee_api
+    session, _ = sign_in(api, administrator=True)
+    # Use a separate budget month with different fixed and safety amounts.
+    start = datetime.fromisoformat('2048-02-01T00:00:00+08:00')
+    monkeypatch.setattr(PgBillingRepository, '_now', lambda self: start + timedelta(days=1))
+    with api.c.pg.admin.begin() as connection:
+        connection.execute(sa.text('SELECT billing_api.open_period(:start,30,:actor,:op,:reason)'),
+                           dict(start=start, actor=api.c.actor, op=uuid4(), reason='Synthetic usage projection'))
+    row = reserve(api, session)
+    worker = 'formal-usage'
+    claim = api.c.scheduler.claim(worker, 30, 1)[0]
+    assert claim.id == row['task_id']
+    with api.c.pg.db.transaction(OwnerContext(api.a.uid)) as tx:
+        task = tx.tasks.get(claim.id)
+        attempt = tx.tasks.prepare_attempt(claim.id, claim.lease_token, worker)
+        api.c.lifecycle.before_submit(tx, task, attempt, claim, worker)
+    partial = Usage(provider_request_id=str(attempt.id), meter='total', revision=1,
+                    quantities={'input_tokens': 40}, final=False)
+    api.c.lifecycle.completed(api.a.uid, claim.id, partial)
+    api.c.lifecycle.completed(api.a.uid, claim.id, None)
+    reserve(api, session)
+
+    response = api.client.get(BASE + '/admin/usage', params={'period_start': '2048-02-01'})
+    assert response.status_code == 200, response.text
+    usage = response.json()
+    assert usage['budget_microyuan'] == '2000000000'
+    assert usage['safety_reserve_microyuan'] == '400000000'
+    risk_fields = ('fixed_and_accrued_microyuan', 'settled_microyuan', 'reserved_microyuan', 'unknown_microyuan')
+    assert tuple(usage[field] for field in risk_fields) == ('300000000', '40', '100', '60')
+    with api.c.pg.admin.connect() as connection:
+        budget = connection.scalar(sa.text('SELECT billing_api.lock_budget(:start)'), {'start': start})
+    assert sum(int(usage[field]) for field in risk_fields) == budget['risk'] == 300000200
 
 
 def test_threshold_outbox_is_transactional_and_acknowledged_once(fee_api):

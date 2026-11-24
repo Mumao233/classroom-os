@@ -28,6 +28,33 @@ describe('approved PR-01 contract examples', () => {
   }
 });
 
+describe('PR-11b admin write and reauthentication contracts', () => {
+  it.each([
+    ['/admin/users/{user_id}', 'patch', 'adminUpdateUser', 'user'],
+    ['/admin/invitations', 'post', 'adminCreateInvitation', 'account'],
+    ['/admin/invitations/{invitation_id}/revoke', 'post', 'adminRevokeInvitation', 'invitation'],
+    ['/admin/invitations/{invitation_id}/reissue', 'post', 'adminReissueInvitation', 'invitation'],
+    ['/admin/quota-adjustments', 'post', 'adminAdjustQuota', 'account'],
+    ['/admin/switches', 'patch', 'adminUpdateSwitches', 'account'],
+  ])('%s binds the reauthentication proof to the same write DTO', (path, method, purpose, kind) => {
+    const write = openapi.paths[path][method];
+    expect(write.operationId).toBe(purpose);
+    expect(write['x-required-role']).toBe('admin');
+    expect(write['x-requires-mfa']).toBe(true);
+    expect(write['x-requires-reauth']).toBe(true);
+    for (const header of ['IdempotencyKey', 'CsrfToken', 'ReauthToken']) {
+      expect(write.parameters).toContainEqual({ $ref: '#/components/parameters/' + header });
+    }
+    const operations = openapi.components.schemas.ReauthOperation.oneOf;
+    const matches = operations.filter((op: {properties: {purpose: {const: string}}}) => op.properties.purpose.const === purpose);
+    expect(matches).toHaveLength(1);
+    const { target, candidate_parameters: parameters } = matches[0].properties;
+    expect(target.properties.kind.const).toBe(kind);
+    expect(parameters.required).toEqual(expect.arrayContaining(['idempotency_key', 'body']));
+    expect(parameters.properties.body).toEqual(write.requestBody.content['application/json'].schema);
+  });
+});
+
 describe('mock HTTP fixtures', () => {
   for (const [name, schema, fixture] of [['empty', 'CoursePage', coursePage], ['account A', 'CoursePage', coursePages.A], ['account B', 'CoursePage', coursePages.B], ['session revoked', 'Error', unauthenticated], ['semesters', 'SemesterPage', semesterPage], ['meta', 'Meta', meta]] as const) {
     it(`${name}: ${schema} conforms`, () => {

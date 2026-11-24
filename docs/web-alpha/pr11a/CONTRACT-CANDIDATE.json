@@ -1,6 +1,6 @@
 {
-  "base_version": "0.2.0",
-  "base_sha256": "7432ba27581f3d44690138b5606ec61c4008579cb049a6c2dfc20737ea3a6a7a",
+  "base_version": "0.4.0",
+  "base_sha256": "ce08ad4e9f11bfe6ca83ab253c24a5fd7338281bf90e0c25bc6b112ac22ad195",
   "status": "unapproved integration candidate",
   "operations": [
     "getQuota",
@@ -90,107 +90,7 @@
           }
         }
       ]
-    },
-    "ReauthOperation": {
-      "oneOf_append": [
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "purpose",
-            "target",
-            "candidate_parameters"
-          ],
-          "properties": {
-            "purpose": {
-              "const": "adminUpdateSwitches"
-            },
-            "target": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": [
-                "kind",
-                "id"
-              ],
-              "properties": {
-                "kind": {
-                  "const": "account"
-                },
-                "id": {
-                  "type": "string",
-                  "format": "uuid"
-                }
-              }
-            },
-            "candidate_parameters": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": [
-                "idempotency_key",
-                "body"
-              ],
-              "properties": {
-                "idempotency_key": {
-                  "type": "string",
-                  "format": "uuid"
-                },
-                "body": {
-                  "$ref": "#/components/schemas/AdminSwitchesPatch"
-                }
-              }
-            }
-          }
-        },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "purpose",
-            "target",
-            "candidate_parameters"
-          ],
-          "properties": {
-            "purpose": {
-              "const": "adminAdjustQuota"
-            },
-            "target": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": [
-                "kind",
-                "id"
-              ],
-              "properties": {
-                "kind": {
-                  "const": "account"
-                },
-                "id": {
-                  "type": "string",
-                  "format": "uuid"
-                }
-              }
-            },
-            "candidate_parameters": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": [
-                "idempotency_key",
-                "body"
-              ],
-              "properties": {
-                "idempotency_key": {
-                  "type": "string",
-                  "format": "uuid"
-                },
-                "body": {
-                  "$ref": "#/components/schemas/QuotaAdjustment"
-                }
-              }
-            }
-          }
-        }
-      ]
     }
   },
-  "compatibility": "Admin routes require explicit candidate composition. Shared OpenAPI and generated frontend types are unchanged."
+  "compatibility": "Fine-grained switches require explicit candidate composition. HTTP 0.4.0 defines the two billing reauthentication purposes and coarse switches. Build the overlay separately for its consumers."
 }

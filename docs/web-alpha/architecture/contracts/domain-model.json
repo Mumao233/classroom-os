@@ -1,6 +1,6 @@
 {
   "schema_version": "1.0.0",
-  "contract_version": "0.3.0",
+  "contract_version": "0.4.0",
   "status": "PR-03b S2 identity contract proposal 0.2.0; S1 approved; no migrations applied; independent S2 review pending",
   "database": "PostgreSQL 17 target; patch/driver lock and actual validation in PR-02",
   "runtime": "Python 3.12 target; independent Web dependency environment",
@@ -7199,7 +7199,8 @@
       "checks": [],
       "transactional_invariants": [
         "append only by narrow writer; metadata schema forbids classroom text, email tokens, secrets, raw prompts and recovery codes",
-        "admin reads operational allowlist, never content tables; retention and erasure minimization policy required"
+        "admin reads operational allowlist, never content tables; retention and erasure minimization policy required",
+        "Create, revoke and reissue invitation writes record the operator-supplied reason atomically with the change. One-time invitation tokens stay out of audits, logs and receipts."
       ],
       "row_security": "No general owner API grant; dedicated identity/control repository only"
     },
@@ -8075,7 +8076,8 @@
         "R1 student 600/admin 300 seconds; R2 300; R3 120; deadline min(actual verified_at+route window, parent session/device/proof expiry); never last_seen or issuance time",
         "server maps purpose to approved route/target/canonical parameter hash; missing/wrong purpose, target, session/device/epoch or weaker MFA rejects",
         "R3 nonce/proof consumed once in same successful operation transaction after all ordered locks and clock_timestamp deadline recheck; failures roll back consumption",
-        "ordinary session metadata reauthenticated_at is not sufficient authorization for a high-risk write; current user role and MFA govern; lost-MFA independent admin recovery never requires this Web proof"
+        "ordinary session metadata reauthenticated_at is not sufficient authorization for a high-risk write; current user role and MFA govern; lost-MFA independent admin recovery never requires this Web proof",
+        "Admin proofs bind the typed operation target, future write key and exact body including reason. Path-scoped writes compare the actual user or invitation UUID. Account-scoped writes compare the active administrator UUID."
       ],
       "row_security": "FORCE RLS: owner_id = nullif(current_setting('app.owner_id', true), '')::uuid for authorized owner paths; empty external scope denies; separate narrowly scoped definer policies support auth lookup/verification and authorized control functions, never general HTTP/runtime credential grants"
     },
