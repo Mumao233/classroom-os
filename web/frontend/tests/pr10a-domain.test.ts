@@ -1,8 +1,29 @@
 import { describe, expect, it } from 'vitest';
 import type { components } from '../src/generated/openapi';
-import { assessProcessing, buildTimeline, columnWidths, createDraftStore, defaultLayout, formatClock, formatYuan, layoutMode, MIN_WIDTH, moveSeparator, parseLayout, SEPARATOR_PX, type LiveSegmentInput } from '../src/domain/classroom';
+import { assessProcessing, buildTimeline, columnWidths, createDraftStore, defaultLayout, formatClock, formatYuan, layoutMode, MIN_WIDTH, moveSeparator, parseLayout, preparationQuotaLines, SEPARATOR_PX, type LiveSegmentInput } from '../src/domain/classroom';
 
 type S = components['schemas'];
+
+describe('classroom preparation quota', () => {
+  const period = { period_start: '2026-11-01T00:00:00Z', period_end: '2026-12-01T00:00:00Z', reserved: 0, submitted: 0, settled: 0, unknown: 0 };
+  const buckets: S['QuotaBucket'][] = [
+    { ...period, kind: 'asr_month_ms', limit: 120000, remaining: 120000 },
+    { ...period, kind: 'interactive_month_count', limit: 5, remaining: 5 },
+  ];
+
+  it('shows balances alone when only retranscription and summaries might be enabled', () => {
+    expect(preparationQuotaLines({ buckets, platform_billing_state: 'normal', asr_enabled: true, ai_enabled: true }))
+      .toEqual(['本月转写额度剩余约 2 分钟', '本月问答与解释额度剩余 5 次']);
+  });
+
+  it('reports a group pause even when its quota balance is positive', () => {
+    expect(preparationQuotaLines({ buckets, platform_billing_state: 'normal', asr_enabled: false, ai_enabled: true }))
+      .toEqual(['本月转写额度剩余约 2 分钟', '本月问答与解释额度剩余 5 次', '新的转写请求已暂停']);
+    expect(preparationQuotaLines({ buckets: [], platform_billing_state: 'normal', asr_enabled: true, ai_enabled: false }))
+      .toEqual(['暂无本月转写额度信息', '暂无本月问答与解释额度信息', '新的 AI 请求已暂停']);
+  });
+});
+
 const CLASS = 'c1000000-0000-4000-8000-000000000001';
 const OTHER = 'c1000000-0000-4000-8000-000000000002';
 const live = (over: Partial<LiveSegmentInput>): LiveSegmentInput => ({ classroomId: CLASS, streamId: 's', segmentId: 'seg-1', sequence: 1, revision: 1, text: 'x', status: 'final', startMs: 0, endMs: 1000, ...over });

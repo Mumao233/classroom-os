@@ -106,7 +106,7 @@ export default function AuthWorkbench() {
       }
     });
   }
-  async function sensitive(purpose:S['ReauthOperation']['purpose'],body:Record<string,unknown>,path:string,targetId?:string) {
+  async function sensitive(purpose:Exclude<S['ReauthOperation']['purpose'], `admin${string}`>,body:Record<string,unknown>,path:string,targetId?:string) {
     if(!session)throw new AuthError('UNAUTHENTICATED');
     const kind=purpose==='confirmMfa'?'mfa_enrollment':purpose==='revokeSession'?'session':purpose==='revokeDevice'?'device':'account';
     return client().change(purpose,{kind,id:targetId??session.user.id},body,password,code||undefined,path);

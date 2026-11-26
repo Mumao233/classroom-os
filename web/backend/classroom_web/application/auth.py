@@ -10,6 +10,8 @@ from ..domain.auth import AuthPolicy,AuthRejected,AuthReply
 from ..domain.identity import Principal,normalize_email
 from ..infrastructure.auth_crypto import digest,random_token,verify_receiver
 
+_CONFIGURED_ADMIN_REAUTH = object()
+
 
 def stamp(value):return datetime.fromisoformat(value.replace('Z','+00:00'))
 
@@ -190,8 +192,15 @@ class AuthService:
         self._need(self._call('revoke_session',dict(token_hash=digest('session',ctx.session),audit_id=str(uuid4()))))
         return AuthReply({},clear_session=True)
 
-    def reauthenticate(self,ctx,body):
+    def reauthenticate(self,ctx,body,*,admin_reauth=_CONFIGURED_ADMIN_REAUTH):
         s=self.require_csrf(ctx,'session');operation=body['operation'];purpose=operation['purpose']
+        # Direct callers use the service default. Each HTTP app supplies its mounted consumer, including None.
+        admin_handler = self.admin_reauth if admin_reauth is _CONFIGURED_ADMIN_REAUTH else admin_reauth
+        if purpose.startswith('admin'):
+            if s['role'] != 'admin' or s['mfa_level'] != 'totp':
+                raise AuthRejected('FORBIDDEN', 403)
+            if admin_handler is None or purpose not in admin_handler.PURPOSES:
+                raise AuthRejected('SERVICE_DISABLED', 503)
         # Unsupported cross-package/control operations remain explicitly closed.
         if purpose in ('trustDevice','deleteAccount') or (purpose.startswith('student_recovery_') and self.control_deployment_id is None):raise AuthRejected('SERVICE_DISABLED',503)
         row=self._need(self._call('locate_auth',dict(lookup='session',token_hash=digest('session',ctx.session)),verifier=True))
@@ -200,8 +209,8 @@ class AuthService:
         needs_mfa=bool(row['factor_id'] or row['role']=='admin')
         with self.failure_budget(*([('mfa_fail',row['owner_id'])] if needs_mfa else [])):
             proof,_=self._attest(row,'reauth',binding=commitment,code=body.get('mfa_code'))
-        if self.admin_reauth is not None and purpose in self.admin_reauth.PURPOSES:
-            return self.admin_reauth.issue_reauth(ctx,operation,proof)
+        if admin_handler is not None and purpose in admin_handler.PURPOSES:
+            return admin_handler.issue_reauth(ctx,operation,proof)
         if purpose.startswith('student_recovery_'):
             token=random_token();value=self._need(self._call('issue_control_reauth',dict(token_hash=digest('session',ctx.session),proof_hash=proof,id=str(uuid4()),
                 reauth_hash=digest('reauth',token),purpose=purpose,case_id=operation['target']['id'],deployment_id=self.control_deployment_id,commitment=commitment,

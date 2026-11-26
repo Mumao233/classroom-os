@@ -74,8 +74,8 @@ unknown 和 submitted 的 hold 依据最终计量核对。释放入口会锁定�
 | 任务 worker／scheduler／repository | 付费发送前调用预算授权；ASR 新帧调用一次性许可；取消、超时、撤权和迟到 usage 联动费用状态；保留现有模拟 worker 的行为 |
 | 周期调度 | 根据已配置阶段打开新周期，旧期风险与账单持续核对。新周期缺配置时收费准入拒绝 |
 | 通知／事件 | 消费持久阈值记录，接入既有 outbox 和通知投影，已读状态独立于持续预算风险 |
-| OpenAPI 与 fixtures | 独立总闸、new_capture、stream/filetrans、interaction/summary 与现有粗粒度 AdminSwitches 的映射，由协调契约流程确认 |
-| PR-09b | 个人配额页面消费既有 QuotaView，页面实现归 Claude；粗粒度开关聚合需与上述映射一起确认 |
+| OpenAPI 与 fixtures | HTTP 0.4.0 公开总闸、存储的新采集配置与四个用途开关。采集准入接入前，改变新采集配置返回 503。ASR/AI 的组读数取 OR，组 PATCH 同时设两项，详见 [PR-11b 裁决](../coordination/PR11B-CONTRACT-DECISION-20261124.md) |
+| PR-09b | 个人配额页面消费既有 QuotaView，页面实现归 Claude；收费总闸开启且至少一项分项开启时，对应组可用 |
 | 迁移链与依赖锁 | 协调分配 revision/down_revision 和接入顺序；本包复用现有依赖 |
 
 共享 HTTP、数据库基础设施、任务调度、契约、依赖锁和迁移链尚待协调接入。独立端口的合成验收与完整应用链路验收分别记录实际覆盖。

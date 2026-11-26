@@ -112,9 +112,9 @@ else:
                 finally:
                     if held:metric(kind+'_leave',0)
     class MeasuredAuth(AuthService):
-        def reauthenticate(self,ctx,body):
+        def reauthenticate(self,ctx,body,**options):
             token=operation.set(body['operation']['candidate_parameters']['idempotency_key'])
-            try:return super().reauthenticate(ctx,body)
+            try:return super().reauthenticate(ctx,body,**options)
             finally:operation.reset(token)
         def login(self,ctx,body):
             if cfg['mode'] in ('r05_probe','r04_probe'):return super().login(ctx,body)
