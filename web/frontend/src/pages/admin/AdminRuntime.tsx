@@ -42,15 +42,23 @@ function Health() {
   </section>;
 }
 
-type SwitchDraft = Pick<S['AdminSwitches'], 'registration_enabled' | 'asr_enabled' | 'ai_enabled' | 'max_active_users'>;
-const switchKeys = ['registration_enabled', 'asr_enabled', 'ai_enabled', 'max_active_users'] as const;
+/**
+ * Editable configured switches (HTTP 0.4.0). Only members are edited, never the ASR/AI group fields, so a
+ * PATCH never mixes a group with its member. `new_capture_enabled` and the active-user stage are shown
+ * read-only: the service refuses changing them for now (503).
+ */
+const switchKeys = ['billing_enabled', 'registration_enabled', 'asr_streaming_enabled', 'asr_filetrans_enabled', 'ai_interaction_enabled', 'ai_summary_enabled'] as const;
+type SwitchDraft = Pick<S['AdminSwitches'], typeof switchKeys[number]>;
 /** Only the editable fields: the server revision is tracked apart from the draft and never edited. */
-const draftOf = (value: S['AdminSwitches']): SwitchDraft => ({ registration_enabled: value.registration_enabled, asr_enabled: value.asr_enabled, ai_enabled: value.ai_enabled, max_active_users: value.max_active_users });
-const switchFields = [
+const draftOf = (value: S['AdminSwitches']): SwitchDraft => Object.fromEntries(switchKeys.map(key => [key, value[key]])) as SwitchDraft;
+const switchFields: ReadonlyArray<{ key: typeof switchKeys[number]; label: string; hint: string }> = [
+  { key: 'billing_enabled', label: '收费总闸', hint: '关闭后不再接收任何新的收费任务（转写、重新转写和 AI）；已提交的任务按原规则核对，已有内容仍可阅读。' },
   { key: 'registration_enabled', label: '开放邀请注册', hint: '关闭后已发出的邀请也不能注册新账号，已有账号不受影响。' },
-  { key: 'asr_enabled', label: '实时转写', hint: '关闭后不再开始新的转写；进行中的会话按服务端规则结束，已有字幕保留。' },
-  { key: 'ai_enabled', label: 'AI 问答、讲解与总结', hint: '关闭后不再接收新的 AI 请求；已生成的内容仍可阅读。' },
-] as const;
+  { key: 'asr_streaming_enabled', label: '实时转写', hint: '关闭后不再开始新的实时转写；已在进行的流按服务端规则结束，已有字幕保留。' },
+  { key: 'asr_filetrans_enabled', label: '重新转写', hint: '关闭后不再接收新的重新转写任务。' },
+  { key: 'ai_interaction_enabled', label: 'AI 问答与讲解', hint: '关闭后不再接收新的提问和讲解请求；已生成的内容仍可阅读。' },
+  { key: 'ai_summary_enabled', label: 'AI 总结与卡片', hint: '关闭后不再生成新的总结和卡片；已有资料仍可阅读。' },
+];
 
 function Switches() {
   const switches = useAdminSwitches();
@@ -72,8 +80,12 @@ function Switches() {
         <input type="checkbox" checked={shown[field.key]} disabled={!online || !current} onChange={event => edit({ [field.key]: event.target.checked })} />
         <span><strong>{field.label}</strong><br /><span className={styles.hint}>{field.hint}</span></span>
       </label>)}
-      <dl className={styles.dl}><dt>活跃用户阶段</dt><dd data-testid="active-user-stage">{shown.max_active_users} 人</dd></dl>
-      <p className={`${styles.small} ${styles.muted}`}>阶段切换（10 人 / 30 人）要等阶段切换规则确定后才开放，这里只显示当前阶段。</p>
+      <dl className={styles.dl}>
+        <dt>新采集</dt><dd data-testid="new-capture-switch">{shown.new_capture_enabled ? '开' : '关'}（暂不可修改：采集准入尚未接入这个开关）</dd>
+        <dt>活跃用户阶段</dt><dd data-testid="active-user-stage">{shown.max_active_users} 人</dd>
+        <dt>转写 / AI 汇总</dt><dd data-testid="switch-groups">转写{shown.asr_enabled ? '至少一项开启' : '全部关闭'} · AI {shown.ai_enabled ? '至少一项开启' : '全部关闭'}</dd>
+      </dl>
+      <p className={`${styles.small} ${styles.muted}`}>阶段切换（10 人 / 30 人）要等阶段切换规则确定后才开放。各服务还要同时满足收费总闸和额度预算才会接收新任务。</p>
       {rebased && <div className={`${styles.banner} ${styles.bannerWarning}`} role="status" data-testid="switches-rebased"><div>开关已被其他管理员更新。保存会被拒绝，请放弃修改后按最新状态重新编辑。</div></div>}
       <div className={styles.row}>
         <button type="button" className={styles.button} disabled={!online || !current || changed.length === 0} onClick={() => draft && setConfirming({ base: draft.base, edits: draft.edits })}>保存变更</button>
@@ -94,9 +106,9 @@ function SwitchDialog({ base, edits, onClose, onSaved }: { base: S['AdminSwitche
     onSuccess: onSaved,
   });
   const changes = switchKeys.filter(key => key in edits && draft[key] !== base[key]);
-  const describe = (key: keyof SwitchDraft) => key === 'max_active_users' ? `活跃用户上限：${base.max_active_users} 人 → ${draft.max_active_users} 人` : `${switchFields.find(field => field.key === key)!.label}：${base[key] ? '开' : '关'} → ${draft[key] ? '开' : '关'}`;
+  const describe = (key: keyof SwitchDraft) => `${switchFields.find(field => field.key === key)!.label}：${base[key] ? '开' : '关'} → ${draft[key] ? '开' : '关'}`;
   const error = reasonError(reason);
-  return <AdminActionDialog open onClose={onClose} write={write} danger={changes.some(key => key !== 'max_active_users' && draft[key] === false)}
+  return <AdminActionDialog open onClose={onClose} write={write} danger={changes.some(key => draft[key] === false)}
     title="修改平台开关" description="开关对所有用户立即生效，并记入审计记录。"
     prepare={<><ul data-testid="switch-changes">{changes.map(key => <li key={key}>{describe(key)}</li>)}</ul><ReasonField id="switch-reason" value={reason} onChange={setReason} error={error} /></>}
     prepareValid={error === null && changes.length > 0}

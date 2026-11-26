@@ -175,7 +175,8 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
   const admittedStreams: Record<MockAccountKey, Set<string>> = { A: new Set(), B: new Set(), C: new Set() };
   const asrAdmits = (account: MockAccountKey, streamId: string) => {
     if (admittedStreams[account].has(streamId)) return true;
-    if (!stores[account].quota.asr_enabled) return false;
+    // Live ASR checks its own switch (and the billing master), not the group summary.
+    if (!admin.serviceEnabled('asr_streaming_enabled')) return false;
     admittedStreams[account].add(streamId);
     return true;
   };
@@ -300,6 +301,7 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
       courseExists: id => Boolean(findCourse(store, id)),
       firstCourseId: () => liveCourses(store).find(course => !course.archived)?.id ?? null,
       quota: () => store.quota,
+      service: switch_ => admin.serviceEnabled(switch_),
       addQuestion: question => { store.questions = [...store.questions, question]; },
       updateQuestion: (taskId, change) => { store.questions = store.questions.map(item => item.task_id === taskId ? { ...item, ...change, revision: item.revision + 1, updated_at: now() } : item); },
       addDocument: document => { store.documents = [...store.documents, document]; },
@@ -352,6 +354,8 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
     const route = `${method} /${parts.map(part => (isId(part) ? ':id' : part)).join('/')}`;
     const id = parts.find(isId) ?? '';
     if (parts[0] === 'admin') return admin.handle(store.user.id, method, parts, query, rawBody, key, reauth);
+    // HTTP 0.4.0: purpose-bound reauthentication for the admin writes (the Mock serves only those purposes).
+    if (method === 'POST' && path === '/auth/reauth') return admin.reauthenticate(store.user.id, rawBody);
 
     switch (route) {
       case 'GET /me': return ok(store.user);

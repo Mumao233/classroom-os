@@ -166,6 +166,7 @@ test.describe('PR-11b operations console', () => {
     await asAdmin(page, '/admin/invites');
     await page.getByRole('button', { name: '创建邀请' }).click();
     await page.getByLabel('受邀邮箱').fill('new-student@example.invalid');
+    await page.getByTestId('admin-action').getByLabel('操作理由').fill('合成：新同学入组');
     await page.getByRole('button', { name: '下一步：验证身份' }).click();
     await verify(page);
     const panel = page.getByTestId('invite-token');
@@ -187,12 +188,14 @@ test.describe('PR-11b operations console', () => {
     expect(consoleText.join(' ')).not.toContain('X-Reauth-Token');
 
     await page.getByTestId(`admin-invitation-${EXPIRED}`).getByRole('button', { name: '重新签发' }).click();
+    await page.getByTestId('admin-action').getByLabel('操作理由').fill('合成：邀请过期');
     await page.getByRole('button', { name: '下一步：验证身份' }).click();
     await verify(page);
     await expect(page.getByTestId('invite-token')).toContainText('新的一次性令牌');
     await expect(page.getByTestId(`admin-invitation-${EXPIRED}`)).toContainText('未使用');
     // Revoking it while its token is still on screen withdraws the token too.
     await page.getByTestId(`admin-invitation-${EXPIRED}`).getByRole('button', { name: '撤销' }).click();
+    await page.getByTestId('admin-action').getByLabel('操作理由').fill('合成：不再需要');
     await page.getByRole('button', { name: '下一步：验证身份后撤销' }).click();
     await verify(page);
     await expect(page.getByTestId(`admin-invitation-${EXPIRED}`)).toContainText('已撤销');
@@ -221,14 +224,17 @@ test.describe('PR-11b operations console', () => {
     await expect(page.getByTestId('admin-health-warnings')).toContainText('2 项删除失败');
 
     const switches = page.getByTestId('admin-switches');
-    await switches.getByLabel(/AI 问答、讲解与总结/).uncheck();
+    await switches.getByLabel(/AI 问答与讲解/).uncheck();
     await switches.getByRole('button', { name: '保存变更' }).click();
-    await expect(page.getByTestId('switch-changes')).toContainText('AI 问答、讲解与总结：开 → 关');
+    await expect(page.getByTestId('switch-changes')).toContainText('AI 问答与讲解：开 → 关');
     await page.getByTestId('admin-action').getByLabel('操作理由').fill('合成：模型供应商维护');
     await page.getByRole('button', { name: '下一步：验证身份' }).click();
     await verify(page);
     await expect(page.getByTestId('admin-action')).toHaveCount(0);
-    await expect(switches.getByLabel(/AI 问答、讲解与总结/)).not.toBeChecked();
+    await expect(switches.getByLabel(/AI 问答与讲解/)).not.toBeChecked();
+    // The AI group is still on as a whole (summaries stay open); new capture is shown read-only.
+    await expect(page.getByTestId('switch-groups')).toContainText('AI 至少一项开启');
+    await expect(page.getByTestId('new-capture-switch')).toContainText('暂不可修改');
     // The active-user stage is shown read-only until stage transitions are approved.
     await expect(page.getByTestId('active-user-stage')).toHaveText('10 人');
     await expect(switches.getByRole('combobox')).toHaveCount(0);
@@ -236,7 +242,7 @@ test.describe('PR-11b operations console', () => {
     await shot(page, 'admin-runtime');
 
     await page.getByLabel('模拟离线').check();
-    await expect(switches.getByLabel(/实时转写/)).toBeDisabled();
+    await expect(switches.getByLabel(/^实时转写/)).toBeDisabled();
     await page.getByLabel('模拟离线').uncheck();
 
     await page.getByRole('button', { name: '管理员未启用 MFA' }).click();

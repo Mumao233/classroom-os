@@ -19,6 +19,8 @@ export type ClassroomHost = {
   courseExists: (id: string) => boolean;
   firstCourseId: () => string | null;
   quota: () => S['QuotaView'];
+  /** PR-11b (0.4.0): whether a service may admit new billable work (billing master and its own switch). */
+  service?: (switch_: 'asr_streaming_enabled' | 'asr_filetrans_enabled' | 'ai_interaction_enabled' | 'ai_summary_enabled') => boolean;
   addQuestion: (question: S['Question']) => void;
   updateQuestion: (taskId: string, change: Partial<S['Question']>) => void;
   addDocument: (document: S['ReviewDocument']) => void;
@@ -546,7 +548,7 @@ export function handleClassroom(store: ClassroomStore, host: ClassroomHost, h: C
       if (status === 'unavailable') return h.error(409, 'SOURCE_UNAVAILABLE', '部分来源已不可用，请重新准备');
       if (status === 'changed' && body.confirm_original_snapshot !== true) return h.error(409, 'SOURCE_CHANGED', '来源在准备后已更新，需要明确选择按原版本发送或重新准备');
       // The platform AI switch is rechecked at first execution, not only when the plan was prepared.
-      if (!host.quota().ai_enabled) return h.error(409, 'BUDGET_BLOCKED', '新的 AI 请求已暂停');
+      if (!(host.service ? host.service(plan.kind === 'review_summary' ? 'ai_summary_enabled' : 'ai_interaction_enabled') : host.quota().ai_enabled)) return h.error(409, 'BUDGET_BLOCKED', '新的 AI 请求已暂停');
       // Synthetic units are rechecked and reserved on first execution (a replay returned the task above).
       const bucket = host.quota().buckets.find(item => item.kind === (plan.kind === 'review_summary' ? 'summary_month_count' : 'interactive_month_count'));
       if (bucket) {
@@ -730,7 +732,7 @@ function audioRefusal(store: ClassroomStore, h: ClassroomHelpers, session: S['Cl
  */
 function quotaRefusal(store: ClassroomStore, host: ClassroomHost, h: ClassroomHelpers, classId: string, approval: string, units: number): ClassroomReply | null {
   // The platform ASR switch is checked at every new admission (a retry included); admitted tasks keep their receipts.
-  if (!host.quota().asr_enabled) return h.error(503, 'SERVICE_DISABLED', '转写服务已暂停');
+  if (!(host.service ? host.service('asr_filetrans_enabled') : host.quota().asr_enabled)) return h.error(503, 'SERVICE_DISABLED', '重新转写服务已暂停');
   const bucket = host.quota().buckets.find(item => item.kind === 'retranscribe_month_ms');
   if (store.retranscribeDev.quota === 'month' || (bucket && bucket.remaining < units)) return h.error(409, 'QUOTA_MONTH_EXCEEDED', '本月重新转写时长不足');
   const admitted = store.tasks.filter(item => item.class_session_id === classId && item.kind === 'asr_retranscribe').length;
@@ -823,7 +825,8 @@ function planFor(store: ClassroomStore, host: ClassroomHost, h: ClassroomHelpers
   const quota = host.quota();
   const bucketKind = kind === 'review_summary' ? 'summary_month_count' : 'interactive_month_count';
   const bucket = quota.buckets.find(item => item.kind === bucketKind);
-  if (!quota.ai_enabled || quota.platform_billing_state === 'blocked100' || quota.platform_billing_state === 'paused') return h.error(409, 'BUDGET_BLOCKED', '新的 AI 请求已暂停');
+  const aiService = kind === 'review_summary' ? 'ai_summary_enabled' : 'ai_interaction_enabled';
+  if (!(host.service ? host.service(aiService) : quota.ai_enabled) || quota.platform_billing_state === 'blocked100' || quota.platform_billing_state === 'paused') return h.error(409, 'BUDGET_BLOCKED', '新的 AI 请求已暂停');
   if (bucket && bucket.remaining < 1) return h.error(409, 'QUOTA_EXCEEDED', '本月额度已用完');
 
   // Whole-class scopes include finals without a time position; time scopes need wholly contained times.

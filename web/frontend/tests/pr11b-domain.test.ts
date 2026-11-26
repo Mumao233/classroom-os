@@ -19,6 +19,10 @@ describe('PR-11b admin domain', () => {
     expect(reasonError('字'.repeat(501))).not.toBeNull();
     // Astral characters count once (JSON Schema maxLength counts code points).
     expect(reasonError('😀'.repeat(500))).toBeNull();
+    // AdminWriteReason (0.4.0): U+FEFF / U+0085 alone are white space; U+0000 is never allowed.
+    expect(reasonError('\uFEFF')).not.toBeNull();
+    expect(reasonError('\u0085\u3000')).not.toBeNull();
+    expect(reasonError('理由\u0000')).not.toBeNull();
   });
 
   it('money stays in integer microyuan and is rounded half up only for display', () => {
@@ -80,5 +84,18 @@ describe('PR-11b admin domain', () => {
     const bad = healthWarnings({ ...fine, database: 'unavailable', worker_heartbeat_at: null, oldest_queued_seconds: 900, unknown_task_count: 2, failed_delete_count: 1, last_backup_at: null });
     expect(bad).toEqual(['数据库不可用', '后台处理进程没有心跳记录', '最早的排队任务已等待 15 分钟', '2 个任务结果未知，需要核对', '1 项删除失败，需要处理', '超过 48 小时没有成功备份']);
     expect(healthWarnings({ ...fine, worker_heartbeat_at: '2026-10-28T07:50:00Z' })).toEqual(['后台处理进程已 10 分钟没有心跳']);
+  });
+});
+
+describe('PR-11b reauthentication operation (HTTP 0.4.0)', () => {
+  it('binds account-targeted writes to the administrator and path writes to their resource', async () => {
+    const { reauthOperation } = await import('../src/features/admin');
+    const admin = 'c9000000-0000-4000-8000-000000000001';
+    const key = '0d000000-0000-4000-8000-000000000001';
+    expect(reauthOperation({ operationId: 'adminAdjustQuota', targetId: 'a0000000-0000-4000-8000-000000000001', idempotencyKey: key, body: { reason: 'r' } }, admin))
+      .toEqual({ purpose: 'adminAdjustQuota', target: { kind: 'account', id: admin }, candidate_parameters: { idempotency_key: key, body: { reason: 'r' } } });
+    expect(reauthOperation({ operationId: 'adminUpdateUser', targetId: 'b0000000-0000-4000-8000-000000000001', idempotencyKey: key, body: {} }, admin).target).toEqual({ kind: 'user', id: 'b0000000-0000-4000-8000-000000000001' });
+    expect(reauthOperation({ operationId: 'adminReissueInvitation', targetId: 'd0000000-0000-4000-8000-000000000104', idempotencyKey: key, body: {} }, admin).target).toEqual({ kind: 'invitation', id: 'd0000000-0000-4000-8000-000000000104' });
+    expect(reauthOperation({ operationId: 'adminCreateInvitation', targetId: null, idempotencyKey: key, body: {} }, admin).target).toEqual({ kind: 'account', id: admin });
   });
 });

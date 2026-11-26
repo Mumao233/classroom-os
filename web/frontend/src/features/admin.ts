@@ -14,16 +14,48 @@ export type AdminReauthBinding = { operationId: AdminOperationId; targetId: stri
 
 /** Why a reauthentication proof could not be issued. */
 export class AdminReauthError extends Error {
-  constructor(readonly kind: 'unavailable' | 'failed' | 'forbidden' | 'mfa' | 'network') { super(`admin reauth: ${kind}`); this.name = 'AdminReauthError'; }
+  constructor(readonly kind: 'unavailable' | 'failed' | 'forbidden' | 'mfa' | 'network' | 'disabled' | 'invalid') { super(`admin reauth: ${kind}`); this.name = 'AdminReauthError'; }
 }
 /**
  * Issues a purpose-bound proof for one admin write (operation, target, Idempotency-Key, exact body).
- * The 0.3.0 contract has no admin reauth purpose (PR11B-SCOPE-GAPS.md §1): only the Mock supplies one.
  * Password and code are passed through once and never kept.
  */
 export type AdminReauthPort = { issue(binding: AdminReauthBinding, password: string, code: string): Promise<{ token: string; expires_at: string }> };
-/** The real-API port until the contract adds admin reauth purposes: every admin write stays disabled. */
+/** Used where no signed-in administrator is known: every admin write stays disabled. */
 export const unavailableAdminReauth: AdminReauthPort = { issue: () => Promise.reject(new AdminReauthError('unavailable')) };
+
+/** Proof target per operation (HTTP 0.4.0; decision PR11B-CONTRACT-DECISION-20261124 §1). */
+const ACCOUNT_TARGETED: ReadonlySet<AdminOperationId> = new Set(['adminAdjustQuota', 'adminUpdateSwitches', 'adminCreateInvitation']);
+export function reauthOperation(binding: AdminReauthBinding, adminId: string): S['ReauthOperation'] {
+  const target = ACCOUNT_TARGETED.has(binding.operationId) ? { kind: 'account', id: adminId } : { kind: binding.operationId === 'adminUpdateUser' ? 'user' : 'invitation', id: binding.targetId ?? '' };
+  return { purpose: binding.operationId, target, candidate_parameters: { idempotency_key: binding.idempotencyKey, body: binding.body } } as S['ReauthOperation'];
+}
+/**
+ * `POST /auth/reauth` for the six admin purposes (HTTP 0.4.0). The reauth request has its own key; the
+ * returned proof is held by the write intent in memory only. A purpose whose backend write is not
+ * implemented yet answers 503 SERVICE_DISABLED (decision §1), shown per operation.
+ */
+export function createHttpAdminReauth(api: ApiClient, adminId: () => string | null, newKey: () => string = () => crypto.randomUUID()): AdminReauthPort {
+  return {
+    async issue(binding, password, code) {
+      const id = adminId();
+      if (!id) throw new AdminReauthError('unavailable');
+      try {
+        const result = await api.reauthenticate({ password, mfa_code: code, operation: reauthOperation(binding, id) }, newKey());
+        return { token: result.reauth_token, expires_at: result.expires_at };
+      } catch (failure) {
+        if (!(failure instanceof ApiClientError)) throw failure;
+        if (failure.kind === 'network') throw new AdminReauthError('network');
+        if (failure.kind !== 'http') throw failure;
+        const kinds: Partial<Record<NonNullable<ApiClientError['code']>, AdminReauthError['kind']>> = { REAUTH_REQUIRED: 'failed', FORBIDDEN: 'forbidden', MFA_REQUIRED: 'mfa', SERVICE_DISABLED: 'disabled', VALIDATION_FAILED: 'invalid' };
+        const kind = failure.code ? kinds[failure.code] : undefined;
+        // Other refusals (an ended session, rate limits) keep their own handling.
+        if (!kind) throw failure;
+        throw new AdminReauthError(kind);
+      }
+    },
+  };
+}
 
 const adminKey = (...parts: unknown[]) => ['admin', ...parts];
 export const useAdminUsers = (enabled = true) => useAccountQuery(adminKey('users'), (api, signal) => api.adminUsers(signal), enabled);
@@ -176,7 +208,9 @@ export function useAdminWrite<B, R>(spec: {
 export type AdminWrite<B> = { stage: AdminWriteStage; error: unknown; operationId: AdminOperationId; resuming: boolean; pendingBody: () => B | null; start(body: B): void; choose(replay: boolean): void; verify(password: string, code: string): Promise<void>; retry(): void; cancel(): void; hasUnconfirmed(body: B): boolean };
 
 const reauthMessages: Record<AdminReauthError['kind'], string> = {
-  unavailable: '管理写操作暂不可用：接口契约还没有定义管理员再认证用途。',
+  unavailable: '管理写操作暂不可用：没有确认当前管理员身份，请刷新页面。',
+  disabled: '这项管理操作的服务端尚未开放，暂时不能执行。',
+  invalid: '提交内容未通过校验，请检查理由和各项输入。验证码没有被使用。',
   failed: '密码或验证码不正确，请重新输入。',
   forbidden: '当前账号无权执行管理操作。',
   mfa: '管理员需要先启用双重验证。',
@@ -188,6 +222,7 @@ const adminMessages: Partial<Record<NonNullable<ApiClientError['code']>, string>
   FORBIDDEN: '当前账号无权执行这项管理操作。',
   INVITATION_UNAVAILABLE: '这个邀请已被使用或撤销，不能执行该操作。',
   SECRET_ALREADY_ISSUED: '操作已经完成，但一次性令牌不会再次显示。请刷新列表，对该邀请执行“重新签发”获取新令牌。',
+  SERVICE_DISABLED: '这项设置或操作暂未开放，没有任何改动。',
   REVISION_CONFLICT: '数据已被其他管理员更新。已重新读取最新状态，请核对后再操作。',
   GONE: '该账号正在注销，不能再修改。',
   CURSOR_EXPIRED: '分页位置已失效，请重新读取列表。',

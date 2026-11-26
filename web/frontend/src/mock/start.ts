@@ -2,7 +2,7 @@ import { delay, http, HttpResponse, passthrough } from 'msw';
 import { setupWorker } from 'msw/browser';
 import { meta, unauthenticated } from './fixtures';
 import { createMockBackend, type MockAccountKey, type MockDataset } from './backend';
-import type { AdminHealthDev, AdminReauthBinding } from './admin-backend';
+import type { AdminHealthDev } from './admin-backend';
 
 const headers = { 'Cache-Control': 'no-store' };
 // Development-only in-memory session identity; never a new HTTP field or real credential.
@@ -61,14 +61,6 @@ export function setMockRetranscribe(value: { classId?: string; audio?: 'ok' | 'e
 /** Browser-test hook: a document's revision reads are refused from now on (its metadata stays readable). */
 export function denyMockReviewRevisions(documentId: string) { if (mockAccount) backend.denyReviewRevisions(mockAccount, documentId); }
 
-/**
- * PR-11b: development stand-in for a purpose-bound admin reauthentication (PR11B-SCOPE-GAPS.md §1). The
- * contract has no admin reauth purpose yet, so this is an in-process call, never an HTTP route.
- */
-export function issueMockAdminProof(binding: AdminReauthBinding, password: string, code: string) {
-  if (mockOffline) return { error: 'NETWORK' as const };
-  return mockAccount ? backend.issueAdminProof(mockAccount, binding, password, code) : { error: 'FORBIDDEN' as const };
-}
 /** PR-11b development panel: runtime health readings and whether the administrator has MFA. */
 export function setMockAdminHealth(value: AdminHealthDev) { backend.setAdminHealth(value); }
 export function setMockAdminMfa(enabled: boolean) { backend.setAdminMfa(enabled); }
@@ -101,8 +93,8 @@ const worker = setupWorker(
     // Browser-test-only: hold reads under a path prefix, so a page can be observed while its re-read is pending.
     const slowGet = localStorage.getItem('mock-test-delay-get');
     if (slowGet && request.method === 'GET' && path.startsWith(slowGet)) await delay(1500);
-    // Admin writes require the session-bound CSRF token (frozen contract); a stale session's token is refused.
-    if (request.method !== 'GET' && path.startsWith('/admin/') && request.headers.get('X-CSRF-Token') !== mockCsrf) {
+    // Admin writes and reauthentication require the session-bound CSRF token; a stale session's token is refused.
+    if (request.method !== 'GET' && (path.startsWith('/admin/') || path === '/auth/reauth') && request.headers.get('X-CSRF-Token') !== mockCsrf) {
       return HttpResponse.json({ error: { code: 'FORBIDDEN', message: '请求校验失败，请刷新页面后重试', request_id: crypto.randomUUID(), retryable: false, retry_after_seconds: null, current_revision: null, conflict_id: null, task_id: null } }, { status: 403, headers });
     }
     // Same rule as the media service: raw upload bytes must be sent as application/octet-stream.

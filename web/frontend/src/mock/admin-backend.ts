@@ -9,10 +9,18 @@ type S = components['schemas'];
 type ErrorCode = S['Error']['error']['code'];
 export type AdminReply = { status: number; body: unknown };
 
-/** Admin write operations that need a purpose-bound reauthentication proof (contract gap §1). */
+/** Admin write operations that need a purpose-bound reauthentication proof (HTTP 0.4.0 ReauthOperation). */
 export type AdminOperationId = 'adminUpdateUser' | 'adminCreateInvitation' | 'adminRevokeInvitation' | 'adminReissueInvitation' | 'adminAdjustQuota' | 'adminUpdateSwitches';
-/** What a development proof is bound to: operation, target, the future Idempotency-Key and the exact body. */
+/** What a proof is bound to: operation, path target (if any), the future Idempotency-Key and the exact body. */
 export type AdminReauthBinding = { operationId: AdminOperationId; targetId: string | null; idempotencyKey: string; body: unknown };
+/** Fine-grained platform configuration (HTTP 0.4.0); the public view adds the ASR/AI group summaries. */
+type SwitchConfig = Omit<S['AdminSwitches'], 'asr_enabled' | 'ai_enabled'>;
+export type ServiceSwitch = 'asr_streaming_enabled' | 'asr_filetrans_enabled' | 'ai_interaction_enabled' | 'ai_summary_enabled';
+/** Proof target per operation (decision PR11B-CONTRACT-DECISION-20261124 §1). */
+const ACCOUNT_TARGETED: ReadonlySet<AdminOperationId> = new Set(['adminAdjustQuota', 'adminUpdateSwitches', 'adminCreateInvitation']);
+export const proofTarget = (operationId: AdminOperationId, actorId: string, pathId: string | null) =>
+  ACCOUNT_TARGETED.has(operationId) ? { kind: 'account', id: actorId } : { kind: operationId === 'adminUpdateUser' ? 'user' : 'invitation', id: pathId ?? '' };
+const CANONICAL_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 export type AdminHealthDev = 'healthy' | 'degraded' | 'stalled';
 
 /** The account-side hooks the admin backend needs; it never reads any account's study records. */
@@ -53,8 +61,12 @@ const canonical = (value: unknown): string => Array.isArray(value) ? `[${value.m
 const maskEmail = (email: string) => { const [name, domain] = email.split('@'); return `${name!.slice(0, 1)}***@${domain}`; };
 const isEmail = (value: unknown) => typeof value === 'string' && value.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 const isUuid = (value: unknown) => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
-/** 1–500 Unicode code points (JSON Schema counts code points), not only whitespace. */
-const reasonOk = (value: unknown) => typeof value === 'string' && value.trim().length > 0 && [...value].length <= 500;
+/** AdminWriteReason (0.4.0): 1–500 code points, one character outside the listed white space, no U+0000. */
+// The contract pattern names these control characters as white space on purpose.
+// eslint-disable-next-line no-control-regex
+const REASON_VISIBLE = /[^\u0009-\u000D\u001C-\u0020\u0085\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF]/u;
+const reasonOk = (value: unknown) => typeof value === 'string' && [...value].length >= 1 && [...value].length <= 500 && REASON_VISIBLE.test(value) && !value.includes('\u0000');
+const MAX_SAFE = Number.MAX_SAFE_INTEGER;
 const only = (body: Record<string, unknown>, keys: string[]) => Object.keys(body).every(key => keys.includes(key));
 const PROOF_MS = 300_000;
 
@@ -103,7 +115,11 @@ export function createAdminBackend(host: AdminHost, accountUsers: S['User'][]) {
     { ...base(synthetic(0x103), '2026-10-12T03:00:00Z', 2), kind: 'email_bound', email_hint: 'w***@example.invalid', state: 'revoked', expires_at: '2026-10-19T03:00:00Z' },
     { ...base(synthetic(0x104), '2026-10-01T03:00:00Z'), kind: 'single_use', email_hint: null, state: 'expired', expires_at: '2026-10-08T03:00:00Z' },
   ];
-  let switches: S['AdminSwitches'] = { revision: 1, registration_enabled: true, asr_enabled: true, ai_enabled: true, max_active_users: '10' };
+  let switches: SwitchConfig = { revision: 1, registration_enabled: true, max_active_users: '10', billing_enabled: true, new_capture_enabled: true, asr_streaming_enabled: true, asr_filetrans_enabled: true, ai_interaction_enabled: true, ai_summary_enabled: true };
+  /** Public view: a group summary is on when either member is configured on (independent of billing). */
+  const switchView = (): S['AdminSwitches'] => ({ ...switches, asr_enabled: switches.asr_streaming_enabled || switches.asr_filetrans_enabled, ai_enabled: switches.ai_interaction_enabled || switches.ai_summary_enabled });
+  /** Whether a service may admit new billable work: the billing master and its own switch. */
+  const serviceEnabled = (service: ServiceSwitch) => switches.billing_enabled && switches[service];
   const adminId = accountUsers.find(item => item.role === 'admin')?.id ?? synthetic(0xfff);
   const audit: S['AuditRecord'][] = [
     { id: synthetic(0x201), actor_id: adminId, operation: 'adminUpdateUser', target_type: 'user', target_id: synthetic(2), reason: '学生本人申请暂停使用（合成记录）', created_at: '2026-10-20T06:00:00Z' },
@@ -137,7 +153,8 @@ export function createAdminBackend(host: AdminHost, accountUsers: S['User'][]) {
     if (risk * 100n >= budget * 80n) return 'warning80';
     return risk * 100n >= budget * 60n ? 'warning60' : 'normal';
   }
-  function applyGates(quota: S['QuotaView']): S['QuotaView'] { return { ...quota, asr_enabled: switches.asr_enabled, ai_enabled: switches.ai_enabled, platform_billing_state: platformState() }; }
+  // QuotaView (0.4.0): a group is enabled when the billing master and at least one member are on.
+  function applyGates(quota: S['QuotaView']): S['QuotaView'] { return { ...quota, asr_enabled: serviceEnabled('asr_streaming_enabled') || serviceEnabled('asr_filetrans_enabled'), ai_enabled: serviceEnabled('ai_interaction_enabled') || serviceEnabled('ai_summary_enabled'), platform_billing_state: platformState() }; }
 
   /**
    * Cursor = the id of the last record returned, scoped to the list. Records added before it (newer audit
@@ -159,17 +176,87 @@ export function createAdminBackend(host: AdminHost, accountUsers: S['User'][]) {
     return ok({ items, next_cursor: offset + limit < list.length ? `${scope}:${items[items.length - 1]!.id}` : null });
   }
 
-  /** Development stand-in for a purpose-bound admin reauthentication (contract gap §1); never an HTTP route. */
+  /** The exact operation a proof commits to: purpose, target and future write (key + body). */
+  const operationOf = (operationId: AdminOperationId, actorId: string, pathId: string | null, key: string, body: unknown) =>
+    canonical({ purpose: operationId, target: proofTarget(operationId, actorId, pathId), candidate_parameters: { idempotency_key: key, body } });
+  function grant(actorId: string, operation: string) {
+    const value = token();
+    const expires = host.clockMs() + PROOF_MS;
+    proofs.set(value, { binding: operation, actor: actorId, generation: host.sessionGeneration(actorId), expires, used: false });
+    return { reauth_token: value, expires_at: new Date(expires).toISOString() } satisfies S['ReauthResult'];
+  }
+  /** Test helper: the same proof the HTTP route issues, without the transport. */
   function issueProof(actorId: string, binding: AdminReauthBinding, password: string, code: string): { token: string; expires_at: string } | { error: 'FORBIDDEN' | 'MFA_REQUIRED' | 'REAUTH_FAILED' } {
     const actor = user(actorId);
     if (!actor || actor.role !== 'admin' || actor.status !== 'active') return { error: 'FORBIDDEN' };
     if (!actor.mfa_enabled) return { error: 'MFA_REQUIRED' };
     // Synthetic factors: any non-empty password; any six digits except 000000 (the Mock's "wrong code").
     if (!password || !/^[0-9]{6}$/.test(code) || code === '000000') return { error: 'REAUTH_FAILED' };
-    const value = token();
-    const expires = host.clockMs() + PROOF_MS;
-    proofs.set(value, { binding: canonical({ ...binding }), actor: actorId, generation: host.sessionGeneration(actorId), expires, used: false });
-    return { token: value, expires_at: new Date(expires).toISOString() };
+    const granted = grant(actorId, operationOf(binding.operationId, actorId, binding.targetId, binding.idempotencyKey, binding.body));
+    return { token: granted.reauth_token, expires_at: granted.expires_at };
+  }
+  /** Per-operation body validation, shared by proof issuance (before any factor) and the write. */
+  function bodyError(operationId: AdminOperationId, body: Record<string, unknown>): AdminReply | null {
+    const revision = (value: unknown) => Number.isSafeInteger(value) && (value as number) >= 1 && (value as number) <= MAX_SAFE;
+    switch (operationId) {
+      case 'adminUpdateUser':
+        return !only(body, ['base_revision', 'status', 'reason']) || !revision(body.base_revision) || !['active', 'disabled'].includes(body.status as string) || !reasonOk(body.reason)
+          ? fail(422, 'VALIDATION_FAILED', '状态变更无效：需要基础版本、目标状态和理由') : null;
+      case 'adminCreateInvitation': {
+        const kind = body.kind;
+        const shape = kind === 'email_bound' ? only(body, ['kind', 'email', 'reason']) && isEmail(body.email) : kind === 'single_use' && only(body, ['kind', 'reason']);
+        return !shape || !reasonOk(body.reason) ? fail(422, 'VALIDATION_FAILED', '邮箱邀请需要有效邮箱，单次邀请不填写邮箱；两者都需要理由') : null;
+      }
+      case 'adminRevokeInvitation':
+      case 'adminReissueInvitation':
+        return !only(body, ['reason']) || !reasonOk(body.reason) ? fail(422, 'VALIDATION_FAILED', '需要填写理由') : null;
+      case 'adminAdjustQuota': {
+        const kinds = ['asr_month_ms', 'asr_day_ms', 'retranscribe_month_ms', 'interactive_month_count', 'summary_month_count'];
+        return !only(body, ['user_id', 'bucket_kind', 'period_start', 'additional_units', 'reason']) || !isUuid(body.user_id) || !kinds.includes(body.bucket_kind as string) || typeof body.period_start !== 'string'
+          || !revision(body.additional_units) || !reasonOk(body.reason) ? fail(422, 'VALIDATION_FAILED', '额度调整无效：需要用户、额度类型、周期、追加数量和理由') : null;
+      }
+      case 'adminUpdateSwitches': {
+        const booleans = ['registration_enabled', 'asr_enabled', 'ai_enabled', 'billing_enabled', 'new_capture_enabled', 'asr_streaming_enabled', 'asr_filetrans_enabled', 'ai_interaction_enabled', 'ai_summary_enabled'];
+        const groups: Array<[string, string[]]> = [['asr_enabled', ['asr_streaming_enabled', 'asr_filetrans_enabled']], ['ai_enabled', ['ai_interaction_enabled', 'ai_summary_enabled']]];
+        return !only(body, ['base_revision', 'reason', 'max_active_users', ...booleans]) || !revision(body.base_revision) || !reasonOk(body.reason)
+          || ![...booleans, 'max_active_users'].some(field => field in body) || booleans.some(field => field in body && typeof body[field] !== 'boolean')
+          || ('max_active_users' in body && !['10', '30'].includes(body.max_active_users as string))
+          // A group field and one of its members cannot appear in the same PATCH.
+          || groups.some(([group, members]) => group in body && members.some(member => member in body))
+          ? fail(422, 'VALIDATION_FAILED', '开关变更无效：需要基础版本、至少一项变更和理由；同组的汇总项和分项不能同时修改') : null;
+      }
+    }
+  }
+  /**
+   * POST /auth/reauth for the six admin purposes (HTTP 0.4.0). The operation is validated before the
+   * factors are checked, so an unusable request never consumes a TOTP step.
+   */
+  function reauthenticate(actorId: string, rawBody: unknown): AdminReply {
+    const request = (typeof rawBody === 'object' && rawBody !== null && !Array.isArray(rawBody) ? rawBody : {}) as Record<string, unknown>;
+    const operation = (typeof request.operation === 'object' && request.operation !== null ? request.operation : {}) as Record<string, unknown>;
+    const purpose = operation.purpose as AdminOperationId;
+    const operations: AdminOperationId[] = ['adminUpdateUser', 'adminCreateInvitation', 'adminRevokeInvitation', 'adminReissueInvitation', 'adminAdjustQuota', 'adminUpdateSwitches'];
+    if (!only(request, ['password', 'mfa_code', 'operation']) || typeof request.password !== 'string' || !operations.includes(purpose)) return fail(422, 'VALIDATION_FAILED', 'Mock 只提供管理员再认证用途');
+    const actor = user(actorId);
+    if (!actor || actor.role !== 'admin' || actor.status !== 'active') return fail(403, 'FORBIDDEN', '当前账号无权执行管理操作');
+    if (!actor.mfa_enabled) return fail(403, 'MFA_REQUIRED', '管理员需要先启用双重验证');
+    const target = (typeof operation.target === 'object' && operation.target !== null ? operation.target : {}) as Record<string, unknown>;
+    const candidate = (typeof operation.candidate_parameters === 'object' && operation.candidate_parameters !== null ? operation.candidate_parameters : {}) as Record<string, unknown>;
+    const body = candidate.body;
+    if (!only(operation, ['purpose', 'target', 'candidate_parameters']) || !only(target, ['kind', 'id']) || !only(candidate, ['idempotency_key', 'body'])
+      || typeof candidate.idempotency_key !== 'string' || !CANONICAL_UUID.test(candidate.idempotency_key) || typeof target.id !== 'string' || !isUuid(target.id)
+      || typeof body !== 'object' || body === null || Array.isArray(body)) return fail(422, 'VALIDATION_FAILED', '再认证操作格式无效');
+    const expected = proofTarget(purpose, actorId, target.id);
+    if (target.kind !== expected.kind) return fail(422, 'VALIDATION_FAILED', '再认证目标类型与用途不符');
+    // An account target is the authenticated administrator, in canonical lowercase.
+    if (expected.kind === 'account' && !CANONICAL_UUID.test(target.id)) return fail(422, 'VALIDATION_FAILED', '账号目标必须是规范小写 UUID');
+    if (expected.kind === 'account' && target.id !== actorId) return fail(403, 'FORBIDDEN', '账号目标必须是当前管理员');
+    const invalid = bodyError(purpose, body as Record<string, unknown>);
+    if (invalid) return invalid;
+    if (typeof request.mfa_code !== 'string' || !/^[0-9]{6}$/.test(request.mfa_code)) return fail(422, 'VALIDATION_FAILED', '需要 6 位验证码');
+    // Synthetic factors: any non-empty password; any six digits except 000000 (the Mock's "wrong code").
+    if (!request.password || request.mfa_code === '000000') return fail(403, 'REAUTH_REQUIRED', '密码或验证码不正确');
+    return ok(grant(actorId, operationOf(purpose, actorId, expected.kind === 'account' ? null : target.id, candidate.idempotency_key, body)));
   }
 
   /** Replay first (a lost reply is recovered with the same key), then the single-use proof, then the write. */
@@ -189,7 +276,7 @@ export function createAdminBackend(host: AdminHost, accountUsers: S['User'][]) {
       return replayed && prior.reply.status < 300 ? replayed(prior.reply) : prior.reply;
     }
     const proof = reauth ? proofs.get(reauth) : undefined;
-    const binding = canonical({ operationId, targetId, idempotencyKey: key, body });
+    const binding = operationOf(operationId, actorId, ACCOUNT_TARGETED.has(operationId) ? null : targetId, key as string, body);
     if (!proof || proof.used || proof.actor !== actorId || proof.generation !== host.sessionGeneration(actorId) || proof.expires <= host.clockMs() || proof.binding !== binding) return fail(403, 'REAUTH_REQUIRED', '请重新验证密码和验证码');
     proof.used = true;
     const reply = run();
@@ -228,7 +315,7 @@ export function createAdminBackend(host: AdminHost, accountUsers: S['User'][]) {
         return target?.status === 'active' ? ok(quotaOf(target.id)) : fail(404, 'NOT_FOUND', '用户不存在或未启用');
       }
       case 'PATCH /admin/users/:id': {
-        if (!only(body, ['base_revision', 'status', 'reason']) || !Number.isInteger(body.base_revision) || (body.base_revision as number) < 1 || !['active', 'disabled'].includes(body.status as string) || !reasonOk(body.reason)) return fail(422, 'VALIDATION_FAILED', '状态变更无效：需要基础版本、目标状态和理由');
+        const invalid = bodyError('adminUpdateUser', body); if (invalid) return invalid;
         return write(actorId, 'adminUpdateUser', id, key, reauth, body, false, () => {
           const target = user(id);
           if (!target) return fail(404, 'NOT_FOUND', '用户不存在');
@@ -246,32 +333,30 @@ export function createAdminBackend(host: AdminHost, accountUsers: S['User'][]) {
       case 'GET /admin/invitations': return paged('i', [...invitations].sort((a, b) => b.created_at.localeCompare(a.created_at) || a.id.localeCompare(b.id)), query);
       case 'POST /admin/invitations': {
         const kind = body.kind;
-        if (!only(body, ['kind', 'email']) || !['email_bound', 'single_use'].includes(kind as string) || (kind === 'email_bound' ? !isEmail(body.email) : 'email' in body)) return fail(422, 'VALIDATION_FAILED', '邮箱邀请需要有效邮箱；单次邀请不填写邮箱');
+        const invalid = bodyError('adminCreateInvitation', body); if (invalid) return invalid;
         return write(actorId, 'adminCreateInvitation', null, key, reauth, body, true, () => {
           const created: S['Invitation'] = { ...base(host.newId(), host.now()), kind: kind as S['Invitation']['kind'], email_hint: kind === 'email_bound' ? maskEmail(body.email as string) : null, state: 'issued', expires_at: expiresIn(7) };
           invitations = [created, ...invitations];
-          record(actorId, 'adminCreateInvitation', 'invitation', created.id, kind === 'email_bound' ? '创建邮箱邀请' : '创建单次邀请');
+          record(actorId, 'adminCreateInvitation', 'invitation', created.id, body.reason as string);
           return ok({ invitation: created, one_time_token: token() } satisfies S['InvitationCreated'], 201);
         });
       }
       case 'POST /admin/invitations/:id/revoke':
       case 'POST /admin/invitations/:id/reissue': {
         const reissue = parts[3] === 'reissue';
-        if (Object.keys(body).length) return fail(422, 'VALIDATION_FAILED', '请求体必须为空');
+        const invalid = bodyError(reissue ? 'adminReissueInvitation' : 'adminRevokeInvitation', body); if (invalid) return invalid;
         return write(actorId, reissue ? 'adminReissueInvitation' : 'adminRevokeInvitation', id, key, reauth, body, reissue, () => {
           const target = invitations.find(item => item.id === id);
           if (!target) return fail(404, 'NOT_FOUND', '邀请不存在');
           if (reissue ? !['issued', 'expired'].includes(target.state) : target.state !== 'issued') return fail(409, 'INVITATION_UNAVAILABLE', reissue ? '已使用或已撤销的邀请不能重新签发' : '只有未使用的邀请可以撤销');
           const next = touch({ ...target, state: reissue ? 'issued' as const : 'revoked' as const, ...(reissue ? { expires_at: expiresIn(7) } : {}) });
           invitations = invitations.map(item => item.id === id ? next : item);
-          record(actorId, reissue ? 'adminReissueInvitation' : 'adminRevokeInvitation', 'invitation', id, `${reissue ? '重新签发邀请，旧令牌失效' : '撤销邀请'}（#${id.replace(/-/g, '').slice(-6)}）`);
+          record(actorId, reissue ? 'adminReissueInvitation' : 'adminRevokeInvitation', 'invitation', id, body.reason as string);
           return reissue ? ok({ invitation: next, one_time_token: token() } satisfies S['InvitationCreated']) : ok(next);
         });
       }
       case 'POST /admin/quota-adjustments': {
-        const kinds = ['asr_month_ms', 'asr_day_ms', 'retranscribe_month_ms', 'interactive_month_count', 'summary_month_count'];
-        if (!only(body, ['user_id', 'bucket_kind', 'period_start', 'additional_units', 'reason']) || !isUuid(body.user_id) || !kinds.includes(body.bucket_kind as string) || typeof body.period_start !== 'string'
-          || !Number.isSafeInteger(body.additional_units) || (body.additional_units as number) < 1 || !reasonOk(body.reason)) return fail(422, 'VALIDATION_FAILED', '额度调整无效：需要用户、额度类型、周期、追加数量和理由');
+        const invalid = bodyError('adminAdjustQuota', body); if (invalid) return invalid;
         return write(actorId, 'adminAdjustQuota', body.user_id as string, key, reauth, body, false, () => {
           const target = user(body.user_id as string);
           if (target?.status !== 'active') return fail(404, 'NOT_FOUND', '用户不存在或未启用');
@@ -279,6 +364,8 @@ export function createAdminBackend(host: AdminHost, accountUsers: S['User'][]) {
           const bucket = quota.buckets.find(item => item.kind === body.bucket_kind && Date.parse(item.period_start) === Date.parse(body.period_start as string));
           if (!bucket) return fail(422, 'VALIDATION_FAILED', '该周期没有对应的额度桶');
           const units = body.additional_units as number;
+          // The resulting limit stays within the safe integer range of the public DTO.
+          if (bucket.limit + units > MAX_SAFE) return fail(422, 'VALIDATION_FAILED', '调整后的额度上限超出范围');
           const next = { ...quota, buckets: quota.buckets.map(item => item === bucket ? { ...item, limit: item.limit + units, remaining: item.remaining + units } : item) };
           saveQuota(target.id, next);
           adjustments.set(target.id, [...(adjustments.get(target.id) ?? []), { kind: bucket.kind, period_start: bucket.period_start, units }]);
@@ -297,21 +384,25 @@ export function createAdminBackend(host: AdminHost, accountUsers: S['User'][]) {
         return found ? ok(found) : fail(404, 'NOT_FOUND', '该周期没有用量记录');
       }
       case 'GET /admin/health': return ok(health());
-      case 'GET /admin/switches': return ok(switches);
+      case 'GET /admin/switches': return ok(switchView());
       case 'PATCH /admin/switches': {
-        const fields = ['registration_enabled', 'asr_enabled', 'ai_enabled', 'max_active_users'];
-        if (!only(body, ['base_revision', 'reason', ...fields]) || !Number.isInteger(body.base_revision) || (body.base_revision as number) < 1 || !reasonOk(body.reason)
-          || !fields.some(field => field in body) || fields.slice(0, 3).some(field => field in body && typeof body[field] !== 'boolean')
-          || ('max_active_users' in body && !['10', '30'].includes(body.max_active_users as string))) return fail(422, 'VALIDATION_FAILED', '开关变更无效：需要基础版本、至少一项变更和理由');
+        const invalid = bodyError('adminUpdateSwitches', body); if (invalid) return invalid;
         return write(actorId, 'adminUpdateSwitches', null, key, reauth, body, false, () => {
           if (switches.revision !== body.base_revision) return fail(409, 'REVISION_CONFLICT', '平台开关已被其他管理员更新', switches.revision);
           if ('max_active_users' in body && body.max_active_users !== switches.max_active_users) return fail(503, 'SERVICE_DISABLED', '活跃用户阶段切换尚未开放');
-          const change = Object.fromEntries(fields.filter(field => field in body).map(field => [field, body[field]]));
+          // Capture lease admission does not enforce this setting yet (0.4.0): changing it is refused.
+          if ('new_capture_enabled' in body && body.new_capture_enabled !== switches.new_capture_enabled) return fail(503, 'SERVICE_DISABLED', '新采集开关暂未接入采集准入');
+          const change: Partial<SwitchConfig> = {};
+          for (const field of ['registration_enabled', 'billing_enabled', 'new_capture_enabled', 'asr_streaming_enabled', 'asr_filetrans_enabled', 'ai_interaction_enabled', 'ai_summary_enabled'] as const) if (field in body) change[field] = body[field] as boolean;
+          if ('max_active_users' in body) change.max_active_users = body.max_active_users as SwitchConfig['max_active_users'];
+          // A group field sets both of its members.
+          if ('asr_enabled' in body) { change.asr_streaming_enabled = body.asr_enabled as boolean; change.asr_filetrans_enabled = body.asr_enabled as boolean; }
+          if ('ai_enabled' in body) { change.ai_interaction_enabled = body.ai_enabled as boolean; change.ai_summary_enabled = body.ai_enabled as boolean; }
           switches = { ...switches, ...change, revision: switches.revision + 1 };
-          host.applySwitches(switches);
+          host.applySwitches(switchView());
           for (const [userId, quota] of otherQuotas) otherQuotas.set(userId, applyGates(quota));
           record(actorId, 'adminUpdateSwitches', 'platform', null, body.reason as string);
-          return ok(switches);
+          return ok(switchView());
         });
       }
       case 'GET /admin/audit': return paged('a', audit, query);
@@ -322,8 +413,11 @@ export function createAdminBackend(host: AdminHost, accountUsers: S['User'][]) {
   return {
     handle,
     issueProof,
+    reauthenticate,
+    /** Whether a service may admit new billable work (billing master and its own switch). */
+    serviceEnabled,
     setHealthDev: (value: AdminHealthDev) => { healthDev = value; },
-    switches: () => switches,
+    switches: () => switchView(),
     /** A reseeded account fixture keeps the platform switches and the admin's quota adjustments. */
     reapply: (userId: string, quota: S['QuotaView']) => withAdjustments(userId, quota),
     /** Platform switches and billing state applied to a quota view. */

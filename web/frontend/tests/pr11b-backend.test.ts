@@ -163,29 +163,29 @@ describe('PR-11b user status, quota and switches', () => {
 describe('PR-11b invitations', () => {
   it('creation shows the one-time token once; a replay never shows it again; the audit has no token', () => {
     const { backend, call, write } = harness();
-    const created = write('adminCreateInvitation', null, 'POST', '/admin/invitations', { kind: 'email_bound', email: 'new-student@example.invalid' });
+    const created = write('adminCreateInvitation', null, 'POST', '/admin/invitations', { kind: 'email_bound', email: 'new-student@example.invalid', reason: '合成：新同学' });
     expect(created.reply.status).toBe(201);
     const body = created.reply.body as S['InvitationCreated'];
     expect(body.one_time_token).toMatch(/^[A-Za-z0-9_-]{43}$/);
     expect(body.invitation).toMatchObject({ kind: 'email_bound', email_hint: 'n***@example.invalid', state: 'issued' });
-    const replay = call('C', 'POST', '/admin/invitations', { kind: 'email_bound', email: 'new-student@example.invalid' }, '', created.key, created.token);
+    const replay = call('C', 'POST', '/admin/invitations', { kind: 'email_bound', email: 'new-student@example.invalid', reason: '合成：新同学' }, '', created.key, created.token);
     expect(err(replay)).toBe('SECRET_ALREADY_ISSUED');
     expect(JSON.stringify(replay.body)).not.toContain(body.one_time_token);
     expect(JSON.stringify(backend.adminAudit())).not.toContain(body.one_time_token);
     expect(JSON.stringify(call('C', 'GET', '/admin/invitations').body)).not.toContain('new-student');
-    for (const invalid of [{ kind: 'email_bound' }, { kind: 'single_use', email: 'x@example.invalid' }, { kind: 'admin' }, { kind: 'email_bound', email: 'not-an-email' }]) expect(err(call('C', 'POST', '/admin/invitations', invalid))).toBe('VALIDATION_FAILED');
+    for (const invalid of [{ kind: 'email_bound', reason: 'r' }, { kind: 'single_use', email: 'x@example.invalid', reason: 'r' }, { kind: 'admin', reason: 'r' }, { kind: 'email_bound', email: 'not-an-email', reason: 'r' }, { kind: 'single_use' }, { kind: 'single_use', reason: '\uFEFF' }]) expect(err(call('C', 'POST', '/admin/invitations', invalid))).toBe('VALIDATION_FAILED');
   });
 
   it('revoke only an unused invitation; reissue an unused or expired one with a new token', () => {
     const { write } = harness();
-    expect(err(write('adminRevokeInvitation', CONSUMED, 'POST', `/admin/invitations/${CONSUMED}/revoke`, {}).reply)).toBe('INVITATION_UNAVAILABLE');
-    expect(err(write('adminReissueInvitation', CONSUMED, 'POST', `/admin/invitations/${CONSUMED}/reissue`, {}).reply)).toBe('INVITATION_UNAVAILABLE');
-    const reissued = write('adminReissueInvitation', EXPIRED, 'POST', `/admin/invitations/${EXPIRED}/reissue`, {}).reply.body as S['InvitationCreated'];
+    expect(err(write('adminRevokeInvitation', CONSUMED, 'POST', `/admin/invitations/${CONSUMED}/revoke`, { reason: '合成' }).reply)).toBe('INVITATION_UNAVAILABLE');
+    expect(err(write('adminReissueInvitation', CONSUMED, 'POST', `/admin/invitations/${CONSUMED}/reissue`, { reason: '合成' }).reply)).toBe('INVITATION_UNAVAILABLE');
+    const reissued = write('adminReissueInvitation', EXPIRED, 'POST', `/admin/invitations/${EXPIRED}/reissue`, { reason: '合成' }).reply.body as S['InvitationCreated'];
     expect(reissued.invitation).toMatchObject({ state: 'issued', revision: 2 });
     expect(Date.parse(reissued.invitation.expires_at)).toBeGreaterThan(Date.parse('2026-10-28T08:00:00Z'));
-    const revoked = write('adminRevokeInvitation', ISSUED, 'POST', `/admin/invitations/${ISSUED}/revoke`, {}).reply.body as S['Invitation'];
+    const revoked = write('adminRevokeInvitation', ISSUED, 'POST', `/admin/invitations/${ISSUED}/revoke`, { reason: '合成' }).reply.body as S['Invitation'];
     expect(revoked.state).toBe('revoked');
-    expect(err(write('adminReissueInvitation', ISSUED, 'POST', `/admin/invitations/${ISSUED}/reissue`, {}).reply)).toBe('INVITATION_UNAVAILABLE');
+    expect(err(write('adminReissueInvitation', ISSUED, 'POST', `/admin/invitations/${ISSUED}/reissue`, { reason: '合成' }).reply)).toBe('INVITATION_UNAVAILABLE');
   });
 });
 
@@ -211,10 +211,10 @@ describe('PR-11b usage and health', () => {
 describe('PR-11b review round 0 regressions (mock)', () => {
   it('a replayed key with the same body but another target is a mismatch, not the first target\'s success', () => {
     const { backend, call, write } = harness();
-    const first = write('adminRevokeInvitation', ISSUED, 'POST', `/admin/invitations/${ISSUED}/revoke`, {});
+    const first = write('adminRevokeInvitation', ISSUED, 'POST', `/admin/invitations/${ISSUED}/revoke`, { reason: '合成' });
     expect(first.reply.status).toBe(200);
-    const proof = backend.issueAdminProof('C', { operationId: 'adminRevokeInvitation', targetId: EXPIRED, idempotencyKey: first.key, body: {} }, 'p', '123456') as { token: string };
-    expect(err(call('C', 'POST', `/admin/invitations/${EXPIRED}/revoke`, {}, '', first.key, proof.token))).toBe('IDEMPOTENCY_MISMATCH');
+    const proof = backend.issueAdminProof('C', { operationId: 'adminRevokeInvitation', targetId: EXPIRED, idempotencyKey: first.key, body: { reason: '合成' } }, 'p', '123456') as { token: string };
+    expect(err(call('C', 'POST', `/admin/invitations/${EXPIRED}/revoke`, { reason: '合成' }, '', first.key, proof.token))).toBe('IDEMPOTENCY_MISMATCH');
     expect((items<S['Invitation']>(call('C', 'GET', '/admin/invitations')).find(item => item.id === EXPIRED))!.state).toBe('expired');
   });
 
@@ -317,7 +317,7 @@ describe('PR-11b extra review regressions (mock)', () => {
     const { backend, call, newKey } = harness();
     for (const raw of [undefined, null, [], 'x', 3]) {
       const key = newKey();
-      const proof = backend.issueAdminProof('C', { operationId: 'adminRevokeInvitation', targetId: ISSUED, idempotencyKey: key, body: {} }, 'p', '123456') as { token: string };
+      const proof = backend.issueAdminProof('C', { operationId: 'adminRevokeInvitation', targetId: ISSUED, idempotencyKey: key, body: { reason: '合成' } }, 'p', '123456') as { token: string };
       expect(err(call('C', 'POST', `/admin/invitations/${ISSUED}/revoke`, raw, '', key, proof.token))).toBe('VALIDATION_FAILED');
     }
     expect((items<S['Invitation']>(call('C', 'GET', '/admin/invitations')).find(item => item.id === ISSUED))!.state).toBe('issued');
@@ -360,5 +360,83 @@ describe('PR-11b extra review regressions (mock)', () => {
     expect((call('C', 'GET', '/admin/usage').body as S['AdminUsage']).settled_microyuan).toBe('180000000');
     expect((call('A', 'GET', '/me/quota').body as S['QuotaView']).platform_billing_state).toBe('warning60');
     expect((call('C', 'GET', '/admin/users/d0000000-0000-4000-8000-000000000001/quota').body as S['QuotaView']).platform_billing_state).toBe('warning60');
+  });
+});
+
+describe('PR-11b on HTTP 0.4.0 (mock)', () => {
+  const ADMIN = C_ID;
+  const reauth = (call: ReturnType<typeof harness>['call'], operation: Record<string, unknown>, code = '123456', key = '0a000000-0000-4000-8000-000000000001') =>
+    call('C', 'POST', '/auth/reauth', { password: 'synthetic-password', mfa_code: code, operation }, '', key);
+  const op = (purpose: string, target: Record<string, unknown>, key: string, body: unknown) => ({ purpose, target, candidate_parameters: { idempotency_key: key, body } });
+
+  it('POST /auth/reauth issues a proof bound to purpose, target, key and body; the write consumes it once', () => {
+    const { call } = harness();
+    const key = '0b000000-0000-4000-8000-000000000001';
+    const body = { base_revision: 1, status: 'disabled', reason: '合成：通过再认证接口' };
+    const issued = reauth(call, op('adminUpdateUser', { kind: 'user', id: B_ID }, key, body));
+    expect(issued.status).toBe(200);
+    const token = (issued.body as S['ReauthResult']).reauth_token;
+    expect(token).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    // Bound to the user in the path: another target is refused.
+    expect(err(call('C', 'PATCH', `/admin/users/${A_ID}`, body, '', key, token))).toBe('REAUTH_REQUIRED');
+    expect(call('C', 'PATCH', `/admin/users/${B_ID}`, body, '', key, token).status).toBe(200);
+    const quotaKey = '0b000000-0000-4000-8000-000000000002';
+    const quota = (call('C', 'GET', `/admin/users/${A_ID}/quota`).body as S['QuotaView']).buckets[0]!;
+    const quotaBody = { user_id: A_ID, bucket_kind: quota.kind, period_start: quota.period_start, additional_units: 1, reason: '合成' };
+    const quotaProof = reauth(call, op('adminAdjustQuota', { kind: 'account', id: ADMIN }, quotaKey, quotaBody), '123456', '0a000000-0000-4000-8000-000000000002');
+    expect(call('C', 'POST', '/admin/quota-adjustments', quotaBody, '', quotaKey, (quotaProof.body as S['ReauthResult']).reauth_token).status).toBe(201);
+  });
+
+  it('an unusable operation is refused before the factors; a student or a non-admin purpose gets no admin proof', () => {
+    const { call } = harness();
+    const key = '0c000000-0000-4000-8000-000000000001';
+    const switches = { base_revision: 1, ai_summary_enabled: false, reason: '合成' };
+    // Wrong code is the factor failure; the shape checks below come first and return 422 even with a valid code.
+    expect(err(reauth(call, op('adminUpdateSwitches', { kind: 'account', id: ADMIN }, key, switches), '000000'))).toBe('REAUTH_REQUIRED');
+    expect(err(reauth(call, op('adminUpdateSwitches', { kind: 'account', id: ADMIN }, key, { ...switches, reason: '\u0020\u3000' })))).toBe('VALIDATION_FAILED');
+    expect(err(reauth(call, op('adminUpdateSwitches', { kind: 'account', id: ADMIN }, key.toUpperCase(), switches)))).toBe('VALIDATION_FAILED');
+    expect(err(reauth(call, op('adminUpdateSwitches', { kind: 'account', id: ADMIN.toUpperCase() }, key, switches)))).toBe('VALIDATION_FAILED');
+    expect(err(reauth(call, op('adminUpdateSwitches', { kind: 'account', id: A_ID }, key, switches)))).toBe('FORBIDDEN');
+    expect(err(reauth(call, op('adminRevokeInvitation', { kind: 'account', id: ADMIN }, key, { reason: 'r' })))).toBe('VALIDATION_FAILED');
+    expect(err(reauth(call, op('adminCreateInvitation', { kind: 'account', id: ADMIN }, key, { kind: 'single_use', email: 'x@example.invalid', reason: 'r' })))).toBe('VALIDATION_FAILED');
+    expect(err(reauth(call, op('logoutAll', { kind: 'account', id: ADMIN }, key, {})))).toBe('VALIDATION_FAILED');
+    expect(err(call('A', 'POST', '/auth/reauth', { password: 'p', mfa_code: '123456', operation: op('adminUpdateSwitches', { kind: 'account', id: A_ID }, key, switches) }, '', '0a000000-0000-4000-8000-0000000000aa'))).toBe('FORBIDDEN');
+  });
+
+  it('switches are fine-grained: groups summarise with OR, a group field sets both members, mixing a group and its member is refused', () => {
+    const { call, write } = harness();
+    const saved = write('adminUpdateSwitches', null, 'PATCH', '/admin/switches', { base_revision: 1, asr_streaming_enabled: false, reason: '合成：实时转写维护' }).reply.body as S['AdminSwitches'];
+    expect(saved).toMatchObject({ asr_streaming_enabled: false, asr_filetrans_enabled: true, asr_enabled: true });
+    // The student's quota view: ASR is still available as a group (filetrans), billing is on.
+    expect((call('A', 'GET', '/me/quota').body as S['QuotaView']).asr_enabled).toBe(true);
+    expect(err(call('C', 'PATCH', '/admin/switches', { base_revision: 2, asr_enabled: false, asr_filetrans_enabled: false, reason: 'x' }))).toBe('VALIDATION_FAILED');
+    const group = write('adminUpdateSwitches', null, 'PATCH', '/admin/switches', { base_revision: 2, ai_enabled: false, reason: '合成' }).reply.body as S['AdminSwitches'];
+    expect(group).toMatchObject({ ai_interaction_enabled: false, ai_summary_enabled: false, ai_enabled: false });
+    // The new-capture switch is stored but not enforced by capture admission yet: changing it is refused.
+    expect(err(write('adminUpdateSwitches', null, 'PATCH', '/admin/switches', { base_revision: 3, new_capture_enabled: false, reason: '合成' }).reply)).toBe('SERVICE_DISABLED');
+    expect(write('adminUpdateSwitches', null, 'PATCH', '/admin/switches', { base_revision: 3, new_capture_enabled: true, registration_enabled: false, reason: '合成' }).reply.status).toBe(200);
+    // The billing master closes every group in the quota view.
+    write('adminUpdateSwitches', null, 'PATCH', '/admin/switches', { base_revision: 4, billing_enabled: false, reason: '合成：总闸' });
+    expect(call('A', 'GET', '/me/quota').body).toMatchObject({ asr_enabled: false, ai_enabled: false });
+  });
+
+  it('each service is admitted by its own switch, not by the group summary', () => {
+    const { backend, call, write } = harness();
+    const ENDED = 'c0000000-0000-4000-8000-000000000001';
+    const request = (over: Record<string, unknown>) => ({ scope: 'all', seen_sources: [], include_images: false, accept_partial_scope: false, ...over });
+    const execute = (plan: S['GenerationPlan']) => ({ plan_sha256: plan.plan_sha256, confirmed_destination_revision: plan.destination.configuration_revision, confirm_send: true, confirm_images: false, confirm_original_snapshot: false, confirm_partial_scope: false });
+    const retranscribe = call('A', 'POST', `/class-sessions/${ENDED}/generation-plans`, request({ kind: 'asr_retranscribe' })).body as S['GenerationPlan'];
+    write('adminUpdateSwitches', null, 'PATCH', '/admin/switches', { base_revision: 1, asr_filetrans_enabled: false, ai_summary_enabled: false, reason: '合成' });
+    // Retranscription is closed while live ASR stays open; summaries are closed while questions stay open.
+    expect(err(call('A', 'POST', `/generation-plans/${retranscribe.id}/execute`, execute(retranscribe)))).toBe('SERVICE_DISABLED');
+    expect(backend.asrAdmits('A', '5c000000-0000-4000-8000-0000000000a1')).toBe(true);
+    expect(err(call('A', 'POST', `/class-sessions/${ENDED}/generation-plans`, request({ kind: 'review_summary' })))).toBe('BUDGET_BLOCKED');
+    expect(call('A', 'POST', `/class-sessions/${ENDED}/generation-plans`, request({ kind: 'ai_question', scope: 'recent120', question: '为什么？' })).status).toBe(201);
+  });
+
+  it('an adjustment whose resulting limit would leave the safe integer range is refused', () => {
+    const { call, write } = harness();
+    const bucket = (call('C', 'GET', `/admin/users/${A_ID}/quota`).body as S['QuotaView']).buckets[0]!;
+    expect(err(write('adminAdjustQuota', A_ID, 'POST', '/admin/quota-adjustments', { user_id: A_ID, bucket_kind: bucket.kind, period_start: bucket.period_start, additional_units: Number.MAX_SAFE_INTEGER, reason: '合成' }).reply)).toBe('VALIDATION_FAILED');
   });
 });

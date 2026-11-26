@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import type { components } from '../../generated/openapi';
-import { invitationKindLabel, invitationRef, invitationStateLabel } from '../../domain/admin';
+import { invitationKindLabel, invitationRef, invitationStateLabel, reasonError } from '../../domain/admin';
 import { formatDateTime } from '../../domain/dashboard';
 import { isAdminDenial, useAdminInvitations, useAdminWrite } from '../../features/admin';
 import { ReadOnlyWhile, readableCache, useAppData } from '../../features/data';
 import { Badge, Empty } from '../common';
-import { AdminActionDialog, AdminData, AdminPage } from './AdminShell';
+import { AdminActionDialog, AdminData, AdminPage, ReasonField } from './AdminShell';
 import styles from '../pages.module.css';
 
 type S = components['schemas'];
@@ -68,6 +68,7 @@ const created = (reply: S['InvitationCreated']): Created => ({ token: reply.one_
 function CreateDialog({ onClose, onIssued }: { onClose: () => void; onIssued: (created: Created) => void }) {
   const [kind, setKind] = useState<S['InvitationCreate']['kind']>('email_bound');
   const [email, setEmail] = useState('');
+  const [reason, setReason] = useState('');
   const write = useAdminWrite<S['InvitationCreate'], S['InvitationCreated']>({
     operationId: 'adminCreateInvitation', targetId: () => null,
     send: (api, body, key, token) => api.adminCreateInvitation(body, key, token),
@@ -84,32 +85,37 @@ function CreateDialog({ onClose, onIssued }: { onClose: () => void; onIssued: (c
       {kind === 'email_bound' && <div className={styles.field}><label htmlFor="invite-email">受邀邮箱</label>
         <input id="invite-email" type="email" autoComplete="off" value={email} onChange={event => setEmail(event.target.value)} aria-invalid={email !== '' && !emailValid ? true : undefined} />
         {email !== '' && !emailValid && <span className={styles.error}>请输入有效的邮箱地址。</span>}</div>}
+      <ReasonField id="invite-reason" value={reason} onChange={setReason} error={reasonError(reason)} />
     </>}
-    prepareValid={kind === 'single_use' || emailValid}
-    build={() => kind === 'email_bound' ? { kind, email: email.trim() } : { kind }} />;
+    prepareValid={(kind === 'single_use' || emailValid) && reasonError(reason) === null}
+    build={() => kind === 'email_bound' ? { kind, email: email.trim(), reason } : { kind, reason }} />;
 }
 
 function RevokeDialog({ invitation, onClose, onRevoked }: { invitation: S['Invitation']; onClose: () => void; onRevoked: (id: string) => void }) {
-  const write = useAdminWrite<Record<string, never>, S['Invitation']>({
+  const [reason, setReason] = useState('');
+  const write = useAdminWrite<S['InvitationAction'], S['Invitation']>({
     operationId: 'adminRevokeInvitation', targetId: () => invitation.id,
-    send: (api, _body, key, token) => api.adminRevokeInvitation(invitation.id, key, token),
+    send: (api, body, key, token) => api.adminRevokeInvitation(invitation.id, body, key, token),
     apply: (client, accountKey, revoked) => client.setQueryData<S['InvitationPage']>(['account', accountKey, 'admin', 'invitations'], page => page && ({ ...page, items: page.items.map(item => item.id === revoked.id && item.revision <= revoked.revision ? revoked : item) })),
     onSuccess: () => onRevoked(invitation.id),
   });
   return <AdminActionDialog open onClose={onClose} write={write} danger title="撤销邀请"
     description={`撤销后这个${invitationKindLabel[invitation.kind]}${invitation.email_hint ? `（${invitation.email_hint}）` : ''}立即失效，已注册的账号不受影响。`}
-    prepareValid build={() => ({})} confirmLabel="下一步：验证身份后撤销" />;
+    prepare={<ReasonField id="revoke-reason" value={reason} onChange={setReason} error={reasonError(reason)} />}
+    prepareValid={reasonError(reason) === null} build={() => ({ reason })} confirmLabel="下一步：验证身份后撤销" />;
 }
 
 function ReissueDialog({ invitation, onClose, onIssued }: { invitation: S['Invitation']; onClose: () => void; onIssued: (created: Created) => void }) {
-  const write = useAdminWrite<Record<string, never>, S['InvitationCreated']>({
+  const [reason, setReason] = useState('');
+  const write = useAdminWrite<S['InvitationAction'], S['InvitationCreated']>({
     operationId: 'adminReissueInvitation', targetId: () => invitation.id,
-    send: (api, _body, key, token) => api.adminReissueInvitation(invitation.id, key, token),
+    send: (api, body, key, token) => api.adminReissueInvitation(invitation.id, body, key, token),
     onSuccess: reply => onIssued(created(reply)),
   });
   return <AdminActionDialog open onClose={onClose} write={write} title="重新签发邀请"
     description={`将为这个${invitationKindLabel[invitation.kind]}${invitation.email_hint ? `（${invitation.email_hint}）` : ''}生成新的一次性令牌，旧令牌立即失效，有效期重新计算。`}
-    prepareValid build={() => ({})} />;
+    prepare={<ReasonField id="reissue-reason" value={reason} onChange={setReason} error={reasonError(reason)} />}
+    prepareValid={reasonError(reason) === null} build={() => ({ reason })} />;
 }
 
 /** Shown once: the token is not cached, not persisted and cannot be shown again after dismissal. */

@@ -134,14 +134,16 @@ export function createApiClient(scope: Scope, transportOrOptions: typeof fetch |
   const adminWrite = <T>(method: 'POST' | 'PATCH', path: string, body: unknown, key: string, reauth: string) => request<T>(method, withQuery(path), body, undefined, key, reauth);
 
   return {
+    /** HTTP 0.4.0: purpose-bound reauthentication (its own Idempotency-Key; the proof is returned once). */
+    reauthenticate: (body: S['ReauthRequest'], key: string) => post<S['ReauthResult']>('/auth/reauth', body, key),
     // PR-11b operations console: metadata projections only (no study content, no impersonation route).
     adminUsers: (signal?: AbortSignal) => allPages<S['User']>('/admin/users', signal),
     adminUserQuota: (userId: string, signal?: AbortSignal) => get<S['QuotaView']>(`/admin/users/${segment(userId)}/quota`, undefined, signal),
     adminUpdateUser: (userId: string, body: S['AdminUserPatch'], key: string, reauth: string) => adminWrite<S['User']>('PATCH', `/admin/users/${segment(userId)}`, body, key, reauth),
     adminInvitations: (signal?: AbortSignal) => allPages<S['Invitation']>('/admin/invitations', signal),
     adminCreateInvitation: (body: S['InvitationCreate'], key: string, reauth: string) => adminWrite<S['InvitationCreated']>('POST', '/admin/invitations', body, key, reauth),
-    adminRevokeInvitation: (invitationId: string, key: string, reauth: string) => adminWrite<S['Invitation']>('POST', `/admin/invitations/${segment(invitationId)}/revoke`, {}, key, reauth),
-    adminReissueInvitation: (invitationId: string, key: string, reauth: string) => adminWrite<S['InvitationCreated']>('POST', `/admin/invitations/${segment(invitationId)}/reissue`, {}, key, reauth),
+    adminRevokeInvitation: (invitationId: string, body: S['InvitationAction'], key: string, reauth: string) => adminWrite<S['Invitation']>('POST', `/admin/invitations/${segment(invitationId)}/revoke`, body, key, reauth),
+    adminReissueInvitation: (invitationId: string, body: S['InvitationAction'], key: string, reauth: string) => adminWrite<S['InvitationCreated']>('POST', `/admin/invitations/${segment(invitationId)}/reissue`, body, key, reauth),
     adminAdjustQuota: (body: S['QuotaAdjustment'], key: string, reauth: string) => adminWrite<S['QuotaView']>('POST', '/admin/quota-adjustments', body, key, reauth),
     adminUsage: (periodStart: string | null, signal?: AbortSignal) => get<S['AdminUsage']>('/admin/usage', { period_start: periodStart }, signal),
     adminHealth: (signal?: AbortSignal) => get<S['AdminHealth']>('/admin/health', undefined, signal),

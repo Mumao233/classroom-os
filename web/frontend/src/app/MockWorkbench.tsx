@@ -29,8 +29,8 @@ import type { ClassroomOSWebV1EventEnvelope } from '../generated/events';
 import { isMockOffline, setMockAccount, setMockDataset, setMockOffline } from '../mock/start';
 import { eventScripts, type EventScriptName } from '../mock/event-scripts';
 import { createApiClient } from '../api/client';
-import { AdminReauthError, type AdminReauthPort } from '../features/admin';
-import { issueMockAdminProof, mockAsrAdmits, mockCsrfToken, setMockAdminHealth, setMockAdminMfa } from '../mock/start';
+import { createHttpAdminReauth } from '../features/admin';
+import { mockAsrAdmits, mockCsrfToken, setMockAdminHealth, setMockAdminMfa } from '../mock/start';
 import { AdminUsers } from '../pages/admin/AdminUsers';
 import { AdminInvites } from '../pages/admin/AdminInvites';
 import { AdminUsage } from '../pages/admin/AdminUsage';
@@ -46,17 +46,6 @@ const baseNav = [
 ];
 /** Shown only when the server says the signed-in user is an administrator (AUTH-07, FE-13). */
 const adminNav = { to: '/admin/users', text: '运营', Icon: IconShieldCheck, DesktopIcon: IconShieldCheck };
-/**
- * PR-11b development stand-in for the missing admin reauthentication purpose (PR11B-SCOPE-GAPS.md §1):
- * an in-process Mock call, never an HTTP request. The real-API shell uses `unavailableAdminReauth`.
- */
-const mockAdminReauth: AdminReauthPort = {
-  issue: async (binding, password, code) => {
-    const result = issueMockAdminProof(binding, password, code);
-    if ('error' in result) throw new AdminReauthError(result.error === 'NETWORK' ? 'network' : result.error === 'MFA_REQUIRED' ? 'mfa' : result.error === 'FORBIDDEN' ? 'forbidden' : 'failed');
-    return result;
-  },
-};
 const scenarioNames = ['首次使用 · 空课程', '合成的最近记录', '模拟课堂跨页面', '模拟上传失败', '离线与暂存状态', 'AI 结果未知', '候选与个人稿', '版本冲突', '来源不可用', '额度限制', '账号切换', '组件状态'];
 
 /** Fixed synthetic clock so mock dates, weeks and expiry warnings are reproducible. */
@@ -159,6 +148,10 @@ function MockWorkbenchContent({ runtime }: { runtime: ReturnType<typeof useMockR
   // Same cache entry as the pages' useMe: the role decides whether the operations entry exists at all.
   const me = useQuery({ queryKey: ['account', `${account}:${epoch}`, 'me'], enabled: account !== null, queryFn: ({ signal }) => api.me(signal) });
   const nav = me.data?.role === 'admin' && !me.isError ? [...baseNav, adminNav] : baseNav;
+  const adminId = me.data?.role === 'admin' && !me.isError ? me.data.id : null;
+  const adminIdRef = useRef(adminId);
+  adminIdRef.current = adminId;
+  const adminReauth = useMemo(() => createHttpAdminReauth(api, () => adminIdRef.current), [api]);
   const apiStatus = !account ? 'revoked' : coursesQuery.isPending ? 'loading' : coursesQuery.isError ? 'error' : 'ready';
   // MOCK-01 is a first-time account with no records; every other scenario uses the seeded records.
   const dataset = scenario === '01' ? 'empty' : 'seeded';
@@ -188,7 +181,8 @@ function MockWorkbenchContent({ runtime }: { runtime: ReturnType<typeof useMockR
     onQuickStart: () => start(), classroomRevoked: runtime.state.eventProjection.classroomDeleted,
     classroom: classroomShell,
     revocation,
-    adminReauth: mockAdminReauth,
+    // HTTP 0.4.0: POST /auth/reauth with the admin purpose, answered by the Mock like the real service.
+    adminReauth,
   };
   const start = () => {
     // The demo quick start always uses the PR-09a demo classroom, never a PR-10a classroom bound earlier.

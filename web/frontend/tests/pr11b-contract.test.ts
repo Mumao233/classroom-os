@@ -15,19 +15,19 @@ const check = (name: string, value: unknown) => { const validate = ajv.compile({
 const A_ID = 'a0000000-0000-4000-8000-000000000001';
 const B_ID = 'b0000000-0000-4000-8000-000000000001';
 
-describe('PR-11b admin mock responses conform to contract 0.3.0', () => {
+describe('PR-11b admin mock responses conform to contract 0.4.0', () => {
   it('every admin route is in the frozen contract, requires admin + MFA, and writes require reauth', () => {
-    expect(openapi.info.version).toBe('0.3.0');
-    const admin = Object.entries(openapi.paths as Record<string, Record<string, Record<string, unknown>>>).filter(([path]) => path.startsWith('/admin'));
+        const admin = Object.entries(openapi.paths as Record<string, Record<string, Record<string, unknown>>>).filter(([path]) => path.startsWith('/admin'));
     expect(admin.map(([path]) => path).sort()).toEqual(['/admin/audit', '/admin/health', '/admin/invitations', '/admin/invitations/{invitation_id}/reissue', '/admin/invitations/{invitation_id}/revoke', '/admin/quota-adjustments', '/admin/switches', '/admin/usage', '/admin/users', '/admin/users/{user_id}', '/admin/users/{user_id}/quota']);
     for (const [, operations] of admin) for (const [method, operation] of Object.entries(operations)) {
       expect(operation['x-required-role']).toBe('admin');
       expect(operation['x-requires-mfa']).toBe(true);
       if (method !== 'get') expect(operation['x-requires-reauth']).toBe(true);
     }
-    // Contract gap §1: no admin purpose exists in ReauthOperation yet (this test fails once it is added).
+    // HTTP 0.4.0: the six admin writes each have a reauthentication purpose.
+    expect(openapi.info.version).toBe('0.4.0');
     const purposes = (openapi.components.schemas.ReauthOperation.oneOf as Array<{ properties: { purpose: { const: string } } }>).map(item => item.properties.purpose.const);
-    expect(purposes.some(purpose => purpose.startsWith('admin'))).toBe(false);
+    expect(purposes.filter(purpose => purpose.startsWith('admin')).sort()).toEqual(['adminAdjustQuota', 'adminCreateInvitation', 'adminReissueInvitation', 'adminRevokeInvitation', 'adminUpdateSwitches', 'adminUpdateUser']);
   });
 
   it('reads, writes and errors of every admin route', () => {
@@ -53,14 +53,17 @@ describe('PR-11b admin mock responses conform to contract 0.3.0', () => {
     for (const mode of ['healthy', 'degraded', 'stalled'] as const) { backend.setAdminHealth(mode); ok('AdminHealth', get('/admin/health')); }
     const switches = ok('AdminSwitches', get('/admin/switches'));
     ok('User', write('adminUpdateUser', B_ID, 'PATCH', `/admin/users/${B_ID}`, { base_revision: 1, status: 'disabled', reason: '合成' }));
-    const created = ok('InvitationCreated', write('adminCreateInvitation', null, 'POST', '/admin/invitations', { kind: 'single_use' }));
+    const created = ok('InvitationCreated', write('adminCreateInvitation', null, 'POST', '/admin/invitations', { kind: 'single_use', reason: '合成' }));
     const invitationId = (created.invitation as { id: string }).id;
-    ok('InvitationCreated', write('adminReissueInvitation', invitationId, 'POST', `/admin/invitations/${invitationId}/reissue`, {}));
-    ok('Invitation', write('adminRevokeInvitation', invitationId, 'POST', `/admin/invitations/${invitationId}/revoke`, {}));
+    ok('InvitationCreated', write('adminReissueInvitation', invitationId, 'POST', `/admin/invitations/${invitationId}/reissue`, { reason: '合成' }));
+    ok('Invitation', write('adminRevokeInvitation', invitationId, 'POST', `/admin/invitations/${invitationId}/revoke`, { reason: '合成' }));
     const quota = get(`/admin/users/${A_ID}/quota`).body as { buckets: Array<{ kind: string; period_start: string }> };
     ok('QuotaView', write('adminAdjustQuota', A_ID, 'POST', '/admin/quota-adjustments', { user_id: A_ID, bucket_kind: 'summary_month_count', period_start: quota.buckets.find(item => item.kind === 'summary_month_count')!.period_start, additional_units: 10, reason: '合成' }));
     ok('AdminSwitches', write('adminUpdateSwitches', null, 'PATCH', '/admin/switches', { base_revision: switches.revision, registration_enabled: false, reason: '合成' }));
     fail(write('adminUpdateSwitches', null, 'PATCH', '/admin/switches', { base_revision: (switches.revision as number) + 1, max_active_users: '30', reason: '合成' }));
+    ok('AdminSwitches', write('adminUpdateSwitches', null, 'PATCH', '/admin/switches', { base_revision: (switches.revision as number) + 1, asr_streaming_enabled: false, reason: '合成' }));
+    const reauthReply = backend.handle('C', 'POST', '/auth/reauth', new URLSearchParams(), { password: 'p', mfa_code: '123456', operation: { purpose: 'adminUpdateSwitches', target: { kind: 'account', id: 'c9000000-0000-4000-8000-000000000001' }, candidate_parameters: { idempotency_key: newKey(), body: { base_revision: 3, ai_enabled: false, reason: '合成' } } } }, newKey(), null)!;
+    ok('ReauthResult', reauthReply);
     ok('AuditRecordPage', get('/admin/audit'));
     ok('AuditRecordPage', get('/admin/audit', 'limit=1'));
 

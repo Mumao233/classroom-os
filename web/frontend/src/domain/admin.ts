@@ -2,10 +2,15 @@ import type { components } from '../generated/openapi';
 
 type S = components['schemas'];
 
-/** Reasons are stored in the audit trail: 1–500 Unicode code points, not only whitespace. */
+/** AdminWriteReason (HTTP 0.4.0): one character outside this white-space set, at most 500 code points, no U+0000. */
+// The contract pattern names these control characters as white space on purpose.
+// eslint-disable-next-line no-control-regex
+const REASON_VISIBLE = /[^\u0009-\u000D\u001C-\u0020\u0085\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF]/u;
+/** Reasons are stored in the audit trail; checked here before any factor is entered. */
 export function reasonError(text: string): string | null {
-  if (!text.trim()) return '请填写操作理由，它会记入审计记录。';
+  if (!REASON_VISIBLE.test(text)) return '请填写操作理由，它会记入审计记录。';
   if ([...text].length > 500) return '理由不能超过 500 个字。';
+  if (text.includes('\u0000')) return '理由里有无法保存的控制字符，请删除后重试。';
   return null;
 }
 
