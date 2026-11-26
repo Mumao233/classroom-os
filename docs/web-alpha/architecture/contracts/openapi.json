@@ -2331,7 +2331,7 @@
         "x-idempotency-scope": "authenticated owner + operationId + Idempotency-Key; auth public routes use preauth-session + operationId + key",
         "parameters": [
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/CacheIdempotencyKey"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -10158,6 +10158,14 @@
           "pattern": "^[A-Za-z0-9_-]+$"
         },
         "description": "Existing X-Reauth-Token header, carrying an opaque server-issued proof for the exact purpose, target, candidate parameters and future Idempotency-Key. R3 at most 120 seconds from real verified_at and single-use; R1/R2 use the documented role window. Recheck current session/device/epoch and deadline after all locks. This header cannot grant ordinary admin permissions or authorize an unreviewed operation. Producer generates at least 32 random bytes, canonical unpadded base64url, 43..256 characters; parser decodes/re-encodes and rejects noncanonical or insufficient-byte values. Same token is accepted by control StudentExecutorEvidence via its Secret envelope; shape alone does not prove entropy or authorization."
+      },
+      "CacheIdempotencyKey": {
+        "name": "Idempotency-Key",
+        "in": "header",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/CanonicalUuidV4"
+        }
       }
     },
     "schemas": {
@@ -15922,29 +15930,47 @@
         "additionalProperties": false
       },
       "InvitationCreate": {
-        "type": "object",
-        "properties": {
-          "kind": {
-            "type": "string",
-            "enum": [
-              "email_bound",
-              "single_use"
-            ]
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "email_bound"
+              },
+              "email": {
+                "type": "string",
+                "maxLength": 254,
+                "format": "email"
+              },
+              "reason": {
+                "$ref": "#/components/schemas/AdminWriteReason"
+              }
+            },
+            "required": [
+              "kind",
+              "reason",
+              "email"
+            ],
+            "additionalProperties": false
           },
-          "email": {
-            "type": "string",
-            "maxLength": 254,
-            "format": "email"
-          },
-          "reason": {
-            "$ref": "#/components/schemas/AdminWriteReason"
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "const": "single_use"
+              },
+              "email": false,
+              "reason": {
+                "$ref": "#/components/schemas/AdminWriteReason"
+              }
+            },
+            "required": [
+              "kind",
+              "reason"
+            ],
+            "additionalProperties": false
           }
-        },
-        "required": [
-          "kind",
-          "reason"
-        ],
-        "additionalProperties": false
+        ]
       },
       "InvitationAction": {
         "type": "object",
@@ -16072,7 +16098,7 @@
           },
           "new_capture_enabled": {
             "type": "boolean",
-            "description": "Independent switch for starting a new capture."
+            "description": "Stored new-capture configuration. Capture lease admission does not currently enforce this setting."
           },
           "asr_streaming_enabled": {
             "type": "boolean",
@@ -16196,7 +16222,7 @@
           },
           "new_capture_enabled": {
             "type": "boolean",
-            "description": "Independent switch for starting a new capture."
+            "description": "Changing the stored value returns 503 SERVICE_DISABLED until capture lease admission enforces this setting. Sending its current value follows normal PATCH revision checks."
           },
           "asr_streaming_enabled": {
             "type": "boolean",
@@ -18005,7 +18031,7 @@
                 "type": "object",
                 "properties": {
                   "idempotency_key": {
-                    "$ref": "#/components/schemas/CanonicalIdempotencyKey"
+                    "$ref": "#/components/schemas/CanonicalUuidV4"
                   },
                   "body": {
                     "$ref": "#/components/schemas/CacheUnlockRequest"
@@ -18492,10 +18518,13 @@
         "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
       },
       "CacheDeviceId": {
+        "$ref": "#/components/schemas/CanonicalUuidV4",
+        "description": "Canonical lowercase UUIDv4 of the current device. Cache proof targets and the device_id in the bound write use the same value."
+      },
+      "CanonicalUuidV4": {
         "type": "string",
         "format": "uuid",
-        "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
-        "description": "Canonical lowercase UUIDv4 of the current device. Cache proof targets and the device_id in the bound write use the same value."
+        "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
       }
     }
   },

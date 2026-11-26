@@ -107,7 +107,7 @@
 | 公开字段 | GET / PATCH 的含义 |
 |---|---|
 | `billing_enabled` | 收费总闸。关闭会阻止新的计费准入，保留各分项原配置。 |
-| `new_capture_enabled` | 新采集的独立配置位。改变它只改这一位。 |
+| `new_capture_enabled` | 新采集的独立配置位。2026-11-26 额外复审后，GET 显示存储值，采集准入接入前，PATCH 改变该值返回 503。 |
 | `asr_streaming_enabled`、`asr_filetrans_enabled` | 分别控制实时 ASR、文件重转写。 |
 | `ai_interaction_enabled`、`ai_summary_enabled` | 分别控制 AI 互动（问答、讲解）和总结。 |
 | `asr_enabled`、`ai_enabled` | 读取为对应组两项配置的 OR。两项都关才显示关，一开一关应按分项显示“部分开启”。PATCH 显式写组字段会把两项都设为该值。 |
@@ -141,6 +141,21 @@ PATCH 只提交有意更改的项，省略项保持原值。一个请求至少�
 核查了 `tools/`、`web/backend/tests/` 和 `web/frontend/tests/` 中的联合类型构造、顺序索引和间接引用。05a 是唯一按首分支派生再认证操作的构建器。11a 按用途名构造缺失分支，索引切片仅用于导出新追加的分支。07a/07b 复制整个契约以扩展各自 DTO，07b 样例校验完整再认证联合。前端契约测试按用途筛选并要求结果唯一。
 
 [缓存凭证消费](../../../web/backend/classroom_web/application/cache_keys.py) · [05a 候选构建器](../../../tools/pr05a/formal/candidate.py) · [组合与可信缓存回归](../../../web/backend/tests/integration/test_trusted_cache_browser.py)
+
+## 额外复审核实 · 2026-11-26
+
+复审输入为 `14201d2080f9014b8656525c527e2170ead77467`。逐项核对生产者、消费者和实际路由后，六项均成立。以下更新仍属未发布的 HTTP 0.4.0。
+
+| 发现 | 原代码依据 | 本轮裁决与回归 |
+|---|---|---|
+| 1 · 新采集开关（P1） | `apply_switch_body` 可保存 `new_capture`。`PgCaptureRepository.scope` 检查采集策略和保留期限，`CaptureService.acquire_in_transaction` 随后创建 epoch 和租约，全程未读取该配置位。 | 在管理写事务锁定开关行后，尝试改变 `new_capture_enabled` 时整笔返回 `503 SERVICE_DISABLED`。GET 显示存储值，同值 PATCH 走既有 CAS。这样可避免把账本变成采集模块的新依赖，也可避免改变续租和接管语义。回归覆盖开→关、关→开、同值与其他开关混写，以及拒绝后的版本、审计、回执和凭证。前端应将该项显示为只读配置。 |
+| 2 · 重新登录后的开关回执（P2） | `apply_admin` 原先用会话 token 摘要查找 `preauth_receipts`。新会话漏查，底层开关审计发现重复后，`apply_switch_body` 仍返回当时的全局视图。 | 新快照按当前管理员 ID、操作和写入键保存。回放复核当前账号、角色、TOTP 会话、设备、安全 epoch、绑定凭证和完整正文承诺。同键异体返回 409。历史会话格式按管理员归属读取首份快照。只有审计且缺少可恢复快照时返回 `503 RESULT_UNKNOWN`。开关审计按操作者和键唯一，其他账本动作保留原唯一性。用例覆盖登出再登录、期间另有修改、旧会话凭证、角色降级、历史多份回执和同键隔离。仅更新 11a 候选 DDL。 |
+| 3 · 精确整数（P2） | `strict_json` 默认通过二进制浮点解析小数。到 schema 和 `normalize_admin_write_integer` 时，原始分数可能已成为整数。 | 三个管理用途的修订号或额度增量及相应签发路径，按精确十进制检查整数性和范围 1 至 9,007,199,254,740,991，再统一为整数。原始 HTTP 字节用例覆盖舍入后看似合法的分数、上下限外的小数、大指数、精确上限，以及 `1.0`、`1e0` 与整数之间的签发、写入和回放。 |
+| 4 · 课堂实时能力（P2） | `PgBillingRepository.quota` 对组内分项取 OR，再与收费总闸取 AND。`ClassroomLive.Preparation` 用两个组位显示「✓」和「可按需使用」，文件重转写或总结单独开启也会触发。 | 课前准备页从两个额度桶读取转写分钟和问答、解释次数。整组关闭时提示暂停。组摘要为真时仅显示余额，额度桶缺失时显示暂无信息。新增前端用例覆盖组开但实时能力未知、单组关闭以及缺少额度桶。沿用学生已有的 `QuotaView`。 |
+| 5 · 缓存未来写入键（P2） | `unlockCache` 签发 DTO 和 POST 的写入头只要求规范 UUID，`CacheKeyService.release` 对实际写入键调用 `canonical_uuid`，要求 UUIDv4。 | 缓存签发与实际写入头共用规范小写 UUIDv4。05a 恢复覆盖层继承解锁头，并据其 schema 构造两种凭证。HTTP 在密码/TOTP 及缓存服务分派之前拒绝 v7。用例核对解锁、恢复、覆盖层冲突和普通写入键的适用范围。 |
+| 6 · 邀请类型与邮箱（P2） | `InvitationCreate` 原先允许两种类型都省略或附带 email。`IdentityService.create_invitation` 已按 kind 检查邮箱是否存在。 | 共享 DTO 改为两个互斥分支。`email_bound` 必填有效 email，`single_use` 必须省略 email。两分支均必填理由。写入 DTO、再认证嵌套样例、生成的 TypeScript 联合类型及因子前拒绝回归同步。四项尚未挂载的管理写入仍按原裁决处理。 |
+
+[采集策略](../../../web/backend/classroom_web/infrastructure/capture_repository.py) · [租约创建](../../../web/backend/classroom_web/application/capture.py) · [开关事务与回执](../../../web/backend/classroom_web/infrastructure/billing_integration.sql) · [HTTP 入站校验](../../../web/backend/classroom_web/entrypoints/http.py) · [课前准备页](../../../web/frontend/src/pages/classroom/ClassroomLive.tsx) · [邀请处理](../../../web/backend/classroom_web/application/identity.py)
 
 ## VERIFICATION · 2026-11-24
 
@@ -420,3 +435,81 @@ tests/integration/test_trusted_cache_browser.py
 | evidence.zip | `4edeaab68da9aa85c53ff6a5007fe9683779fe6d2e9b687c4d3cab6f0af8f9d2` |
 | commands.json | `99efcb40016adf1c021e8590e689b0fb42a7b28390d5fd5c4c05af45bcda7978` |
 | pr11a/20261124T204649-ee627d3c/pytest.xml | `ad2cd812ed83aed73179d28f67145f2d0b0cadc3734796a46157ea47cb621241` |
+
+### 额外复审修复 · 2026-11-26
+
+送测内容为本分支 `14201d2` 加上“额外复审核实”表中的六项修复、生成类型、测试与裁决。宿主为 Windows、Python 3.10.4、Node v24.19.0。打包后逐个核对 1,008 份输入的工作树、ZIP 和清单散列。打包后对送测文件的唯一编辑是追加本节验证记录。
+
+| 宿主门禁 | 退出码 | 通过 | 失败 | 跳过 |
+|---|---:|---:|---:|---:|
+| Python `json.loads`，OpenAPI、共享样例和 11a 候选清单 | 0 | 3 | 0 | 0 |
+| Python `ast.parse`，4 个变更的仓库文件和 2 个本轮打包、来宾脚本 | 0 | 6 | 0 | 0 |
+| `node scripts/gen-contracts.mjs --check` | 0 | 1 | 0 | 0 |
+| `node node_modules/typescript/bin/tsc --noEmit --pretty false` | 0 | 1 | 0 | 0 |
+| `node node_modules/eslint/bin/eslint.js . --max-warnings 0` | 0 | 1 | 0 | 0 |
+| `git diff --check` | 0 | 1 | 0 | 0 |
+
+先在 `web/frontend` 运行 `node scripts/gen-contracts.mjs` 刷新类型，再执行上表。六组共 13 项通过，错误 0。命令、工作目录和退出码见 `outputs/pr11b-contract/review-extra-20261126/host-static.json`。
+
+**来宾命令。** 启动脚本在来宾缺少 `J:` 时执行 `subst.exe J: C:\j`。以 `python -I -B -X utf8 work/pr11b-contract/guest-r3/verify.py` 执行下表中的七组门禁。前端命令在 `web/frontend` 运行，Python 使用本作业的私有解释器，PG 指向既有来宾 PG 17.11 的 bin 目录。前端契约专项是全量 Vitest 的子集。
+
+| 顺序 | 来宾命令 |
+|---:|---|
+| 1 | `python -I -B -X utf8 -m pip check` |
+| 2 | `python -I -B -X utf8 tools/overnight/check_contracts.py --output <out>/contracts.json` |
+| 3 | `python -I -B -X utf8 tools/pr07b/check_contract_candidate.py --output <out>/compositions.json` |
+| 4 | `node scripts/gen-contracts.mjs --check` |
+| 5 | `node node_modules/vitest/vitest.mjs run --config tests/vitest.config.ts tests/contract.test.ts tests/pr10a-contract.test.ts tests/pr10b-contract.test.ts` |
+| 6 | `node node_modules/vitest/vitest.mjs run --config tests/vitest.config.ts` |
+| 7 | `python -I -B -X utf8 tools/pr11a/run_tests.py --pg-bin <PG17.11-bin>`，每个下列目标单独传 `--test-target` |
+
+```text
+tests/unit/test_pr07b_contract.py
+tests/unit/test_measured_reauth.py
+tests/unit/test_billing_policy.py
+tests/unit/test_auth_commit.py
+tests/integration/test_billing.py
+tests/integration/test_billing_integration.py
+tests/integration/test_capture_recovery.py::test_acquire_idempotency_and_parallel_owner_lease
+tests/integration/test_capture_recovery.py::test_independent_device_discovers_lease_and_explicit_cas_takeover
+tests/integration/test_authentication.py
+tests/integration/test_auth_review_fixes.py
+tests/integration/test_identity.py::test_invitation_always_activates_student_and_student_cannot_manage
+tests/integration/test_identity.py::test_admin_management_rechecks_all_trusted_auth_evidence
+tests/integration/test_trusted_cache_browser.py
+```
+
+**首轮 `b11-54e49eef01d8`。** 来宾于 13:28:22–13:30:28 UTC 执行。前六组退出 0，前端全量 642 项通过。后端 247 项通过，断言失败 0，fixture 错误 2，跳过 0。两个采集目标在同一处初始化中断，`deletion_support.services` 缺少本作业的 `PR04B_OBJECT_ROOT`。按已有 PR-05b 来宾脚本，为本作业指定独立目录及既有 `PR04B_WEED` 可执行文件，然后复用字节相同的源码 ZIP、清单和测试目标。产品与测试文件未改动。
+
+**复验 `b11-1a4ae695cbc9`。** 等待共享 broker 的在先作业写出完成回执后投递，来宾于 13:59:44–14:02:13 UTC 完成。来宾为 Windows VMware、Python 3.12.14、Node v24.19.0、隔离 PostgreSQL 17.11。下表为复验实际结果。
+
+| 来宾门禁 | 退出码 | 通过 | 失败 | 错误 | 跳过 |
+|---|---:|---:|---:|---:|---:|
+| pip check | 0 | 1 | 0 | 0 | 0 |
+| 冻结契约 | 0 | 9 | 0 | 0 | 0 |
+| PR-07b 候选组合 | 0 | 116 | 0 | 0 | 0 |
+| gen-contracts --check | 0 | 1 | 0 | 0 | 0 |
+| 前端契约专项 | 0 | 236 | 0 | 0 | 0 |
+| 前端全量 Vitest | 0 | 642 | 0 | 0 | 0 |
+| 后端定向 PostgreSQL 回归 | 0 | 249 | 0 | 0 | 0 |
+
+冻结检查覆盖 201 个共享样例（92 正、109 反）。07b 的两个组合各通过 20 个正例及 38 个反例。JUnit 记录了采集并发准入和显式接管、新旧开关回执的跨会话回放、精确整数、缓存解锁和恢复的 v7 早拒。首轮的两项 fixture 错误均已复验通过。PG 在 `127.0.0.1:49940` 正常停库，真实供应商调用 0。后端有 1 条既有 Starlette TestClient 弃用警告。
+
+两轮的原始日志、作业回执、证据包与 `verification.json` 分别位于 `outputs/pr11b-contract/b11-54e49eef01d8/` 和 `outputs/pr11b-contract/b11-1a4ae695cbc9/`。两个证据 ZIP 均按来宾 stdout 的 SHA-256 核对，包内 `SOURCE.json` 与各自宿主清单逐字节相同。复核对象仍为本地未发布的 0.4.0，采集配置的实际执行及四个管理写入消费者按上文保留。
+
+| 证据 | SHA-256 |
+|---|---|
+| 本轮输入 review.md | `55b3370b2b07dfa838fe95898d0897fd5d2413d4d742d331e0f8a211d2d0c4be` |
+| 本轮输入 final-report.md | `3952251ef776137414e7bac24c50bc72dd2ac3ea29b1c09e7cad7629fec6c5b3` |
+| 宿主 host-static.json | `7412b0d09f36b7ad4a9004e7c1b00f1056f99e2ed4200dc1a850055a63f25f5e` |
+| 两轮共用 source.zip | `532c2a72ab89c8e8132a5fb25a39f2a012d58b2ac663ec414c3e37ac4c94f9cc` |
+| 两轮共用 SOURCE.json | `47fd78feb6d9ceccb6095fa830a421e3c3bd116e3953437915604a96bf7f8eb0` |
+| 首轮 guest.ps1 | `58ea1d5c6134b69dcf16d8dad95e8460e4a5120cdc01e11deddcc95fbfb5772e` |
+| 首轮 evidence.zip | `5731e1a6b13e7607e2599d870bf4e5cde0204196737f0bd55fb1d83a4d80bb75` |
+| 首轮 verification.json | `bbfa3a7032594f14416299344c8996c96d1b5f8a2084823b1be45edb80c50aeb` |
+| 复验 guest.ps1 | `c109f3863d8210815304827788fc7769053bc83cec3ca5abf673641e55c84fbb` |
+| 复验 run 回执 | `d42f7c53ff4b24baaa774a47030cc587cce37b5b49787561d2a238db87a2ed4d` |
+| 复验 copyFrom 回执 | `d337710a797b36b34d8adcf894fc7cf2b8153e9e9b5ddf7869728b3f91a01315` |
+| 复验 evidence.zip | `918b55cd1c05508d91bb39c7c620819f3f7bc4471c1f7549d31f10d4d2bb24e1` |
+| 复验包内 commands.json | `dceb9e56443521ace9144809fee9ecf3c3971f3ca853a0d494e45f29bf14ef92` |
+| 复验包内 pr11a/20261126T140007-2c035052/pytest.xml | `f18c2520b20ec821a9041c160c93e61f6d4824399e486459141c543fe71081b8` |

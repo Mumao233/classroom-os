@@ -3795,10 +3795,15 @@ export interface components {
             expires_at: string;
         };
         InvitationCreate: {
-            /** @enum {string} */
-            kind: "email_bound" | "single_use";
+            /** @constant */
+            kind: "email_bound";
             /** Format: email */
-            email?: string;
+            email: string;
+            reason: components["schemas"]["AdminWriteReason"];
+        } | {
+            /** @constant */
+            kind: "single_use";
+            email?: never;
             reason: components["schemas"]["AdminWriteReason"];
         };
         InvitationAction: {
@@ -3837,7 +3842,7 @@ export interface components {
             max_active_users: "10" | "30";
             /** @description Master switch for new billable work. */
             billing_enabled: boolean;
-            /** @description Independent switch for starting a new capture. */
+            /** @description Stored new-capture configuration. Capture lease admission does not currently enforce this setting. */
             new_capture_enabled: boolean;
             /** @description Live ASR configuration. */
             asr_streaming_enabled: boolean;
@@ -3861,7 +3866,7 @@ export interface components {
             reason: components["schemas"]["AdminWriteReason"];
             /** @description Master switch for new billable work. */
             billing_enabled?: boolean;
-            /** @description Independent switch for starting a new capture. */
+            /** @description Changing the stored value returns 503 SERVICE_DISABLED until capture lease admission enforces this setting. Sending its current value follows normal PATCH revision checks. */
             new_capture_enabled?: boolean;
             /** @description Live ASR configuration. */
             asr_streaming_enabled?: boolean;
@@ -4282,7 +4287,7 @@ export interface components {
             };
             /** @description Future write Idempotency-Key and exact strict body, not the reauth request key. Server computes and stores a purpose-separated keyed commitment; no raw secret/ordinary SHA is persisted or returned. */
             candidate_parameters: {
-                idempotency_key: components["schemas"]["CanonicalIdempotencyKey"];
+                idempotency_key: components["schemas"]["CanonicalUuidV4"];
                 body: components["schemas"]["CacheUnlockRequest"];
             };
         } | {
@@ -4422,11 +4427,10 @@ export interface components {
         AdminWriteReason: string;
         /** Format: uuid */
         CanonicalUuid: string;
-        /**
-         * Format: uuid
-         * @description Canonical lowercase UUIDv4 of the current device. Cache proof targets and the device_id in the bound write use the same value.
-         */
-        CacheDeviceId: string;
+        /** @description Canonical lowercase UUIDv4 of the current device. Cache proof targets and the device_id in the bound write use the same value. */
+        CacheDeviceId: components["schemas"]["CanonicalUuidV4"];
+        /** Format: uuid */
+        CanonicalUuidV4: string;
     };
     responses: never;
     parameters: {
@@ -4435,6 +4439,7 @@ export interface components {
         CsrfToken: string;
         /** @description Existing X-Reauth-Token header, carrying an opaque server-issued proof for the exact purpose, target, candidate parameters and future Idempotency-Key. R3 at most 120 seconds from real verified_at and single-use; R1/R2 use the documented role window. Recheck current session/device/epoch and deadline after all locks. This header cannot grant ordinary admin permissions or authorize an unreviewed operation. Producer generates at least 32 random bytes, canonical unpadded base64url, 43..256 characters; parser decodes/re-encodes and rejects noncanonical or insufficient-byte values. Same token is accepted by control StudentExecutorEvidence via its Secret envelope; shape alone does not prove entropy or authorization. */
         ReauthToken: string;
+        CacheIdempotencyKey: components["schemas"]["CanonicalUuidV4"];
     };
     requestBodies: never;
     headers: never;
@@ -5618,7 +5623,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                "Idempotency-Key": components["parameters"]["CacheIdempotencyKey"];
                 /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
                 /** @description Existing X-Reauth-Token header, carrying an opaque server-issued proof for the exact purpose, target, candidate parameters and future Idempotency-Key. R3 at most 120 seconds from real verified_at and single-use; R1/R2 use the documented role window. Recheck current session/device/epoch and deadline after all locks. This header cannot grant ordinary admin permissions or authorize an unreviewed operation. Producer generates at least 32 random bytes, canonical unpadded base64url, 43..256 characters; parser decodes/re-encodes and rejects noncanonical or insufficient-byte values. Same token is accepted by control StudentExecutorEvidence via its Secret envelope; shape alone does not prove entropy or authorization. */

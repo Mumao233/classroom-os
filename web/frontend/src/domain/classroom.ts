@@ -4,6 +4,19 @@ import { isClassComplete } from './flows';
 /** Pure PR-10a classroom logic: no DOM, network, storage or runtime imports. */
 type S = components['schemas'];
 
+export function preparationQuotaLines(quota: S['QuotaView']): string[] {
+  const asr = quota.buckets.find(bucket => bucket.kind === 'asr_month_ms');
+  const interaction = quota.buckets.find(bucket => bucket.kind === 'interactive_month_count');
+  const lines = [
+    asr ? `本月转写额度剩余约 ${Math.floor(asr.remaining / 60000)} 分钟` : '暂无本月转写额度信息',
+    interaction ? `本月问答与解释额度剩余 ${interaction.remaining} 次` : '暂无本月问答与解释额度信息',
+  ];
+  // A disabled group covers every member. An enabled group can still have paused services.
+  if (!quota.asr_enabled) lines.push('新的转写请求已暂停');
+  if (!quota.ai_enabled) lines.push('新的 AI 请求已暂停');
+  return lines;
+}
+
 // ---------------------------------------------------------------- transcript timeline
 
 /** One live segment as projected from transcript events (shape owned by the capture runtime). */

@@ -9,6 +9,7 @@ import socket
 import subprocess
 import threading
 import time
+from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
@@ -18,8 +19,8 @@ from fastapi.responses import HTMLResponse, Response
 
 from classroom_web.entrypoints.http import create_app
 from test_auth_browser import _certificate
-from test_authentication import auth, PASSWORD
-from test_cache_keys import cache, cache_schema, candidate_contract, pg
+from test_authentication import auth, PASSWORD, post
+from test_cache_keys import cache, cache_schema, candidate_contract, pg, request_body
 
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -38,20 +39,26 @@ def test_cache_proofs_follow_device_contract_after_reordering(cache_contract_bas
         branches[:] = [branch for branch in branches if branch['properties']['purpose']['const'] != 'unlockCache']
     original = deepcopy(branches)
     device = next(branch for branch in original if branch['properties']['purpose']['const'] == 'revokeDevice')
-    schemas = candidate_contract(cache_contract_base)['components']['schemas']
+    contract = candidate_contract(cache_contract_base)
+    schemas = contract['components']['schemas']
     composed = schemas['ReauthOperation']['oneOf']
     assert branches == original
     cache_device_id = {'$ref': '#/components/schemas/CacheDeviceId'}
-    for purpose, body in [('unlockCache', 'CacheUnlockRequest'), ('recoverCache', 'CacheRecoverRequest')]:
+    cache_key = {'$ref': '#/components/schemas/CanonicalUuidV4'}
+    assert contract['components']['parameters']['CacheIdempotencyKey']['schema'] == cache_key
+    for purpose, body, path in [('unlockCache', 'CacheUnlockRequest', '/me/cache-unlock'),
+                                ('recoverCache', 'CacheRecoverRequest', '/me/cache-recover')]:
+        assert {'$ref': '#/components/parameters/CacheIdempotencyKey'} in contract['paths'][path]['post']['parameters']
         assert schemas[body]['properties']['device_id'] == cache_device_id
         expected = deepcopy(device)
         expected['properties']['purpose']['const'] = purpose
         expected['properties']['target']['properties']['id'] = cache_device_id
+        expected['properties']['candidate_parameters']['properties']['idempotency_key'] = cache_key
         expected['properties']['candidate_parameters']['properties']['body'] = {'$ref': '#/components/schemas/' + body}
         assert [branch for branch in composed if branch['properties']['purpose']['const'] == purpose] == [expected]
 
 
-@pytest.mark.parametrize('defect', ['duplicate', 'wrong_target', 'wrong_body'])
+@pytest.mark.parametrize('defect', ['duplicate', 'wrong_target', 'wrong_key', 'wrong_header', 'wrong_body'])
 def test_cache_overlay_rejects_conflicting_public_unlock(cache_contract_base, defect):
     branches = cache_contract_base['components']['schemas']['ReauthOperation']['oneOf']
     unlock = next(branch for branch in branches if branch['properties']['purpose']['const'] == 'unlockCache')
@@ -62,10 +69,38 @@ def test_cache_overlay_rejects_conflicting_public_unlock(cache_contract_base, de
         branches.append(deepcopy(unlock))
     elif defect == 'wrong_target':
         unlock['properties']['target']['properties']['id'] = {'type': 'integer'}
+    elif defect == 'wrong_key':
+        unlock['properties']['candidate_parameters']['properties']['idempotency_key'] = {
+            '$ref': '#/components/schemas/CanonicalIdempotencyKey'}
+    elif defect == 'wrong_header':
+        headers = cache_contract_base['paths']['/me/cache-unlock']['post']['parameters']
+        header = next(item for item in headers if item['$ref'].endswith('/CacheIdempotencyKey'))
+        header['$ref'] = '#/components/parameters/IdempotencyKey'
     else:
         unlock['properties']['candidate_parameters']['properties']['body'] = {'$ref': '#/components/schemas/Empty'}
     with pytest.raises(ValueError, match='unlockCache'):
         candidate_contract(cache_contract_base)
+
+
+@pytest.mark.parametrize('recovery', [False, True], ids=['unlock', 'recover'])
+def test_cache_v7_write_key_is_rejected_before_reauth_or_release(cache, recovery):
+    body = request_body(cache)
+    if recovery:
+        body['key_id'] = str(uuid4())
+    purpose = 'recoverCache' if recovery else 'unlockCache'
+    path = '/me/cache-recover' if recovery else '/me/cache-unlock'
+    key = 'abcdabcd-abcd-7def-8abc-abcdefabcdef'
+    csrf = cache.session['csrf_token']
+    operation = dict(purpose=purpose, target=dict(kind='device', id=body['device_id']),
+                     candidate_parameters=dict(idempotency_key=key, body=body))
+    with patch.object(cache.a.service, 'reauthenticate', wraps=cache.a.service.reauthenticate) as issue:
+        response = post(cache.a, '/auth/reauth', dict(password=PASSWORD, operation=operation), csrf)
+        assert response.status_code == 422 and response.json()['error']['code'] == 'VALIDATION_FAILED'
+        issue.assert_not_called()
+    with patch.object(cache.service, 'release', wraps=cache.service.release) as release:
+        response = post(cache.a, path, body, csrf, **{'Idempotency-Key': key})
+        assert response.status_code == 422 and response.json()['error']['code'] == 'VALIDATION_FAILED'
+        release.assert_not_called()
 
 
 def test_formal_authclient_encrypted_cache_and_revocation(cache, tmp_path):

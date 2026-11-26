@@ -522,6 +522,125 @@ def test_formal_admin_reauth_and_switch_projection(fee_api):
 
 
 @pytest.mark.parametrize('fee_api', ['formal'], indirect=True)
+@pytest.mark.parametrize(('stored', 'requested'), [(True, False), (False, True), (False, False)])
+def test_new_capture_switch_declines_transitions_atomically(fee_api, stored, requested):
+    api = fee_api
+    session, seed = sign_in(api, administrator=True)
+    path = BASE + '/admin/switches'
+    key = str(uuid4())
+    if not stored:
+        with api.c.pg.admin.begin() as db:
+            db.execute(sa.text("""SELECT billing_api.update_switches(:actor,:op,
+                (SELECT revision FROM billing_control.switches),jsonb_build_object('new_capture',false),'Synthetic stored capture flag')"""),
+                       dict(actor=api.c.actor, op=uuid4()))
+    initial = api.client.get(path).json()
+    assert initial['new_capture_enabled'] is stored
+    body = dict(base_revision=initial['revision'], new_capture_enabled=requested,
+                billing_enabled=not initial['billing_enabled'], reason='Synthetic capture switch edit')
+    proof = prove(api, session, seed, 'adminUpdateSwitches', body, key)
+    response = api.client.patch(path, json=body, headers=headers(session, **proof))
+    if requested == stored:
+        assert response.status_code == 200, response.text
+        assert response.json() == {**initial, 'revision': initial['revision'] + 1,
+                                   'billing_enabled': body['billing_enabled']}
+    else:
+        assert response.status_code == 503 and response.json()['error']['code'] == 'SERVICE_DISABLED', response.text
+        assert api.client.get(path).json() == initial
+        with api.c.pg.admin.connect() as db:
+            assert db.scalar(sa.text('SELECT count(*) FROM billing_control.audit WHERE op_id=:op'), {'op': key}) == 0
+            assert db.scalar(sa.text('SELECT count(*) FROM preauth_receipts WHERE operation_key=:op'), {'op': key}) == 0
+            assert db.execute(sa.text('SELECT consumed_at FROM reauth_proofs WHERE operation_key=:op'),
+                              {'op': key}).scalar_one() is None
+
+
+@pytest.mark.parametrize('fee_api', ['formal'], indirect=True)
+@pytest.mark.parametrize('legacy_session_key', [False, True])
+def test_switch_receipt_after_fresh_login_rechecks_authority_and_body(fee_api, legacy_session_key):
+    api = fee_api
+    session, seed = sign_in(api, administrator=True)
+    path = BASE + '/admin/switches'
+    initial = api.client.get(path).json()
+    key = str(uuid4())
+    body = dict(base_revision=initial['revision'], ai_summary_enabled=False, reason='Synthetic first edit')
+    proof = prove(api, session, seed, 'adminUpdateSwitches', body, key)
+    first = api.client.patch(path, json=body, headers=headers(session, **proof))
+    assert first.status_code == 200, first.text
+    expected = first.json()
+    with api.c.pg.admin.begin() as db:
+        receipt_context = db.execute(sa.text("""SELECT context_hash FROM preauth_receipts
+            WHERE operation='adminUpdateSwitches' AND operation_key=:op"""), {'op': key}).scalar_one()
+        assert receipt_context == str(api.a.uid)
+        if legacy_session_key:
+            db.execute(sa.text("""UPDATE preauth_receipts SET context_hash=(
+                SELECT token_hash FROM auth_sessions WHERE owner_id=:owner AND device_id=:device)
+                WHERE context_hash=:context AND operation='adminUpdateSwitches' AND operation_key=:op"""),
+                       dict(owner=api.a.uid, device=session['device_id'], context=receipt_context, op=key))
+        # A different actor can use the same key, even while the first receipt is still needed.
+        db.execute(sa.text("""SELECT billing_api.update_switches(:actor,:op,:revision,
+            jsonb_build_object('billing',false),'Synthetic second edit')"""), dict(actor=api.c.actor, op=key, revision=expected['revision']))
+    current = api.client.get(path).json()
+    assert current == {**expected, 'revision': expected['revision'] + 1, 'billing_enabled': False}
+    logged_out = api.client.post(BASE + '/auth/logout', json={}, headers=headers(session))
+    assert logged_out.status_code == 200, logged_out.text
+    # Install a fresh synthetic factor for the second login without recycling a TOTP counter.
+    with api.c.pg.admin.begin() as db:
+        db.execute(sa.text("""UPDATE mfa_credentials SET state='revoked',revoked_at=clock_timestamp()
+            WHERE owner_id=:owner AND state='active'"""), {'owner': api.a.uid})
+    session, seed = sign_in(api, administrator=True)
+    if legacy_session_key:
+        # The old producer could save the later state on a second session-scoped retry.
+        with api.c.pg.admin.begin() as db:
+            db.execute(sa.text("""INSERT INTO preauth_receipts(context_hash,operation,operation_key,commitment,result)
+                SELECT s.token_hash,r.operation,r.operation_key,r.commitment,cast(:current AS jsonb)
+                FROM preauth_receipts r JOIN auth_sessions s ON s.owner_id=:owner AND s.device_id=:device
+                WHERE r.operation='adminUpdateSwitches' AND r.operation_key=:op"""),
+                       dict(owner=api.a.uid, device=session['device_id'], current=json.dumps(current), op=key))
+    stale = api.client.patch(path, json=body, headers=headers(session, **proof))
+    assert stale.status_code == 403 and stale.json()['error']['code'] == 'REAUTH_REQUIRED', stale.text
+    fresh = prove(api, session, seed, 'adminUpdateSwitches', body, key)
+    mismatch = api.client.patch(path, json={**body, 'reason': 'Different binding'}, headers=headers(session, **fresh))
+    assert mismatch.status_code == 409 and mismatch.json()['error']['code'] == 'IDEMPOTENCY_MISMATCH', mismatch.text
+    replay = api.client.patch(path, json=body, headers=headers(session, **fresh))
+    assert replay.status_code == 200 and replay.json() == expected, replay.text
+    assert api.client.get(path).json() == current
+    with api.c.pg.admin.begin() as db:
+        assert db.scalar(sa.text('SELECT count(*) FROM billing_control.audit WHERE actor_id=:owner AND op_id=:op'),
+                         dict(owner=api.a.uid, op=key)) == 1
+        db.execute(sa.text("UPDATE users SET role='student' WHERE id=:owner"), {'owner': api.a.uid})
+    denied = api.client.patch(path, json=body, headers=headers(session, **fresh))
+    assert denied.status_code == 401 and denied.json()['error']['code'] == 'UNAUTHENTICATED', denied.text
+
+
+def test_switch_audit_key_is_scoped_apart_from_other_operations(fee_control):
+    with fee_control.pg.admin.begin() as db:
+        period_op = db.execute(sa.text("""SELECT actor_id,op_id FROM billing_control.audit
+            WHERE action='open_period' LIMIT 1""")).mappings().one()
+        db.execute(sa.text("""SELECT billing_api.update_switches(:actor_id,:op_id,
+            (SELECT revision FROM billing_control.switches),jsonb_build_object('ai_summary',true),'Synthetic scope check')"""), dict(period_op))
+        actions = db.scalars(sa.text('SELECT action FROM billing_control.audit WHERE actor_id=:actor_id AND op_id=:op_id'),
+                             dict(period_op)).all()
+        assert sorted(actions) == ['open_period', 'switches']
+
+
+@pytest.mark.parametrize('fee_api', ['formal'], indirect=True)
+def test_switch_audit_without_http_snapshot_cannot_be_replayed_as_current(fee_api):
+    api = fee_api
+    session, seed = sign_in(api, administrator=True)
+    path = BASE + '/admin/switches'
+    revision = api.client.get(path).json()['revision']
+    key = str(uuid4())
+    body = dict(base_revision=revision, ai_summary_enabled=False, reason='Synthetic operator edit')
+    with api.c.operator.begin() as db:
+        db.execute(sa.text("""SELECT billing_api.update_switches(:actor,:op,:revision,
+            jsonb_build_object('ai_summary',false),:reason)"""),
+                   dict(actor=api.a.uid, op=key, revision=revision, reason=body['reason']))
+    proof = prove(api, session, seed, 'adminUpdateSwitches', body, key)
+    answer = api.client.patch(path, json=body, headers=headers(session, **proof))
+    assert answer.status_code == 503 and answer.json()['error']['code'] == 'RESULT_UNKNOWN', answer.text
+    assert api.client.get(path).json()['revision'] == revision + 1
+
+
+@pytest.mark.parametrize('fee_api', ['formal'], indirect=True)
 def test_mixed_switch_projection_matches_admission_and_replays_the_original_revision(fee_api):
     api = fee_api
     session, seed = sign_in(api, administrator=True)
@@ -624,6 +743,8 @@ def test_formal_invalid_admin_candidates_are_rejected_before_password_or_totp(fe
         ('adminAdjustQuota', 'account', key, quota | {'additional_units': 2**53}),
         ('adminUpdateUser', 'user', key, dict(base_revision=2**63, status='active', reason=reason)),
         ('adminCreateInvitation', 'account', key, dict(kind='single_use', reason='\u2028\u2029')),
+        ('adminCreateInvitation', 'account', key, dict(kind='single_use', email='tester@example.test', reason=reason)),
+        ('adminCreateInvitation', 'account', key, dict(kind='email_bound', reason=reason)),
         ('adminRevokeInvitation', 'invitation', key + '\n', dict(reason=reason)),
         ('adminReissueInvitation', 'invitation', key, dict(reason='\u0085\ufeff')),
     )
@@ -833,6 +954,58 @@ def test_composed_media_and_billing_migration_candidate(pg,tmp_path):
         if admin is not None:admin.dispose()
         with control.connect() as connection:connection.exec_driver_sql(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
         control.dispose()
+
+
+@pytest.mark.parametrize('fee_api', ['formal'], indirect=True)
+def test_admin_numbers_preserve_precision_before_factors_and_writes(fee_api):
+    api = fee_api
+    session, seed = sign_in(api, administrator=True)
+    user_id, key = str(api.a.uid), str(uuid4())
+    reason = 'Synthetic decimal precision'
+    switch = dict(base_revision='__wire_number__', ai_enabled=False, reason=reason)
+    user = dict(base_revision='__wire_number__', status='active', reason=reason)
+    quota = dict(user_id=user_id, bucket_kind='interactive_month_count', period_start='2026-11-01T00:00:00+08:00',
+                 additional_units='__wire_number__', reason=reason)
+
+    def number_on_wire(body, number):
+        return json.dumps(body).replace('"__wire_number__"', number)
+
+    def proof_body(purpose, kind, body):
+        return dict(password=PASSWORD, mfa_code=pyotp.TOTP(seed).at(datetime.now(timezone.utc) + timedelta(seconds=30)),
+                    operation=dict(purpose=purpose, target=dict(kind=kind, id=user_id),
+                                   candidate_parameters=dict(idempotency_key=key, body=body)))
+
+    routes = (
+        ('POST', '/auth/reauth', proof_body('adminUpdateUser', 'user', user)),
+        ('POST', '/auth/reauth', proof_body('adminUpdateSwitches', 'account', switch)),
+        ('POST', '/auth/reauth', proof_body('adminAdjustQuota', 'account', quota)),
+        ('PATCH', '/admin/switches', switch),
+        ('POST', '/admin/quota-adjustments', quota),
+    )
+    with (patch.object(api.a.service, 'check_current_password', wraps=api.a.service.check_current_password) as password,
+          patch.object(api.admin, 'apply', wraps=api.admin.apply) as apply):
+        for method, path, body in routes:
+            for number in ('1.00000000000000001', '999999999999999999e-18',
+                           '9007199254740991.0000000001', '1e999999999'):
+                request_headers = headers(session, **{'Content-Type': 'application/json'})
+                if path != '/auth/reauth':
+                    request_headers['Idempotency-Key'] = key
+                response = api.client.request(method, BASE + path, content=number_on_wire(body, number),
+                                              headers=request_headers)
+                assert response.status_code == 422 and response.json()['error']['code'] == 'VALIDATION_FAILED', (
+                    path, number, response.text)
+        password.assert_not_called()
+        apply.assert_not_called()
+
+    # The exact maximum in exponent notation reaches the normal proof commitment as an integer.
+    with patch.object(api.a.crypto, 'commitment', wraps=api.a.crypto.commitment) as commitment:
+        body = proof_body('adminAdjustQuota', 'account', quota)
+        response = api.client.post(BASE + '/auth/reauth', content=number_on_wire(body, '90071992547409910e-1'),
+                                   headers=headers(session, **{'Content-Type': 'application/json'}))
+        assert response.status_code == 200, response.text
+        amounts = [call.args[1]['candidate_parameters']['body']['additional_units']
+                   for call in commitment.call_args_list if call.args[0] == 'operation']
+        assert amounts and all(type(amount) is int and amount == 2**53 - 1 for amount in amounts)
 
 
 @pytest.mark.parametrize('fee_api', ['formal'], indirect=True)

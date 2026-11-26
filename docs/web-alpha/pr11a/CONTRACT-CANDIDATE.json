@@ -1,6 +1,6 @@
 {
   "base_version": "0.4.0",
-  "base_sha256": "99b088afd2f4976fcf4a15661f7d789429e41cd9896d44c18a4b04e8429ddc1e",
+  "base_sha256": "8d44148d6d54ca7423010ba76c91b84441e4d72b8b9ed5826b34d8d533034a91",
   "status": "unapproved integration candidate",
   "operations": [
     "getQuota",

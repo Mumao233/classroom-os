@@ -108,10 +108,12 @@ CREATE TABLE billing_control.switches(
 INSERT INTO billing_control.switches(flags) VALUES
   ('{"billing":false,"registration":false,"new_capture":false,"asr_streaming":false,"asr_filetrans":false,"ai_interaction":false,"ai_summary":false}');
 CREATE TABLE billing_control.audit(
-  id uuid PRIMARY KEY,op_id uuid NOT NULL UNIQUE,actor_id uuid NOT NULL,
+  id uuid PRIMARY KEY,op_id uuid NOT NULL,actor_id uuid NOT NULL,
   action text NOT NULL,reason text NOT NULL CHECK(length(reason) BETWEEN 1 AND 500),
   detail jsonb NOT NULL,created_at timestamptz NOT NULL DEFAULT clock_timestamp()
 );
+CREATE UNIQUE INDEX billing_switch_audit_op ON billing_control.audit(actor_id,op_id) WHERE action='switches';
+CREATE UNIQUE INDEX billing_other_audit_op ON billing_control.audit(op_id) WHERE action<>'switches';
 CREATE TABLE billing_control.alerts(
   period_start timestamptz NOT NULL REFERENCES billing_control.platform_budgets(period_start),
   threshold integer NOT NULL CHECK(threshold IN (60,80,100)),
@@ -210,7 +212,7 @@ DECLARE s billing_control.switches%ROWTYPE;old billing_control.audit%ROWTYPE;det
 BEGIN
   SELECT * INTO STRICT s FROM billing_control.switches WHERE singleton FOR UPDATE;
   detail:=jsonb_build_object('revision',p_revision,'flags',p_flags);
-  SELECT * INTO old FROM billing_control.audit WHERE op_id=p_op;
+  SELECT * INTO old FROM billing_control.audit WHERE action='switches' AND actor_id=p_actor AND op_id=p_op;
   IF FOUND THEN
     IF old.actor_id<>p_actor OR old.reason<>p_reason OR old.detail<>detail THEN RAISE EXCEPTION 'IDEMPOTENCY_MISMATCH';END IF;
     RETURN jsonb_build_object('revision',s.revision,'flags',s.flags);
@@ -236,7 +238,7 @@ BEGIN
   -- explicitly opened future cycle until the product approves another policy.
   PERFORM 1 FROM billing_control.switches WHERE singleton FOR UPDATE;
   detail:=jsonb_build_object('period_start',p_start,'stage',p_stage);
-  SELECT * INTO old FROM billing_control.audit WHERE op_id=p_op;
+  SELECT * INTO old FROM billing_control.audit WHERE action<>'switches' AND op_id=p_op;
   IF FOUND THEN
     IF old.actor_id<>p_actor OR old.reason<>p_reason OR old.detail<>detail THEN RAISE EXCEPTION 'IDEMPOTENCY_MISMATCH';END IF;
     RETURN;
@@ -284,7 +286,7 @@ BEGIN
   PERFORM billing_api.lock_budget(date_trunc('month',q.period_start AT TIME ZONE 'Asia/Shanghai') AT TIME ZONE 'Asia/Shanghai');
   SELECT * INTO STRICT q FROM public.quota_periods WHERE id=p_quota FOR UPDATE;
   detail:=jsonb_build_object('quota_id',p_quota,'delta',p_delta);
-  SELECT * INTO old FROM billing_control.audit WHERE op_id=p_op;
+  SELECT * INTO old FROM billing_control.audit WHERE action<>'switches' AND op_id=p_op;
   IF FOUND THEN
     IF old.actor_id<>p_actor OR old.reason<>p_reason OR old.detail<>detail THEN RAISE EXCEPTION 'IDEMPOTENCY_MISMATCH';END IF;
     RETURN;

@@ -94,8 +94,11 @@ ALTER FUNCTION billing_api.switch_view() OWNER TO classroom_billing_control;
 
 CREATE FUNCTION billing_api.apply_switch_body(actor uuid,op uuid,body jsonb) RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog AS $f$
-DECLARE flags jsonb:='{}';k text;c record;previous boolean;
+DECLARE flags jsonb:='{}';k text;c record;capture_flag jsonb;previous boolean;
 BEGIN
+  SELECT switches.flags->'new_capture' INTO STRICT capture_flag FROM billing_control.switches WHERE singleton FOR UPDATE;
+  IF body ? 'new_capture_enabled' AND body->'new_capture_enabled' IS DISTINCT FROM capture_flag THEN
+    RETURN jsonb_build_object('error','SERVICE_DISABLED');END IF;
   SELECT max_active_users INTO STRICT c FROM public.identity_capacity WHERE id=1;
   IF body ? 'max_active_users' AND (body->>'max_active_users')::integer<>c.max_active_users THEN
     RETURN jsonb_build_object('error','SERVICE_DISABLED');END IF;
@@ -105,9 +108,11 @@ BEGIN
   IF body ? 'asr_enabled' THEN flags:=flags||jsonb_build_object('asr_streaming',body->'asr_enabled','asr_filetrans',body->'asr_enabled');END IF;
   IF body ? 'ai_enabled' THEN flags:=flags||jsonb_build_object('ai_interaction',body->'ai_enabled','ai_summary',body->'ai_enabled');END IF;
   IF body ? 'registration_enabled' THEN flags:=flags||jsonb_build_object('registration',body->'registration_enabled');END IF;
-  SELECT EXISTS(SELECT FROM billing_control.audit WHERE op_id=op) INTO previous;
+  -- apply_admin replays the committed HTTP snapshot. An audit alone cannot reconstruct it.
+  SELECT EXISTS(SELECT FROM billing_control.audit WHERE action='switches' AND actor_id=actor AND op_id=op) INTO previous;
   PERFORM billing_api.update_switches(actor,op,(body->>'base_revision')::bigint,flags,body->>'reason');
-  IF NOT previous AND body ? 'registration_enabled' THEN
+  IF previous THEN RETURN jsonb_build_object('error','RESULT_UNKNOWN');END IF;
+  IF body ? 'registration_enabled' THEN
     UPDATE public.identity_capacity SET registration_enabled=(body->>'registration_enabled')::boolean,
       revision=revision+1,updated_at=clock_timestamp() WHERE id=1;
   END IF;
@@ -187,39 +192,51 @@ CREATE FUNCTION billing_api.apply_admin(p jsonb) RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog AS $f$
 DECLARE s jsonb;r public.reauth_proofs%ROWTYPE;old public.preauth_receipts%ROWTYPE;
   answer jsonb;n timestamptz;uid uuid;action text:=p->>'purpose';b jsonb:=p->'body';q uuid;
+  receipt_context text;op uuid:=(p->>'operation_key')::uuid;
 BEGIN
   s:=identity_api.lock_account(p);
   IF s IS NULL OR s->>'role'<>'admin' OR s->>'mfa_level'<>'totp' THEN RETURN jsonb_build_object('error','FORBIDDEN');END IF;
   uid:=(s->>'owner_id')::uuid;
   IF action NOT IN ('adminUpdateSwitches','adminAdjustQuota') OR b->>'reason' IS NULL OR length(btrim(b->>'reason'))=0 THEN
     RETURN jsonb_build_object('error','VALIDATION_FAILED');END IF;
-  SELECT * INTO old FROM public.preauth_receipts WHERE context_hash=p->>'token_hash' AND operation=action
-    AND operation_key=(p->>'operation_key')::uuid FOR UPDATE;
-  IF FOUND THEN
+  receipt_context:=CASE WHEN action='adminUpdateSwitches' THEN uid::text ELSE p->>'token_hash' END;
+  SELECT * INTO old FROM public.preauth_receipts WHERE context_hash=receipt_context AND operation=action
+    AND operation_key=op;
+  IF NOT FOUND AND action='adminUpdateSwitches' THEN
+    -- Earlier candidates keyed snapshots by session. A later login could have saved
+    -- another revision for the same write, so use the first committed response.
+    SELECT pr.* INTO old FROM public.auth_sessions sessions JOIN public.preauth_receipts pr
+      ON pr.context_hash=sessions.token_hash WHERE sessions.owner_id=uid AND pr.operation=action AND pr.operation_key=op
+      ORDER BY pr.created_at,pr.context_hash LIMIT 1;
+  END IF;
+  IF old.operation_key IS NOT NULL THEN
     IF old.commitment IS DISTINCT FROM p->>'commitment' THEN RETURN jsonb_build_object('error','IDEMPOTENCY_MISMATCH');END IF;
-    IF action='adminUpdateSwitches' THEN RETURN billing_api.with_switch_summaries(old.result);END IF;
-    RETURN old.result;
+    IF action='adminAdjustQuota' THEN RETURN old.result;END IF;
   END IF;
   SELECT * INTO r FROM public.reauth_proofs WHERE token_hash=p->>'reauth_hash' AND owner_id=uid FOR UPDATE;
   n:=clock_timestamp();
   IF r.id IS NULL OR r.session_id<>(s->>'session_id')::uuid OR r.device_id<>(s->>'device_id')::uuid OR r.security_epoch<>(s->>'epoch')::bigint
     OR r.purpose<>action OR r.target_id<>uid OR r.commitment IS DISTINCT FROM p->>'commitment'
-    OR r.operation_key<>(p->>'operation_key')::uuid OR r.consumed_at IS NOT NULL OR n>=r.expires_at THEN
+    OR r.operation_key<>op OR (r.consumed_at IS NULL AND n>=r.expires_at)
+    OR (r.consumed_at IS NOT NULL AND old.operation_key IS NULL) THEN
     RETURN jsonb_build_object('error','REAUTH_REQUIRED');END IF;
-  IF action='adminUpdateSwitches' THEN
-    answer:=billing_api.apply_switch_body(uid,(p->>'operation_key')::uuid,b);
+  IF old.operation_key IS NOT NULL THEN
+    IF r.consumed_at IS NULL THEN UPDATE public.reauth_proofs SET consumed_at=n WHERE id=r.id;END IF;
+    RETURN billing_api.with_switch_summaries(old.result);
+  ELSIF action='adminUpdateSwitches' THEN
+    answer:=billing_api.apply_switch_body(uid,op,b);
     IF answer ? 'error' THEN RETURN answer;END IF;
   ELSE
     PERFORM set_config('app.owner_id',b->>'user_id',true);
     q:=billing_api.adjustment_period(b);
     IF q IS NULL THEN RETURN jsonb_build_object('error','NOT_FOUND');END IF;
-    PERFORM billing_api.adjust_quota(uid,(p->>'operation_key')::uuid,q,(b->>'additional_units')::bigint,b->>'reason');
+    PERFORM billing_api.adjust_quota(uid,op,q,(b->>'additional_units')::bigint,b->>'reason');
     answer:=jsonb_build_object('user_id',b->>'user_id');
   END IF;
   IF clock_timestamp()>=r.expires_at THEN RAISE EXCEPTION 'reauth expired' USING ERRCODE='42501';END IF;
   UPDATE public.reauth_proofs SET consumed_at=clock_timestamp() WHERE id=r.id;
   INSERT INTO public.preauth_receipts(context_hash,operation,operation_key,commitment,secret,result)
-    VALUES(p->>'token_hash',action,(p->>'operation_key')::uuid,p->>'commitment',false,answer);
+    VALUES(receipt_context,action,op,p->>'commitment',false,answer);
   RETURN answer;
 END $f$;
 ALTER FUNCTION billing_api.apply_admin(jsonb) OWNER TO classroom_web_session_writer;

@@ -45,6 +45,10 @@ def candidate_contract(contract):
     recover["responses"]["200"]["content"]["application/json"]["schema"] = {"$ref": "#/components/schemas/CacheRecoverResult"}
     recover["x-reauth-policy"]["purpose"] = "recoverCache"
     result["paths"]["/me/cache-recover"] = {"post": recover}
+    headers = (result["components"]["parameters"][entry["$ref"].rsplit("/", 1)[-1]]
+               for entry in unlock["parameters"] if "$ref" in entry)
+    write_key, = (header["schema"] for header in headers
+                  if header["in"] == "header" and header["name"] == "Idempotency-Key")
     operations = schemas["ReauthOperation"]["oneOf"]
     device_operation, = (item for item in operations
                          if item["properties"]["purpose"]["const"] == "revokeDevice")
@@ -55,7 +59,9 @@ def candidate_contract(contract):
         operation["properties"]["purpose"] = {"const": purpose}
         # Cache release reconstructs the target from the validated body device ID.
         operation["properties"]["target"]["properties"]["id"] = copy.deepcopy(schemas[body]["properties"]["device_id"])
-        operation["properties"]["candidate_parameters"]["properties"]["body"] = {"$ref": f"#/components/schemas/{body}"}
+        parameters = operation["properties"]["candidate_parameters"]["properties"]
+        parameters["idempotency_key"] = copy.deepcopy(write_key)
+        parameters["body"] = {"$ref": f"#/components/schemas/{body}"}
         existing = [item for item in operations
                     if item.get("properties", {}).get("purpose", {}).get("const") == purpose]
         if existing:
