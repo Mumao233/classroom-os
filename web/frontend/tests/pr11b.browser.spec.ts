@@ -38,9 +38,10 @@ async function verify(page: Page, code = '123456') {
   await dialog.getByRole('button', { name: '验证并执行' }).click();
 }
 
+// Failure traces would keep request bodies (factors, proofs, one-time tokens): screenshots only, masked.
+test.use({ trace: 'off' });
+
 test.describe('PR-11b operations console', () => {
-  // Failure traces would keep request bodies (factors, proofs, one-time tokens): screenshots only, masked.
-  test.use({ trace: 'off' });
   test('a student has no operations entry and the admin URLs make no admin request (FE-13, AUTH-05)', async ({ page }) => {
     const seen = adminRequests(page);
     await ready(page, '/dashboard');

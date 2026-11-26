@@ -480,7 +480,9 @@ describe('PR-11b #38 review round 0 regressions (mock)', () => {
     const body = { user_id: A_ID, bucket_kind: 'summary_month_count', period_start: '2026-10-01', additional_units: 1, reason: '合成' };
     expect(err(call('C', 'POST', '/auth/reauth', { password: 'p', mfa_code: '123456', operation: { purpose: 'adminAdjustQuota', target: { kind: 'account', id: C_ID }, candidate_parameters: { idempotency_key: '0e000000-0000-4000-8000-000000000001', body } } }, '', '0e000000-0000-4000-8000-000000000002'))).toBe('VALIDATION_FAILED');
     expect(err(call('C', 'POST', '/admin/quota-adjustments', body))).toBe('VALIDATION_FAILED');
-    expect(write('adminAdjustQuota', A_ID, 'POST', '/admin/quota-adjustments', { ...body, period_start: '2026-09-30T16:00:00Z' }).reply.status).not.toBe(422);
+    // The same adjustment with the bucket's own date-time period is accepted.
+    const bucket = (call('C', 'GET', `/admin/users/${A_ID}/quota`).body as S['QuotaView']).buckets.find(item => item.kind === 'summary_month_count')!;
+    expect(write('adminAdjustQuota', A_ID, 'POST', '/admin/quota-adjustments', { ...body, period_start: bucket.period_start }).reply.status).toBe(201);
   });
 
   it('a live stream admission belongs to its classroom', () => {
