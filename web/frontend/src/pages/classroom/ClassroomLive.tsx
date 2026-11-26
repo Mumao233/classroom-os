@@ -6,7 +6,7 @@ import { ApiClientError } from '../../api/client';
 import { Dialog } from '../../ui';
 import { describeError, useAppData, useCourse, useInvalidateAccount, usePreferences, useQuota } from '../../features/data';
 import { CONSENT_TEXT, commandCapture, reconcileCommand, startCapture, stopCapture, useClassSession, useClassroomShell, useMarks, useSlides, useTranscript, type BoundCapture } from '../../features/classroom';
-import { buildTimeline, formatClock } from '../../domain/classroom';
+import { buildTimeline, formatClock, preparationQuotaLines } from '../../domain/classroom';
 import { flowItems } from '../../domain/flows';
 import { DataSourceNote } from '../common';
 import { TranscriptTimeline } from './TranscriptTimeline';
@@ -213,7 +213,6 @@ function Preparation({ session, courseName, blocked, busy, onStart }: { session:
     const timer = window.setInterval(() => { tick++; setLevel([35, 62, 48, 70, 41, 58][tick % 6]!); }, 300);
     return () => window.clearInterval(timer);
   }, [testing]);
-  const asrMonth = quota.data?.buckets.find(bucket => bucket.kind === 'asr_month_ms');
   const billing = quota.data?.platform_billing_state;
   const canStart = online && consent && !blocked && !busy;
   return <section className={styles.stack} aria-labelledby="prep-title" data-testid="classroom-prep">
@@ -238,8 +237,7 @@ function Preparation({ session, courseName, blocked, busy, onStart }: { session:
       <div className={styles.panel}>
         <h3>额度</h3>
         {quota.isPending ? <p className={styles.muted} role="status">正在读取额度…</p> : quota.isError ? <p className={styles.error} role="alert">{describeError(quota.error)}</p> : <ul className={styles.checkList}>
-          <li><span aria-hidden="true">{quota.data!.asr_enabled ? '✓' : '!'}</span><span>转写：{quota.data!.asr_enabled ? `本月剩余约 ${Math.floor((asrMonth?.remaining ?? 0) / 60000)} 分钟` : '已暂停，可以采集原音，字幕稍后才能生成'}</span></li>
-          <li><span aria-hidden="true">{quota.data!.ai_enabled ? '✓' : '!'}</span><span>AI：{quota.data!.ai_enabled ? '可按需使用，每次确认前显示费用上限' : '新的 AI 请求已暂停'}</span></li>
+          {preparationQuotaLines(quota.data).map(line => <li key={line}>{line}</li>)}
           {billing && billing !== 'normal' && <li><span aria-hidden="true">!</span><span>平台额度状态：{billing === 'paused' || billing === 'blocked100' ? '新收费请求已暂停' : '接近上限'}</span></li>}
         </ul>}
       </div>

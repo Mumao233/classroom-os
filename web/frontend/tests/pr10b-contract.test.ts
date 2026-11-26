@@ -18,9 +18,9 @@ const UPLOAD_FAILED = 'c0000000-0000-4000-8000-000000000004';
 const SUMMARY = 'e0000000-0000-4000-8000-000000000001';
 const CARDS = 'e0000000-0000-4000-8000-000000000002';
 
-describe('PR-10b review mock responses conform to contract 0.3.0', () => {
-  it('uses the frozen 0.3.0 contract with the four retranscription error codes', () => {
-    expect(openapi.info.version).toBe('0.3.0');
+describe('PR-10b review mock responses conform to the frozen contract', () => {
+  it('retains the four retranscription error codes in HTTP 0.4.0', () => {
+    expect(openapi.info.version).toBe('0.4.0');
     const codes: string[] = openapi.components.schemas.Error.properties.error.properties.code.enum;
     for (const code of ['AUDIO_EXPIRED', 'AUDIO_DELETED', 'QUOTA_SESSION_EXCEEDED', 'QUOTA_MONTH_EXCEEDED']) expect(codes).toContain(code);
   });

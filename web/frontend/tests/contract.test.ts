@@ -28,7 +28,64 @@ describe('approved PR-01 contract examples', () => {
   }
 });
 
+describe('PR-11b admin write and reauthentication contracts', () => {
+  it.each([
+    ['/admin/users/{user_id}', 'patch', 'adminUpdateUser', 'user'],
+    ['/admin/invitations', 'post', 'adminCreateInvitation', 'account'],
+    ['/admin/invitations/{invitation_id}/revoke', 'post', 'adminRevokeInvitation', 'invitation'],
+    ['/admin/invitations/{invitation_id}/reissue', 'post', 'adminReissueInvitation', 'invitation'],
+    ['/admin/quota-adjustments', 'post', 'adminAdjustQuota', 'account'],
+    ['/admin/switches', 'patch', 'adminUpdateSwitches', 'account'],
+  ])('%s binds the reauthentication proof to the same write DTO', (path, method, purpose, kind) => {
+    const write = openapi.paths[path][method];
+    expect(write.operationId).toBe(purpose);
+    expect(write['x-required-role']).toBe('admin');
+    expect(write['x-requires-mfa']).toBe(true);
+    expect(write['x-requires-reauth']).toBe(true);
+    for (const header of ['IdempotencyKey', 'CsrfToken', 'ReauthToken']) {
+      expect(write.parameters).toContainEqual({ $ref: '#/components/parameters/' + header });
+    }
+    const operations = openapi.components.schemas.ReauthOperation.oneOf;
+    const matches = operations.filter((op: {properties: {purpose: {const: string}}}) => op.properties.purpose.const === purpose);
+    expect(matches).toHaveLength(1);
+    const { target, candidate_parameters: parameters } = matches[0].properties;
+    expect(target.properties.kind.const).toBe(kind);
+    expect(parameters.required).toEqual(expect.arrayContaining(['idempotency_key', 'body']));
+    expect(parameters.properties.body).toEqual(write.requestBody.content['application/json'].schema);
+  });
+});
+
 describe('mock HTTP fixtures', () => {
+  it('validates the shared write-key fixtures before mutating mock records', () => {
+    const backend = createMockBackend();
+    const query = new URLSearchParams();
+    const semesters = () => backend.handle('A', 'GET', '/semesters', query, undefined, null)!.body as {items: unknown[]};
+    const me = () => backend.handle('A', 'GET', '/me', query, undefined, null)!.body as {revision: number};
+    const before = structuredClone(semesters());
+    const profile = structuredClone(me());
+    const validate = ajv.compile({ $ref: 'https://classroom.invalid/openapi#/components/parameters/IdempotencyKey/schema' });
+    const header = (name: string) => {
+      const fixture = cases.find(item => item.name === name);
+      if (typeof fixture?.value !== 'string') throw new Error('Missing write-key fixture ' + name);
+      expect(validate(fixture.value)).toBe(fixture.expected_valid);
+      return fixture.value;
+    };
+    const invalid = header('pr11b_r0_header_uppercase');
+    const body = { name: 'Synthetic semester' };
+    const rejected = { status: 422, body: { error: { code: 'VALIDATION_FAILED' } } };
+    expect(backend.handle('A', 'POST', '/semesters', query, body, invalid)).toMatchObject(rejected);
+    expect(semesters()).toEqual(before);
+    // Profile updates use CAS directly and must pass the same header check as receipt-backed creates.
+    expect(backend.handle('A', 'PATCH', '/me', query, { base_revision: profile.revision, nickname: 'Updated' }, invalid)).toMatchObject(rejected);
+    expect(me()).toEqual(profile);
+
+    const valid = header('pr11b_r0_header_lowercase');
+    const created = backend.handle('A', 'POST', '/semesters', query, body, valid);
+    expect(created?.status).toBe(201);
+    expect(backend.handle('A', 'POST', '/semesters', query, body, valid)).toEqual(created);
+    expect(semesters().items).toHaveLength(before.items.length + 1);
+  });
+
   for (const [name, schema, fixture] of [['empty', 'CoursePage', coursePage], ['account A', 'CoursePage', coursePages.A], ['account B', 'CoursePage', coursePages.B], ['session revoked', 'Error', unauthenticated], ['semesters', 'SemesterPage', semesterPage], ['meta', 'Meta', meta]] as const) {
     it(`${name}: ${schema} conforms`, () => {
       const validate = ajv.compile({ $ref: `https://classroom.invalid/openapi#/components/schemas/${schema}` });

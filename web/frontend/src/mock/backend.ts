@@ -338,6 +338,10 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
   }
 
   function handle(account: MockAccountKey, method: string, path: string, query: URLSearchParams, rawBody: unknown, key: string | null, reauth: string | null = null, generation?: number): MockReply | null {
+    const isId = (part: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(part);
+    if (['POST', 'PATCH', 'PUT', 'DELETE'].includes(method) && (!key || !isId(key))) {
+      return error(422, 'VALIDATION_FAILED', 'Idempotency-Key 必须为小写且带连字符的 UUID');
+    }
     const store = stores[account];
     // A request dispatched by a session that has since ended is refused, even if the account signed in again.
     if (generation !== undefined && generation !== generations[account]) return error(401, 'UNAUTHENTICATED', '会话已失效');
@@ -345,7 +349,6 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
     if (store.user.status !== 'active' || revokedSessions.has(account)) return error(401, 'UNAUTHENTICATED', '会话已失效');
     const body = (typeof rawBody === 'object' && rawBody !== null && !Array.isArray(rawBody) ? rawBody : {}) as Record<string, unknown>;
     const parts = path.split('/').filter(Boolean);
-    const isId = (part: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(part);
     const route = `${method} /${parts.map(part => (isId(part) ? ':id' : part)).join('/')}`;
     const id = parts.find(isId) ?? '';
     if (parts[0] === 'admin') return admin.handle(store.user.id, method, parts, query, rawBody, key, reauth);
