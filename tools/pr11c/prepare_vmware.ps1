@@ -51,6 +51,38 @@ foreach ($file in ($files | Sort-Object -Unique)) {
     }
 }
 
+# The pathname checks above can race with a directory being swapped for a junction. Each file is
+# therefore opened once, the final path of that open handle is checked against the worktree's own
+# final path, and the hash and archive bytes are read from the same handle.
+Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using System.Text;
+using Microsoft.Win32.SafeHandles;
+public static class Pr11cFinalPath {
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    static extern uint GetFinalPathNameByHandleW(SafeFileHandle handle, StringBuilder path, uint size, uint flags);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    static extern SafeFileHandle CreateFileW(string name, uint access, uint share, IntPtr security,
+                                             uint disposition, uint flags, IntPtr template);
+    public static string OfHandle(SafeFileHandle handle) {
+        var path = new StringBuilder(32768);
+        uint length = GetFinalPathNameByHandleW(handle, path, (uint)path.Capacity, 0);
+        if (length == 0 || length >= path.Capacity) throw new Win32Exception(Marshal.GetLastWin32Error());
+        return path.ToString();
+    }
+    public static string OfDirectory(string directory) {
+        // FILE_READ_ATTRIBUTES, share read/write/delete, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS
+        using (var handle = CreateFileW(directory, 0x80, 7, IntPtr.Zero, 3, 0x02000000, IntPtr.Zero)) {
+            if (handle.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error());
+            return OfHandle(handle);
+        }
+    }
+}
+'@
+$rootFinal = [Pr11cFinalPath]::OfDirectory($root).TrimEnd('\') + '\'
+
 $null = New-Item -ItemType Directory -Path $work, $transfer
 Add-Type -AssemblyName System.IO.Compression
 $archive = Join-Path $work 'source.zip'
@@ -63,11 +95,22 @@ try {
         if ($source.PSIsContainer -or ($source.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
             throw "Unexpected source entry $file"
         }
-        $hashes[$file] = (Get-FileHash -LiteralPath $source.FullName).Hash.ToLowerInvariant()
-        $entry = $zip.CreateEntry($file.Replace('\','/'), [IO.Compression.CompressionLevel]::Optimal)
-        $input = $source.OpenRead()
-        $output = $entry.Open()
-        try { $input.CopyTo($output) } finally { $output.Dispose(); $input.Dispose() }
+        $input = [IO.File]::Open($source.FullName, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+        try {
+            $final = [Pr11cFinalPath]::OfHandle($input.SafeFileHandle)
+            if (-not $final.StartsWith($rootFinal, [StringComparison]::OrdinalIgnoreCase)) {
+                throw "Opened source resolves outside the worktree: $file"
+            }
+            $sha256 = [Security.Cryptography.SHA256]::Create()
+            try { $hashes[$file] = [Convert]::ToHexString($sha256.ComputeHash($input)).ToLowerInvariant() }
+            finally { $sha256.Dispose() }
+            $input.Position = 0
+            $entry = $zip.CreateEntry($file.Replace('\','/'), [IO.Compression.CompressionLevel]::Optimal)
+            $output = $entry.Open()
+            try { $input.CopyTo($output) } finally { $output.Dispose() }
+        } finally {
+            $input.Dispose()
+        }
     }
 } finally {
     $zip.Dispose()

@@ -32,8 +32,9 @@ function Center({ list, markRead }: Props) {
   const listing = useRef<AbortController | null>(null);
   const marking = useRef<AbortController | null>(null);
   const listSequence = useRef(0);
-  // The cursor of the list request currently in flight, so a superseding read can reissue it.
-  const inflight = useRef<{ cursor: string | null } | null>(null);
+  // The list request currently in flight (its cursor and the callback that issued it), so a
+  // superseding read can reissue exactly that request even if the parent has since re-rendered.
+  const inflight = useRef<{ cursor: string | null; source: Props['list'] } | null>(null);
   const keys = useRef(new Map<string, string>());
   const clearAuthorization = useCallback(() => {
     listSequence.current += 1;
@@ -46,16 +47,19 @@ function Center({ list, markRead }: Props) {
     setNotice('通知已无法访问，请重新加载。');
   }, []);
 
-  const load = useCallback(async (next: string | null) => {
+  const load = useCallback(async (next: string | null,
+                                  options: { source?: Props['list']; keepNotice?: boolean } = {}) => {
+    const source = options.source ?? list;
     listing.current?.abort();
     const run = new AbortController();
     listing.current = run;
     const sequence = ++listSequence.current;
     const isCurrent = () => sequence === listSequence.current && !run.signal.aborted;
-    inflight.current = { cursor: next };
-    setBusy(true); setNotice('');
+    inflight.current = { cursor: next, source };
+    setBusy(true);
+    if (!options.keepNotice) setNotice('');
     try {
-      const page = await list(next, run.signal);
+      const page = await source(next, run.signal);
       if (!isCurrent()) return;
       setItems(previous => orderNotifications(next ? [...previous, ...page.items] : page.items));
       setCursor(page.next_cursor); setLoaded(true);
@@ -101,7 +105,7 @@ function Center({ list, markRead }: Props) {
       const interrupted = supersedeList();
       keys.current.delete(id);
       setItems(previous => previous.some(row => row.id === id) ? orderNotifications([...previous, item]) : previous);
-      if (interrupted) void load(interrupted.cursor);
+      if (interrupted) void load(interrupted.cursor, { source: interrupted.source });
     } catch (error) {
       if (run.signal.aborted) return;
       if (isAuthorizationFailure(error)) { clearAuthorization(); return; }
@@ -113,7 +117,8 @@ function Center({ list, markRead }: Props) {
         setItems(previous => previous.filter(item => item.id !== id));
         setNotice('这条通知已无法访问，已从列表移除。');
         heading.current?.focus({ preventScroll: true });
-        if (interrupted) void load(interrupted.cursor);
+        // Keep the removal announcement; a later load or error may still replace it.
+        if (interrupted) void load(interrupted.cursor, { source: interrupted.source, keepNotice: true });
       } else setNotice('暂时无法标为已读，请重试。');
     } finally {
       if (!run.signal.aborted) setWriting(false);

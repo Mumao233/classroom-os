@@ -106,13 +106,40 @@ it.each(['read', 'gone'] as const)(
     expect(refresh.mock.calls[1][0]).toBeNull();
     expect(screen.getByRole('button', { name: '更多通知' })).toBeTruthy();
     if (outcome === 'read') expect(screen.getByText('已读')).toBeTruthy();
-    else expect(screen.queryByText('采集已中断')).toBeNull();
+    else {
+      expect(screen.queryByText('采集已中断')).toBeNull();
+      // The automatic replay keeps the removal announcement in the status region.
+      expect(screen.getByRole('status').textContent).toBe('这条通知已无法访问，已从列表移除。');
+    }
     // The superseded response arriving late changes nothing.
     await act(async () => { completeStale({ items: [item], next_cursor: 'stale-cursor' }); });
     expect(screen.getByText('任务已完成')).toBeTruthy();
     expect(screen.queryAllByRole('button', { name: '标为已读' }).length).toBe(1);
   },
 );
+
+it('reissues an interrupted refresh through the callback that issued it, not the one captured at click time', async () => {
+  const item: Notification = { id: a.document, kind: 'capture_failure', severity: 'warning',
+    object_id: a.classroom, read_at: null, resolved_at: null, created_at: '2026-11-23T00:00:00Z', message_code: 'CAPTURE_LEASE_LOST' };
+  const arrived: Notification = { id: b.document, kind: 'task_completed', severity: 'info', object_id: null,
+    read_at: null, resolved_at: null, created_at: '2026-11-23T00:00:01Z', message_code: 'TASK_COMPLETED' };
+  const original = vi.fn(async () => ({ items: [item], next_cursor: null }));
+  const replacement = vi.fn()
+    .mockReturnValueOnce(new Promise<NotificationPage>(() => {}))
+    .mockResolvedValueOnce({ items: [{ ...item, read_at: item.created_at }, arrived], next_cursor: null });
+  let finishRead!: (value: Notification) => void;
+  const markRead = vi.fn(() => new Promise<Notification>(resolve => { finishRead = resolve; }));
+  const view = render(createElement(NotificationCenter, { accountKey: a.owner, list: original, markRead }));
+  await userEvent.click(await screen.findByRole('button', { name: '标为已读' }));
+  // The parent supplies a new list callback while the write is still pending; its refresh is in flight.
+  view.rerender(createElement(NotificationCenter, { accountKey: a.owner, list: replacement, markRead }));
+  expect(replacement).toHaveBeenCalledTimes(1);
+  await act(async () => { finishRead({ ...item, read_at: item.created_at }); });
+  expect(await screen.findByText('任务已完成')).toBeTruthy();
+  expect(replacement).toHaveBeenCalledTimes(2);
+  expect(original).toHaveBeenCalledTimes(1);
+  expect(screen.getByText('已读')).toBeTruthy();
+});
 
 it.each([
   { action: 'refresh', error: { status: 403 } },

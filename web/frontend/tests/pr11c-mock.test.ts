@@ -121,6 +121,16 @@ it.each(['description', 'build_id', 'confirmed_excerpt'] as const)(
   },
 );
 
+it('reports missing consent before NUL text, matching the backend precedence', () => {
+  const store = seedSearchBackend();
+  const reply = handleSearchBackend(store, { ownerId: a.owner, method: 'POST', key: crypto.randomUUID(),
+    csrfVerified: true, path: '/feedback', body: { category: 'bug', build_id: 'test', request_id: null,
+      description: 'before\u0000after', confirmed_excerpt: 'excerpt', confirm_send_excerpt: false } })!;
+  expect(reply.status).toBe(422);
+  expect(reply.body).toMatchObject({ error: { code: 'CONSENT_REQUIRED' } });
+  expect(store.accounts.get(a.owner)?.feedback.size).toBe(0);
+});
+
 it('rate limits distinct successful feedback submissions per account within the rolling window', () => {
   const store = seedSearchBackend();
   const clock = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);

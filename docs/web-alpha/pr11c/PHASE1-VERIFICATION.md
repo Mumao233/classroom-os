@@ -1,6 +1,6 @@
-# PR-11c 第一阶段验证与复审报告（2026-11-24 第五次更新）
+# PR-11c 第一阶段验证与复审报告（2026-11-26 第六次更新）
 
-负责人林珈诚。工作树 `J:\class-assistant\worktrees\web-pr11c-search`，分支 `feature/web-pr11c-search`，基线 `origin/main` `80d2204`，契约 OpenAPI 0.3.0。第一阶段代码已在本地分支提交（`06ad428`），r5 的 P2/P3 修复随本报告一并提交；负责人授权在复审无新 P1 时推送并开 Draft PR，不合并。Astra 各轮均以当时的未提交工作区为范围复审。
+负责人林珈诚。工作树 `J:\class-assistant\worktrees\web-pr11c-search`，分支 `feature/web-pr11c-search`，基线 `origin/main` `80d2204`，契约 OpenAPI 0.3.0。已推送并开 Draft PR #39（不合并）。2026-11-26 负责人授权修复 r6 的 P2/P3，随本报告提交。Astra 各轮均以当时的未提交工作区为范围复审。
 
 ## 范围与分工
 
@@ -14,7 +14,16 @@
 
 全部功能测试在 VMware Windows TEST 来宾、独立 PostgreSQL 17.11 集群和随机测试库中执行；宿主只做静态检查与编排。
 
-**当前代码（r6 所审代码）对应的运行：**
+**当前代码（r6 修复后）对应的运行：**
+
+| 运行 | 后端 pytest | 前端 Vitest | 其他 |
+|---|---|---|---|
+| `pr11c-20261126-132652-533f5b85` targeted | 28 passed（全部 11c） | 36 passed（全部 11c） | — |
+| `pr11c-20261126-133045-e9495b04` full | 1743 passed，0 failed/skip（含 11c 28 项） | 603 passed（含 11c 36 项） | 生产构建、PG 日志隐私标记通过；来宾残留进程 0 |
+
+full 证据：`outputs/pr11c/pr11c-20261126-133045-e9495b04/evidence.zip`，SHA-256 `0173a5ce736afb9aebc7047571bbc27561ef36f712fc5dacd413da78add7b0eb`。r6 修复之后未再做 Astra 复审。
+
+**r6 所审代码对应的运行（历史）：**
 
 | 运行 | 后端 pytest | 前端 Vitest | 其他 |
 |---|---|---|---|
@@ -22,9 +31,9 @@
 | `pr11c-20261124-205831-6c24c145` full | 1741/1743 passed（含 11c 28 项全过） | 601 passed（含 11c 34 项） | 生产构建、PG 日志隐私标记通过；来宾残留进程 0 |
 | `pr11c-20261124-212551-e51049e8` full | 1741/1743 passed（含 11c 28 项全过） | 601 passed（含 11c 34 项） | 同上 |
 
-两次 full 的唯一失败都是 `test_pr08c_pool.py` 的两个 `[export]` 用例，`STORAGE_UNAVAILABLE`。该路径为 `PortableTransfers._put` → `store.put_portable`，直接写 SeaweedFS，不经过任何 ASGI 中间件；本分支未改动 `portable_*`、`object_store` 或该测试，分支内与之最近的改动只有 `media_http.py` 的路由路径匹配。现象与 [PR-06c 验证](../pr06c/VERIFICATION.md) 记录的 SeaweedFS 截断上传一致。本会话池测试实际执行 11 次，失败 5 次（`[import]` 2 次、`[export]` 3 次，最近 3 次均为 `[export]`），频率上升，建议作为 08c/测试环境事项单独排查。
+两次 full 的唯一失败都是 `test_pr08c_pool.py` 的两个 `[export]` 用例，`STORAGE_UNAVAILABLE`。该路径为 `PortableTransfers._put` → `store.put_portable`，直接写 SeaweedFS，不经过任何 ASGI 中间件；本分支未改动 `portable_*`、`object_store` 或该测试，分支内与之最近的改动只有 `media_http.py` 的路由路径匹配。现象与 [PR-06c 验证](../pr06c/VERIFICATION.md) 记录的 SeaweedFS 截断上传一致。本会话池测试实际执行 12 次，失败 5 次（`[import]` 2 次、`[export]` 3 次），最近一次通过，建议作为 08c/测试环境事项单独排查。
 
-最近证据：`outputs/pr11c/pr11c-20261124-212551-e51049e8/evidence.zip`，SHA-256 `453cfc34effd34b465cd2f1c1646165c6a5ecdd955a117d7564b910c27ae9ad8`；包内 `SOURCE.json` 记录基线 `80d2204`、1036 个文件。
+r6 所审代码的证据：`outputs/pr11c/pr11c-20261124-212551-e51049e8/evidence.zip`，SHA-256 `453cfc34effd34b465cd2f1c1646165c6a5ecdd955a117d7564b910c27ae9ad8`。
 
 **历史运行（早于当前代码，只作过程记录）：** 挂载前缀修复后、r5 修复前的 full `pr11c-20261124-195006-0bdcb51d`（后端 1741、前端 596 全过）；r3 所审代码的 full `pr11c-20261124-093454-4f8a6180`（后端 1730、前端 596 全过）。更早各轮的失败与处理：
 
@@ -45,6 +54,11 @@
    - `run_guest.py` 先保留 `ObjectService` 句柄再启动。
    - 来宾不再静默映射：映射后核验 `J:` 为 `C:\j` 替代盘，否则在写入前失败。TEST 来宾只有单一 C: 卷，此为 03b/04b/06c/11a runner 共用的既有约定，未改为非 C 卷。
    - 已解决冲突标题改为"同步冲突已解决"；mock 拒绝含 NUL 的反馈文本。
+4. **r6 的 P2/P3**（负责人授权，2026-11-26）：
+   - 通知中心记录被打断请求的发起回调，重发时使用该回调；父组件在写入期间更换 `list` 时不再回落到旧回调。
+   - 自动重发保留"已从列表移除"提示，后续加载或错误仍可覆盖。
+   - 打包时每个文件只打开一次，以该句柄的 `GetFinalPathNameByHandle` 结果核验位于 worktree 内，哈希与归档均从同一句柄读取；路径级预检保留。
+   - mock 的错误优先级与后端一致：先同意检查，再 NUL 检查。
 
 ## Astra 复审
 
@@ -64,13 +78,12 @@
 ### 仍未关闭
 
 - **跨进程删除放行（r0–r5 的 P1，r6 未再报出）**：`OperationsService` 与事件轮询只看进程内 `deletion.ready`；`DeletionGate` 对全部 API 路由同样只看进程内状态，属 04b 既有架构。仍建议作为 04b 独立事项，在门禁层统一读取数据库放行记录。
-- **P2（r6）**：通知中心重发被打断的刷新时调用的是写入前捕获的 `load`，若期间父组件换了 `list` 回调，旧回调结果可能覆盖新结果；打包预检按路径名记录已检目录，预检后到读取前目录被换成联接的竞争未以同一文件句柄核验。
-- **P3（r6）**：已读/移除后的自动重发会清掉"已从列表移除"提示；mock 在 NUL 与未确认摘录同时出现时返回 `VALIDATION_FAILED`，后端返回 `CONSENT_REQUIRED`。
+- **r6 的 2 条 P2、2 条 P3**：已修并经 VMware 验证（见上文第 4 项），未再复审。
 - **测试环境**：`test_pr08c_pool.py` `[export]` 偶发 `STORAGE_UNAVAILABLE`，见上文。
 
 已关闭：前三轮针对反馈投影直接读取的 P1 因不再授予直接读取而不再适用；r4 挂载前缀脱敏 P1、r5 全部 P2/P3 已修并经 VMware 验证。
 
 ## 待负责人决定
 
-- r6 的 P2/P3 是否在第二阶段前修复；跨进程放行与 08c 池测试是否单独立项。
+- 跨进程放行与 08c 池测试是否单独立项；是否对 r6 修复再做一次复审。
 - 预算告警映射、复习文档独立删除、持续故障解决信号等契约问题需 Astra 定（见交接）。

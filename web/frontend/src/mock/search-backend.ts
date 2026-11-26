@@ -100,9 +100,11 @@ function parseFeedback(value: unknown): Feedback | null {
       || (body.request_id !== null && (typeof body.request_id !== 'string' || !uuid.test(body.request_id)))
       || (body.confirmed_excerpt !== null && (typeof body.confirmed_excerpt !== 'string' || [...body.confirmed_excerpt].length > 5000))
       || typeof body.confirm_send_excerpt !== 'boolean') return null;
-  // Mirrors OperationsService: any NUL in the stored text fields is rejected with 422.
-  if ([body.description, body.build_id, body.confirmed_excerpt].some(text => text?.includes('\u0000'))) return null;
   return body;
+}
+
+function containsNul(body: Feedback): boolean {
+  return [body.description, body.build_id, body.confirmed_excerpt].some(text => text?.includes('\u0000'));
 }
 
 function page<T>(store: Store, query: URLSearchParams, binding: unknown[], items: T[],
@@ -180,7 +182,9 @@ export function handleSearchBackend(store: Store, input: MockRequest): Reply | n
   }
   const body = parseFeedback(input.body);
   if (body === null) return error(422, 'VALIDATION_FAILED');
+  // Same precedence as OperationsService.dispatch: consent first, then NUL in stored text.
   if (body.confirmed_excerpt && !body.confirm_send_excerpt) return error(422, 'CONSENT_REQUIRED');
+  if (containsNul(body)) return error(422, 'VALIDATION_FAILED');
   const fingerprint = JSON.stringify(Object.entries(body).sort(([a], [b]) => a.localeCompare(b)));
   const prior = account.receipts.get(`feedback:${key}`);
   if (prior) return prior.fingerprint === fingerprint ? response(202, { accepted: true, request_id: prior.identity })
