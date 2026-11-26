@@ -28,7 +28,7 @@ from classroom_web.domain.data import OwnerContext
 from classroom_web.entrypoints.http import create_app
 from classroom_web.entrypoints.deletion_http import DeletionGate
 from classroom_web.entrypoints.media_http import MediaRequestLifecycle
-from classroom_web.entrypoints.operations_http import SearchQueryRedaction
+from classroom_web.entrypoints.operations_http import ROUTES, OperationsRoutes, SearchQueryRedaction
 from classroom_web.infrastructure.qa_repository import PgQaRepository
 from classroom_web.infrastructure.review_provider import FakeReviewProvider
 from classroom_web.infrastructure.review_repository import PgReviewRepository
@@ -261,6 +261,34 @@ def test_feedback_body_limit_follows_the_route_under_a_mount_prefix(d, mount):
     assert len(json.dumps(body, ensure_ascii=False).encode()) > 16384
     with browser(d, app_wrapper=mounted) as member:
         assert result(post(member, '/feedback', body, member.csrf), 202)['accepted'] is True
+
+
+@pytest.mark.parametrize('version,accepted', [('0.3.0', True), ('0.4.0', True), ('0.2.1', False), ('0.5.0', False)])
+def test_operations_accept_only_contract_versions_with_identical_operations(version, accepted):
+    auth = object()
+    database = SimpleNamespace(cursor_secret=b'synthetic-cursor-secret')
+    service = SimpleNamespace(auth=auth, database=database)
+    deletion = SimpleNamespace(auth=auth, database=database)
+    frozen = contract()
+    candidate = {**frozen, 'info': {**frozen['info'], 'version': version}}
+
+    def build():
+        return OperationsRoutes(service, auth, candidate, deletion, None, None, None, None)
+
+    if not accepted:
+        with pytest.raises(ValueError):
+            build()
+        return
+    routes = build()
+    registered = []
+
+    class App:
+        def add_api_route(self, path, endpoint, methods, operation_id):
+            registered.append((path, methods[0], operation_id))
+
+    routes.register(App(), BASE, lambda path, method, operation: None)
+    assert sorted(registered) == sorted((BASE + path, method.upper(), operation_id)
+                                        for path, (method, operation_id) in ROUTES.items())
 
 
 def test_search_isolated_readable_literal_paged_and_deleted(d):

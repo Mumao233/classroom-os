@@ -3,6 +3,11 @@ from ..domain.auth import AuthRejected
 from .asgi_paths import path_is
 
 
+# 0.4.0 (PR #40, PR-11b admin writes) leaves these four operations, their schemas and error
+# codes unchanged; its canonical Idempotency-Key is the UUID v4 form these routes already
+# require. create_app's own version gate is widened by that contract change itself.
+SUPPORTED_CONTRACTS = ('0.3.0', '0.4.0')
+
 ROUTES = {
     '/search': ('get', 'search'),
     '/notifications': ('get', 'listNotifications'),
@@ -40,10 +45,10 @@ class OperationsRoutes:
         self.paths = ROUTES if service is not None else {}
         if service is None:
             return
-        if (contract['info']['version'] != '0.3.0' or deletion is None
+        if (contract['info']['version'] not in SUPPORTED_CONTRACTS or deletion is None
                 or service.auth is not auth or service.database is not deletion.database
                 or deletion.auth is not auth):
-            raise ValueError('PR-11c requires 0.3.0 and the shared authentication and deletion gate')
+            raise ValueError('PR-11c requires contract 0.3.0 or 0.4.0 and the shared authentication and deletion gate')
         if service.database.cursor_secret is None:
             raise ValueError('PR-11c requires the shared stable owner cursor secret')
         for reader in (business, asr, filetrans, review):
