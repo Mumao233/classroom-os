@@ -150,6 +150,8 @@ export function createAdminBackend(host: AdminHost, accountUsers: S['User'][]) {
     const budget = BigInt(month.budget_microyuan);
     const risk = BigInt(month.fixed_and_accrued_microyuan) + BigInt(month.settled_microyuan) + BigInt(month.reserved_microyuan) + BigInt(month.unknown_microyuan);
     if (budget === 0n || risk >= budget) return 'blocked100';
+    // billing_state(risk, budget, enabled): the master switch pauses billable work below 100 %.
+    if (!switches.billing_enabled) return 'paused';
     if (risk * 100n >= budget * 80n) return 'warning80';
     return risk * 100n >= budget * 60n ? 'warning60' : 'normal';
   }
@@ -212,7 +214,8 @@ export function createAdminBackend(host: AdminHost, accountUsers: S['User'][]) {
         return !only(body, ['reason']) || !reasonOk(body.reason) ? fail(422, 'VALIDATION_FAILED', '需要填写理由') : null;
       case 'adminAdjustQuota': {
         const kinds = ['asr_month_ms', 'asr_day_ms', 'retranscribe_month_ms', 'interactive_month_count', 'summary_month_count'];
-        return !only(body, ['user_id', 'bucket_kind', 'period_start', 'additional_units', 'reason']) || !isUuid(body.user_id) || !kinds.includes(body.bucket_kind as string) || typeof body.period_start !== 'string'
+        const dateTime = typeof body.period_start === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/.test(body.period_start) && !Number.isNaN(Date.parse(body.period_start));
+        return !only(body, ['user_id', 'bucket_kind', 'period_start', 'additional_units', 'reason']) || !isUuid(body.user_id) || !kinds.includes(body.bucket_kind as string) || !dateTime
           || !revision(body.additional_units) || !reasonOk(body.reason) ? fail(422, 'VALIDATION_FAILED', '额度调整无效：需要用户、额度类型、周期、追加数量和理由') : null;
       }
       case 'adminUpdateSwitches': {
@@ -268,16 +271,21 @@ export function createAdminBackend(host: AdminHost, accountUsers: S['User'][]) {
     // Path target and body together, as the contract's receipt fingerprint does.
     const serialized = canonical({ targetId, body });
     const prior = receipts.get(scope);
+    const binding = operationOf(operationId, actorId, ACCOUNT_TARGETED.has(operationId) ? null : targetId, key as string, body);
+    const proof = reauth ? proofs.get(reauth) : undefined;
+    const proofValid = (allowUsed: boolean) => proof !== undefined && (allowUsed || !proof.used) && proof.actor === actorId && proof.generation === host.sessionGeneration(actorId) && proof.expires > host.clockMs() && proof.binding === binding;
     if (prior) {
       if (prior.body !== serialized) return fail(409, 'IDEMPOTENCY_MISMATCH', '同一操作键对应了不同的对象或内容');
+      // A replay is authorised like the write: a current-session proof bound to this exact write (the
+      // original one or a fresh one). It is answered from the receipt and never applied again.
+      if (!proofValid(true)) return fail(403, 'REAUTH_REQUIRED', '请重新验证密码和验证码');
+      if (proof && !proof.used) proof.used = true;
       // A secret-bearing success is never replayed: only its non-secret status was kept.
       if (prior.reply === SECRET_ISSUED) return fail(409, 'SECRET_ALREADY_ISSUED', '该操作已完成，一次性令牌不会再次显示');
       // Applied once; what is returned now is rechecked against current access (as BillingAdmin.apply does).
       return replayed && prior.reply.status < 300 ? replayed(prior.reply) : prior.reply;
     }
-    const proof = reauth ? proofs.get(reauth) : undefined;
-    const binding = operationOf(operationId, actorId, ACCOUNT_TARGETED.has(operationId) ? null : targetId, key as string, body);
-    if (!proof || proof.used || proof.actor !== actorId || proof.generation !== host.sessionGeneration(actorId) || proof.expires <= host.clockMs() || proof.binding !== binding) return fail(403, 'REAUTH_REQUIRED', '请重新验证密码和验证码');
+    if (!proofValid(false) || !proof) return fail(403, 'REAUTH_REQUIRED', '请重新验证密码和验证码');
     proof.used = true;
     const reply = run();
     // The one-time token of an invitation is never kept in a receipt (frozen endpoint rule).

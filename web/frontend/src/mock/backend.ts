@@ -173,11 +173,13 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
   const adminRevoked = new Set<MockAccountKey>();
   /** Live transcription streams admitted per account; a stream admitted while ASR was on keeps going. */
   const admittedStreams: Record<MockAccountKey, Set<string>> = { A: new Set(), B: new Set(), C: new Set() };
-  const asrAdmits = (account: MockAccountKey, streamId: string) => {
-    if (admittedStreams[account].has(streamId)) return true;
+  // Scoped to the classroom: a scripted stream reusing an ID in another classroom is a new admission.
+  const asrAdmits = (account: MockAccountKey, classId: string, streamId: string) => {
+    const admission = `${classId}:${streamId}`;
+    if (admittedStreams[account].has(admission)) return true;
     // Live ASR checks its own switch (and the billing master), not the group summary.
     if (!admin.serviceEnabled('asr_streaming_enabled')) return false;
-    admittedStreams[account].add(streamId);
+    admittedStreams[account].add(admission);
     return true;
   };
   const accountOf = (userId: string) => accounts.find(account => stores[account].user.id === userId) ?? null;
@@ -565,7 +567,8 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
      * row; the revoked rows stay as history (a restore never revives them).
      */
     beginSession: (account: MockAccountKey) => {
-      if (!revokedSessions.delete(account)) return;
+      // A sign-in attempt of a disabled account creates nothing; the revocation stays until a real sign-in.
+      if (stores[account].user.status !== 'active' || !revokedSessions.delete(account)) return;
       const store = stores[account];
       const device = store.deviceSessions[0]?.device_id ?? newId();
       store.deviceSessions = [{ ...base(newId(), now()), device_id: device, device_name: '本机浏览器（模拟）', last_active_at: now(), expires_at: new Date(Date.parse(now()) + 30 * 86_400_000).toISOString().replace('.000Z', 'Z'), is_current: true, revoked_at: null }, ...store.deviceSessions.map(item => ({ ...item, is_current: false }))];
@@ -586,7 +589,7 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
       return done;
     },
     persistFinal: (account: MockAccountKey, input: Parameters<typeof persistFinal>[3]) => {
-      if (!asrAdmits(account, input.streamId)) return;
+      if (!asrAdmits(account, input.classId, input.streamId)) return;
       persistFinal(classrooms[account], classroomHost(account), classroomHelpers(account), input);
     },
     ensureDemoClassroom: (account: MockAccountKey, input: Parameters<typeof ensureDemoClassroom>[3]) => ensureDemoClassroom(classrooms[account], classroomHost(account), classroomHelpers(account), input),

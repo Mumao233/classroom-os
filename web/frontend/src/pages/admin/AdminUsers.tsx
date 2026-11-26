@@ -74,7 +74,7 @@ function QuotaPanel({ user, onClose }: { user: S['User']; onClose: () => void })
   return <ReadOnlyWhile stale={quota.isError}><section className={styles.panel} aria-labelledby="admin-quota-title" data-testid="admin-quota">
     <div className={styles.sectionHead}><h2 id="admin-quota-title">{user.email} 的额度</h2><button type="button" className={styles.buttonGhost} onClick={onClose}>收起</button></div>
     <AdminData query={quota} label="正在读取额度…">{view => <>
-      <p className={`${styles.small} ${styles.muted}`}>实时转写{view.asr_enabled ? '已开启' : '已关闭'}，AI {view.ai_enabled ? '已开启' : '已关闭'}。额度只记录用量数字，不包含任何学习内容。</p>
+      <p className={`${styles.small} ${styles.muted}`}>转写服务（实时或重新转写）{view.asr_enabled ? '至少一项可用' : '全部暂停'}，AI 服务（问答或总结）{view.ai_enabled ? '至少一项可用' : '全部暂停'}；各项是否开放见运行状态页的平台开关。额度只记录用量数字，不包含任何学习内容。</p>
       <div className={styles.tableWrap}><table className={styles.table}>
         <thead><tr><th>额度</th><th>周期</th><th>上限</th><th>已结算</th><th>处理中</th><th>结果未知</th><th>剩余</th><th></th></tr></thead>
         <tbody>{view.buckets.map(item => <tr key={`${item.kind}:${item.period_start}`}>

@@ -91,9 +91,12 @@ describe('PR-11b admin writes need a purpose-bound, single-use proof', () => {
     expect(err(call('C', 'PATCH', `/admin/users/${B_ID}`, patch, '', key, late.token))).toBe('REAUTH_REQUIRED');
     const first = write('adminUpdateUser', B_ID, 'PATCH', `/admin/users/${B_ID}`, patch);
     expect(first.reply.status).toBe(200);
-    // Same key and body: the stored reply, even with the consumed (or an expired) proof — no second audit entry.
+    // Same key and body: the stored reply, never a second write. An expired proof no longer authorises the
+    // replay; a fresh proof bound to the same write does.
     advance(600_000);
-    expect(call('C', 'PATCH', `/admin/users/${B_ID}`, patch, '', first.key, first.token)).toEqual(first.reply);
+    expect(err(call('C', 'PATCH', `/admin/users/${B_ID}`, patch, '', first.key, first.token))).toBe('REAUTH_REQUIRED');
+    const fresh = backend.issueAdminProof('C', { operationId: 'adminUpdateUser', targetId: B_ID, idempotencyKey: first.key, body: patch }, 'p', '123456') as { token: string };
+    expect(call('C', 'PATCH', `/admin/users/${B_ID}`, patch, '', first.key, fresh.token)).toEqual(first.reply);
     expect(backend.adminAudit().filter(item => item.target_id === B_ID && item.created_at === '2026-10-28T08:00:00Z')).toHaveLength(1);
     expect(err(call('C', 'PATCH', `/admin/users/${B_ID}`, { ...patch, reason: '改过' }, '', first.key, first.token))).toBe('IDEMPOTENCY_MISMATCH');
     // A used proof cannot authorise a new request.
@@ -291,8 +294,8 @@ describe('PR-11b review round 1 regressions (mock)', () => {
     const final = (streamId: string, n: number) => ({ classId: ENDED, streamId, segmentId: `5e000000-0000-4000-8000-00000000000${n}`, segmentRevisionId: `5f000000-0000-4000-8000-00000000000${n}`, versionId: '5d000000-0000-4000-8000-000000000001', text: '合成', startMs: 0, endMs: 1, revision: 1 });
     backend.persistFinal('A', final('5c000000-0000-4000-8000-000000000001', 1));
     write('adminUpdateSwitches', null, 'PATCH', '/admin/switches', { base_revision: 1, asr_enabled: false, reason: '合成：维护' });
-    expect(backend.asrAdmits('A', '5c000000-0000-4000-8000-000000000001')).toBe(true);
-    expect(backend.asrAdmits('A', '5c000000-0000-4000-8000-000000000002')).toBe(false);
+    expect(backend.asrAdmits('A', 'c0000000-0000-4000-8000-000000000001', '5c000000-0000-4000-8000-000000000001')).toBe(true);
+    expect(backend.asrAdmits('A', 'c0000000-0000-4000-8000-000000000001', '5c000000-0000-4000-8000-000000000002')).toBe(false);
     backend.persistFinal('A', final('5c000000-0000-4000-8000-000000000002', 2));
     expect(backend.classroomStore('A').segments.some(item => item.stream_id === '5c000000-0000-4000-8000-000000000002')).toBe(false);
   });
@@ -348,9 +351,9 @@ describe('PR-11b extra review regressions (mock)', () => {
   it('a stream admitted by its first partial keeps going after ASR is turned off', () => {
     const { backend, write } = harness();
     const STREAM = '5c000000-0000-4000-8000-000000000003';
-    expect(backend.asrAdmits('A', STREAM)).toBe(true);
+    expect(backend.asrAdmits('A', 'c0000000-0000-4000-8000-000000000001', STREAM)).toBe(true);
     write('adminUpdateSwitches', null, 'PATCH', '/admin/switches', { base_revision: 1, asr_enabled: false, reason: '合成' });
-    expect(backend.asrAdmits('A', STREAM)).toBe(true);
+    expect(backend.asrAdmits('A', 'c0000000-0000-4000-8000-000000000001', STREAM)).toBe(true);
     backend.persistFinal('A', { classId: 'c0000000-0000-4000-8000-000000000001', streamId: STREAM, segmentId: '5e000000-0000-4000-8000-000000000009', segmentRevisionId: '5f000000-0000-4000-8000-000000000009', versionId: '5d000000-0000-4000-8000-000000000002', text: '合成', startMs: 0, endMs: 1, revision: 1 });
     expect(backend.classroomStore('A').segments.some(item => item.stream_id === STREAM)).toBe(true);
   });
@@ -429,7 +432,7 @@ describe('PR-11b on HTTP 0.4.0 (mock)', () => {
     write('adminUpdateSwitches', null, 'PATCH', '/admin/switches', { base_revision: 1, asr_filetrans_enabled: false, ai_summary_enabled: false, reason: '合成' });
     // Retranscription is closed while live ASR stays open; summaries are closed while questions stay open.
     expect(err(call('A', 'POST', `/generation-plans/${retranscribe.id}/execute`, execute(retranscribe)))).toBe('SERVICE_DISABLED');
-    expect(backend.asrAdmits('A', '5c000000-0000-4000-8000-0000000000a1')).toBe(true);
+    expect(backend.asrAdmits('A', 'c0000000-0000-4000-8000-000000000001', '5c000000-0000-4000-8000-0000000000a1')).toBe(true);
     expect(err(call('A', 'POST', `/class-sessions/${ENDED}/generation-plans`, request({ kind: 'review_summary' })))).toBe('BUDGET_BLOCKED');
     expect(call('A', 'POST', `/class-sessions/${ENDED}/generation-plans`, request({ kind: 'ai_question', scope: 'recent120', question: '为什么？' })).status).toBe(201);
   });
@@ -438,5 +441,54 @@ describe('PR-11b on HTTP 0.4.0 (mock)', () => {
     const { call, write } = harness();
     const bucket = (call('C', 'GET', `/admin/users/${A_ID}/quota`).body as S['QuotaView']).buckets[0]!;
     expect(err(write('adminAdjustQuota', A_ID, 'POST', '/admin/quota-adjustments', { user_id: A_ID, bucket_kind: bucket.kind, period_start: bucket.period_start, additional_units: Number.MAX_SAFE_INTEGER, reason: '合成' }).reply)).toBe('VALIDATION_FAILED');
+  });
+});
+
+describe('PR-11b #38 review round 0 regressions (mock)', () => {
+  it('a replay is authorised like the write: an old-session proof is refused, a fresh proof gets the original receipt', () => {
+    const { backend, call, write } = harness();
+    const body = { base_revision: 1, ai_summary_enabled: false, reason: '合成：回执重放' };
+    const first = write('adminUpdateSwitches', null, 'PATCH', '/admin/switches', body);
+    write('adminUpdateSwitches', null, 'PATCH', '/admin/switches', { base_revision: 2, registration_enabled: false, reason: '合成：后续变更' });
+    backend.retireSession('C');
+    backend.beginSession('C');
+    expect(err(call('C', 'PATCH', '/admin/switches', body, '', first.key, first.token))).toBe('REAUTH_REQUIRED');
+    const fresh = backend.issueAdminProof('C', { operationId: 'adminUpdateSwitches', targetId: null, idempotencyKey: first.key, body }, 'p', '123456') as { token: string };
+    const replay = call('C', 'PATCH', '/admin/switches', body, '', first.key, fresh.token);
+    expect(replay.body).toEqual(first.reply.body);
+    expect((call('C', 'GET', '/admin/switches').body as S['AdminSwitches']).revision).toBe(3);
+  });
+
+  it('a sign-in attempt of a disabled account creates no session; the first real sign-in after restoring does', () => {
+    const { backend, call, write } = harness();
+    write('adminUpdateUser', A_ID, 'PATCH', `/admin/users/${A_ID}`, { base_revision: 1, status: 'disabled', reason: '合成' });
+    backend.beginSession('A');
+    write('adminUpdateUser', A_ID, 'PATCH', `/admin/users/${A_ID}`, { base_revision: 2, status: 'active', reason: '合成' });
+    expect(err(call('A', 'GET', '/me'))).toBe('UNAUTHENTICATED');
+    backend.beginSession('A');
+    expect(items<S['DeviceSession']>(call('A', 'GET', '/me/sessions')).filter(item => item.revoked_at === null)).toHaveLength(1);
+  });
+
+  it('the billing master pauses the platform state below 100 %', () => {
+    const { call, write } = harness();
+    write('adminUpdateSwitches', null, 'PATCH', '/admin/switches', { base_revision: 1, billing_enabled: false, reason: '合成' });
+    expect((call('A', 'GET', '/me/quota').body as S['QuotaView']).platform_billing_state).toBe('paused');
+  });
+
+  it('a quota period must be a date-time, at proof issuance and at the write', () => {
+    const { call, write } = harness();
+    const body = { user_id: A_ID, bucket_kind: 'summary_month_count', period_start: '2026-10-01', additional_units: 1, reason: '合成' };
+    expect(err(call('C', 'POST', '/auth/reauth', { password: 'p', mfa_code: '123456', operation: { purpose: 'adminAdjustQuota', target: { kind: 'account', id: C_ID }, candidate_parameters: { idempotency_key: '0e000000-0000-4000-8000-000000000001', body } } }, '', '0e000000-0000-4000-8000-000000000002'))).toBe('VALIDATION_FAILED');
+    expect(err(call('C', 'POST', '/admin/quota-adjustments', body))).toBe('VALIDATION_FAILED');
+    expect(write('adminAdjustQuota', A_ID, 'POST', '/admin/quota-adjustments', { ...body, period_start: '2026-09-30T16:00:00Z' }).reply.status).not.toBe(422);
+  });
+
+  it('a live stream admission belongs to its classroom', () => {
+    const { backend, write } = harness();
+    const STREAM = '5c000000-0000-4000-8000-0000000000b1';
+    expect(backend.asrAdmits('A', 'c0000000-0000-4000-8000-000000000001', STREAM)).toBe(true);
+    write('adminUpdateSwitches', null, 'PATCH', '/admin/switches', { base_revision: 1, asr_streaming_enabled: false, reason: '合成' });
+    expect(backend.asrAdmits('A', 'c0000000-0000-4000-8000-000000000001', STREAM)).toBe(true);
+    expect(backend.asrAdmits('A', 'c0000000-0000-4000-8000-000000000004', STREAM)).toBe(false);
   });
 });

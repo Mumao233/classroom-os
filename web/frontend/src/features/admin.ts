@@ -1,11 +1,11 @@
 import { useRef, useState } from 'react';
-import { useInfiniteQuery, useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { ApiClientError, type ApiClient } from '../api/client';
 import { canonicalJson } from '../domain/admin';
 import type { components } from '../generated/openapi';
 import { isDefinitiveRejection } from './classroom';
 import { isAuthoritativeDenial, isUnauthenticated } from './revocation';
-import { useAccountQuery, useAppData } from './data';
+import { useAppData } from './data';
 
 type S = components['schemas'];
 
@@ -14,7 +14,7 @@ export type AdminReauthBinding = { operationId: AdminOperationId; targetId: stri
 
 /** Why a reauthentication proof could not be issued. */
 export class AdminReauthError extends Error {
-  constructor(readonly kind: 'unavailable' | 'failed' | 'forbidden' | 'mfa' | 'network' | 'disabled' | 'invalid') { super(`admin reauth: ${kind}`); this.name = 'AdminReauthError'; }
+  constructor(readonly kind: 'unavailable' | 'failed' | 'forbidden' | 'mfa' | 'network' | 'disabled' | 'invalid' | 'recheck') { super(`admin reauth: ${kind}`); this.name = 'AdminReauthError'; }
 }
 /**
  * Issues a purpose-bound proof for one admin write (operation, target, Idempotency-Key, exact body).
@@ -47,6 +47,8 @@ export function createHttpAdminReauth(api: ApiClient, adminId: () => string | nu
         if (!(failure instanceof ApiClientError)) throw failure;
         if (failure.kind === 'network') throw new AdminReauthError('network');
         if (failure.kind !== 'http') throw failure;
+        // 401 is both "wrong current password" and "session ended": the caller rechecks the session.
+        if (failure.status === 401) throw new AdminReauthError('recheck');
         const kinds: Partial<Record<NonNullable<ApiClientError['code']>, AdminReauthError['kind']>> = { REAUTH_REQUIRED: 'failed', FORBIDDEN: 'forbidden', MFA_REQUIRED: 'mfa', SERVICE_DISABLED: 'disabled', VALIDATION_FAILED: 'invalid' };
         const kind = failure.code ? kinds[failure.code] : undefined;
         // Other refusals (an ended session, rate limits) keep their own handling.
@@ -58,20 +60,42 @@ export function createHttpAdminReauth(api: ApiClient, adminId: () => string | nu
 }
 
 const adminKey = (...parts: unknown[]) => ['admin', ...parts];
-export const useAdminUsers = (enabled = true) => useAccountQuery(adminKey('users'), (api, signal) => api.adminUsers(signal), enabled);
-export const useAdminUserQuota = (userId: string | null) => useAccountQuery(adminKey('user-quota', userId), (api, signal) => api.adminUserQuota(userId ?? '', signal), userId !== null);
-export const useAdminInvitations = () => useAccountQuery(adminKey('invitations'), (api, signal) => api.adminInvitations(signal));
-export const useAdminUsage = (periodStart: string | null) => useAccountQuery(adminKey('usage', periodStart), (api, signal) => api.adminUsage(periodStart, signal));
-export const useAdminHealth = () => useAccountQuery(adminKey('health'), (api, signal) => api.adminHealth(signal));
-export const useAdminSwitches = () => useAccountQuery(adminKey('switches'), (api, signal) => api.adminSwitches(signal));
+/**
+ * Per account epoch: when an admin read was last refused (role, MFA, session). Data read before that
+ * moment stays hidden even if a later refresh fails at the transport, until a successful read replaces it.
+ */
+const deniedAt = new WeakMap<QueryClient, Map<string, number>>();
+const denials = (client: QueryClient) => { let map = deniedAt.get(client); if (!map) { map = new Map(); deniedAt.set(client, map); } return map; };
+function useAdminQuery<T>(parts: unknown[], fn: (api: ApiClient, signal: AbortSignal) => Promise<T>, enabled = true) {
+  const { api, accountKey } = useAppData();
+  const client = useQueryClient();
+  const key = ['account', accountKey, ...adminKey(...parts)];
+  const query = useQuery({ queryKey: key, queryFn: ({ signal }) => fn(api, signal), enabled });
+  const hash = JSON.stringify(key);
+  if (query.isError && isAdminDenial(query.error) && (denials(client).get(hash) ?? -1) < query.errorUpdatedAt) denials(client).set(hash, query.errorUpdatedAt);
+  const refusedAt = denials(client).get(hash);
+  return refusedAt !== undefined && query.dataUpdatedAt <= refusedAt ? { ...query, data: undefined } : query;
+}
+export const useAdminUsers = (enabled = true) => useAdminQuery(['users'], (api, signal) => api.adminUsers(signal), enabled);
+export const useAdminUserQuota = (userId: string | null) => useAdminQuery(['user-quota', userId], (api, signal) => api.adminUserQuota(userId ?? '', signal), userId !== null);
+export const useAdminInvitations = () => useAdminQuery(['invitations'], (api, signal) => api.adminInvitations(signal));
+export const useAdminUsage = (periodStart: string | null) => useAdminQuery(['usage', periodStart], (api, signal) => api.adminUsage(periodStart, signal));
+export const useAdminHealth = () => useAdminQuery(['health'], (api, signal) => api.adminHealth(signal));
+export const useAdminSwitches = () => useAdminQuery(['switches'], (api, signal) => api.adminSwitches(signal));
 export function useAdminAudit() {
   const { api, accountKey } = useAppData();
-  return useInfiniteQuery({
-    queryKey: ['account', accountKey, 'admin', 'audit'],
+  const client = useQueryClient();
+  const key = ['account', accountKey, 'admin', 'audit'];
+  const query = useInfiniteQuery({
+    queryKey: key,
     initialPageParam: null as string | null,
     queryFn: ({ pageParam, signal }) => api.adminAudit(pageParam, signal),
     getNextPageParam: (last: S['AuditRecordPage']) => last.next_cursor,
   });
+  const hash = JSON.stringify(key);
+  if (query.isError && isAdminDenial(query.error) && (denials(client).get(hash) ?? -1) < query.errorUpdatedAt) denials(client).set(hash, query.errorUpdatedAt);
+  const refusedAt = denials(client).get(hash);
+  return refusedAt !== undefined && query.dataUpdatedAt <= refusedAt ? { ...query, data: undefined } : query;
 }
 
 /** The server refused an admin read itself (role, MFA, session): nothing of it, nor a secret shown beside it, may stay. */
@@ -101,8 +125,6 @@ export function useAdminWrite<B, R>(spec: {
   onSuccess?: (result: R, body: B) => void;
 }) {
   const { api, accountKey, adminReauth = unavailableAdminReauth } = useAppData();
-  // Proof expiry is wall-clock time (the page's data clock may be a fixed synthetic one).
-  const wall = () => Date.now();
   const client = useQueryClient();
   const [stage, setStage] = useState<AdminWriteStage>('idle');
   const [error, setError] = useState<unknown>(null);
@@ -170,7 +192,7 @@ export function useAdminWrite<B, R>(spec: {
     start(body: B) {
       setError(null);
       const slot = slotOf(body);
-      if (pending.current?.slot === slot) { if (pending.current.token && pending.current.expires <= wall()) pending.current.token = null; setStage('reauth'); return; }
+      if (pending.current?.slot === slot) { pending.current.token = null; setStage('reauth'); return; }
       const earlier = intentsOf(client).get(slot) as Pending<B> | undefined;
       if (earlier) { pending.current = earlier; setStage('choose'); return; }
       pending.current = { slot, body, key: crypto.randomUUID(), token: null, expires: 0, sent: false };
@@ -180,7 +202,7 @@ export function useAdminWrite<B, R>(spec: {
     choose(replay: boolean) {
       const earlier = pending.current;
       if (!earlier) return;
-      if (replay) { if (earlier.token && earlier.expires <= wall()) earlier.token = null; }
+      if (replay) earlier.token = null;
       else pending.current = { slot: earlier.slot, body: earlier.body, key: crypto.randomUUID(), token: null, expires: 0, sent: false };
       setStage('reauth');
     },
@@ -193,12 +215,26 @@ export function useAdminWrite<B, R>(spec: {
         if (pending.current !== intent) return;
         intent.token = proof.token;
         intent.expires = Date.parse(proof.expires_at);
-      } catch (failure) { setError(failure); return; }
+      } catch (failure) {
+        if (failure instanceof AdminReauthError && failure.kind === 'recheck') {
+          // Re-read the session: if it has ended, the 401 on this account query retires the account epoch
+          // (revocation ledger) and nothing private stays on screen; otherwise it was a factor failure.
+          try {
+            await client.fetchQuery({ queryKey: ['account', accountKey, 'me'], queryFn: ({ signal }) => api.me(signal), staleTime: 0 });
+            setError(new AdminReauthError('failed'));
+          } catch (sessionFailure) { setError(sessionFailure); }
+          return;
+        }
+        setError(failure);
+        return;
+      }
       await send();
     },
-    // The server answers a replayed key from its receipt before it looks at the proof, so an expired proof
-    // is still sent; only an unprocessed request comes back REAUTH_REQUIRED and asks for a new one.
-    retry: () => { void send(); },
+    /**
+     * An explicit retry keeps the same key and body but always asks for fresh verification (HTTP 0.4.0
+     * decision): a request that never reached the server is never sent on an earlier proof.
+     */
+    retry: () => { const intent = pending.current; if (!intent) return; intent.token = null; setError(null); setStage('reauth'); },
     /** Leaves the intent. An unconfirmed one is re-read from the server, never assumed to have failed. */
     cancel() { pending.current = null; setStage('idle'); setError(null); void refresh(); },
     /** Whether an earlier attempt of this operation with this body is still unconfirmed. */
@@ -212,6 +248,7 @@ const reauthMessages: Record<AdminReauthError['kind'], string> = {
   disabled: '这项管理操作的服务端尚未开放，暂时不能执行。',
   invalid: '提交内容未通过校验，请检查理由和各项输入。验证码没有被使用。',
   failed: '密码或验证码不正确，请重新输入。',
+  recheck: '验证没有完成，正在确认登录状态。',
   forbidden: '当前账号无权执行管理操作。',
   mfa: '管理员需要先启用双重验证。',
   network: '无法连接服务，验证没有完成。',

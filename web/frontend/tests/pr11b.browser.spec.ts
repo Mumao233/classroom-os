@@ -39,6 +39,8 @@ async function verify(page: Page, code = '123456') {
 }
 
 test.describe('PR-11b operations console', () => {
+  // Failure traces would keep request bodies (factors, proofs, one-time tokens): screenshots only, masked.
+  test.use({ trace: 'off' });
   test('a student has no operations entry and the admin URLs make no admin request (FE-13, AUTH-05)', async ({ page }) => {
     const seen = adminRequests(page);
     await ready(page, '/dashboard');
@@ -110,7 +112,9 @@ test.describe('PR-11b operations console', () => {
     await page.getByRole('button', { name: '下一步：验证身份' }).click();
     await verify(page);
     await expect(page.getByTestId('admin-unconfirmed')).toBeVisible();
+    // The retry keeps the same key and body but asks for fresh verification (HTTP 0.4.0).
     await page.getByRole('button', { name: '重试同一操作' }).click();
+    await verify(page);
     await expect(page.getByTestId('admin-action')).toHaveCount(0);
     await expect(page.getByTestId(`admin-user-${B_ID}`)).toContainText('已停用');
     await page.getByRole('link', { name: '运行状态' }).click();

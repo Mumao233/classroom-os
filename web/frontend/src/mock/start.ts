@@ -21,7 +21,7 @@ export function setMockAccount(account: MockAccountKey | null) {
 let mockCsrf: string | null = `mock-csrf-${crypto.randomUUID()}`;
 export function mockCsrfToken() { return mockCsrf; }
 /** PR-11b: whether the platform ASR switch admits a live stream (new streams are refused while it is off). */
-export function mockAsrAdmits(streamId: string) { return mockAccount ? backend.asrAdmits(mockAccount, streamId) : false; }
+export function mockAsrAdmits(classId: string, streamId: string) { return mockAccount ? backend.asrAdmits(mockAccount, classId, streamId) : false; }
 /** Simulated loss of connectivity: every business request fails like a network error. */
 export function setMockOffline(offline: boolean) { mockOffline = offline; }
 export function isMockOffline() { return mockOffline; }

@@ -203,8 +203,8 @@ export function createMockRuntime(options: { createVault?: () => MemoryVault } =
     return id;
   };
   // PR-11b: the simulated server sends no captions for a stream its ASR admission refuses.
-  let admitTranscript: (streamId: string) => boolean = () => true;
-  const transcriptAdmitted = (event: ClassroomOSWebV1EventEnvelope) => (event.type !== 'transcript.partial' && event.type !== 'transcript.final') || admitTranscript(event.data.stream_id);
+  let admitTranscript: (classId: string, streamId: string) => boolean = () => true;
+  const transcriptAdmitted = (event: ClassroomOSWebV1EventEnvelope) => (event.type !== 'transcript.partial' && event.type !== 'transcript.final') || admitTranscript(event.data.class_session_id, event.data.stream_id);
   const bindScriptEvent = (event: ClassroomOSWebV1EventEnvelope, scope = state.captureScope): ClassroomOSWebV1EventEnvelope => {
     if (!scope) return event;
     if (event.type === 'capture.lease_lost') return { ...event, event_id: scriptedId(`${event.type}:${event.event_id}:${scope.captureEpochId}:${scope.fenceToken}`), data: { ...event.data, class_session_id: scope.classSessionId, capture_epoch_id: scope.captureEpochId, fence_token: scope.fenceToken } };
@@ -353,7 +353,7 @@ export function createMockRuntime(options: { createVault?: () => MemoryVault } =
       return true;
     },
     /** PR-11b: the simulated server's ASR admission, applied to every transcript event it delivers. */
-    setTranscriptAdmission: (admit: (streamId: string) => boolean) => { admitTranscript = admit; },
+    setTranscriptAdmission: (admit: (classId: string, streamId: string) => boolean) => { admitTranscript = admit; },
     /** Feed and scripts share one delivery check. */
     deliverTranscript: (event: ClassroomOSWebV1EventEnvelope) => { if (state.account && transcriptAdmitted(event)) events.emit(event); },
     /**
