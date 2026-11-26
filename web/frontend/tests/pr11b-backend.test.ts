@@ -83,7 +83,7 @@ describe('PR-11b admin writes need a purpose-bound, single-use proof', () => {
     expect(backend.accountUser('B').status).toBe('disabled');
   });
 
-  it('a proof expires after 300 s and is used once; a lost reply is recovered by replaying the same key', () => {
+  it('a proof expires after 120 s and is used once; a lost reply is recovered by replaying the same key', () => {
     const { backend, call, write, newKey, advance } = harness();
     const key = newKey();
     const late = backend.issueAdminProof('C', { operationId: 'adminUpdateUser', targetId: B_ID, idempotencyKey: key, body: patch }, 'p', '123456') as { token: string };
@@ -492,5 +492,50 @@ describe('PR-11b #38 review round 0 regressions (mock)', () => {
     write('adminUpdateSwitches', null, 'PATCH', '/admin/switches', { base_revision: 1, asr_streaming_enabled: false, reason: '合成' });
     expect(backend.asrAdmits('A', 'c0000000-0000-4000-8000-000000000001', STREAM)).toBe(true);
     expect(backend.asrAdmits('A', 'c0000000-0000-4000-8000-000000000004', STREAM)).toBe(false);
+  });
+});
+
+describe('PR-11b #38 review round 1 regressions (mock)', () => {
+  it('a rejected billing write leaves its proof unused and stores no receipt', () => {
+    const { backend, call, newKey } = harness();
+    const key = newKey();
+    const body = { base_revision: 1, new_capture_enabled: false, reason: '合成' };
+    const proof = backend.issueAdminProof('C', { operationId: 'adminUpdateSwitches', targetId: null, idempotencyKey: key, body }, 'p', '123456') as { token: string };
+    expect(err(call('C', 'PATCH', '/admin/switches', body, '', key, proof.token))).toBe('SERVICE_DISABLED');
+    // Same key, body and proof again: still evaluated (no receipt, proof not consumed), never REAUTH_REQUIRED.
+    expect(err(call('C', 'PATCH', '/admin/switches', body, '', key, proof.token))).toBe('SERVICE_DISABLED');
+  });
+
+  it('a proof is good for 120 s from verification', () => {
+    const { backend, call, newKey, advance } = harness();
+    const use = (wait: number) => {
+      const key = newKey();
+      const body = { base_revision: (call('C', 'GET', '/admin/switches').body as S['AdminSwitches']).revision, registration_enabled: wait % 2 === 0, reason: '合成' };
+      const proof = backend.issueAdminProof('C', { operationId: 'adminUpdateSwitches', targetId: null, idempotencyKey: key, body }, 'p', '123456') as { token: string };
+      advance(wait);
+      return call('C', 'PATCH', '/admin/switches', body, '', key, proof.token);
+    };
+    expect(use(119_999).status).toBe(200);
+    expect(err(use(120_000))).toBe('REAUTH_REQUIRED');
+  });
+
+  it('an MFA transition retires outstanding proofs', () => {
+    const { backend, call, newKey } = harness();
+    const key = newKey();
+    const body = { base_revision: 1, registration_enabled: false, reason: '合成' };
+    const proof = backend.issueAdminProof('C', { operationId: 'adminUpdateSwitches', targetId: null, idempotencyKey: key, body }, 'p', '123456') as { token: string };
+    backend.setAdminMfa(false);
+    backend.setAdminMfa(true);
+    expect(err(call('C', 'PATCH', '/admin/switches', body, '', key, proof.token))).toBe('REAUTH_REQUIRED');
+  });
+
+  it('a live stream admission belongs to its capture run', () => {
+    const { backend, write } = harness();
+    const ROOM = 'c0000000-0000-4000-8000-000000000001';
+    const STREAM = '5c000000-0000-4000-8000-0000000000c1';
+    expect(backend.asrAdmits('A', ROOM, STREAM, 'run-1')).toBe(true);
+    write('adminUpdateSwitches', null, 'PATCH', '/admin/switches', { base_revision: 1, asr_streaming_enabled: false, reason: '合成' });
+    expect(backend.asrAdmits('A', ROOM, STREAM, 'run-1')).toBe(true);
+    expect(backend.asrAdmits('A', ROOM, STREAM, 'run-2')).toBe(false);
   });
 });

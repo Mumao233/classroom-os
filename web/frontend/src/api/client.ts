@@ -77,7 +77,8 @@ export function createApiClient(scope: Scope, transportOrOptions: typeof fetch |
         if (csrf) headers['X-CSRF-Token'] = csrf;
         // Purpose-bound proof for a sensitive write; held in memory by the caller only, never persisted.
         if (reauth) headers['X-Reauth-Token'] = reauth;
-        response = await transport(url, { method, credentials: 'same-origin', cache: 'no-store', signal, headers, body: JSON.stringify(body ?? {}) });
+        // A write never follows a redirect: its body (factors, a proof, a write) must not reach another endpoint.
+        response = await transport(url, { method, credentials: 'same-origin', cache: 'no-store', redirect: 'error', signal, headers, body: JSON.stringify(body ?? {}) });
       }
     } catch (error) {
       assertCurrent();

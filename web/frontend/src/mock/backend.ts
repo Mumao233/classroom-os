@@ -173,9 +173,9 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
   const adminRevoked = new Set<MockAccountKey>();
   /** Live transcription streams admitted per account; a stream admitted while ASR was on keeps going. */
   const admittedStreams: Record<MockAccountKey, Set<string>> = { A: new Set(), B: new Set(), C: new Set() };
-  // Scoped to the classroom: a scripted stream reusing an ID in another classroom is a new admission.
-  const asrAdmits = (account: MockAccountKey, classId: string, streamId: string) => {
-    const admission = `${classId}:${streamId}`;
+  // Scoped to the classroom and the capture run: a scripted stream reusing an ID in a later run is a new admission.
+  const asrAdmits = (account: MockAccountKey, classId: string, streamId: string, run = '') => {
+    const admission = `${classId}|${run}|${streamId}`;
     if (admittedStreams[account].has(admission)) return true;
     // Live ASR checks its own switch (and the billing master), not the group summary.
     if (!admin.serviceEnabled('asr_streaming_enabled')) return false;
@@ -577,7 +577,12 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
     /** PR-11b: the platform ASR switch admits new live streams; a stream admitted before keeps going. */
     asrAdmits,
     /** Development panel: the administrator has (or has not) enrolled MFA. */
-    setAdminMfa: (enabled: boolean) => { stores.C.user = { ...stores.C.user, mfa_enabled: enabled }; },
+    setAdminMfa: (enabled: boolean) => {
+      if (stores.C.user.mfa_enabled === enabled) return;
+      stores.C.user = { ...stores.C.user, mfa_enabled: enabled };
+      // A factor change advances the security epoch: proofs issued before it never regain authority.
+      generations.C += 1;
+    },
     adminAudit: () => admin.audit(),
     accountUser: (account: MockAccountKey) => stores[account].user,
     /** PR-10a development helpers; none of them is an HTTP route. */
@@ -589,7 +594,9 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
       return done;
     },
     persistFinal: (account: MockAccountKey, input: Parameters<typeof persistFinal>[3]) => {
-      if (!asrAdmits(account, input.classId, input.streamId)) return;
+      // A final belongs to a stream admitted by one of its runs (late finals of the original run included).
+      const admitted = [...admittedStreams[account]].some(item => item.startsWith(`${input.classId}|`) && item.endsWith(`|${input.streamId}`));
+      if (!admitted && !asrAdmits(account, input.classId, input.streamId)) return;
       persistFinal(classrooms[account], classroomHost(account), classroomHelpers(account), input);
     },
     ensureDemoClassroom: (account: MockAccountKey, input: Parameters<typeof ensureDemoClassroom>[3]) => ensureDemoClassroom(classrooms[account], classroomHost(account), classroomHelpers(account), input),

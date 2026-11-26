@@ -29,6 +29,17 @@ function InvitesBody() {
   // A denial (or an ended session) withdraws the secret for good; a later transport failure cannot show it again.
   const denied = invitations.isError && isAdminDenial(invitations.error);
   useEffect(() => { if (denied) setIssued(null); }, [denied]);
+  // A successful list that no longer shows the token's invitation as the issued revision withdraws the token
+  // for good: a later failed read cannot bring it back.
+  const fresh = invitations.isSuccess ? invitations.data : undefined;
+  useEffect(() => {
+    if (!fresh) return;
+    setIssued(current => {
+      if (!current) return current;
+      const row = fresh.items.find(item => item.id === current.invitation.id);
+      return row && row.state === 'issued' && row.revision === current.invitation.revision ? current : null;
+    });
+  }, [fresh]);
   /** The confirmed receipt supersedes an older cached row (metadata only; the token never enters the cache). */
   const issue = (created: Created, reissued: boolean) => {
     client.setQueryData<S['InvitationPage']>(['account', accountKey, 'admin', 'invitations'], page => page && ({ ...page, items: page.items.some(item => item.id === created.invitation.id) ? page.items.map(item => item.id === created.invitation.id && item.revision <= created.invitation.revision ? created.invitation : item) : [created.invitation, ...page.items] }));

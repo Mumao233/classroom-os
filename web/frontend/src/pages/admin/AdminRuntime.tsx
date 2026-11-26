@@ -60,6 +60,9 @@ const switchFields: ReadonlyArray<{ key: typeof switchKeys[number]; label: strin
   { key: 'ai_summary_enabled', label: 'AI 总结与卡片', hint: '关闭后不再生成新的总结和卡片；已有资料仍可阅读。' },
 ];
 
+/** Summary of a group from the two member values on screen (draft included): all off, partly on, all on. */
+const groupState = (a: boolean, b: boolean) => a && b ? '全部开启' : a || b ? '部分开启' : '全部关闭';
+
 function Switches() {
   const switches = useAdminSwitches();
   const { online } = useAppData();
@@ -83,7 +86,7 @@ function Switches() {
       <dl className={styles.dl}>
         <dt>新采集</dt><dd data-testid="new-capture-switch">{shown.new_capture_enabled ? '开' : '关'}（暂不可修改：采集准入尚未接入这个开关）</dd>
         <dt>活跃用户阶段</dt><dd data-testid="active-user-stage">{shown.max_active_users} 人</dd>
-        <dt>转写 / AI 汇总</dt><dd data-testid="switch-groups">转写{shown.asr_enabled ? '至少一项开启' : '全部关闭'} · AI {shown.ai_enabled ? '至少一项开启' : '全部关闭'}</dd>
+        <dt>转写 / AI 汇总</dt><dd data-testid="switch-groups">转写{groupState(shown.asr_streaming_enabled, shown.asr_filetrans_enabled)} · AI {groupState(shown.ai_interaction_enabled, shown.ai_summary_enabled)}</dd>
       </dl>
       <p className={`${styles.small} ${styles.muted}`}>阶段切换（10 人 / 30 人）要等阶段切换规则确定后才开放。各服务还要同时满足收费总闸和额度预算才会接收新任务。</p>
       {rebased && <div className={`${styles.banner} ${styles.bannerWarning}`} role="status" data-testid="switches-rebased"><div>开关已被其他管理员更新。保存会被拒绝，请放弃修改后按最新状态重新编辑。</div></div>}

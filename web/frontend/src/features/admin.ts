@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { ApiClientError, type ApiClient } from '../api/client';
 import { canonicalJson } from '../domain/admin';
@@ -66,15 +66,44 @@ const adminKey = (...parts: unknown[]) => ['admin', ...parts];
  */
 const deniedAt = new WeakMap<QueryClient, Map<string, number>>();
 const denials = (client: QueryClient) => { let map = deniedAt.get(client); if (!map) { map = new Map(); deniedAt.set(client, map); } return map; };
+/**
+ * Account-wide admin gate: a refusal of the admin role, MFA or the session on any admin read hides every
+ * admin projection read before it (and re-reads `/me`), until each is read again successfully.
+ * Resource-specific denials (NOT_FOUND, GONE) stay with their own query.
+ */
+type Gate = { at: number; listeners: Set<() => void> };
+const gates = new WeakMap<QueryClient, Gate>();
+const gateOf = (client: QueryClient) => { let gate = gates.get(client); if (!gate) { gate = { at: -1, listeners: new Set() }; gates.set(client, gate); } return gate; };
+const accessDenial = (error: unknown) => isUnauthenticated(error) || (error instanceof ApiClientError && (error.code === 'FORBIDDEN' || error.code === 'MFA_REQUIRED'));
+function useAdminGate(client: QueryClient) {
+  const gate = gateOf(client);
+  return useSyncExternalStore(listener => { gate.listeners.add(listener); return () => { gate.listeners.delete(listener); }; }, () => gate.at);
+}
+/** Records a refusal (after render) and returns the moment before which this query's data stays hidden. */
+function useDenialMask(client: QueryClient, accountKey: string, key: readonly unknown[], query: { isError: boolean; error: unknown; errorUpdatedAt: number }) {
+  const hash = JSON.stringify(key);
+  const gateAt = useAdminGate(client);
+  const { isError, error, errorUpdatedAt } = query;
+  useEffect(() => {
+    if (!isError || !isAdminDenial(error)) return;
+    if ((denials(client).get(hash) ?? -1) < errorUpdatedAt) denials(client).set(hash, errorUpdatedAt);
+    const gate = gateOf(client);
+    if (accessDenial(error) && gate.at < errorUpdatedAt) {
+      gate.at = errorUpdatedAt;
+      for (const listener of gate.listeners) listener();
+      void client.invalidateQueries({ queryKey: ['account', accountKey, 'me'] });
+    }
+  }, [client, accountKey, hash, isError, error, errorUpdatedAt]);
+  const local = isError && isAdminDenial(error) ? errorUpdatedAt : (denials(client).get(hash) ?? -1);
+  return Math.max(local, gateAt);
+}
 function useAdminQuery<T>(parts: unknown[], fn: (api: ApiClient, signal: AbortSignal) => Promise<T>, enabled = true) {
   const { api, accountKey } = useAppData();
   const client = useQueryClient();
   const key = ['account', accountKey, ...adminKey(...parts)];
   const query = useQuery({ queryKey: key, queryFn: ({ signal }) => fn(api, signal), enabled });
-  const hash = JSON.stringify(key);
-  if (query.isError && isAdminDenial(query.error) && (denials(client).get(hash) ?? -1) < query.errorUpdatedAt) denials(client).set(hash, query.errorUpdatedAt);
-  const refusedAt = denials(client).get(hash);
-  return refusedAt !== undefined && query.dataUpdatedAt <= refusedAt ? { ...query, data: undefined } : query;
+  const refusedAt = useDenialMask(client, accountKey, key, query);
+  return refusedAt >= 0 && query.dataUpdatedAt <= refusedAt ? { ...query, data: undefined } : query;
 }
 export const useAdminUsers = (enabled = true) => useAdminQuery(['users'], (api, signal) => api.adminUsers(signal), enabled);
 export const useAdminUserQuota = (userId: string | null) => useAdminQuery(['user-quota', userId], (api, signal) => api.adminUserQuota(userId ?? '', signal), userId !== null);
@@ -92,10 +121,8 @@ export function useAdminAudit() {
     queryFn: ({ pageParam, signal }) => api.adminAudit(pageParam, signal),
     getNextPageParam: (last: S['AuditRecordPage']) => last.next_cursor,
   });
-  const hash = JSON.stringify(key);
-  if (query.isError && isAdminDenial(query.error) && (denials(client).get(hash) ?? -1) < query.errorUpdatedAt) denials(client).set(hash, query.errorUpdatedAt);
-  const refusedAt = denials(client).get(hash);
-  return refusedAt !== undefined && query.dataUpdatedAt <= refusedAt ? { ...query, data: undefined } : query;
+  const refusedAt = useDenialMask(client, accountKey, key, query);
+  return refusedAt >= 0 && query.dataUpdatedAt <= refusedAt ? { ...query, data: undefined } : query;
 }
 
 /** The server refused an admin read itself (role, MFA, session): nothing of it, nor a secret shown beside it, may stay. */
@@ -129,6 +156,10 @@ export function useAdminWrite<B, R>(spec: {
   const [stage, setStage] = useState<AdminWriteStage>('idle');
   const [error, setError] = useState<unknown>(null);
   const pending = useRef<Pending<B> | null>(null);
+  // An intent not yet dispatched belongs to this dialog: leaving it abandons a verification still in flight,
+  // so it can never be sent later beside a new intent with another key.
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; if (pending.current && !pending.current.sent) pending.current = null; }; }, []);
   const slotOf = (body: B) => `${spec.operationId}:${spec.targetId(body) ?? ''}:${canonicalJson(body)}`;
   const settle = (intent: Pending<B>) => { if (intentsOf(client).get(intent.slot) === intent) intentsOf(client).delete(intent.slot); if (pending.current === intent) pending.current = null; };
   // The reply may carry a one-time secret (an invitation token): it is handed to the page once and never
@@ -152,6 +183,7 @@ export function useAdminWrite<B, R>(spec: {
 
   async function send() {
     const intent = pending.current;
+    if (!mounted.current) return;
     if (!intent?.token) { setStage('reauth'); return; }
     // Registered before dispatch: a dialog opened while this request is in flight joins the same key.
     intentsOf(client).set(intent.slot, intent as Pending<unknown>);
@@ -212,7 +244,7 @@ export function useAdminWrite<B, R>(spec: {
       setError(null);
       try {
         const proof = await adminReauth.issue({ operationId: spec.operationId, targetId: spec.targetId(intent.body), idempotencyKey: intent.key, body: intent.body }, password, code);
-        if (pending.current !== intent) return;
+        if (!mounted.current || pending.current !== intent) return;
         intent.token = proof.token;
         intent.expires = Date.parse(proof.expires_at);
       } catch (failure) {

@@ -18,6 +18,7 @@ type SwitchConfig = Omit<S['AdminSwitches'], 'asr_enabled' | 'ai_enabled'>;
 export type ServiceSwitch = 'asr_streaming_enabled' | 'asr_filetrans_enabled' | 'ai_interaction_enabled' | 'ai_summary_enabled';
 /** Proof target per operation (decision PR11B-CONTRACT-DECISION-20261124 §1). */
 const ACCOUNT_TARGETED: ReadonlySet<AdminOperationId> = new Set(['adminAdjustQuota', 'adminUpdateSwitches', 'adminCreateInvitation']);
+const BILLING_WRITES: ReadonlySet<AdminOperationId> = new Set(['adminAdjustQuota', 'adminUpdateSwitches']);
 export const proofTarget = (operationId: AdminOperationId, actorId: string, pathId: string | null) =>
   ACCOUNT_TARGETED.has(operationId) ? { kind: 'account', id: actorId } : { kind: operationId === 'adminUpdateUser' ? 'user' : 'invitation', id: pathId ?? '' };
 const CANONICAL_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -68,7 +69,8 @@ const REASON_VISIBLE = /[^\u0009-\u000D\u001C-\u0020\u0085\u00A0\u1680\u2000-\u2
 const reasonOk = (value: unknown) => typeof value === 'string' && [...value].length >= 1 && [...value].length <= 500 && REASON_VISIBLE.test(value) && !value.includes('\u0000');
 const MAX_SAFE = Number.MAX_SAFE_INTEGER;
 const only = (body: Record<string, unknown>, keys: string[]) => Object.keys(body).every(key => keys.includes(key));
-const PROOF_MS = 300_000;
+/** identity_api.verify_auth: the verified factor is good for 120 s, and an admin proof never outlives it. */
+const PROOF_MS = 120_000;
 
 /** Stage-10 personal limits (domain/billing.py quota_limits(10)); a larger allowance is an explicit adjustment. */
 const STAGE10 = { asr_month_ms: 12 * 3_600_000, asr_day_ms: 3 * 3_600_000, retranscribe_month_ms: 2_400 * 3_600, interactive_month_count: 20, summary_month_count: 8 } as const;
@@ -286,8 +288,10 @@ export function createAdminBackend(host: AdminHost, accountUsers: S['User'][]) {
       return replayed && prior.reply.status < 300 ? replayed(prior.reply) : prior.reply;
     }
     if (!proofValid(false) || !proof) return fail(403, 'REAUTH_REQUIRED', '请重新验证密码和验证码');
-    proof.used = true;
     const reply = run();
+    // A rejected billing write is rolled back by the producer: the proof stays unused and no receipt exists.
+    if (BILLING_WRITES.has(operationId) && reply.status >= 400) return reply;
+    proof.used = true;
     // The one-time token of an invitation is never kept in a receipt (frozen endpoint rule).
     receipts.set(scope, { body: serialized, reply: secret && reply.status < 300 ? SECRET_ISSUED : reply });
     return reply;

@@ -230,6 +230,8 @@ test.describe('PR-11b operations console', () => {
 
     const switches = page.getByTestId('admin-switches');
     await switches.getByLabel(/AI 问答与讲解/).uncheck();
+    // The group summary follows the members on screen, draft included.
+    await expect(page.getByTestId('switch-groups')).toContainText('AI 部分开启');
     await switches.getByRole('button', { name: '保存变更' }).click();
     await expect(page.getByTestId('switch-changes')).toContainText('AI 问答与讲解：开 → 关');
     await page.getByTestId('admin-action').getByLabel('操作理由').fill('合成：模型供应商维护');
@@ -238,7 +240,7 @@ test.describe('PR-11b operations console', () => {
     await expect(page.getByTestId('admin-action')).toHaveCount(0);
     await expect(switches.getByLabel(/AI 问答与讲解/)).not.toBeChecked();
     // The AI group is still on as a whole (summaries stay open); new capture is shown read-only.
-    await expect(page.getByTestId('switch-groups')).toContainText('AI 至少一项开启');
+    await expect(page.getByTestId('switch-groups')).toContainText('AI 部分开启');
     await expect(page.getByTestId('new-capture-switch')).toContainText('暂不可修改');
     // The active-user stage is shown read-only until stage transitions are approved.
     await expect(page.getByTestId('active-user-stage')).toHaveText('10 人');
