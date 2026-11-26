@@ -8,6 +8,7 @@ from collections import deque
 import traceback
 from dataclasses import replace
 from datetime import datetime,timedelta,timezone
+from decimal import Decimal, InvalidOperation
 from http.cookies import SimpleCookie,CookieError
 from urllib.parse import urlsplit
 from uuid import UUID,uuid4
@@ -26,9 +27,31 @@ PREFIX='/api/web/v1'
 # Opaque to clients: rank, creation time in microseconds and row id of the last item served.
 PAGE_CURSOR=re.compile(r'[012]\.[0-9]{1,18}\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}')
 COOKIES={'session':'__Host-classroom_session','preauth':'__Host-classroom_preauth','recovery':'__Host-classroom_recovery'}
+ADMIN_INTEGER_FIELDS = {
+    'adminUpdateUser': 'base_revision',
+    'adminUpdateSwitches': 'base_revision',
+    'adminAdjustQuota': 'additional_units',
+}
 
 
-def strict_json(raw):
+def normalize_admin_write_integer(operation_id, body):
+    """Preserve the exact wire value until its integer and range checks have passed."""
+    try:
+        if operation_id == 'reauthenticate':
+            planned = body['operation']
+            operation_id = planned['purpose']
+            body = planned['candidate_parameters']['body']
+        field = ADMIN_INTEGER_FIELDS[operation_id]
+        number = body[field]
+    except (KeyError, TypeError):
+        return  # The request schema checks the operation and body structure.
+    if isinstance(number, Decimal):
+        if not 1 <= number <= 2**53 - 1 or number != number.to_integral_value():
+            raise ValueError('expected a safe positive integer')
+        body[field] = int(number)
+
+
+def strict_json(raw, *, operation_id=None):
     def pairs(rows):
         value={}
         for k,v in rows:
@@ -37,16 +60,26 @@ def strict_json(raw):
         return value
     def reject(_):raise ValueError('nonfinite JSON')
     try:
-        value=json.loads(raw.decode('utf8'),object_pairs_hook=pairs,parse_constant=reject)
-        def scalars(v):
-            if isinstance(v,str) and any(0xD800<=ord(c)<=0xDFFF for c in v):raise ValueError('invalid Unicode')
-            if isinstance(v,dict):
-                for k,w in v.items():scalars(k);scalars(w)
-            if isinstance(v,list):
-                for w in v:scalars(w)
-        scalars(value)
-        return value
-    except (ValueError,UnicodeError,RecursionError):raise AuthRejected('VALIDATION_FAILED',422) from None
+        exact = operation_id in ADMIN_INTEGER_FIELDS or operation_id == 'reauthenticate'
+        value=json.loads(raw.decode('utf8'),object_pairs_hook=pairs,parse_constant=reject,
+                         parse_float=Decimal if exact else float)
+        if exact:
+            normalize_admin_write_integer(operation_id, value)
+        def scalars(node):
+            if isinstance(node, Decimal):
+                return float(node)  # Other numeric fields retain their ordinary JSON representation.
+            if isinstance(node, str) and any(0xD800 <= ord(c) <= 0xDFFF for c in node):
+                raise ValueError('invalid Unicode')
+            if isinstance(node, dict):
+                for key, item in node.items():
+                    scalars(key)
+                    node[key] = scalars(item)
+            elif isinstance(node, list):
+                for index, item in enumerate(node):
+                    node[index] = scalars(item)
+            return node
+        return scalars(value)
+    except (ValueError,InvalidOperation,UnicodeError,RecursionError):raise AuthRejected('VALIDATION_FAILED',422) from None
 
 
 def request_context(request):
@@ -71,8 +104,9 @@ def failure(error,request_id):
 def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admission=None,cache=None,media=None,media_spool_directory=None,billing=None,billing_admin=None,qa=None,review=None,deletion=None,capture=None,sync=None,portable=None,portable_transfers=None,portable_jobs=None,asr=None,asr_worker=None,filetrans=None,filetrans_worker=None):
     parsed=urlsplit(origin)
     if parsed.scheme!='https' or not parsed.netloc or parsed.path or parsed.query or parsed.fragment or parsed.username:raise ValueError('one exact HTTPS origin is required')
-    if contract.get('info', {}).get('version') not in ('0.2.0', '0.2.1', '0.3.0'):
-        raise ValueError('approved contract 0.2.0, 0.2.1 or 0.3.0 required')
+    contract_version = contract.get('info', {}).get('version')
+    if contract_version not in ('0.2.0', '0.2.1', '0.3.0', '0.4.0'):
+        raise ValueError('approved contract 0.2.0, 0.2.1, 0.3.0 or 0.4.0 required')
     if asr is not None and (asr.capture is not capture or asr.auth is not auth):
         raise ValueError('ASR requires the same capture and auth services')
     if asr_worker is not None and (asr is None or asr_worker.service is not asr or not asr.enabled):
@@ -85,8 +119,8 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
         raise ValueError('Filetrans requires the shared capture, authentication and deletion gate')
     if filetrans_worker is not None and (filetrans is None or filetrans_worker.service is not filetrans):
         raise ValueError('Filetrans worker requires its explicit synthetic service')
-    if billing_admin is not None and not contract.get('x-pr11a-candidate'):
-        raise ValueError('billing administration requires its explicit contract candidate')
+    if billing_admin is not None and contract_version != '0.4.0' and not contract.get('x-pr11a-candidate'):
+        raise ValueError('billing administration requires contract 0.4.0 or its explicit contract candidate')
     if qa is not None and contract.get('x-pr07a-candidate') != 'pr07a-1':
         raise ValueError('QA requires its explicit PR-07a contract candidate')
     if review is not None and contract.get('x-pr07b-candidate') != 'pr07b-1':
@@ -121,10 +155,8 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
     } if review is not None else set()
     from ..application.sync_browser import SYNC_PATHS
     sync_paths = SYNC_PATHS if sync is not None else set()
-    if billing_admin is not None:
-        if auth.admin_reauth is not None and auth.admin_reauth is not billing_admin:
-            raise ValueError('an existing admin reauth delegate must be coordinated')
-        auth.admin_reauth=billing_admin
+    if billing_admin is not None and auth.admin_reauth is not None and auth.admin_reauth is not billing_admin:
+        raise ValueError('an existing admin reauth delegate must be coordinated')
     workers=ThreadPoolExecutor(max_workers=64,thread_name_prefix='auth-ingress');slots=threading.BoundedSemaphore(64)
     @asynccontextmanager
     async def lifespan(app):
@@ -154,7 +186,7 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
         if write and (request.headers.get('origin')!=origin or request.headers.get('sec-fetch-site') not in sites):raise AuthRejected('FORBIDDEN',403)
         if request.headers.get('origin') not in (None,origin):raise AuthRejected('FORBIDDEN',403)
 
-    async def body_for(request,schema):
+    async def body_for(request,schema,*,operation_id=None):
         if request.headers.get('content-type','').split(';')[0].strip().lower()!='application/json' or request.headers.get('content-encoding','identity')!='identity':raise AuthRejected('VALIDATION_FAILED',422)
         limit=32768 if request.url.path==PREFIX+'/auth/reauth' else 16384
         if review is not None and (request.url.path == PREFIX+'/review-documents'
@@ -173,7 +205,7 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
             data.extend(chunk)
             if len(data)>limit:
                 raise AuthRejected('CAPACITY_EXCEEDED' if capacity_limited else 'VALIDATION_FAILED',413 if capacity_limited else 422)
-        result=strict_json(bytes(data));check(schema,result);return result
+        result=strict_json(bytes(data),operation_id=operation_id);check(schema,result);return result
 
     changes={'/auth/logout-all':'logoutAll','/auth/password/change':'changePassword','/auth/email/change':'requestEmailChange',
              '/auth/mfa/enroll':'enrollMfa','/auth/mfa/confirm':'confirmMfa','/auth/mfa/disable':'disableMfa','/auth/mfa/recovery-codes':'rotateRecoveryCodes'}
@@ -240,7 +272,10 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
         if path=='/auth/login':return auth.login(ctx,body)
         if path=='/auth/login/mfa':return auth.login_mfa(ctx,body,key)
         if path=='/auth/logout':return auth.logout(ctx)
-        if path=='/auth/reauth':return auth.reauthenticate(ctx,body)
+        if path=='/auth/reauth':
+            if body['operation']['purpose'].startswith('admin'):
+                return auth.reauthenticate(ctx,body,admin_reauth=billing_admin)
+            return auth.reauthenticate(ctx,body)
         if path in changes:return auth.change(ctx,body,key,changes[path])
         if path.startswith('/me/sessions/') and path.endswith('/revoke'):return auth.change(ctx,body,key,'revokeSession',target_id=params['session_id'])
         if path.startswith('/me/devices/') and path.endswith('/revoke'):return auth.change(ctx,body,key,'revokeDevice',target_id=params['device_id'])
@@ -297,6 +332,13 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
         success=next(k for k in operation['responses'] if k.startswith('2'))
         response_schema=operation['responses'][success]['content']['application/json']['schema']
         schema=operation.get('requestBody',{}).get('content',{}).get('application/json',{}).get('schema')
+        key_validator = None
+        for parameter in operation.get('parameters', []):
+            if '$ref' in parameter:
+                parameter = contract['components']['parameters'][parameter['$ref'].rsplit('/', 1)[-1]]
+            if parameter.get('in') == 'header' and parameter['name'].lower() == 'idempotency-key':
+                key_validator = validator(parameter['schema'])
+                break
         async def handle(request:Request):
             request_id=str(uuid4())
             entered=time.monotonic();deadline=entered+(120 if path == '/imports/preview' and portable_jobs is not None else 5);deadline_token=DEADLINE.set(deadline);dispatched=False
@@ -379,7 +421,10 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
                     try:
                         if str(UUID(key))!=key:raise ValueError()
                     except (ValueError,TypeError,AttributeError):raise AuthRejected('VALIDATION_FAILED',422) from None
-                    async with asyncio.timeout(max(0,entered+1-time.monotonic())):body=await body_for(request,schema)
+                    if key_validator is not None and not key_validator.is_valid(key):
+                        raise AuthRejected('VALIDATION_FAILED', 422)
+                    async with asyncio.timeout(max(0,entered+1-time.monotonic())):
+                        body=await body_for(request,schema,operation_id=operation['operationId'])
                 dispatched=True
                 # Cancellation detaches the reply, not the actual worker/hash.
                 # Cross-process slots stay held until computation really exits;

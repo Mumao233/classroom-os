@@ -1,5 +1,5 @@
 {
-  "contract_version": "0.3.0",
+  "contract_version": "0.4.0",
   "description": "Synthetic structural validation cases; stateful transactions require future PG/HTTP/browser tests.",
   "cases": [
     {
@@ -495,7 +495,8 @@
       "expected_valid": false,
       "value": {
         "kind": "single_use",
-        "role": "admin"
+        "role": "admin",
+        "reason": "Synthetic onboarding"
       },
       "reason": ""
     },
@@ -2601,6 +2602,998 @@
         }
       },
       "reason": ""
+    },
+    {
+      "name": "pr11b_adminUpdateUser",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/ReauthOperation",
+      "expected_valid": true,
+      "value": {
+        "purpose": "adminUpdateUser",
+        "target": {
+          "kind": "user",
+          "id": "33333333-3333-4333-8333-333333333333"
+        },
+        "candidate_parameters": {
+          "idempotency_key": "22222222-2222-4222-8222-222222222222",
+          "body": {
+            "base_revision": 1,
+            "status": "disabled",
+            "reason": "Synthetic roster change"
+          }
+        }
+      },
+      "reason": "Exact target kind and write DTO for this operation."
+    },
+    {
+      "name": "pr11b_adminUpdateUser_wrong_target",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/ReauthOperation",
+      "expected_valid": false,
+      "value": {
+        "purpose": "adminUpdateUser",
+        "target": {
+          "kind": "account",
+          "id": "33333333-3333-4333-8333-333333333333"
+        },
+        "candidate_parameters": {
+          "idempotency_key": "22222222-2222-4222-8222-222222222222",
+          "body": {
+            "base_revision": 1,
+            "status": "disabled",
+            "reason": "Synthetic roster change"
+          }
+        }
+      },
+      "reason": "A different target kind cannot authorize this purpose."
+    },
+    {
+      "name": "pr11b_adminCreateInvitation",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/ReauthOperation",
+      "expected_valid": true,
+      "value": {
+        "purpose": "adminCreateInvitation",
+        "target": {
+          "kind": "account",
+          "id": "11111111-1111-4111-8111-111111111111"
+        },
+        "candidate_parameters": {
+          "idempotency_key": "22222222-2222-4222-8222-222222222222",
+          "body": {
+            "kind": "email_bound",
+            "email": "fixture@example.invalid",
+            "reason": "Synthetic onboarding"
+          }
+        }
+      },
+      "reason": "Exact target kind and write DTO for this operation."
+    },
+    {
+      "name": "pr11b_adminRevokeInvitation",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/ReauthOperation",
+      "expected_valid": true,
+      "value": {
+        "purpose": "adminRevokeInvitation",
+        "target": {
+          "kind": "invitation",
+          "id": "44444444-4444-4444-8444-444444444444"
+        },
+        "candidate_parameters": {
+          "idempotency_key": "22222222-2222-4222-8222-222222222222",
+          "body": {
+            "reason": "Synthetic roster correction"
+          }
+        }
+      },
+      "reason": "Exact target kind and write DTO for this operation."
+    },
+    {
+      "name": "pr11b_adminRevokeInvitation_wrong_target",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/ReauthOperation",
+      "expected_valid": false,
+      "value": {
+        "purpose": "adminRevokeInvitation",
+        "target": {
+          "kind": "account",
+          "id": "44444444-4444-4444-8444-444444444444"
+        },
+        "candidate_parameters": {
+          "idempotency_key": "22222222-2222-4222-8222-222222222222",
+          "body": {
+            "reason": "Synthetic roster correction"
+          }
+        }
+      },
+      "reason": "A different target kind cannot authorize this purpose."
+    },
+    {
+      "name": "pr11b_adminReissueInvitation",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/ReauthOperation",
+      "expected_valid": true,
+      "value": {
+        "purpose": "adminReissueInvitation",
+        "target": {
+          "kind": "invitation",
+          "id": "44444444-4444-4444-8444-444444444444"
+        },
+        "candidate_parameters": {
+          "idempotency_key": "22222222-2222-4222-8222-222222222222",
+          "body": {
+            "reason": "Synthetic roster correction"
+          }
+        }
+      },
+      "reason": "Exact target kind and write DTO for this operation."
+    },
+    {
+      "name": "pr11b_adminAdjustQuota",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/ReauthOperation",
+      "expected_valid": true,
+      "value": {
+        "purpose": "adminAdjustQuota",
+        "target": {
+          "kind": "account",
+          "id": "11111111-1111-4111-8111-111111111111"
+        },
+        "candidate_parameters": {
+          "idempotency_key": "22222222-2222-4222-8222-222222222222",
+          "body": {
+            "user_id": "33333333-3333-4333-8333-333333333333",
+            "bucket_kind": "asr_month_ms",
+            "period_start": "2026-11-01T00:00:00+08:00",
+            "additional_units": 1000,
+            "reason": "Synthetic adjustment"
+          }
+        }
+      },
+      "reason": "Exact target kind and write DTO for this operation."
+    },
+    {
+      "name": "pr11b_adminAdjustQuota_wrong_target",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/ReauthOperation",
+      "expected_valid": false,
+      "value": {
+        "purpose": "adminAdjustQuota",
+        "target": {
+          "kind": "user",
+          "id": "11111111-1111-4111-8111-111111111111"
+        },
+        "candidate_parameters": {
+          "idempotency_key": "22222222-2222-4222-8222-222222222222",
+          "body": {
+            "user_id": "33333333-3333-4333-8333-333333333333",
+            "bucket_kind": "asr_month_ms",
+            "period_start": "2026-11-01T00:00:00+08:00",
+            "additional_units": 1000,
+            "reason": "Synthetic adjustment"
+          }
+        }
+      },
+      "reason": "A different target kind cannot authorize this purpose."
+    },
+    {
+      "name": "pr11b_adminUpdateSwitches",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/ReauthOperation",
+      "expected_valid": true,
+      "value": {
+        "purpose": "adminUpdateSwitches",
+        "target": {
+          "kind": "account",
+          "id": "11111111-1111-4111-8111-111111111111"
+        },
+        "candidate_parameters": {
+          "idempotency_key": "22222222-2222-4222-8222-222222222222",
+          "body": {
+            "base_revision": 1,
+            "registration_enabled": false,
+            "reason": "Synthetic registration pause"
+          }
+        }
+      },
+      "reason": "Exact target kind and write DTO for this operation."
+    },
+    {
+      "name": "pr11b_create_missing_reason",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/InvitationCreate",
+      "expected_valid": false,
+      "value": {
+        "kind": "single_use"
+      },
+      "reason": "The former invitation creation body omits the audit reason."
+    },
+    {
+      "name": "pr11b_action_empty",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/InvitationAction",
+      "expected_valid": false,
+      "value": {},
+      "reason": "Revoke and reissue now require a reason."
+    },
+    {
+      "name": "pr11b_action_blank",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/InvitationAction",
+      "expected_valid": false,
+      "value": {
+        "reason": " \t "
+      },
+      "reason": "Whitespace alone is insufficient."
+    },
+    {
+      "name": "pr11b_action_too_long",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/InvitationAction",
+      "expected_valid": false,
+      "value": {
+        "reason": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "reason": "500 Unicode code points maximum."
+    },
+    {
+      "name": "pr11b_usage_period",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/AdminUsage",
+      "expected_valid": true,
+      "value": {
+        "period_start": "2026-11-01T00:00:00+08:00",
+        "period_end": "2026-12-01T00:00:00+08:00",
+        "budget_microyuan": "1000",
+        "fixed_and_accrued_microyuan": "100",
+        "settled_microyuan": "70",
+        "reserved_microyuan": "20",
+        "unknown_microyuan": "30",
+        "safety_reserve_microyuan": "200",
+        "price_version": "synthetic-v1",
+        "ledger_reconciled_at": null
+      },
+      "reason": "Risk is 220 microyuan, gross budget 1000, ordinary platform limit 800."
+    },
+    {
+      "name": "pr11b_r0_header_lowercase",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/parameters/IdempotencyKey/schema",
+      "expected_valid": true,
+      "value": "abcdabcd-abcd-4def-8abc-abcdefabcdef",
+      "reason": "Future key and write header use the identical lowercase UUID representation."
+    },
+    {
+      "name": "pr11b_r0_proof_key_lowercase",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/ReauthOperation",
+      "expected_valid": true,
+      "value": {
+        "purpose": "adminUpdateSwitches",
+        "target": {
+          "kind": "account",
+          "id": "11111111-1111-4111-8111-111111111111"
+        },
+        "candidate_parameters": {
+          "idempotency_key": "abcdabcd-abcd-4def-8abc-abcdefabcdef",
+          "body": {
+            "base_revision": 1,
+            "registration_enabled": false,
+            "reason": "Synthetic registration pause"
+          }
+        }
+      },
+      "reason": "The signed key must match the exact future header."
+    },
+    {
+      "name": "pr11b_r0_header_uppercase",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/parameters/IdempotencyKey/schema",
+      "expected_valid": false,
+      "value": "ABCDABCD-ABCD-4DEF-8ABC-ABCDEFABCDEF",
+      "reason": "Future key and write header use the identical lowercase UUID representation."
+    },
+    {
+      "name": "pr11b_r0_proof_key_uppercase",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/ReauthOperation",
+      "expected_valid": false,
+      "value": {
+        "purpose": "adminUpdateSwitches",
+        "target": {
+          "kind": "account",
+          "id": "11111111-1111-4111-8111-111111111111"
+        },
+        "candidate_parameters": {
+          "idempotency_key": "ABCDABCD-ABCD-4DEF-8ABC-ABCDEFABCDEF",
+          "body": {
+            "base_revision": 1,
+            "registration_enabled": false,
+            "reason": "Synthetic registration pause"
+          }
+        }
+      },
+      "reason": "The signed key must match the exact future header."
+    },
+    {
+      "name": "pr11b_r0_invitation_reason_nel",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/InvitationCreate",
+      "expected_valid": false,
+      "value": {
+        "kind": "single_use",
+        "reason": "\u0085"
+      },
+      "reason": "This code point alone is blank in the shared audit reason schema."
+    },
+    {
+      "name": "pr11b_r0_invitation_reason_bom",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/InvitationCreate",
+      "expected_valid": false,
+      "value": {
+        "kind": "single_use",
+        "reason": "\uFEFF"
+      },
+      "reason": "This code point alone is blank in the shared audit reason schema."
+    },
+    {
+      "name": "pr11b_r0_invitation_reason_mixed",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/InvitationAction",
+      "expected_valid": true,
+      "value": {
+        "reason": "\u0085来源已确认\uFEFF"
+      },
+      "reason": "Visible text may be surrounded by whitespace. The original text stays in the commitment."
+    },
+    {
+      "name": "pr11b_r0_adminAdjustQuota_blank_reason",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/ReauthOperation",
+      "expected_valid": false,
+      "value": {
+        "purpose": "adminAdjustQuota",
+        "target": {
+          "kind": "account",
+          "id": "11111111-1111-4111-8111-111111111111"
+        },
+        "candidate_parameters": {
+          "idempotency_key": "22222222-2222-4222-8222-222222222222",
+          "body": {
+            "user_id": "33333333-3333-4333-8333-333333333333",
+            "bucket_kind": "asr_month_ms",
+            "period_start": "2026-11-01T00:00:00+08:00",
+            "additional_units": 1000,
+            "reason": " \t "
+          }
+        }
+      },
+      "reason": "Billing must reject blank reasons before verifying credentials."
+    },
+    {
+      "name": "pr11b_r0_adminUpdateSwitches_blank_reason",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/ReauthOperation",
+      "expected_valid": false,
+      "value": {
+        "purpose": "adminUpdateSwitches",
+        "target": {
+          "kind": "account",
+          "id": "11111111-1111-4111-8111-111111111111"
+        },
+        "candidate_parameters": {
+          "idempotency_key": "22222222-2222-4222-8222-222222222222",
+          "body": {
+            "base_revision": 1,
+            "registration_enabled": false,
+            "reason": " \t "
+          }
+        }
+      },
+      "reason": "Billing must reject blank reasons before verifying credentials."
+    },
+    {
+      "name": "pr11b_r0_adminAdjustQuota_max",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/ReauthOperation",
+      "expected_valid": true,
+      "value": {
+        "purpose": "adminAdjustQuota",
+        "target": {
+          "kind": "account",
+          "id": "11111111-1111-4111-8111-111111111111"
+        },
+        "candidate_parameters": {
+          "idempotency_key": "22222222-2222-4222-8222-222222222222",
+          "body": {
+            "user_id": "33333333-3333-4333-8333-333333333333",
+            "bucket_kind": "asr_month_ms",
+            "period_start": "2026-11-01T00:00:00+08:00",
+            "additional_units": 9007199254740991,
+            "reason": "Synthetic adjustment"
+          }
+        }
+      },
+      "reason": "Canonical JSON commitment uses the interoperable integer range."
+    },
+    {
+      "name": "pr11b_r0_adminAdjustQuota_overflow",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/ReauthOperation",
+      "expected_valid": false,
+      "value": {
+        "purpose": "adminAdjustQuota",
+        "target": {
+          "kind": "account",
+          "id": "11111111-1111-4111-8111-111111111111"
+        },
+        "candidate_parameters": {
+          "idempotency_key": "22222222-2222-4222-8222-222222222222",
+          "body": {
+            "user_id": "33333333-3333-4333-8333-333333333333",
+            "bucket_kind": "asr_month_ms",
+            "period_start": "2026-11-01T00:00:00+08:00",
+            "additional_units": 9007199254740992,
+            "reason": "Synthetic adjustment"
+          }
+        }
+      },
+      "reason": "Canonical JSON commitment uses the interoperable integer range."
+    },
+    {
+      "name": "pr11b_r0_adminUpdateSwitches_max",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/ReauthOperation",
+      "expected_valid": true,
+      "value": {
+        "purpose": "adminUpdateSwitches",
+        "target": {
+          "kind": "account",
+          "id": "11111111-1111-4111-8111-111111111111"
+        },
+        "candidate_parameters": {
+          "idempotency_key": "22222222-2222-4222-8222-222222222222",
+          "body": {
+            "base_revision": 9007199254740991,
+            "registration_enabled": false,
+            "reason": "Synthetic registration pause"
+          }
+        }
+      },
+      "reason": "Canonical JSON commitment uses the interoperable integer range."
+    },
+    {
+      "name": "pr11b_r0_adminUpdateSwitches_overflow",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/ReauthOperation",
+      "expected_valid": false,
+      "value": {
+        "purpose": "adminUpdateSwitches",
+        "target": {
+          "kind": "account",
+          "id": "11111111-1111-4111-8111-111111111111"
+        },
+        "candidate_parameters": {
+          "idempotency_key": "22222222-2222-4222-8222-222222222222",
+          "body": {
+            "base_revision": 9007199254740992,
+            "registration_enabled": false,
+            "reason": "Synthetic registration pause"
+          }
+        }
+      },
+      "reason": "Canonical JSON commitment uses the interoperable integer range."
+    },
+    {
+      "name": "pr11b_r0_adminUpdateUser_max",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/ReauthOperation",
+      "expected_valid": true,
+      "value": {
+        "purpose": "adminUpdateUser",
+        "target": {
+          "kind": "user",
+          "id": "33333333-3333-4333-8333-333333333333"
+        },
+        "candidate_parameters": {
+          "idempotency_key": "22222222-2222-4222-8222-222222222222",
+          "body": {
+            "base_revision": 9007199254740991,
+            "status": "disabled",
+            "reason": "Synthetic roster change"
+          }
+        }
+      },
+      "reason": "Canonical JSON commitment uses the interoperable integer range."
+    },
+    {
+      "name": "pr11b_r0_adminUpdateUser_overflow",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/ReauthOperation",
+      "expected_valid": false,
+      "value": {
+        "purpose": "adminUpdateUser",
+        "target": {
+          "kind": "user",
+          "id": "33333333-3333-4333-8333-333333333333"
+        },
+        "candidate_parameters": {
+          "idempotency_key": "22222222-2222-4222-8222-222222222222",
+          "body": {
+            "base_revision": 9007199254740992,
+            "status": "disabled",
+            "reason": "Synthetic roster change"
+          }
+        }
+      },
+      "reason": "Canonical JSON commitment uses the interoperable integer range."
+    },
+    {
+      "name": "pr11b_r1_logout_all_uppercase_key",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/ReauthOperation",
+      "expected_valid": false,
+      "value": {
+        "purpose": "logoutAll",
+        "target": {
+          "kind": "account",
+          "id": "11111111-1111-4111-8111-111111111111"
+        },
+        "candidate_parameters": {
+          "idempotency_key": "ABCDABCD-ABCD-4DEF-8ABC-ABCDEFABCDEF",
+          "body": {}
+        }
+      },
+      "reason": "A non-admin proof must carry the exact canonical key accepted by the future HTTP write."
+    },
+    {
+      "name": "pr11b_r2_mixed_switches",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/AdminSwitches",
+      "expected_valid": true,
+      "value": {
+        "billing_enabled": true,
+        "new_capture_enabled": true,
+        "asr_streaming_enabled": true,
+        "asr_filetrans_enabled": false,
+        "ai_interaction_enabled": true,
+        "ai_summary_enabled": false,
+        "revision": 2,
+        "registration_enabled": true,
+        "max_active_users": "10",
+        "asr_enabled": true,
+        "ai_enabled": true
+      },
+      "reason": "Each group has one enabled service."
+    },
+    {
+      "name": "pr11b_r2_mixed_asr_reported_off",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/AdminSwitches",
+      "expected_valid": false,
+      "value": {
+        "billing_enabled": true,
+        "new_capture_enabled": true,
+        "asr_streaming_enabled": true,
+        "asr_filetrans_enabled": false,
+        "ai_interaction_enabled": true,
+        "ai_summary_enabled": false,
+        "revision": 2,
+        "registration_enabled": true,
+        "max_active_users": "10",
+        "asr_enabled": false,
+        "ai_enabled": true
+      },
+      "reason": "Live ASR is enabled."
+    },
+    {
+      "name": "pr11b_r2_mixed_ai_reported_off",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/AdminSwitches",
+      "expected_valid": false,
+      "value": {
+        "billing_enabled": true,
+        "new_capture_enabled": true,
+        "asr_streaming_enabled": true,
+        "asr_filetrans_enabled": false,
+        "ai_interaction_enabled": true,
+        "ai_summary_enabled": false,
+        "revision": 2,
+        "registration_enabled": true,
+        "max_active_users": "10",
+        "asr_enabled": true,
+        "ai_enabled": false
+      },
+      "reason": "AI interaction is enabled."
+    },
+    {
+      "name": "pr11b_r2_fine_patch",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/AdminSwitchesPatch",
+      "expected_valid": true,
+      "value": {
+        "base_revision": 2,
+        "reason": "Synthetic configuration change",
+        "asr_filetrans_enabled": false,
+        "ai_enabled": true
+      },
+      "reason": "Independent changes across two groups share one revision."
+    },
+    {
+      "name": "pr11b_r2_conflicting_patch",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/AdminSwitchesPatch",
+      "expected_valid": false,
+      "value": {
+        "base_revision": 2,
+        "reason": "Synthetic configuration change",
+        "asr_enabled": true,
+        "asr_filetrans_enabled": false
+      },
+      "reason": "A batch field overlaps a member."
+    },
+    {
+      "name": "pr11b_r2_empty_patch",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/AdminSwitchesPatch",
+      "expected_valid": false,
+      "value": {
+        "base_revision": 2,
+        "reason": "Synthetic configuration change"
+      },
+      "reason": "Supply at least one setting."
+    },
+    {
+      "name": "pr11b_r2_account_uuid",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/ReauthOperation",
+      "expected_valid": true,
+      "value": {
+        "purpose": "adminUpdateSwitches",
+        "target": {
+          "kind": "account",
+          "id": "abcdefab-abcd-4def-8abc-abcdefabcdef"
+        },
+        "candidate_parameters": {
+          "idempotency_key": "abcdabcd-abcd-4def-8abc-abcdefabcdef",
+          "body": {
+            "base_revision": 1,
+            "registration_enabled": false,
+            "reason": "Synthetic registration pause"
+          }
+        }
+      },
+      "reason": "An account locator uses canonical lowercase UUID text."
+    },
+    {
+      "name": "pr11b_r2_account_uuid_uppercase",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/ReauthOperation",
+      "expected_valid": false,
+      "value": {
+        "purpose": "adminUpdateSwitches",
+        "target": {
+          "kind": "account",
+          "id": "ABCDEFAB-ABCD-4DEF-8ABC-ABCDEFABCDEF"
+        },
+        "candidate_parameters": {
+          "idempotency_key": "abcdabcd-abcd-4def-8abc-abcdefabcdef",
+          "body": {
+            "base_revision": 1,
+            "registration_enabled": false,
+            "reason": "Synthetic registration pause"
+          }
+        }
+      },
+      "reason": "Reject the spelling before factor verification."
+    },
+    {
+      "name": "pr11b_r2_nul_in_write",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/AdminSwitchesPatch",
+      "expected_valid": false,
+      "value": {
+        "base_revision": 2,
+        "reason": "Reason before\u0000and after",
+        "asr_enabled": true
+      },
+      "reason": "PostgreSQL text cannot store U+0000."
+    },
+    {
+      "name": "pr11b_r2_nul_in_proof",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/ReauthOperation",
+      "expected_valid": false,
+      "value": {
+        "purpose": "adminUpdateSwitches",
+        "target": {
+          "kind": "account",
+          "id": "11111111-1111-4111-8111-111111111111"
+        },
+        "candidate_parameters": {
+          "idempotency_key": "abcdabcd-abcd-4def-8abc-abcdefabcdef",
+          "body": {
+            "base_revision": 2,
+            "reason": "Reason before\u0000and after",
+            "asr_enabled": true
+          }
+        }
+      },
+      "reason": "Reject the same invalid reason before proof issuance."
+    },
+    {
+      "name": "pr11b_r2_quota_bucket_max",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/QuotaBucket",
+      "expected_valid": true,
+      "value": {
+        "kind": "summary_month_count",
+        "period_start": "2026-11-01T00:00:00+08:00",
+        "period_end": "2026-12-01T00:00:00+08:00",
+        "reserved": 0,
+        "submitted": 0,
+        "settled": 0,
+        "unknown": 0,
+        "limit": 9007199254740991,
+        "remaining": 9007199254740991
+      },
+      "reason": "Adjusted quota values must remain exact in a browser."
+    },
+    {
+      "name": "pr11b_r2_quota_bucket_overflow",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/QuotaBucket",
+      "expected_valid": false,
+      "value": {
+        "kind": "summary_month_count",
+        "period_start": "2026-11-01T00:00:00+08:00",
+        "period_end": "2026-12-01T00:00:00+08:00",
+        "reserved": 0,
+        "submitted": 0,
+        "settled": 0,
+        "unknown": 0,
+        "limit": 9007199254740992,
+        "remaining": 9007199254740992
+      },
+      "reason": "Adjusted quota values must remain exact in a browser."
+    },
+    {
+      "name": "pr11b_r2_cache_device_lowercase_v4",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/ReauthOperation",
+      "expected_valid": true,
+      "value": {
+        "purpose": "unlockCache",
+        "target": {
+          "kind": "device",
+          "id": "abcdefab-abcd-4def-8abc-abcdefabcdef"
+        },
+        "candidate_parameters": {
+          "idempotency_key": "22222222-2222-4222-8222-222222222222",
+          "body": {
+            "device_id": "abcdefab-abcd-4def-8abc-abcdefabcdef",
+            "key_epoch": 1,
+            "scope": "drafts",
+            "class_session_id": null
+          }
+        }
+      },
+      "reason": "Use the same canonical UUIDv4 in the cache target and the write."
+    },
+    {
+      "name": "pr11b_r2_cache_target_uppercase",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/ReauthOperation",
+      "expected_valid": false,
+      "value": {
+        "purpose": "unlockCache",
+        "target": {
+          "kind": "device",
+          "id": "ABCDEFAB-ABCD-4DEF-8ABC-ABCDEFABCDEF"
+        },
+        "candidate_parameters": {
+          "idempotency_key": "22222222-2222-4222-8222-222222222222",
+          "body": {
+            "device_id": "abcdefab-abcd-4def-8abc-abcdefabcdef",
+            "key_epoch": 1,
+            "scope": "drafts",
+            "class_session_id": null
+          }
+        }
+      },
+      "reason": "The cache consumer rebuilds the commitment using the canonical device ID."
+    },
+    {
+      "name": "pr11b_r2_cache_body_uppercase",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/CacheUnlockRequest",
+      "expected_valid": false,
+      "value": {
+        "device_id": "ABCDEFAB-ABCD-4DEF-8ABC-ABCDEFABCDEF",
+        "key_epoch": 1,
+        "scope": "drafts",
+        "class_session_id": null
+      },
+      "reason": "Cache release requires a lowercase UUIDv4 in its body."
+    },
+    {
+      "name": "pr11b_r2_cache_target_v1",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/ReauthOperation",
+      "expected_valid": false,
+      "value": {
+        "purpose": "unlockCache",
+        "target": {
+          "kind": "device",
+          "id": "abcdefab-abcd-1def-8abc-abcdefabcdef"
+        },
+        "candidate_parameters": {
+          "idempotency_key": "22222222-2222-4222-8222-222222222222",
+          "body": {
+            "device_id": "abcdefab-abcd-4def-8abc-abcdefabcdef",
+            "key_epoch": 1,
+            "scope": "drafts",
+            "class_session_id": null
+          }
+        }
+      },
+      "reason": "Cache release requires version four."
+    },
+    {
+      "name": "pr11b_r2_revoke_device_uppercase_target",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/ReauthOperation",
+      "expected_valid": true,
+      "value": {
+        "purpose": "revokeDevice",
+        "target": {
+          "kind": "device",
+          "id": "ABCDEFAB-ABCD-4DEF-8ABC-ABCDEFABCDEF"
+        },
+        "candidate_parameters": {
+          "idempotency_key": "22222222-2222-4222-8222-222222222222",
+          "body": {}
+        }
+      },
+      "reason": "Device revocation binds the UUID spelling in the path."
+    },
+    {
+      "name": "pr11b_r3_cache_proof_v7",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/ReauthOperation",
+      "expected_valid": false,
+      "value": {
+        "purpose": "unlockCache",
+        "target": {
+          "kind": "device",
+          "id": "abcdefab-abcd-4def-8abc-abcdefabcdef"
+        },
+        "candidate_parameters": {
+          "idempotency_key": "abcdabcd-abcd-7def-8abc-abcdefabcdef",
+          "body": {
+            "device_id": "abcdefab-abcd-4def-8abc-abcdefabcdef",
+            "key_epoch": 1,
+            "scope": "drafts",
+            "class_session_id": null
+          }
+        }
+      },
+      "reason": "The future key of a cache write must be a canonical UUIDv4."
+    },
+    {
+      "name": "pr11b_r3_cache_header_v7",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/parameters/CacheIdempotencyKey/schema",
+      "expected_valid": false,
+      "value": "abcdabcd-abcd-7def-8abc-abcdefabcdef",
+      "reason": "Cache release rejects a version-seven UUID."
+    },
+    {
+      "name": "pr11b_r3_cache_header_v4",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/parameters/CacheIdempotencyKey/schema",
+      "expected_valid": true,
+      "value": "abcdabcd-abcd-4def-8abc-abcdefabcdef",
+      "reason": "Cache release accepts a canonical lowercase UUIDv4."
+    },
+    {
+      "name": "pr11b_r3_ordinary_write_header_v7",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/parameters/IdempotencyKey/schema",
+      "expected_valid": true,
+      "value": "abcdabcd-abcd-7def-8abc-abcdefabcdef",
+      "reason": "The version restriction applies only to cache writes."
+    },
+    {
+      "name": "pr11b_r3_invite_bound",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/InvitationCreate",
+      "expected_valid": true,
+      "value": {
+        "kind": "email_bound",
+        "email": "fixture@example.invalid",
+        "reason": "Synthetic onboarding"
+      },
+      "reason": "An email-bound invitation names its recipient."
+    },
+    {
+      "name": "pr11b_r3_invite_single",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/InvitationCreate",
+      "expected_valid": true,
+      "value": {
+        "kind": "single_use",
+        "reason": "Synthetic onboarding"
+      },
+      "reason": "A single-use invitation omits the recipient address."
+    },
+    {
+      "name": "pr11b_r3_invite_bound_without_email",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/InvitationCreate",
+      "expected_valid": false,
+      "value": {
+        "kind": "email_bound",
+        "reason": "Synthetic onboarding"
+      },
+      "reason": "An email-bound invitation requires its recipient address."
+    },
+    {
+      "name": "pr11b_r3_invite_proof_bound_without_email",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/ReauthOperation",
+      "expected_valid": false,
+      "value": {
+        "purpose": "adminCreateInvitation",
+        "target": {
+          "kind": "account",
+          "id": "11111111-1111-4111-8111-111111111111"
+        },
+        "candidate_parameters": {
+          "idempotency_key": "22222222-2222-4222-8222-222222222222",
+          "body": {
+            "kind": "email_bound",
+            "reason": "Synthetic onboarding"
+          }
+        }
+      },
+      "reason": "An email-bound invitation requires its recipient address."
+    },
+    {
+      "name": "pr11b_r3_invite_single_with_email",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/InvitationCreate",
+      "expected_valid": false,
+      "value": {
+        "kind": "single_use",
+        "reason": "Synthetic onboarding",
+        "email": "fixture@example.invalid"
+      },
+      "reason": "A single-use invitation cannot be bound to a recipient address."
+    },
+    {
+      "name": "pr11b_r3_invite_proof_single_with_email",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/ReauthOperation",
+      "expected_valid": false,
+      "value": {
+        "purpose": "adminCreateInvitation",
+        "target": {
+          "kind": "account",
+          "id": "11111111-1111-4111-8111-111111111111"
+        },
+        "candidate_parameters": {
+          "idempotency_key": "22222222-2222-4222-8222-222222222222",
+          "body": {
+            "kind": "single_use",
+            "reason": "Synthetic onboarding",
+            "email": "fixture@example.invalid"
+          }
+        }
+      },
+      "reason": "A single-use invitation cannot be bound to a recipient address."
     }
   ],
   "audio_manifest_request_cases": [

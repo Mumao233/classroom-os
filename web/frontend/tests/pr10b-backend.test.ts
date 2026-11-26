@@ -64,9 +64,10 @@ describe('PR-10b mock review documents', () => {
   it('a personal revision never replaces the adopted revision or candidates, and is idempotent per key', () => {
     const { call } = harness();
     const body = { base_revision: 1, base_content_revision_id: ADOPTED, draft_id: '5a000000-0000-4000-8000-000000000001', body_markdown: '我的整理（合成）', personal_note: '' };
-    const first = call('A', 'POST', `/review-documents/${SUMMARY}/personal-revisions`, body, '', 'k-personal');
+    const key = crypto.randomUUID();
+    const first = call('A', 'POST', `/review-documents/${SUMMARY}/personal-revisions`, body, '', key);
     expect(first.status).toBe(201);
-    expect(call('A', 'POST', `/review-documents/${SUMMARY}/personal-revisions`, body, '', 'k-personal').body).toEqual(first.body);
+    expect(call('A', 'POST', `/review-documents/${SUMMARY}/personal-revisions`, body, '', key).body).toEqual(first.body);
     const doc = call('A', 'GET', `/review-documents/${SUMMARY}`).body as S['ReviewDocument'];
     expect(doc).toMatchObject({ adopted_revision_id: ADOPTED, candidate_revision_ids: [CANDIDATE], latest_personal_revision_id: (first.body as S['ReviewRevision']).id, revision: 2 });
     expect(err(call('A', 'POST', `/review-documents/${SUMMARY}/personal-revisions`, body)).code).toBe('REVISION_CONFLICT');
@@ -100,14 +101,17 @@ describe('PR-10b mock review: Astra r0 findings', () => {
   it('a revoked classroom never replays an earlier review receipt', () => {
     const { backend, call } = harness();
     const body = { base_revision: 1, base_content_revision_id: ADOPTED, draft_id: '5a000000-0000-4000-8000-000000000010', body_markdown: '合成', personal_note: '' };
-    expect(call('A', 'POST', `/review-documents/${SUMMARY}/personal-revisions`, body, '', 'k-revoked').status).toBe(201);
+    const key = crypto.randomUUID();
+    expect(call('A', 'POST', `/review-documents/${SUMMARY}/personal-revisions`, body, '', key).status).toBe(201);
     backend.revokeClassroom('A', ENDED);
-    expect(err(call('A', 'POST', `/review-documents/${SUMMARY}/personal-revisions`, body, '', 'k-revoked')).code).toBe('NOT_FOUND');
+    expect(err(call('A', 'POST', `/review-documents/${SUMMARY}/personal-revisions`, body, '', key)).code).toBe('NOT_FOUND');
   });
   it('an understood patch replayed with the same key returns its receipt instead of a conflict', () => {
     const { call } = harness();
-    const first = call('A', 'PATCH', `/review-documents/${SUMMARY}`, { base_revision: 1, understood: true }, '', 'k-patch');
-    expect(call('A', 'PATCH', `/review-documents/${SUMMARY}`, { base_revision: 1, understood: true }, '', 'k-patch')).toEqual(first);
+    const key = crypto.randomUUID();
+    const first = call('A', 'PATCH', `/review-documents/${SUMMARY}`, { base_revision: 1, understood: true }, '', key);
+    expect(first.status).toBe(200);
+    expect(call('A', 'PATCH', `/review-documents/${SUMMARY}`, { base_revision: 1, understood: true }, '', key)).toEqual(first);
   });
   it('a stale personal save keeps the submitted branch without moving any pointer; a derived revision keeps the parent snapshot', () => {
     const { call } = harness();
