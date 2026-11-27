@@ -107,3 +107,16 @@ describe('PR-11b mock: exact integers in the raw admin JSON', () => {
     for (const bad of ['{"additional_units":1.0000000000000001}', '{"base_revision":1.5}', '{"base_revision":1e-1}', '{"operation":{"candidate_parameters":{"body":{"additional_units":2.25}}}}']) expect(rawIntegersOk(bad)).toBe(false);
   });
 });
+
+describe('PR-11b lost invitation-create reply', () => {
+  it('names the invitation the server reports for SECRET_ALREADY_ISSUED, never a token', async () => {
+    const { describeAdminError } = await import('../src/features/admin');
+    const { ApiClientError } = await import('../src/api/client');
+    const body = (conflict_id: unknown) => ({ error: { code: 'SECRET_ALREADY_ISSUED', message: 'm', request_id: '00000000-0000-4000-8000-000000000001', retryable: false, retry_after_seconds: null, current_revision: null, conflict_id, task_id: null } });
+    const fallback = () => 'fallback';
+    const named = describeAdminError(new ApiClientError('http', 409, body('D0000000-0000-4000-8000-0000000AB123') as never), fallback);
+    expect(named).toContain('#0ab123');
+    // Without (or with a malformed) reference the general guidance is kept.
+    for (const missing of [null, 'not-a-uuid']) expect(describeAdminError(new ApiClientError('http', 409, body(missing) as never), fallback)).toContain('请刷新列表');
+  });
+});

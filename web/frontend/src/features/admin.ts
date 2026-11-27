@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { ApiClientError, type ApiClient } from '../api/client';
-import { canonicalJson } from '../domain/admin';
+import { canonicalJson, invitationRef } from '../domain/admin';
 import type { components } from '../generated/openapi';
 import { isDefinitiveRejection } from './classroom';
 import { isAuthoritativeDenial, isUnauthenticated } from './revocation';
@@ -343,6 +343,9 @@ const adminMessages: Partial<Record<NonNullable<ApiClientError['code']>, string>
 };
 export function describeAdminError(error: unknown, fallback: (error: unknown) => string): string {
   if (error instanceof AdminReauthError) return reauthMessages[error.kind];
+  // A lost create reply: the server names the invitation it made (never its token), so the administrator can find it.
+  if (error instanceof ApiClientError && error.code === 'SECRET_ALREADY_ISSUED' && error.conflictId)
+    return `操作已经完成（邀请 ${invitationRef(error.conflictId)}），但一次性令牌不会再次显示。请在列表中对该邀请执行“重新签发”获取新令牌。`;
   if (error instanceof ApiClientError && error.code && adminMessages[error.code]) return adminMessages[error.code]!;
   return fallback(error);
 }
