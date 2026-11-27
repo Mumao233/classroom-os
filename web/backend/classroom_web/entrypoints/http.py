@@ -269,6 +269,7 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
                 target_id = params.get('user_id') or params.get('invitation_id')
                 return billing_admin.apply(ctx,operation_id,body,key,target_id=target_id)
             if path=='/admin/users/{user_id}/quota':return billing_admin.user_quota(ctx,params['user_id'])
+            if operation_id == 'adminListInvitations':return billing_admin.invitations(ctx, **params)
             if path=='/admin/usage':return billing_admin.read(ctx,'usage',params.get('period_start'))
             if path=='/admin/switches':return billing_admin.read(ctx,'switches')
         if path in reads:return reads[path](ctx,params)
@@ -357,7 +358,8 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
                     for item in operation.get('parameters', []):
                         if item.get('in') == 'path':
                             check(item['schema'], params[item['name']])
-                if (path in review_paths or path in sync_paths or path in asr_paths or path in filetrans_paths) and method == 'get':
+                if (path in review_paths or path in sync_paths or path in asr_paths or path in filetrans_paths
+                        or operation['operationId'] == 'adminListInvitations') and method == 'get':
                     query_schemas = {item['name']: item['schema'] for item in operation.get('parameters', [])
                                      if item.get('in') == 'query'}
                     pairs = list(request.query_params.multi_items())
@@ -472,8 +474,6 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
     for path in selected:
         if path not in contract['paths']:raise ValueError('route absent from approved contract: '+path)
         for method,operation in contract['paths'][path].items():
-            if path == '/admin/invitations' and method == 'get':
-                continue
             if (method in ('get','post')
                     or (path in admin_paths and method=='patch')
                     or (path in review_paths and method=='patch')

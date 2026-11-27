@@ -12,7 +12,7 @@ from .auth_deadlines import remaining
 
 class PgBillingAdminRepository:
     OPERATIONS = frozenset(('issue_admin_proof', 'apply_admin', 'read_admin'))
-    SQL_REVISION = 'classroom-admin-0.4.0-sql-1'
+    SQL_REVISION = 'classroom-admin-0.4.0-sql-2'
 
     def __init__(self, url):
         parsed = make_url(url)

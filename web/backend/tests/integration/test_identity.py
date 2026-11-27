@@ -25,6 +25,7 @@ from classroom_web.infrastructure.schema import tables
 from classroom_web.test_support import synthetic_connect_args, validate_test_database_target
 
 from conftest import migration_config
+from test_identity_recovery import wait_for_database_lock
 
 
 PASSWORD = "Synthetic-password-03a"
@@ -341,6 +342,26 @@ def test_activation_error_after_writes_rolls_everything_back_and_proof_retries(i
         connection.exec_driver_sql("DROP TRIGGER pr03a_activation_failure ON identity_events")
         connection.exec_driver_sql("DROP FUNCTION pr03a_injected_failure()")
     assert identity.service.activate(token) is not None
+
+
+def test_capacity_change_rejects_reauthentication_expired_during_lock_wait(identity):
+    before = rows(identity, "identity_capacity")
+    assert before[0]["max_active_users"] == 10
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with identity.admin.begin() as holder:
+            holder.exec_driver_sql("SELECT id FROM identity_capacity WHERE id=1 FOR UPDATE")
+            blocker = holder.scalar(sa.text("SELECT pg_backend_pid()"))
+            valid_until = holder.scalar(sa.text("SELECT clock_timestamp() + interval '3 seconds'"))
+            admin = replace(identity.admin_principal,
+                            reauthenticated_at=valid_until - identity.service.admin_window)
+            change = pool.submit(identity.service.set_capacity, admin, 30)
+            wait_for_database_lock(identity, blocker, "identity_capacity")
+            holder.execute(sa.text("SELECT pg_sleep_until(:deadline)"),
+                           {"deadline": valid_until + timedelta(milliseconds=1)})
+        with pytest.raises(AuthorizationDenied):
+            change.result(timeout=10)
+    assert rows(identity, "identity_capacity") == before
+    assert rows(identity, "identity_audit") == []
 
 
 @pytest.mark.parametrize("capacity", [10, 30])

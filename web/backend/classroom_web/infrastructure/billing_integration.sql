@@ -183,10 +183,14 @@ ALTER TABLE identity_control.identity_control_audit ADD CONSTRAINT admin_write_a
   OR (actor_id IS NOT NULL AND target_id IS NOT NULL AND reason IS NOT NULL AND length(reason) BETWEEN 1 AND 500)
 );
 
+-- SELECT FOR UPDATE requires a column UPDATE grant. Row checks prohibit updates.
+GRANT SELECT(id,max_active_users), UPDATE(id) ON public.identity_capacity TO classroom_web_session_writer;
+CREATE POLICY admin_capacity_lock ON public.identity_capacity TO classroom_web_session_writer USING (id=1) WITH CHECK (false);
+
 -- A NULL patch only resolves a receipt against the current authorized view.
 CREATE FUNCTION billing_api.admin_user_state(target uuid, patch jsonb) RETURNS jsonb
 LANGUAGE plpgsql SET search_path=pg_catalog AS $f$
-DECLARE u record;
+DECLARE u record; capacity integer;
 BEGIN
   SELECT id,revision,created_at,updated_at,role,state,normalized_email,profile,email_verified_at,password_hash IS NOT NULL AS has_password,
     deleted_at,security_epoch INTO u FROM public.users WHERE id=target FOR UPDATE;
@@ -202,6 +206,13 @@ BEGIN
       RETURN jsonb_build_object('error','REVISION_CONFLICT','current_revision',u.revision);END IF;
     IF u.email_verified_at IS NULL OR NOT u.has_password OR patch->>'status' IS NULL OR patch->>'status' NOT IN ('active','disabled') THEN
       RETURN jsonb_build_object('error','VALIDATION_FAILED');END IF;
+    IF u.state='disabled' AND patch->>'status'='active' THEN
+      -- Registration uses the same singleton. Read current occupancy after the lock
+      -- is acquired; restoring an existing account does not consume a new activation.
+      SELECT max_active_users INTO STRICT capacity FROM public.identity_capacity WHERE id=1 FOR UPDATE;
+      IF (SELECT count(*) FROM public.users WHERE state='active' AND deleted_at IS NULL) >= capacity THEN
+        RETURN jsonb_build_object('error','VALIDATION_FAILED');END IF;
+    END IF;
     UPDATE public.users SET state=patch->>'status', revision=revision+1, updated_at=clock_timestamp(),
       security_epoch=security_epoch+CASE WHEN patch->>'status'='disabled' THEN 1 ELSE 0 END
       WHERE id=target RETURNING state,revision,updated_at,security_epoch INTO u.state,u.revision,u.updated_at,u.security_epoch;
@@ -217,6 +228,15 @@ BEGIN
     'mfa_enabled',EXISTS(SELECT 1 FROM public.mfa_credentials WHERE owner_id=target AND state='active'));
 END $f$;
 ALTER FUNCTION billing_api.admin_user_state(uuid,jsonb) OWNER TO classroom_web_session_writer;
+
+CREATE VIEW billing_api.invitation_metadata AS
+  SELECT id,revision,created_at,updated_at,expires_at,
+    CASE WHEN email_binding IS NULL THEN 'single_use' ELSE 'email_bound' END AS kind,
+    CASE WHEN email_binding IS NOT NULL THEN left(left(email_binding,1)||'***@'||split_part(email_binding,'@',2),254) END AS email_hint,
+    CASE WHEN status='open' AND expires_at<=clock_timestamp() THEN 'expired'
+         WHEN status='open' THEN 'issued' ELSE status END AS state
+  FROM public.invitations;
+ALTER VIEW billing_api.invitation_metadata OWNER TO classroom_web_session_writer;
 
 CREATE FUNCTION billing_api.admin_invitation_state(actor uuid,target uuid,action text,p jsonb) RETURNS jsonb
 LANGUAGE plpgsql SET search_path=pg_catalog AS $f$
@@ -252,13 +272,9 @@ BEGIN
       UPDATE public.invitations SET status='revoked', revision=revision+1, updated_at=n WHERE id=target;
     END IF;
   END IF;
-  SELECT id,status,email_binding,expires_at,revision,created_at,updated_at INTO inv FROM public.invitations WHERE id=target;
+  SELECT * INTO inv FROM billing_api.invitation_metadata WHERE id=target;
   IF NOT FOUND THEN RETURN jsonb_build_object('error','NOT_FOUND');END IF;
-  RETURN jsonb_build_object('id',inv.id,'revision',inv.revision,'created_at',inv.created_at,'updated_at',inv.updated_at,
-    'kind',CASE WHEN inv.email_binding IS NULL THEN 'single_use' ELSE 'email_bound' END,
-    'email_hint',CASE WHEN inv.email_binding IS NOT NULL THEN left(left(inv.email_binding,1)||'***@'||split_part(inv.email_binding,'@',2),254) END,
-    'state',CASE WHEN inv.status='open' AND inv.expires_at<=clock_timestamp() THEN 'expired'
-                 WHEN inv.status='open' THEN 'issued' ELSE inv.status END,'expires_at',inv.expires_at);
+  RETURN to_jsonb(inv);
 END $f$;
 ALTER FUNCTION billing_api.admin_invitation_state(uuid,uuid,text,jsonb) OWNER TO classroom_web_session_writer;
 
@@ -303,9 +319,12 @@ BEGIN
       ORDER BY u.id FOR UPDATE OF u;
   END IF;
   IF action='adminAdjustQuota' THEN
-    -- A quota write never changes the actor. validate_session holds the user
-    -- FOR SHARE, compatible with the operator's actor FK; the per-operation
-    -- lock below serializes different sessions even if they select different buckets.
+    -- A new bucket takes an FK lock on its recipient. Take both user locks
+    -- in status-update order before validate_session locks the actor.
+    -- SHARE remains compatible with the operator's actor FK.
+    PERFORM u.id FROM public.users u JOIN public.auth_sessions sess ON u.id IN (sess.owner_id,(b->>'user_id')::uuid)
+      WHERE sess.token_hash=p->>'token_hash' AND sess.role='admin' AND sess.revoked_at IS NULL
+      ORDER BY u.id FOR SHARE OF u;
     s:=identity_api.validate_session(p);
   ELSE
     s:=identity_api.lock_account(p);
@@ -406,10 +425,19 @@ ALTER FUNCTION billing_api.apply_admin(jsonb) OWNER TO classroom_web_session_wri
 
 CREATE FUNCTION billing_api.read_admin(p jsonb) RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog AS $f$
-DECLARE s jsonb;
+DECLARE s jsonb; page_size integer; items jsonb;
 BEGIN
   s:=identity_api.validate_session(p);
   IF s IS NULL OR s->>'role'<>'admin' OR s->>'mfa_level'<>'totp' THEN RETURN jsonb_build_object('error','FORBIDDEN');END IF;
+  IF p->>'kind'='invitations' THEN
+    page_size:=(p->>'limit')::integer;
+    IF page_size IS NULL OR page_size NOT BETWEEN 1 AND 100 THEN RETURN jsonb_build_object('error','VALIDATION_FAILED');END IF;
+    SELECT coalesce(jsonb_agg(to_jsonb(m) ORDER BY m.created_at DESC,m.id DESC),'[]'::jsonb) INTO items
+    FROM (SELECT * FROM billing_api.invitation_metadata
+          WHERE p->>'before_id' IS NULL OR (created_at,id)<((p->>'before_created')::timestamptz,(p->>'before_id')::uuid)
+          ORDER BY created_at DESC,id DESC LIMIT page_size+1) m;
+    RETURN jsonb_build_object('items',items);
+  END IF;
   IF p->>'kind'='switches' THEN RETURN billing_api.switch_view();END IF;
   RETURN billing_api.usage_view(coalesce((p->>'period_start')::timestamptz,
     date_trunc('month',clock_timestamp() AT TIME ZONE 'Asia/Shanghai') AT TIME ZONE 'Asia/Shanghai'));
@@ -462,4 +490,4 @@ BEGIN
     END IF;
 END
 $filetrans$;
-COMMENT ON FUNCTION billing_api.apply_admin(jsonb) IS 'classroom-admin-0.4.0-sql-1';
+COMMENT ON FUNCTION billing_api.apply_admin(jsonb) IS 'classroom-admin-0.4.0-sql-2';

@@ -15,14 +15,14 @@ from test_billing_integration import ROOT, fee_api, fee_control, headers, pg, pr
 
 PURPOSE = 'adminAdjustQuota'
 PATH = BASE + '/admin/quota-adjustments'
-VERSION = 'classroom-admin-0.4.0-sql-1'
+VERSION = 'classroom-admin-0.4.0-sql-2'
 MAXIMUM = 2**53 - 1
 
 
 @pytest.mark.parametrize('fee_api', ['formal'], indirect=True)
 @pytest.mark.parametrize(('signature', 'old_comment'), [
     ('billing_api.adjust_quota(uuid,uuid,uuid,bigint,text)', 'NULL'),
-    ('billing_api.apply_admin(jsonb)', "'earlier-installation'"),
+    ('billing_api.apply_admin(jsonb)', "'classroom-admin-0.4.0-sql-1'"),
 ])
 def test_old_installed_sql_refuses_admin_mount_and_keeps_auth_available(fee_api, signature, old_comment):
     api = fee_api

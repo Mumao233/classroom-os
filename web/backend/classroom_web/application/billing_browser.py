@@ -1,4 +1,5 @@
 """Session-bound HTTP use cases, including the explicit admin contract candidate."""
+import hmac
 from uuid import UUID, uuid4
 
 from sqlalchemy import text
@@ -8,7 +9,7 @@ from ..domain.billing import BillingBlocked
 from ..domain.data import NotFound, Gone, InactiveOwner
 from ..domain.identity import AuthorizationDenied, normalize_email
 from ..domain.tasks import IdempotencyMismatch
-from ..infrastructure.auth_crypto import digest, random_token
+from ..infrastructure.auth_crypto import b64, digest, random_token, unb64
 from ..infrastructure.billing_repository import PgBillingRepository
 from .identity import token_digest
 
@@ -112,6 +113,30 @@ class BillingAdmin:
         self._principal(ctx)
         return AuthReply(self.repository.call('read_admin', dict(token_hash=digest('session', ctx.session),
             kind=kind, period_start=period_start)))
+
+    def invitations(self, ctx, *, limit=50, cursor=None):
+        principal = self._principal(ctx)
+        payload = dict(token_hash=digest('session', ctx.session), kind='invitations', limit=limit)
+
+        def signature(created, invitation_id):
+            return self.auth.crypto.commitment('admin-invitations-created-desc-v1',
+                [str(principal.user_id), created, invitation_id])
+
+        if cursor is not None:
+            try:
+                created, invitation_id, expected = unb64(cursor).decode('ascii').split('|')
+                if not hmac.compare_digest(signature(created, invitation_id), expected):
+                    raise ValueError()
+            except (AuthRejected, ValueError):
+                raise AuthRejected('VALIDATION_FAILED', 422) from None
+            payload.update(before_created=created, before_id=invitation_id)
+        rows = self.repository.call('read_admin', payload)['items']
+        next_cursor = None
+        if len(rows) > limit:
+            rows = rows[:limit]
+            created, invitation_id = rows[-1]['created_at'], rows[-1]['id']
+            next_cursor = b64('|'.join((created, invitation_id, signature(created, invitation_id))).encode('ascii'))
+        return AuthReply(dict(items=rows, next_cursor=next_cursor))
 
     def _quota(self, ctx, owner_id):
         principal = self._principal(ctx)

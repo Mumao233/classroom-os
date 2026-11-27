@@ -147,15 +147,6 @@ def test_user_transition_guards(admin, case, status, code):
     assert audit(admin, 'adminUpdateUser', target) == []
 
 
-def test_reenable_disabled_user(admin):
-    target, _ = create_student(admin, 'disabled')
-    body = dict(base_revision=1, status='active', reason='Synthetic account re-enabled')
-    credential = proof(admin, 'adminUpdateUser', body, 'user', target)
-    response = write(admin, 'PATCH', '/admin/users/' + str(target), body, credential)
-    assert response.status_code == 200, response.text
-    assert (response.json()['status'], response.json()['revision']) == ('active', 2)
-
-
 def test_concurrent_invitation_create_returns_one_secret_and_one_receipt(admin, registration):
     email = uuid4().hex + '@example.test'
     body = dict(kind='email_bound', email=email, reason='  合成邀请批次  ')

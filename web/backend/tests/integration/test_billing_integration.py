@@ -1,4 +1,5 @@
 """Incremental PR-11a entrypoint and lifecycle tests, with real PG and identity."""
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 import importlib.util
 import json
@@ -49,8 +50,8 @@ def pg():
         yield database
 
 
-@pytest.fixture(scope='module')
-def fee_control(pg):
+@contextmanager
+def installed_fee_control(pg):
     tag = uuid4().hex[:12]
     names = {key:'pr02a_billing_'+key+'_'+tag for key in ('gateway','operator','reconciler','scheduler')}
     actor,price = uuid4(),uuid4()
@@ -86,6 +87,12 @@ def fee_control(pg):
         for name in names.values():
             connection.exec_driver_sql(f'DROP OWNED BY "{name}"')
             connection.exec_driver_sql(f'DROP ROLE "{name}"')
+
+
+@pytest.fixture(scope='module')
+def fee_control(pg):
+    with installed_fee_control(pg) as control:
+        yield control
 
 
 @pytest.fixture
