@@ -34,6 +34,8 @@
 
 [账本浏览器服务](../../../web/backend/classroom_web/application/billing_browser.py) · [受限账本网关](../../../web/backend/classroom_web/infrastructure/billing_control.py) · [签发与消费事务](../../../web/backend/classroom_web/infrastructure/billing_integration.sql) · [HTTP 组合入口](../../../web/backend/classroom_web/entrypoints/http.py)
 
+**2026-11-27 后端接入。** 显式注入管理服务的 HTTP 0.4.0 应用现已挂载表中的六项写入。四项新增用途沿用上表中的目标、写入键和 DTO。创建邮箱邀请在核验因子前按注册服务的规则检查邮箱，原始拼写参与操作承诺。用户状态更新校验版本，停用同时推进安全 epoch 并撤销会话。创建与重签返回的随机令牌只在首次成功响应出现；同键同操作再试取得 `409 SECRET_ALREADY_ISSUED`。重签保留邀请 ID，换发新令牌，并使源自前一令牌的待激活注册失效。用户和邀请的成功写入、受限审计、凭证消费与回执一同提交。HTTP 字段和版本沿用 0.4.0。
+
 ## 二、邀请操作的理由
 
 **问题与选项。** 创建只收 kind/email，撤销与重签使用 `Empty`。可选理由能接纳历史请求，却允许新操作只留下固定动作名。04-CONTRACTS-FLOWS 的运营行已要求“记理由”，AUTH-07 要求管理操作 MFA 与审计，现有用户、额度和开关写入都带操作者理由。因此三项均**必填**，无需新增产品规则。

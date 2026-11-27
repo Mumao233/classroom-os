@@ -24,6 +24,7 @@ class PgBillingAdminRepository:
     def call(self, operation, payload):
         if operation not in self.OPERATIONS:
             raise ValueError('unsupported billing gateway operation')
+        committing = False
         try:
             with self.engine.begin() as connection:
                 safe = connection.scalar(sa.text('''SELECT NOT(rolsuper OR rolbypassrls OR rolcreatedb OR rolcreaterole OR rolinherit)
@@ -41,12 +42,19 @@ class PgBillingAdminRepository:
                 remaining()
                 if result is None:
                     raise AuthRejected('REAUTH_REQUIRED', 403)
-                if 'error' in result:
+                if 'error' in result and result['error'] != 'SECRET_ALREADY_ISSUED':
                     code = result['error']
                     status = {'FORBIDDEN':403, 'REAUTH_REQUIRED':403, 'NOT_FOUND':404, 'VALIDATION_FAILED':422,
-                              'IDEMPOTENCY_MISMATCH':409, 'SERVICE_DISABLED':503}.get(code, 503)
-                    raise AuthRejected(code, status)
-                return result
+                              'IDEMPOTENCY_MISMATCH':409, 'REVISION_CONFLICT':409, 'INVITATION_UNAVAILABLE':409,
+                              'GONE':410, 'SERVICE_DISABLED':503}.get(code, 503)
+                    error = AuthRejected(code, status)
+                    error.current_revision = result.get('current_revision')
+                    raise error
+                committing = True
+            # A secret replay commits consumption of any fresh proof before answering 409.
+            if result.get('error') == 'SECRET_ALREADY_ISSUED':
+                raise AuthRejected('SECRET_ALREADY_ISSUED', 409)
+            return result
         except sa.exc.DBAPIError as error:
             state = getattr(error.orig, 'sqlstate', '') or ''
             message = getattr(getattr(error.orig, 'diag', None), 'message_primary', '')
@@ -54,9 +62,12 @@ class PgBillingAdminRepository:
                 raise AuthRejected('IDEMPOTENCY_MISMATCH', 409) from None
             if state == '22003' and message == 'QUOTA_LIMIT_OUT_OF_RANGE':
                 raise AuthRejected('VALIDATION_FAILED', 422) from None
+            if state == '42501' and message == 'reauth expired':
+                raise AuthRejected('REAUTH_REQUIRED', 403) from None
             if state == 'P0001':
                 raise AuthRejected('REVISION_CONFLICT', 409) from None
-            raise AuthRejected('RESULT_UNKNOWN' if state.startswith('08') else 'STORAGE_UNAVAILABLE', 503) from None
+            unknown = state.startswith('08') or (committing and (error.connection_invalidated or not state))
+            raise AuthRejected('RESULT_UNKNOWN' if unknown else 'STORAGE_UNAVAILABLE', 503) from None
 
     def dispose(self):
         self.engine.dispose()

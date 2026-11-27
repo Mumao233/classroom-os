@@ -6,10 +6,11 @@ from sqlalchemy import text
 from ..domain.auth import AuthRejected, AuthReply
 from ..domain.billing import BillingBlocked
 from ..domain.data import NotFound, Gone, InactiveOwner
-from ..domain.identity import AuthorizationDenied
+from ..domain.identity import AuthorizationDenied, normalize_email
 from ..domain.tasks import IdempotencyMismatch
 from ..infrastructure.auth_crypto import digest, random_token
 from ..infrastructure.billing_repository import PgBillingRepository
+from .identity import token_digest
 
 
 class BillingBrowser:
@@ -63,7 +64,15 @@ class BillingBrowser:
 
 
 class BillingAdmin:
-    PURPOSES = frozenset(('adminUpdateSwitches', 'adminAdjustQuota'))
+    TARGET_KINDS = {
+        'adminUpdateSwitches': 'account',
+        'adminAdjustQuota': 'account',
+        'adminCreateInvitation': 'account',
+        'adminUpdateUser': 'user',
+        'adminRevokeInvitation': 'invitation',
+        'adminReissueInvitation': 'invitation',
+    }
+    PURPOSES = frozenset(TARGET_KINDS)
 
     def __init__(self, auth, database, repository):
         self.auth, self.database, self.repository = auth, database, repository
@@ -76,14 +85,23 @@ class BillingAdmin:
             raise AuthRejected('FORBIDDEN', 403)
         return principal
 
-    def issue_reauth(self, ctx, operation, proof_hash):
-        principal = self._principal(ctx, write=True)
-        if operation['purpose'] not in self.PURPOSES or operation['target'] != dict(kind='account', id=str(principal.user_id)):
+    def validate_operation(self, owner_id, operation):
+        target = operation['target']
+        purpose = operation['purpose']
+        if (target['kind'] != self.TARGET_KINDS[purpose]
+                or (target['kind'] == 'account' and target['id'] != str(owner_id))):
             raise AuthRejected('FORBIDDEN', 403)
+        body = operation['candidate_parameters']['body']
+        if purpose == 'adminCreateInvitation' and body['kind'] == 'email_bound':
+            # Registration applies IDNA and local-part rules beyond the JSON email format.
+            normalize_email(body['email'])
+
+    def issue_reauth(self, ctx, operation, proof_hash):
+        self._principal(ctx, write=True)
         token = random_token()
         value = self.repository.call('issue_admin_proof', dict(token_hash=digest('session', ctx.session),
             proof_hash=proof_hash, id=str(uuid4()), reauth_hash=digest('reauth', token), purpose=operation['purpose'],
-            target_id=str(principal.user_id), commitment=self.auth.crypto.commitment('operation', operation),
+            target_id=operation['target']['id'], commitment=self.auth.crypto.commitment('operation', operation),
             operation_key=operation['candidate_parameters']['idempotency_key']))
         return AuthReply(dict(reauth_token=token, expires_at=value['expires_at']))
 
@@ -111,15 +129,26 @@ class BillingAdmin:
             raise AuthRejected('VALIDATION_FAILED', 422) from None
         return AuthReply(self._quota(ctx, owner_id))
 
-    def apply(self, ctx, purpose, body, key):
+    def apply(self, ctx, purpose, body, key, *, target_id=None):
         principal = self._principal(ctx, write=True)
         if not ctx.reauth:
             raise AuthRejected('REAUTH_REQUIRED', 403)
         if not body.get('reason', '').strip():
             raise AuthRejected('VALIDATION_FAILED', 422)
-        operation = dict(purpose=purpose, target=dict(kind='account', id=str(principal.user_id)),
+        kind = self.TARGET_KINDS[purpose]
+        target_id = str(principal.user_id) if kind == 'account' else target_id
+        operation = dict(purpose=purpose, target=dict(kind=kind, id=target_id),
                          candidate_parameters=dict(idempotency_key=key, body=body))
-        result = self.repository.call('apply_admin', dict(token_hash=digest('session', ctx.session),
-            reauth_hash=digest('reauth', ctx.reauth), purpose=purpose, body=body, operation_key=key,
-            commitment=self.auth.crypto.commitment('operation', operation)))
+        payload = dict(token_hash=digest('session', ctx.session), reauth_hash=digest('reauth', ctx.reauth),
+            purpose=purpose, target_id=target_id, body=body, operation_key=key,
+            commitment=self.auth.crypto.commitment('operation', operation))
+        token = None
+        if purpose in ('adminCreateInvitation', 'adminReissueInvitation'):
+            token = random_token()
+            payload['invitation_hash'] = token_digest(token).hex()
+            if purpose == 'adminCreateInvitation' and body['kind'] == 'email_bound':
+                payload['email_binding'] = normalize_email(body['email'])
+        result = self.repository.call('apply_admin', payload)
+        if token is not None:
+            return AuthReply(dict(invitation=result, one_time_token=token))
         return AuthReply(self._quota(ctx, UUID(result['user_id'])) if purpose == 'adminAdjustQuota' else result)

@@ -165,9 +165,105 @@ BEGIN
 END $f$;
 ALTER FUNCTION billing_api.adjustment_period(jsonb) OWNER TO classroom_billing_control;
 GRANT EXECUTE ON FUNCTION billing_api.adjustment_period(jsonb) TO classroom_web_session_writer;
+
+-- Only the existing NOLOGIN session definer gains these columns. The HTTP
+-- gateway still has no table privileges, and receives no invitation digests.
+GRANT UPDATE(state) ON public.users TO classroom_web_session_writer;
+GRANT SELECT(id,created_at,updated_at,revision,status,email_binding,expires_at),
+  INSERT(id,token_hash,email_binding,status,expires_at,created_by),
+  UPDATE(token_hash,status,expires_at,revision,updated_at) ON public.invitations TO classroom_web_session_writer;
+CREATE POLICY admin_invitation ON public.invitations TO classroom_web_session_writer USING(true) WITH CHECK(true);
+GRANT SELECT(id,invitation_id,expires_at,consumed_at), UPDATE(consumed_at)
+  ON public.pending_registrations TO classroom_web_session_writer;
+CREATE POLICY admin_pending_registration ON public.pending_registrations TO classroom_web_session_writer USING(true) WITH CHECK(true);
+ALTER TABLE identity_control.identity_control_audit ADD COLUMN reason text;
+ALTER TABLE identity_control.identity_control_audit ADD CONSTRAINT admin_write_audit_reason CHECK (
+  action NOT IN ('adminUpdateUser','adminCreateInvitation','adminRevokeInvitation','adminReissueInvitation')
+  OR (actor_id IS NOT NULL AND target_id IS NOT NULL AND reason IS NOT NULL AND length(reason) BETWEEN 1 AND 500)
+);
+
+-- A NULL patch only resolves a receipt against the current authorized view.
+CREATE FUNCTION billing_api.admin_user_state(target uuid, patch jsonb) RETURNS jsonb
+LANGUAGE plpgsql SET search_path=pg_catalog AS $f$
+DECLARE u record;
+BEGIN
+  SELECT id,revision,created_at,updated_at,role,state,normalized_email,profile,email_verified_at,password_hash IS NOT NULL AS has_password,
+    deleted_at,security_epoch INTO u FROM public.users WHERE id=target FOR UPDATE;
+  IF NOT FOUND THEN
+    IF EXISTS (SELECT 1 FROM public.pending_registrations WHERE id=target AND consumed_at IS NULL
+               AND expires_at>clock_timestamp()) THEN RETURN jsonb_build_object('error','VALIDATION_FAILED');END IF;
+    RETURN jsonb_build_object('error','NOT_FOUND');
+  END IF;
+  IF u.state IN ('erasing','erased') OR u.deleted_at IS NOT NULL THEN RETURN jsonb_build_object('error','GONE');END IF;
+  IF u.normalized_email IS NULL THEN RETURN jsonb_build_object('error','NOT_FOUND');END IF;
+  IF patch IS NOT NULL THEN
+    IF (patch->>'base_revision')::bigint IS DISTINCT FROM u.revision THEN
+      RETURN jsonb_build_object('error','REVISION_CONFLICT','current_revision',u.revision);END IF;
+    IF u.email_verified_at IS NULL OR NOT u.has_password OR patch->>'status' IS NULL OR patch->>'status' NOT IN ('active','disabled') THEN
+      RETURN jsonb_build_object('error','VALIDATION_FAILED');END IF;
+    UPDATE public.users SET state=patch->>'status', revision=revision+1, updated_at=clock_timestamp(),
+      security_epoch=security_epoch+CASE WHEN patch->>'status'='disabled' THEN 1 ELSE 0 END
+      WHERE id=target RETURNING state,revision,updated_at,security_epoch INTO u.state,u.revision,u.updated_at,u.security_epoch;
+    IF u.state='disabled' THEN
+      PERFORM identity_api.revoke_derived(target);
+      INSERT INTO identity_control.identity_revocation_notices(id,subject_id,security_epoch)
+        VALUES(gen_random_uuid(),target,u.security_epoch);
+    END IF;
+  END IF;
+  RETURN jsonb_build_object('id',u.id,'revision',u.revision,'created_at',u.created_at,'updated_at',u.updated_at,
+    'role',u.role,'status',u.state,'email',u.normalized_email,'nickname',coalesce(u.profile->>'nickname',''),
+    'school',coalesce(u.profile->>'school',''),'major',coalesce(u.profile->>'major',''),
+    'mfa_enabled',EXISTS(SELECT 1 FROM public.mfa_credentials WHERE owner_id=target AND state='active'));
+END $f$;
+ALTER FUNCTION billing_api.admin_user_state(uuid,jsonb) OWNER TO classroom_web_session_writer;
+
+CREATE FUNCTION billing_api.admin_invitation_state(actor uuid,target uuid,action text,p jsonb) RETURNS jsonb
+LANGUAGE plpgsql SET search_path=pg_catalog AS $f$
+DECLARE inv record; n timestamptz; b jsonb:=p->'body'; binding text:=p->>'email_binding';
+BEGIN
+  IF action IN ('adminCreateInvitation','adminReissueInvitation') AND
+     (p->>'invitation_hash' IS NULL OR p->>'invitation_hash' !~ '^[0-9a-f]{64}$') THEN
+    RETURN jsonb_build_object('error','VALIDATION_FAILED');
+  END IF;
+  IF action='adminCreateInvitation' THEN
+    IF b->>'kind' IS NULL OR b->>'kind' NOT IN ('single_use','email_bound')
+       OR (b->>'kind'='email_bound') IS DISTINCT FROM (b ? 'email')
+       OR (b->>'kind'='email_bound') IS DISTINCT FROM (binding IS NOT NULL) THEN
+      RETURN jsonb_build_object('error','VALIDATION_FAILED');END IF;
+    target:=gen_random_uuid();
+    INSERT INTO public.invitations(id,token_hash,email_binding,status,expires_at,created_by)
+      VALUES(target,decode(p->>'invitation_hash','hex'),binding,'open',clock_timestamp()+interval '168 hours',actor);
+  ELSIF action IN ('adminReissueInvitation','adminRevokeInvitation') THEN
+    SELECT status,expires_at INTO inv FROM public.invitations WHERE id=target FOR UPDATE;
+    IF NOT FOUND THEN RETURN jsonb_build_object('error','NOT_FOUND');END IF;
+    n:=clock_timestamp();
+    IF inv.status NOT IN ('open','expired') OR
+       (action='adminRevokeInvitation' AND (inv.status<>'open' OR inv.expires_at<=n)) THEN
+      RETURN jsonb_build_object('error','INVITATION_UNAVAILABLE');END IF;
+    -- Registration takes the invitation lock before consuming an email proof.
+    -- Reissuing the same invitation ID must also retire proofs and pending mail
+    -- derived from the previous secret; 03a ignores consumed registrations.
+    UPDATE public.pending_registrations SET consumed_at=n WHERE invitation_id=target AND consumed_at IS NULL;
+    IF action='adminReissueInvitation' THEN
+      UPDATE public.invitations SET token_hash=decode(p->>'invitation_hash','hex'), status='open',
+        expires_at=n+interval '168 hours', revision=revision+1, updated_at=n WHERE id=target;
+    ELSE
+      UPDATE public.invitations SET status='revoked', revision=revision+1, updated_at=n WHERE id=target;
+    END IF;
+  END IF;
+  SELECT id,status,email_binding,expires_at,revision,created_at,updated_at INTO inv FROM public.invitations WHERE id=target;
+  IF NOT FOUND THEN RETURN jsonb_build_object('error','NOT_FOUND');END IF;
+  RETURN jsonb_build_object('id',inv.id,'revision',inv.revision,'created_at',inv.created_at,'updated_at',inv.updated_at,
+    'kind',CASE WHEN inv.email_binding IS NULL THEN 'single_use' ELSE 'email_bound' END,
+    'email_hint',CASE WHEN inv.email_binding IS NOT NULL THEN left(left(inv.email_binding,1)||'***@'||split_part(inv.email_binding,'@',2),254) END,
+    'state',CASE WHEN inv.status='open' AND inv.expires_at<=clock_timestamp() THEN 'expired'
+                 WHEN inv.status='open' THEN 'issued' ELSE inv.status END,'expires_at',inv.expires_at);
+END $f$;
+ALTER FUNCTION billing_api.admin_invitation_state(uuid,uuid,text,jsonb) OWNER TO classroom_web_session_writer;
+
 CREATE FUNCTION billing_api.issue_admin_proof(p jsonb) RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog AS $f$
-DECLARE s jsonb;a public.auth_challenges%ROWTYPE;n timestamptz;
+DECLARE s jsonb;a public.auth_challenges%ROWTYPE;n timestamptz;action text:=p->>'purpose';target uuid:=(p->>'target_id')::uuid;
 BEGIN
   s:=identity_api.lock_account(p);
   IF s IS NULL OR s->>'role'<>'admin' OR s->>'mfa_level'<>'totp' THEN RETURN jsonb_build_object('error','FORBIDDEN');END IF;
@@ -177,11 +273,13 @@ BEGIN
   IF a.id IS NULL OR a.consumed_at IS NOT NULL OR n>=a.expires_at OR a.security_epoch<>(s->>'epoch')::bigint
     OR a.scope->>'mode'<>'reauth' OR a.scope->>'mfa_level'<>'totp'
     OR a.scope->>'binding' IS DISTINCT FROM p->>'commitment'
-    OR p->>'purpose' NOT IN ('adminUpdateSwitches','adminAdjustQuota') OR p->>'target_id'<>s->>'owner_id' THEN RETURN NULL;END IF;
+    OR action IS NULL OR target IS NULL
+    OR action NOT IN ('adminUpdateSwitches','adminAdjustQuota','adminUpdateUser','adminCreateInvitation','adminRevokeInvitation','adminReissueInvitation')
+    OR (action IN ('adminUpdateSwitches','adminAdjustQuota','adminCreateInvitation') AND target<>a.owner_id) THEN RETURN NULL;END IF;
   INSERT INTO public.reauth_proofs(id,owner_id,session_id,device_id,security_epoch,token_hash,purpose,target_id,
       commitment,operation_key,verified_at,expires_at)
     VALUES((p->>'id')::uuid,a.owner_id,(s->>'session_id')::uuid,(s->>'device_id')::uuid,a.security_epoch,p->>'reauth_hash',
-      p->>'purpose',a.owner_id,p->>'commitment',(p->>'operation_key')::uuid,(a.scope->>'verified_at')::timestamptz,
+      action,target,p->>'commitment',(p->>'operation_key')::uuid,(a.scope->>'verified_at')::timestamptz,
       least(a.expires_at,(s->>'expires_at')::timestamptz));
   UPDATE public.auth_challenges SET consumed_at=n WHERE id=a.id;
   RETURN jsonb_build_object('expires_at',least(a.expires_at,(s->>'expires_at')::timestamptz));
@@ -192,14 +290,26 @@ CREATE FUNCTION billing_api.apply_admin(p jsonb) RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog AS $f$
 DECLARE s jsonb;r public.reauth_proofs%ROWTYPE;old public.preauth_receipts%ROWTYPE;
   answer jsonb;n timestamptz;uid uuid;action text:=p->>'purpose';b jsonb:=p->'body';q uuid;
-  receipt_context text;op uuid:=(p->>'operation_key')::uuid;
+  receipt_context text;receipt_result jsonb;op uuid:=(p->>'operation_key')::uuid;target uuid:=(p->>'target_id')::uuid;
+  secret boolean:=action IN ('adminCreateInvitation','adminReissueInvitation');
 BEGIN
+  -- A pair of admins can target each other. Lock both users in UUID order
+  -- before lock_account obtains the actor, then recheck the live session.
+  IF action='adminUpdateUser' THEN
+    PERFORM u.id FROM public.users u JOIN public.auth_sessions sess ON u.id IN (sess.owner_id,target)
+      WHERE sess.token_hash=p->>'token_hash' AND sess.role='admin' AND sess.revoked_at IS NULL
+      ORDER BY u.id FOR UPDATE OF u;
+  END IF;
   s:=identity_api.lock_account(p);
   IF s IS NULL OR s->>'role'<>'admin' OR s->>'mfa_level'<>'totp' THEN RETURN jsonb_build_object('error','FORBIDDEN');END IF;
   uid:=(s->>'owner_id')::uuid;
-  IF action NOT IN ('adminUpdateSwitches','adminAdjustQuota') OR b->>'reason' IS NULL OR length(btrim(b->>'reason'))=0 THEN
+  IF action IS NULL OR target IS NULL OR op IS NULL
+    OR action NOT IN ('adminUpdateSwitches','adminAdjustQuota','adminUpdateUser','adminCreateInvitation','adminRevokeInvitation','adminReissueInvitation')
+    OR b->>'reason' IS NULL OR length(b->>'reason') NOT BETWEEN 1 AND 500 OR length(btrim(b->>'reason'))=0 THEN
     RETURN jsonb_build_object('error','VALIDATION_FAILED');END IF;
-  receipt_context:=CASE WHEN action='adminUpdateSwitches' THEN uid::text ELSE p->>'token_hash' END;
+  IF action IN ('adminUpdateSwitches','adminAdjustQuota','adminCreateInvitation') AND target<>uid THEN
+    RETURN jsonb_build_object('error','REAUTH_REQUIRED');END IF;
+  receipt_context:=CASE WHEN action='adminAdjustQuota' THEN p->>'token_hash' ELSE uid::text END;
   SELECT * INTO old FROM public.preauth_receipts WHERE context_hash=receipt_context AND operation=action
     AND operation_key=op;
   IF NOT FOUND AND action='adminUpdateSwitches' THEN
@@ -216,27 +326,44 @@ BEGIN
   SELECT * INTO r FROM public.reauth_proofs WHERE token_hash=p->>'reauth_hash' AND owner_id=uid FOR UPDATE;
   n:=clock_timestamp();
   IF r.id IS NULL OR r.session_id<>(s->>'session_id')::uuid OR r.device_id<>(s->>'device_id')::uuid OR r.security_epoch<>(s->>'epoch')::bigint
-    OR r.purpose<>action OR r.target_id<>uid OR r.commitment IS DISTINCT FROM p->>'commitment'
-    OR r.operation_key<>op OR (r.consumed_at IS NULL AND n>=r.expires_at)
+    OR r.purpose<>action OR r.target_id IS DISTINCT FROM target OR r.commitment IS DISTINCT FROM p->>'commitment'
+    OR r.operation_key<>op OR (n>=r.expires_at AND (r.consumed_at IS NULL OR action<>'adminUpdateSwitches'))
     OR (r.consumed_at IS NOT NULL AND old.operation_key IS NULL) THEN
     RETURN jsonb_build_object('error','REAUTH_REQUIRED');END IF;
   IF old.operation_key IS NOT NULL THEN
     IF r.consumed_at IS NULL THEN UPDATE public.reauth_proofs SET consumed_at=n WHERE id=r.id;END IF;
+    IF old.secret THEN RETURN jsonb_build_object('error','SECRET_ALREADY_ISSUED');END IF;
+    IF action='adminUpdateUser' THEN RETURN billing_api.admin_user_state((old.result->>'id')::uuid,NULL);END IF;
+    IF action='adminRevokeInvitation' THEN
+      RETURN billing_api.admin_invitation_state(uid,(old.result->>'id')::uuid,NULL,NULL);END IF;
     RETURN billing_api.with_switch_summaries(old.result);
   ELSIF action='adminUpdateSwitches' THEN
     answer:=billing_api.apply_switch_body(uid,op,b);
     IF answer ? 'error' THEN RETURN answer;END IF;
-  ELSE
+  ELSIF action='adminAdjustQuota' THEN
     PERFORM set_config('app.owner_id',b->>'user_id',true);
     q:=billing_api.adjustment_period(b);
     IF q IS NULL THEN RETURN jsonb_build_object('error','NOT_FOUND');END IF;
     PERFORM billing_api.adjust_quota(uid,op,q,(b->>'additional_units')::bigint,b->>'reason');
     answer:=jsonb_build_object('user_id',b->>'user_id');
+  ELSE
+    IF action='adminUpdateUser' THEN
+      IF target=uid THEN RETURN jsonb_build_object('error','FORBIDDEN');END IF;
+      answer:=billing_api.admin_user_state(target,b);
+    ELSE
+      answer:=billing_api.admin_invitation_state(uid,target,action,p);
+    END IF;
+    IF answer ? 'error' THEN RETURN answer;END IF;
+    INSERT INTO identity_control.identity_control_audit(id,actor_id,subject_id,action,target_id,reason)
+      VALUES(gen_random_uuid(),uid,CASE WHEN action='adminUpdateUser' THEN target END,action,(answer->>'id')::uuid,b->>'reason');
   END IF;
   IF clock_timestamp()>=r.expires_at THEN RAISE EXCEPTION 'reauth expired' USING ERRCODE='42501';END IF;
   UPDATE public.reauth_proofs SET consumed_at=clock_timestamp() WHERE id=r.id;
+  receipt_result:=CASE WHEN secret THEN NULL
+    WHEN action IN ('adminUpdateUser','adminRevokeInvitation') THEN jsonb_build_object('id',answer->'id')
+    ELSE answer END;
   INSERT INTO public.preauth_receipts(context_hash,operation,operation_key,commitment,secret,result)
-    VALUES(receipt_context,action,op,p->>'commitment',false,answer);
+    VALUES(receipt_context,action,op,p->>'commitment',secret,receipt_result);
   RETURN answer;
 END $f$;
 ALTER FUNCTION billing_api.apply_admin(jsonb) OWNER TO classroom_web_session_writer;

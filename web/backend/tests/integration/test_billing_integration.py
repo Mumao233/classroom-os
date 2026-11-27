@@ -152,8 +152,8 @@ def headers(session, **extra):
             'Idempotency-Key':str(uuid4()),**extra}
 
 
-def prove(api,session,seed,purpose,body,key):
-    operation=dict(purpose=purpose,target=dict(kind='account',id=str(api.a.uid)),candidate_parameters=dict(idempotency_key=key,body=body))
+def prove(api,session,seed,purpose,body,key,*,target=None):
+    operation=dict(purpose=purpose,target=target or dict(kind='account',id=str(api.a.uid)),candidate_parameters=dict(idempotency_key=key,body=body))
     code=pyotp.TOTP(seed).at(datetime.now(timezone.utc)+timedelta(seconds=30))
     response=api.client.post(BASE+'/auth/reauth',json=dict(password=PASSWORD,mfa_code=code,operation=operation),headers=headers(session))
     assert response.status_code==200,response.text
@@ -745,6 +745,7 @@ def test_formal_invalid_admin_candidates_are_rejected_before_password_or_totp(fe
         ('adminCreateInvitation', 'account', key, dict(kind='single_use', reason='\u2028\u2029')),
         ('adminCreateInvitation', 'account', key, dict(kind='single_use', email='tester@example.test', reason=reason)),
         ('adminCreateInvitation', 'account', key, dict(kind='email_bound', reason=reason)),
+        ('adminCreateInvitation', 'account', key, dict(kind='email_bound', email='tester@localhost', reason=reason)),
         ('adminRevokeInvitation', 'invitation', key + '\n', dict(reason=reason)),
         ('adminReissueInvitation', 'invitation', key, dict(reason='\u0085\ufeff')),
     )
@@ -775,12 +776,14 @@ def test_formal_invalid_admin_candidates_are_rejected_before_password_or_totp(fe
     # Exercise the mounted write validators with a real, still usable proof.
     proof = prove(api, session, seed, 'adminUpdateSwitches', switch, key)
     for purpose, _, future_key, body in invalid:
-        if purpose == 'adminUpdateSwitches':
-            method, path = 'PATCH', '/admin/switches'
-        elif purpose == 'adminAdjustQuota':
-            method, path = 'POST', '/admin/quota-adjustments'
-        else:
-            continue
+        method, path = {
+            'adminUpdateSwitches': ('PATCH', '/admin/switches'),
+            'adminAdjustQuota': ('POST', '/admin/quota-adjustments'),
+            'adminUpdateUser': ('PATCH', '/admin/users/' + user_id),
+            'adminCreateInvitation': ('POST', '/admin/invitations'),
+            'adminRevokeInvitation': ('POST', f'/admin/invitations/{user_id}/revoke'),
+            'adminReissueInvitation': ('POST', f'/admin/invitations/{user_id}/reissue'),
+        }[purpose]
         write_headers = headers(session, **{**proof, 'Idempotency-Key': future_key})
         response = api.client.request(method, BASE + path, json=body, headers=write_headers)
         assert response.status_code == 422 and response.json()['error']['code'] == 'VALIDATION_FAILED', response.text
@@ -794,6 +797,9 @@ def test_formal_invalid_admin_candidates_are_rejected_before_password_or_totp(fe
 def test_formal_reauth_without_admin_write_handler_stays_disabled(fee_api):
     api = fee_api
     session, _ = sign_in(api, administrator=True)
+    # Both apps share AuthService. Reauthentication must use the consumer mounted on this app.
+    api.a.service.admin_reauth = api.admin
+    api.a.client.cookies.update(api.client.cookies)
     reason = {'reason': 'Synthetic administration'}
     for purpose, kind, body in (
         ('adminUpdateUser', 'user', dict(base_revision=1, status='disabled', **reason)),
@@ -804,12 +810,9 @@ def test_formal_reauth_without_admin_write_handler_stays_disabled(fee_api):
         target_id = str(api.a.uid) if kind == 'account' else str(uuid4())
         operation = dict(purpose=purpose, target=dict(kind=kind, id=target_id),
                          candidate_parameters=dict(idempotency_key=str(uuid4()), body=body))
-        response = api.client.post(BASE + '/auth/reauth', json=dict(password=PASSWORD, operation=operation),
+        response = api.a.client.post(BASE + '/auth/reauth', json=dict(password=PASSWORD, operation=operation),
                                    headers=headers(session))
         assert response.status_code == 503 and response.json()['error']['code'] == 'SERVICE_DISABLED', response.text
-    # Both apps share AuthService, but only the billing app mounted a write consumer.
-    api.a.service.admin_reauth = api.admin
-    api.a.client.cookies.update(api.client.cookies)
     switches = dict(purpose='adminUpdateSwitches', target=dict(kind='account', id=str(api.a.uid)),
                     candidate_parameters=dict(idempotency_key=str(uuid4()), body=dict(base_revision=1, ai_enabled=False, **reason)))
     disabled = api.a.client.post(BASE + '/auth/reauth', json=dict(password=PASSWORD, operation=switches), headers=headers(session))
@@ -979,6 +982,7 @@ def test_admin_numbers_preserve_precision_before_factors_and_writes(fee_api):
         ('POST', '/auth/reauth', proof_body('adminUpdateUser', 'user', user)),
         ('POST', '/auth/reauth', proof_body('adminUpdateSwitches', 'account', switch)),
         ('POST', '/auth/reauth', proof_body('adminAdjustQuota', 'account', quota)),
+        ('PATCH', '/admin/users/' + user_id, user),
         ('PATCH', '/admin/switches', switch),
         ('POST', '/admin/quota-adjustments', quota),
     )
