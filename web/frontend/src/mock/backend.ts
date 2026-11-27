@@ -206,8 +206,9 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
   }, accounts.map(account => stores[account].user));
   for (const account of accounts) stores[account].quota = admin.gate(stores[account].quota);
 
-  const error = (status: number, code: ErrorCode, message: string, currentRevision: number | null = null): MockReply =>
-    ({ status, body: { error: { code, message, request_id: newId(), retryable: false, retry_after_seconds: null, current_revision: currentRevision, conflict_id: null, task_id: null } } });
+  const error = (status: number, code: ErrorCode, message: string, currentRevision: number | null = null,
+    details?: Partial<Pick<S['Error']['error'], 'retryable' | 'conflict_id'>>): MockReply =>
+    ({ status, body: { error: { code, message, request_id: newId(), retryable: false, retry_after_seconds: null, current_revision: currentRevision, conflict_id: null, task_id: null, ...details } } });
   const ok = (body: unknown, status = 200): MockReply => ({ status, body });
   const page = <T>(items: T[]) => ok({ items, next_cursor: null });
   const touch = <T extends { revision: number; updated_at: string }>(value: T): T => ({ ...value, revision: value.revision + 1, updated_at: now() });
@@ -306,6 +307,7 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
       courseExists: id => Boolean(findCourse(store, id)),
       firstCourseId: () => liveCourses(store).find(course => !course.archived)?.id ?? null,
       quota: () => store.quota,
+      newCaptureEnabled: () => admin.switches().new_capture_enabled,
       service: switch_ => admin.serviceEnabled(switch_),
       addQuestion: question => { store.questions = [...store.questions, question]; },
       updateQuestion: (taskId, change) => { store.questions = store.questions.map(item => item.task_id === taskId ? { ...item, ...change, revision: item.revision + 1, updated_at: now() } : item); },
@@ -342,6 +344,13 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
   }
   function classroomHelpers(account: MockAccountKey): ClassroomHelpers {
     return { now, newId, error, idempotent: (key, scope, body, run) => idempotent(stores[account], key, scope, body, run) };
+  }
+
+  // The demo runtime can bind a server-issued lease after closure. It cannot mint its own epoch.
+  function canBindCapture(account: MockAccountKey, classId: string, epochId: string, fence: number) {
+    if (admin.switches().new_capture_enabled) return true;
+    const lease = classrooms[account].leases.get(classId);
+    return lease?.capture_epoch_id === epochId && lease.fence_token === fence && Date.parse(lease.expires_at) > Date.parse(now());
   }
 
   function handle(account: MockAccountKey, method: string, path: string, query: URLSearchParams, rawBody: unknown, key: string | null, reauth: string | null = null, generation?: number): MockReply | null {
@@ -605,7 +614,9 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
       if (!admitted && !asrAdmits(account, input.classId, input.streamId)) return;
       persistFinal(classrooms[account], classroomHost(account), classroomHelpers(account), input);
     },
-    ensureDemoClassroom: (account: MockAccountKey, input: Parameters<typeof ensureDemoClassroom>[3]) => ensureDemoClassroom(classrooms[account], classroomHost(account), classroomHelpers(account), input),
+    canBindCapture,
+    ensureDemoClassroom: (account: MockAccountKey, input: Parameters<typeof ensureDemoClassroom>[3]) =>
+      canBindCapture(account, input.classId, input.captureEpochId, input.fenceToken) && ensureDemoClassroom(classrooms[account], classroomHost(account), classroomHelpers(account), input),
     setDurable: (account: MockAccountKey, classId: string, captureEpochId: string, seqs: number[]) => recordDurable(classrooms[account], classroomHost(account), classroomHelpers(account), classId, captureEpochId, seqs),
     releaseLease: (account: MockAccountKey, classId: string) => releaseLease(classrooms[account], classroomHost(account), classroomHelpers(account), classId),
     releaseAccountLeases: (account: MockAccountKey) => releaseAccountLeases(classrooms[account], classroomHost(account), classroomHelpers(account)),

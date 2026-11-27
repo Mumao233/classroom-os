@@ -24,7 +24,7 @@ from test_capture_recovery import (
 @pytest.fixture
 def live(capture, fee_control):
     m, fees = capture, fee_control
-    flags = {'billing': True, 'asr_streaming': True}
+    flags = {'new_capture': True, 'billing': True, 'asr_streaming': True}
     price = uuid4()
     rates = {key: {'microyuan': rate, 'units': 1} for key, rate in
              (('audio_duration_ms', 0), ('input_tokens', 1), ('output_tokens', 1))}

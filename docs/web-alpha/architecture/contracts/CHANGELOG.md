@@ -1,5 +1,11 @@
 # Classroom OS契约变更记录
 
+## 0.4.0 补充 · 2026-11-27 · 新采集开关
+
+负责人林珈诚确认方案 A（AUTH-07、REC-01）。`adminUpdateSwitches` 可通过 CAS 改变 `new_capture_enabled`，GET 与回执继续返回原结构。关闸后首次采集、跨课堂接管、租约过期或停止后的重新申请均返回 `503 SERVICE_DISABLED`。同一课堂内的有效租约仍可续租、显式接管或暂停后恢复。开闸后原有租约、凭证、同意和幂等检查继续生效。
+
+本次更新 `AdminSwitches`、`AdminSwitchesPatch` 和 acquire、renew、resume 的描述、样例、生成类型及 Mock。请求、响应、封闭枚举和最低客户端能力均沿用 HTTP 0.4.0。旧客户端能够解析关闸错误，旧管理页面需由前端更新控件才能切换该项。两份 SQL 候选须配套安装到 sql-4，原存储值立即用于准入。[负责人裁决与数据库锁序](../../coordination/PR11B-CONTRACT-DECISION-20261124.md#负责人裁决-2026-11-27方案-a)
+
 ## 0.4.0 · 2026-11-24 · PR-11b 运营后台写入和用量
 
 负责人林珈诚。关联 AUTH-07、AUTH-02、QUOTA-01、COST-01/02。邀请创建、撤销、重签改为必填操作者理由，旧请求在新版本下返回 422。六种敏感写入进入封闭的 `ReauthOperation`，因此本次按 Alpha 破坏性次版本交接。HTTP 路径前缀沿用 `/api/web/v1`。

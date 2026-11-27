@@ -32,6 +32,20 @@ class PgCaptureRepository(PgMediaRepository):
     def lease(self):
         return self.execute('SELECT * FROM capture_leases WHERE owner_id=:owner FOR UPDATE').mappings().one_or_none()
 
+    def lock_new_capture_enabled(self):
+        # Standalone PR-05b uses capture_policy alone. An installed billing schema
+        # must supply the scalar reader; never treat an incomplete upgrade as open.
+        has_reader = self.execute("""SELECT to_regprocedure('billing_api.new_capture_enabled()') IS NOT NULL
+            FROM pg_catalog.pg_namespace WHERE nspname='billing_api'""").scalar_one_or_none()
+        if has_reader is None:
+            return True
+        if not has_reader:
+            raise AuthRejected('SERVICE_DISABLED', 503)
+        enabled = self.execute('SELECT billing_api.new_capture_enabled()').scalar_one()
+        if enabled is None:
+            raise AuthRejected('SERVICE_DISABLED', 503)
+        return enabled
+
     def _manifest_signature(self, classroom, payload):
         key = self.tx.events.secret
         if key is None:

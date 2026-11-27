@@ -424,8 +424,6 @@ export function createAdminBackend(host: AdminHost, accountUsers: S['User'][]) {
         return write(actorId, 'adminUpdateSwitches', null, key, reauth, body, false, () => {
           if (switches.revision !== body.base_revision) return fail(409, 'REVISION_CONFLICT', '平台开关已被其他管理员更新', switches.revision);
           if ('max_active_users' in body && body.max_active_users !== switches.max_active_users) return fail(503, 'SERVICE_DISABLED', '活跃用户阶段切换尚未开放');
-          // Capture lease admission does not enforce this setting yet (0.4.0): changing it is refused.
-          if ('new_capture_enabled' in body && body.new_capture_enabled !== switches.new_capture_enabled) return fail(503, 'SERVICE_DISABLED', '新采集开关暂未接入采集准入');
           const change: Partial<SwitchConfig> = {};
           for (const field of ['registration_enabled', 'billing_enabled', 'new_capture_enabled', 'asr_streaming_enabled', 'asr_filetrans_enabled', 'ai_interaction_enabled', 'ai_summary_enabled'] as const) if (field in body) change[field] = body[field] as boolean;
           if ('max_active_users' in body) change.max_active_users = body.max_active_users as SwitchConfig['max_active_users'];

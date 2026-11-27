@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { components } from '../src/generated/openapi';
-import { createMockBackend, type MockAccountKey } from '../src/mock/backend';
+import { createMockBackend, mockIds, type MockAccountKey } from '../src/mock/backend';
+import { createMockRuntime } from '../src/mock/runtime';
 import type { AdminOperationId } from '../src/mock/admin-backend';
 
 type S = components['schemas'];
@@ -13,9 +14,9 @@ const ISSUED = 'd0000000-0000-4000-8000-000000000101';
 const CONSUMED = 'd0000000-0000-4000-8000-000000000102';
 const EXPIRED = 'd0000000-0000-4000-8000-000000000104';
 
-function harness() {
+function harness(now?: () => string) {
   let clock = 1_000_000;
-  const backend = createMockBackend({ clockMs: () => clock });
+  const backend = createMockBackend({ clockMs: () => clock, now });
   let n = 0;
   const newKey = () => `00000000-0000-4000-8000-${String(++n).padStart(12, '0')}`;
   const call = (account: MockAccountKey, method: string, path: string, body?: unknown, query = '', key?: string | null, reauth?: string | null) =>
@@ -438,9 +439,9 @@ describe('PR-11b on HTTP 0.4.0 (mock)', () => {
     expect(err(call('C', 'PATCH', '/admin/switches', { base_revision: 2, asr_enabled: false, asr_filetrans_enabled: false, reason: 'x' }))).toBe('VALIDATION_FAILED');
     const group = write('adminUpdateSwitches', null, 'PATCH', '/admin/switches', { base_revision: 2, ai_enabled: false, reason: '合成' }).reply.body as S['AdminSwitches'];
     expect(group).toMatchObject({ ai_interaction_enabled: false, ai_summary_enabled: false, ai_enabled: false });
-    // The new-capture switch is stored but not enforced by capture admission yet: changing it is refused.
-    expect(err(write('adminUpdateSwitches', null, 'PATCH', '/admin/switches', { base_revision: 3, new_capture_enabled: false, reason: '合成' }).reply)).toBe('SERVICE_DISABLED');
-    expect(write('adminUpdateSwitches', null, 'PATCH', '/admin/switches', { base_revision: 3, new_capture_enabled: true, registration_enabled: false, reason: '合成' }).reply.status).toBe(200);
+    const closed = write('adminUpdateSwitches', null, 'PATCH', '/admin/switches', { base_revision: 3, new_capture_enabled: false, registration_enabled: false, reason: '合成' }).reply;
+    expect(closed.status).toBe(200);
+    expect(closed.body).toMatchObject({ revision: 4, new_capture_enabled: false, registration_enabled: false });
     // The billing master closes every group in the quota view.
     write('adminUpdateSwitches', null, 'PATCH', '/admin/switches', { base_revision: 4, billing_enabled: false, reason: '合成：总闸' });
     expect(call('A', 'GET', '/me/quota').body).toMatchObject({ asr_enabled: false, ai_enabled: false });
@@ -520,13 +521,21 @@ describe('PR-11b #38 review round 0 regressions (mock)', () => {
 
 describe('PR-11b #38 review round 1 regressions (mock)', () => {
   it('a rejected billing write leaves its proof unused and stores no receipt', () => {
-    const { backend, call, newKey } = harness();
+    const { backend, call, write, newKey } = harness();
     const key = newKey();
-    const body = { base_revision: 1, new_capture_enabled: false, reason: '合成' };
+    const body = { base_revision: 2, new_capture_enabled: false, reason: '合成：关闭新采集' };
     const proof = backend.issueAdminProof('C', { operationId: 'adminUpdateSwitches', targetId: null, idempotencyKey: key, body }, 'p', '123456') as { token: string };
-    expect(err(call('C', 'PATCH', '/admin/switches', body, '', key, proof.token))).toBe('SERVICE_DISABLED');
-    // Same key, body and proof again: still evaluated (no receipt, proof not consumed), never REAUTH_REQUIRED.
-    expect(err(call('C', 'PATCH', '/admin/switches', body, '', key, proof.token))).toBe('SERVICE_DISABLED');
+    expect(err(call('C', 'PATCH', '/admin/switches', body, '', key, proof.token))).toBe('REVISION_CONFLICT');
+    const audit = () => backend.adminAudit().filter(item => item.operation === 'adminUpdateSwitches' && item.reason === body.reason);
+    expect(audit()).toHaveLength(0);
+    expect(write('adminUpdateSwitches', null, 'PATCH', '/admin/switches', { base_revision: 1, new_capture_enabled: true, reason: '合成：仍开放' }).reply.status).toBe(200);
+    const closed = call('C', 'PATCH', '/admin/switches', body, '', key, proof.token);
+    expect(closed.status).toBe(200);
+    expect(closed.body).toMatchObject({ revision: 3, new_capture_enabled: false });
+    expect(write('adminUpdateSwitches', null, 'PATCH', '/admin/switches', { base_revision: 3, new_capture_enabled: true, reason: '合成：恢复' }).reply.status).toBe(200);
+    expect(call('C', 'PATCH', '/admin/switches', body, '', key, proof.token)).toEqual(closed);
+    expect(call('C', 'GET', '/admin/switches').body).toMatchObject({ revision: 4, new_capture_enabled: true });
+    expect(audit()).toHaveLength(1);
   });
 
   it('a proof is good for 120 s from verification', () => {
@@ -560,6 +569,84 @@ describe('PR-11b #38 review round 1 regressions (mock)', () => {
     write('adminUpdateSwitches', null, 'PATCH', '/admin/switches', { base_revision: 1, asr_streaming_enabled: false, reason: '合成' });
     expect(backend.asrAdmits('A', ROOM, STREAM, 'run-1')).toBe(true);
     expect(backend.asrAdmits('A', ROOM, STREAM, 'run-2')).toBe(false);
+  });
+});
+
+describe('PR-11b new capture admission', () => {
+  const acquire = { device_id: 'a2000000-0000-4000-8000-000000000001', microphone_consent_version: 'm', recovery_consent_version: 'r', asr_consent_version: 'a', confirm_takeover: false, expected_lease_id: null };
+  const command = (lease: S['CaptureLease']) => ({ capture_epoch_id: lease.capture_epoch_id, fence_token: lease.fence_token, last_local_seq: 0, last_sample: 0, client_monotonic_ms: 0 });
+
+  function captureHarness() {
+    let now = Date.parse('2026-10-28T08:00:00Z');
+    const { backend, call, write, newKey } = harness(() => new Date(now).toISOString());
+    const room = () => (call('A', 'POST', '/class-sessions', { course_id: mockIds.la, title: '合成采集课堂' }).body as S['ClassSession']).id;
+    const post = (id: string, action: string, body: unknown, key?: string) => call('A', 'POST', `/class-sessions/${id}/capture/${action}`, body, '', key);
+    const toggle = (revision: number, enabled: boolean) => expect(write('adminUpdateSwitches', null, 'PATCH', '/admin/switches',
+      { base_revision: revision, new_capture_enabled: enabled, billing_enabled: false, reason: '合成采集准入' }).reply.status).toBe(200);
+    return { backend, room, post, toggle, newKey, advance: (ms: number) => { now += ms; } };
+  }
+
+  it('continues a valid lease in its classroom after closure, including explicit takeover and resume', () => {
+    const { room, post, toggle, advance, newKey } = captureHarness();
+    const first = room(), second = room(), acquireKey = newKey();
+    const lease = post(first, 'acquire', acquire, acquireKey).body as S['CaptureLease'];
+    toggle(1, false);
+    expect(post(first, 'acquire', acquire, acquireKey).body).toEqual(lease);
+    const takeover = { ...acquire, confirm_takeover: true, expected_lease_id: lease.id };
+    expect(post(second, 'acquire', takeover)).toMatchObject({ status: 503, body: { error: { code: 'SERVICE_DISABLED', retryable: true, conflict_id: null } } });
+    expect(post(first, 'acquire', { ...takeover, expected_lease_id: newKey() })).toMatchObject({ status: 409, body: { error: { code: 'LEASE_CONFLICT', conflict_id: lease.id } } });
+    advance(20_000);
+    const renewed = post(first, 'renew', command(lease)).body as S['CaptureLease'];
+    expect(renewed.id).toBe(lease.id);
+    expect(Date.parse(renewed.expires_at)).toBeGreaterThan(Date.parse(lease.expires_at));
+    advance(15_000);
+    const taken = post(first, 'acquire', takeover);
+    expect(taken.status).toBe(201);
+    const next = taken.body as S['CaptureLease'];
+    expect(next.fence_token).toBe(lease.fence_token + 1);
+    expect(err(post(first, 'acquire', acquire, acquireKey))).toBe('STALE_FENCE');
+    expect(post(first, 'pause', command(next)).status).toBe(200);
+    const resumeKey = newKey();
+    const resumed = post(first, 'resume', command(next), resumeKey);
+    expect(resumed.status).toBe(200);
+    expect((resumed.body as S['CaptureLease']).capture_epoch_id).not.toBe(next.capture_epoch_id);
+    expect(post(first, 'resume', command(next), resumeKey)).toEqual(resumed);
+  });
+
+  it('refuses fresh and expired starts until reopened, without reviving a fenced lease', () => {
+    const { room, post, toggle, advance, newKey } = captureHarness();
+    const first = room(), key = newKey();
+    toggle(1, false);
+    expect(post(first, 'acquire', acquire, key)).toMatchObject({ status: 503, body: { error: { code: 'SERVICE_DISABLED', retryable: true, conflict_id: null } } });
+    toggle(2, true);
+    const started = post(first, 'acquire', acquire, key);
+    expect(started.status).toBe(201);
+    const lease = started.body as S['CaptureLease'];
+    expect(post(first, 'pause', command(lease)).status).toBe(200);
+    toggle(3, false);
+    advance(30_000);
+    expect(err(post(first, 'renew', command(lease)))).toBe('STALE_FENCE');
+    expect(err(post(first, 'resume', command(lease)))).toBe('STALE_FENCE');
+    expect(err(post(first, 'acquire', acquire, key))).toBe('STALE_FENCE');
+    expect(err(post(first, 'acquire', { ...acquire, confirm_takeover: true, expected_lease_id: lease.id }))).toBe('SERVICE_DISABLED');
+    toggle(4, true);
+    expect(post(first, 'acquire', acquire).status).toBe(201);
+  });
+
+  it('a local demo can bind an admitted epoch while closed but cannot start its own', () => {
+    const { backend, room, post, toggle } = captureHarness();
+    const first = room();
+    const lease = post(first, 'acquire', acquire).body as S['CaptureLease'];
+    const runtime = createMockRuntime();
+    runtime.setCaptureAdmission((id, epoch, fence) => backend.canBindCapture('A', id, epoch, fence));
+    toggle(1, false);
+    expect(runtime.start()).toBe(false);
+    expect(runtime.acquireMockLease(first)).toBe(false);
+    expect(runtime.acquireMockLease(first, { captureEpochId: lease.capture_epoch_id, fenceToken: lease.fence_token })).toBe(true);
+    expect(runtime.start()).toBe(true);
+    runtime.stop();
+    expect(runtime.start()).toBe(false);
+    expect(backend.ensureDemoClassroom('A', { classId: first, title: '合成', captureEpochId: first, fenceToken: 1 })).toBe(false);
   });
 });
 

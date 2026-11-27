@@ -83,6 +83,22 @@
 
 [创建、接管与暂停恢复](../../../web/backend/classroom_web/application/capture.py) · [租约锁与课堂范围](../../../web/backend/classroom_web/infrastructure/capture_repository.py) · [采集回归](../../../web/backend/tests/integration/test_capture_recovery.py)
 
+### 负责人裁决 2026-11-27：方案 A
+
+林珈诚选择 A。关闭 `new_capture_enabled` 的目的是暂停新的采集，同时让已在上课的用户续租、换设备或从暂停中恢复。延续的依据是同一账号在目标课堂内仍持有未释放且未过期的租约。接管仍须显式确认并匹配原租约 ID，续租和恢复仍须通过设备、围栏及同意校验。首次申请、跨课堂接管、过期或停止后再申请均受关闸限制，采集申请返回既有的 `503 SERVICE_DISABLED`。向已过期的租约发送续租或恢复命令沿用 `409 STALE_FENCE`。有效回执按原有规则重放。重新开闸即恢复原准入规则。
+
+**并发与权限。** 采集端在创建 epoch 的同一 PostgreSQL 事务内调用无参函数 `billing_api.new_capture_enabled()`。函数只返回布尔值，复用 `lock_switches()` 对开关单例行的 `FOR SHARE` 锁；管理写入用 `FOR UPDATE` 锁同一行。两种锁都持有至事务结束。在 READ COMMITTED 下，管理写入先取得锁且提交时，随后获锁的采集请求读到关闭值；采集先取得锁时，关闸写入等该次采集结束后才可提交。账号和租约锁串行化同一账号的接管与恢复。恢复在释放原租约前核验其有效性，在同一事务中创建下一 epoch。
+
+业务层只依赖采集仓库提供的准入判断。数据库函数以固定搜索路径和定义者权限执行，采集调用方无需开关表读写权限、管理员凭证或收费服务。独立 PR-05b 库尚无 `billing_api` 时，沿用其原采集策略。首次接入账本或升级旧库时，按既有安装流程暂停写入、等待在途事务结束，再切换到配套 SQL。装有账本却缺少新版读取接口时，拒绝新采集。候选库保留原开关值，原先存为 false 的库升级后立即关闸。
+
+**兼容与交接。** 管理 PATCH 将开关、修订号、原因审计、成功回执和绑定凭证消费一并提交。HTTP 0.4.0 已覆盖所需载荷与错误；本次更正已有字段语义，沿用该版本。合成库配套安装 `classroom-admin-0.4.0-sql-4` 的两份 SQL。Mock 与共享样例按同一行为更新；管理页面的编辑控件由 Claude Code 接手。[SQL 安装说明](../pr11a/README.md) · [契约变更记录](../architecture/contracts/CHANGELOG.md)
+
+**方案 A 验证记录。** 基于 `cf46afd` 的工作树共 1,031 个送测文件。2026-11-27 VMware 作业 `b11b-r1-b2dbe34235` 于 20:59–21:24 UTC 执行，传输成功，来宾退出 1。宿主 18 项静态检查通过。来宾冻结契约 9 项、07b 候选 116 项、生成校验 1 项、前端契约 245 项、全量 Vitest 705 项通过。PostgreSQL 17.11 的管理/账本 139 项、身份 243 项、采集/媒体 159 项（含方案 A 的 8 项及双向锁等待）、ASR 147 项、学习流程 324 项通过。
+
+PR-08c 移植包组 15 项通过、1 项失败。5 GB 导入池用例在并发填充对象时，`PortableLifecycle.stage()` 调用 `classroom_web_portable_admit()`，等待 `pg_advisory_xact_lock(41006,21)` 超时。后端累计 1,027 项通过、1 项失败、0 错误、0 跳过，60 个集成模块中 47 个出现在 JUnit。首错停止使该组余项和 foundation 组未执行。真实供应商调用为 0。当时按停止条件保留修改，未提交。原始证据在本工作树 `outputs/pr11b-backend/b11b-r1-b2dbe34235/`。证据 ZIP 的 SHA-256 为 `fe98ec9dbbd9bba8c03d3b05f9284b2b3630d6e079107e2b08ea614d1955667b`，送测源码 ZIP 为 `10ed6b10720b0d1371ddc087aa9278fe86cbb6cf222144f79f4ebcfff41b7dee`。验后仅补入本验证记录。
+
+**复验与对照（2026-11-27）。** 同一工作树原样重跑（作业 `b11b-r1-89f5384d83`，证据 `a983ad394d186247d1f62805f7502f316cb6d3828927dab5bbfce8a4b6a3d00c`）在同一导入池用例、同一把锁上再次超时，其余门禁与首轮一致。随后只跑 portable 组做对照，打开锁等待和慢语句日志（`outputs/pr11b-backend/portable-ab-20261127/REPORT.md`，清单 `81115bcf6b96d750dda6dc55e39a8d4b3b6978cb400224ada5badca0fb781d42`）：干净 `cf46afd` 两轮、带改动两轮，四轮都没有复现 `(41006,21)` 超时，持锁事务都在 `COMMIT` 等待 WAL 写入，持锁不超过 0.4 秒。带改动的两轮在 `_put()` 写对象时返回 `503 STORAGE_UNAVAILABLE`；干净基线两轮的 export 用例出现同类 503，两边整组都有失败（基线 42/2，改动 40/4、42/2）。方案 A 的改动不触及 portable 准入、对象存储或该锁。结论：PR-08c 的 5 GB 池用例在当前 VMware 来宾的 I/O 条件下不稳定，基线同样失败，不归因于方案 A；方案 A 据此提交，池用例的环境不稳定作为遗留问题单独跟进。
+
 [HTTP 契约](../architecture/contracts/openapi.json) · [合成正反例](../architecture/contracts/examples.json) · [上次契约裁决](PR10A-CONTRACT-DECISION-20261122.md)
 
 ## 第 0 轮独立复审核实 · 2026-11-24
@@ -123,7 +139,7 @@
 | 公开字段 | GET / PATCH 的含义 |
 |---|---|
 | `billing_enabled` | 收费总闸。关闭会阻止新的计费准入，保留各分项原配置。 |
-| `new_capture_enabled` | 新采集的独立配置位。2026-11-26 额外复审后，GET 显示存储值，采集准入接入前，PATCH 改变该值返回 503。 |
+| `new_capture_enabled` | GET 显示当前准入值。PATCH 通过 CAS 更新，关闭后仅同课堂有效租约可续租、显式接管和暂停恢复。见上文负责人裁决。 |
 | `asr_streaming_enabled`、`asr_filetrans_enabled` | 分别控制实时 ASR、文件重转写。 |
 | `ai_interaction_enabled`、`ai_summary_enabled` | 分别控制 AI 互动（问答、讲解）和总结。 |
 | `asr_enabled`、`ai_enabled` | 读取为对应组两项配置的 OR。两项都关才显示关，一开一关应按分项显示“部分开启”。PATCH 显式写组字段会把两项都设为该值。 |
@@ -159,6 +175,8 @@ PATCH 只提交有意更改的项，省略项保持原值。一个请求至少�
 [缓存凭证消费](../../../web/backend/classroom_web/application/cache_keys.py) · [05a 候选构建器](../../../tools/pr05a/formal/candidate.py) · [组合与可信缓存回归](../../../web/backend/tests/integration/test_trusted_cache_browser.py)
 
 ## 额外复审核实 · 2026-11-26
+
+下表第 1 项记录当日的临时保护。2026-11-27 的负责人裁决用方案 A 替代了该保护和当时的前端只读建议。
 
 复审输入为 `14201d2080f9014b8656525c527e2170ead77467`。逐项核对生产者、消费者和实际路由后，六项均成立。以下更新仍属未发布的 HTTP 0.4.0。
 

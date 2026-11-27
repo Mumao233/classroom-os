@@ -530,7 +530,7 @@ def test_formal_admin_reauth_and_switch_projection(fee_api):
 
 @pytest.mark.parametrize('fee_api', ['formal'], indirect=True)
 @pytest.mark.parametrize(('stored', 'requested'), [(True, False), (False, True), (False, False)])
-def test_new_capture_switch_declines_transitions_atomically(fee_api, stored, requested):
+def test_new_capture_switch_commits_and_replays_atomically(fee_api, stored, requested):
     api = fee_api
     session, seed = sign_in(api, administrator=True)
     path = BASE + '/admin/switches'
@@ -546,18 +546,25 @@ def test_new_capture_switch_declines_transitions_atomically(fee_api, stored, req
                 billing_enabled=not initial['billing_enabled'], reason='Synthetic capture switch edit')
     proof = prove(api, session, seed, 'adminUpdateSwitches', body, key)
     response = api.client.patch(path, json=body, headers=headers(session, **proof))
-    if requested == stored:
-        assert response.status_code == 200, response.text
-        assert response.json() == {**initial, 'revision': initial['revision'] + 1,
-                                   'billing_enabled': body['billing_enabled']}
-    else:
-        assert response.status_code == 503 and response.json()['error']['code'] == 'SERVICE_DISABLED', response.text
-        assert api.client.get(path).json() == initial
-        with api.c.pg.admin.connect() as db:
-            assert db.scalar(sa.text('SELECT count(*) FROM billing_control.audit WHERE op_id=:op'), {'op': key}) == 0
-            assert db.scalar(sa.text('SELECT count(*) FROM preauth_receipts WHERE operation_key=:op'), {'op': key}) == 0
-            assert db.execute(sa.text('SELECT consumed_at FROM reauth_proofs WHERE operation_key=:op'),
-                              {'op': key}).scalar_one() is None
+    expected = {**initial, 'revision': initial['revision'] + 1,
+                'new_capture_enabled': requested, 'billing_enabled': body['billing_enabled']}
+    assert response.status_code == 200 and response.json() == expected, response.text
+    replay = api.client.patch(path, json=body, headers=headers(session, **proof))
+    assert replay.status_code == 200 and replay.json() == expected, replay.text
+    assert api.client.get(path).json() == expected
+    with api.c.pg.admin.connect() as db:
+        audit = db.execute(sa.text("""SELECT actor_id,action,reason,detail FROM billing_control.audit
+            WHERE op_id=:op"""), {'op': key}).mappings().one()
+        assert dict(audit) == dict(actor_id=api.a.uid, action='switches', reason=body['reason'],
+                                   detail=dict(revision=initial['revision'],
+                                               flags=dict(new_capture=requested, billing=body['billing_enabled'])))
+        receipt = db.execute(sa.text("""SELECT context_hash,secret,result FROM preauth_receipts
+            WHERE operation='adminUpdateSwitches' AND operation_key=:op"""), {'op': key}).mappings().one()
+        assert receipt['context_hash'] == str(api.a.uid) and not receipt['secret']
+        assert receipt['result']['revision'] == expected['revision']
+        assert receipt['result']['new_capture_enabled'] is requested
+        assert db.execute(sa.text('SELECT consumed_at FROM reauth_proofs WHERE operation_key=:op'),
+                          {'op': key}).scalar_one() is not None
 
 
 @pytest.mark.parametrize('fee_api', ['formal'], indirect=True)
@@ -713,8 +720,10 @@ def test_fine_and_coarse_switches_share_a_revision(fee_api):
     api = fee_api
     session, seed = sign_in(api, administrator=True)
     initial = api.client.get(BASE + '/admin/switches').json()
-    coarse = dict(base_revision=initial['revision'], asr_enabled=False, reason='Synthetic stale batch')
-    proof = prove(api, session, seed, 'adminUpdateSwitches', coarse, str(uuid4()))
+    coarse = dict(base_revision=initial['revision'], asr_enabled=False, new_capture_enabled=False,
+                  reason='Synthetic stale batch')
+    key = str(uuid4())
+    proof = prove(api, session, seed, 'adminUpdateSwitches', coarse, key)
     with api.c.pg.admin.begin() as db:
         db.execute(sa.text('SELECT billing_api.update_switches(:actor,:op,:revision,cast(:flags AS jsonb),:reason)'),
                    dict(actor=api.c.actor, op=uuid4(), revision=initial['revision'],
@@ -723,6 +732,11 @@ def test_fine_and_coarse_switches_share_a_revision(fee_api):
     assert response.status_code == 409 and response.json()['error']['code'] == 'REVISION_CONFLICT', response.text
     assert api.client.get(BASE + '/admin/switches').json() == {
         **initial, 'revision': initial['revision'] + 1, 'ai_interaction_enabled': False}
+    with api.c.pg.admin.connect() as db:
+        assert db.scalar(sa.text('SELECT count(*) FROM billing_control.audit WHERE op_id=:op'), {'op': key}) == 0
+        assert db.scalar(sa.text('SELECT count(*) FROM preauth_receipts WHERE operation_key=:op'), {'op': key}) == 0
+        assert db.execute(sa.text('SELECT consumed_at FROM reauth_proofs WHERE operation_key=:op'),
+                          {'op': key}).scalar_one() is None
 
 
 @pytest.mark.parametrize('fee_api', ['formal'], indirect=True)

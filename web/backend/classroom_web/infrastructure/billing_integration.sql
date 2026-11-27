@@ -94,11 +94,9 @@ ALTER FUNCTION billing_api.switch_view() OWNER TO classroom_billing_control;
 
 CREATE FUNCTION billing_api.apply_switch_body(actor uuid,op uuid,body jsonb) RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog AS $f$
-DECLARE flags jsonb:='{}';k text;c record;capture_flag jsonb;previous boolean;
+DECLARE flags jsonb:='{}';k text;c record;previous boolean;
 BEGIN
-  SELECT switches.flags->'new_capture' INTO STRICT capture_flag FROM billing_control.switches WHERE singleton FOR UPDATE;
-  IF body ? 'new_capture_enabled' AND body->'new_capture_enabled' IS DISTINCT FROM capture_flag THEN
-    RETURN jsonb_build_object('error','SERVICE_DISABLED');END IF;
+  PERFORM 1 FROM billing_control.switches WHERE singleton FOR UPDATE;
   SELECT max_active_users INTO STRICT c FROM public.identity_capacity WHERE id=1;
   IF body ? 'max_active_users' AND (body->>'max_active_users')::integer<>c.max_active_users THEN
     RETURN jsonb_build_object('error','SERVICE_DISABLED');END IF;
@@ -557,4 +555,4 @@ BEGIN
     END IF;
 END
 $filetrans$;
-COMMENT ON FUNCTION billing_api.apply_admin(jsonb) IS 'classroom-admin-0.4.0-sql-3';
+COMMENT ON FUNCTION billing_api.apply_admin(jsonb) IS 'classroom-admin-0.4.0-sql-4';

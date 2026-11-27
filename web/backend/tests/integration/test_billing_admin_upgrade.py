@@ -15,7 +15,7 @@ from test_billing_integration import ROOT, fee_api, fee_control, headers, pg, pr
 
 PURPOSE = 'adminAdjustQuota'
 PATH = BASE + '/admin/quota-adjustments'
-VERSION = 'classroom-admin-0.4.0-sql-3'
+VERSION = 'classroom-admin-0.4.0-sql-4'
 MAXIMUM = 2**53 - 1
 
 
@@ -24,6 +24,7 @@ MAXIMUM = 2**53 - 1
     ('billing_api.adjust_quota(uuid,uuid,uuid,bigint,text)', 'NULL'),
     ('billing_api.apply_admin(jsonb)', "'classroom-admin-0.4.0-sql-1'"),
     ('billing_api.apply_admin(jsonb)', "'classroom-admin-0.4.0-sql-2'"),
+    ('billing_api.apply_admin(jsonb)', "'classroom-admin-0.4.0-sql-3'"),
 ])
 def test_old_installed_sql_refuses_admin_mount_and_keeps_auth_available(fee_api, signature, old_comment):
     api = fee_api

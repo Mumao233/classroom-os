@@ -986,7 +986,7 @@ export interface paths {
         put?: never;
         /**
          * acquireCapture
-         * @description Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics.
+         * @description When new_capture_enabled is false, a new acquisition returns 503 SERVICE_DISABLED. An explicit takeover of the owner's current, unreleased, unexpired lease in this class session remains available with confirm_takeover and a matching expected_lease_id. Starting another class session, restarting after expiry or stop, and first acquisition are disabled. A valid idempotent replay preserves its existing lease checks.
          */
         post: operations["acquireCapture"];
         delete?: never;
@@ -1006,7 +1006,7 @@ export interface paths {
         put?: never;
         /**
          * renewCapture
-         * @description Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics.
+         * @description The current device can renew its valid lease in this class session while new_capture_enabled is false. An expired lease or stale fence still returns 409 STALE_FENCE.
          */
         post: operations["renewCapture"];
         delete?: never;
@@ -1046,7 +1046,7 @@ export interface paths {
         put?: never;
         /**
          * resumeCapture
-         * @description Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics.
+         * @description The current device can resume a paused epoch with its valid lease in this class session while new_capture_enabled is false. Resume creates the successor epoch in the same transaction. An expired lease or stale fence still returns 409 STALE_FENCE.
          */
         post: operations["resumeCapture"];
         delete?: never;
@@ -2358,7 +2358,7 @@ export interface paths {
         head?: never;
         /**
          * adminUpdateSwitches
-         * @description Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Use a single-use proof for adminUpdateSwitches. The authenticated administrator updating the platform switches. Bind the future write key and exact request body, including the reason.
+         * @description The authenticated administrator updates platform switches using a single-use proof bound to the write key and exact body, including the reason. Changing new_capture_enabled uses the same revision check, audit and idempotent receipt as other switch updates. Capture admission observes the change at commit.
          */
         patch: operations["adminUpdateSwitches"];
         trace?: never;
@@ -3842,7 +3842,7 @@ export interface components {
             max_active_users: "10" | "30";
             /** @description Master switch for new billable work. */
             billing_enabled: boolean;
-            /** @description Stored new-capture configuration. Capture lease admission does not currently enforce this setting. */
+            /** @description Allows new capture. When false, only renewal, explicit takeover and resume of a valid lease in the same class session can continue capture. */
             new_capture_enabled: boolean;
             /** @description Live ASR configuration. */
             asr_streaming_enabled: boolean;
@@ -3866,7 +3866,7 @@ export interface components {
             reason: components["schemas"]["AdminWriteReason"];
             /** @description Master switch for new billable work. */
             billing_enabled?: boolean;
-            /** @description Changing the stored value returns 503 SERVICE_DISABLED until capture lease admission enforces this setting. Sending its current value follows normal PATCH revision checks. */
+            /** @description Set false to block new capture, including cross-class takeover and restart after expiry or stop. Renewal, explicit takeover and resume of a valid lease in the same class session remain available. */
             new_capture_enabled?: boolean;
             /** @description Live ASR configuration. */
             asr_streaming_enabled?: boolean;

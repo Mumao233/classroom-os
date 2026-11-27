@@ -176,6 +176,11 @@ BEGIN
   SELECT * INTO STRICT s FROM billing_control.switches WHERE singleton FOR SHARE;
   RETURN jsonb_build_object('revision',s.revision,'flags',s.flags);
 END $f$;
+-- Epoch admission reads one bit and holds the switch row's shared lock until commit.
+CREATE FUNCTION billing_api.new_capture_enabled() RETURNS boolean
+LANGUAGE sql SECURITY DEFINER SET search_path=pg_catalog AS $f$
+  SELECT (billing_api.lock_switches()->'flags'->>'new_capture')::boolean
+$f$;
 CREATE FUNCTION billing_api.sync_exposure(p_id uuid,p_admit boolean DEFAULT false) RETURNS void
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,billing_control AS $f$
 DECLARE r public.quota_reservations%ROWTYPE;b jsonb;h bigint:=0;u bigint:=0;s bigint:=0;old_risk bigint:=0;new_risk bigint;
@@ -202,6 +207,8 @@ END $f$;
 REVOKE ALL ON ALL FUNCTIONS IN SCHEMA billing_api FROM PUBLIC;
 ALTER FUNCTION billing_api.lock_budget(timestamptz) OWNER TO classroom_billing_control;
 ALTER FUNCTION billing_api.lock_switches() OWNER TO classroom_billing_control;
+ALTER FUNCTION billing_api.new_capture_enabled() OWNER TO classroom_billing_control;
+GRANT EXECUTE ON FUNCTION billing_api.new_capture_enabled() TO classroom_web_runtime;
 ALTER FUNCTION billing_api.sync_exposure(uuid,boolean) OWNER TO classroom_billing_control;
 GRANT EXECUTE ON FUNCTION billing_api.lock_budget(timestamptz),billing_api.lock_switches(),billing_api.sync_exposure(uuid,boolean)
   TO classroom_web_runtime,classroom_billing_reconciler;
@@ -317,4 +324,4 @@ END $f$;
 ALTER FUNCTION billing_api.adjust_quota(uuid,uuid,uuid,bigint,text) OWNER TO classroom_billing_control;
 REVOKE ALL ON FUNCTION billing_api.adjust_quota(uuid,uuid,uuid,bigint,text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION billing_api.adjust_quota(uuid,uuid,uuid,bigint,text) TO classroom_billing_operator;
-COMMENT ON FUNCTION billing_api.adjust_quota(uuid,uuid,uuid,bigint,text) IS 'classroom-admin-0.4.0-sql-3';
+COMMENT ON FUNCTION billing_api.adjust_quota(uuid,uuid,uuid,bigint,text) IS 'classroom-admin-0.4.0-sql-4';
