@@ -1,8 +1,8 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { components } from '../../generated/openapi';
 import { healthLabel, healthWarnings, heartbeatAge, invitationRef, operationLabel, reasonError, targetTypeLabel } from '../../domain/admin';
 import { formatDateTime } from '../../domain/dashboard';
-import { describeAdminError, useAdminAudit, useAdminHealth, useAdminSwitches, useAdminUsers, useAdminWrite } from '../../features/admin';
+import { describeAdminError, useAdminAccessLost, useAdminAudit, useAdminHealth, useAdminSwitches, useAdminUsers, useAdminWrite } from '../../features/admin';
 import { describeError, ReadOnlyWhile, readableCache, useAppData } from '../../features/data';
 import { Badge, Empty, Loading, QueryError } from '../common';
 import { AdminActionDialog, AdminData, AdminPage, ReasonField } from './AdminShell';
@@ -75,6 +75,8 @@ function Switches() {
   const edit = (change: Partial<SwitchDraft>) => current && setDraft({ base: draft?.base ?? current, edits: { ...draft?.edits, ...change } });
   const changed = draft ? switchKeys.filter(key => key in draft.edits && draft.edits[key] !== draft.base[key]) : [];
   const rebased = draft !== null && current !== undefined && current.revision !== draft.base.revision;
+  const lost = useAdminAccessLost();
+  useEffect(() => { if (lost) { setConfirming(null); setDraft(null); } }, [lost]);
   return <ReadOnlyWhile stale={switches.isError}><section className={styles.panel} aria-labelledby="admin-switches-title">
     <h2 id="admin-switches-title">平台开关</h2>
     {!shown ? (switches.isError ? <QueryError error={switches.error} retry={() => void switches.refetch()} /> : <Loading label="正在读取平台开关…" />) : <div className={styles.stack} data-testid="admin-switches">

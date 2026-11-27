@@ -61,49 +61,85 @@ export function createHttpAdminReauth(api: ApiClient, adminId: () => string | nu
 
 const adminKey = (...parts: unknown[]) => ['admin', ...parts];
 /**
- * Per account epoch: when an admin read was last refused (role, MFA, session). Data read before that
- * moment stays hidden even if a later refresh fails at the transport, until a successful read replaces it.
+ * Admin read authorisation, per account epoch (one QueryClient). A projection is shown only after a GET
+ * that started after the latest refusal applying to it has succeeded:
+ * - a role, MFA or session refusal (on any admin read, or on reauthentication) applies to every admin
+ *   projection — the account-wide gate — and re-checks `/me`; once `/me` confirms admin access, every admin
+ *   projection is read again;
+ * - a resource refusal (NOT_FOUND, GONE) applies to its own query only.
+ * A mutation receipt written into the cache, or a GET already in flight when the refusal arrived, never
+ * authorises a projection.
  */
-const deniedAt = new WeakMap<QueryClient, Map<string, number>>();
-const denials = (client: QueryClient) => { let map = deniedAt.get(client); if (!map) { map = new Map(); deniedAt.set(client, map); } return map; };
-/**
- * Account-wide admin gate: a refusal of the admin role, MFA or the session on any admin read hides every
- * admin projection read before it (and re-reads `/me`), until each is read again successfully.
- * Resource-specific denials (NOT_FOUND, GONE) stay with their own query.
- */
-type Gate = { at: number; listeners: Set<() => void> };
-const gates = new WeakMap<QueryClient, Gate>();
-const gateOf = (client: QueryClient) => { let gate = gates.get(client); if (!gate) { gate = { at: -1, listeners: new Set() }; gates.set(client, gate); } return gate; };
-const accessDenial = (error: unknown) => isUnauthenticated(error) || (error instanceof ApiClientError && (error.code === 'FORBIDDEN' || error.code === 'MFA_REQUIRED'));
-function useAdminGate(client: QueryClient) {
-  const gate = gateOf(client);
-  return useSyncExternalStore(listener => { gate.listeners.add(listener); return () => { gate.listeners.delete(listener); }; }, () => gate.at);
+type Access = { seq: number; gate: number; lost: boolean; denied: Map<string, number>; authorized: Map<string, number>; seen: Map<string, number>; version: number; listeners: Set<() => void> };
+const accessByClient = new WeakMap<QueryClient, Access>();
+const accessOf = (client: QueryClient) => {
+  let access = accessByClient.get(client);
+  if (!access) { access = { seq: 0, gate: 0, lost: false, denied: new Map(), authorized: new Map(), seen: new Map(), version: 0, listeners: new Set() }; accessByClient.set(client, access); }
+  return access;
+};
+const notify = (access: Access) => { access.version += 1; for (const listener of access.listeners) listener(); };
+/** A refusal of the admin role, MFA or the session (not of one resource). */
+export const isAccessDenial = (error: unknown) => isUnauthenticated(error) || (error instanceof ApiClientError && (error.code === 'FORBIDDEN' || error.code === 'MFA_REQUIRED'));
+/** Records an account-wide refusal: every admin projection is hidden at once and the administrator re-checked. */
+export function denyAdminAccess(client: QueryClient, api: ApiClient, accountKey: string) {
+  const access = accessOf(client);
+  access.seq += 1;
+  access.gate = access.seq;
+  access.lost = true;
+  notify(access);
+  void (async () => {
+    try {
+      const me = await client.fetchQuery({ queryKey: ['account', accountKey, 'me'], queryFn: ({ signal }) => api.me(signal), staleTime: 0 });
+      if (me.role !== 'admin' || !me.mfa_enabled) return;
+      access.lost = false;
+      notify(access);
+      // Access reconfirmed: active projections re-read now, inactive ones on their next visit.
+      await client.invalidateQueries({ queryKey: ['account', accountKey, 'admin'] });
+    } catch { /* An ended session retires the account epoch (revocation ledger); a transport failure keeps the gate. */ }
+  })();
 }
-/** Records a refusal (after render) and returns the moment before which this query's data stays hidden. */
-function useDenialMask(client: QueryClient, accountKey: string, key: readonly unknown[], query: { isError: boolean; error: unknown; errorUpdatedAt: number }) {
-  const hash = JSON.stringify(key);
-  const gateAt = useAdminGate(client);
+function useAccess(client: QueryClient) {
+  const access = accessOf(client);
+  useSyncExternalStore(listener => { access.listeners.add(listener); return () => { access.listeners.delete(listener); }; }, () => access.version);
+  return access;
+}
+/** Whether admin access is currently lost: dialogs and displayed secrets close until it is reconfirmed. */
+export function useAdminAccessLost() { return useAccess(useQueryClient()).lost; }
+/** Wraps a GET so its start (not its arrival, and never a cache write) is what may authorise the projection. */
+function authorizing<A extends unknown[], T>(client: QueryClient, hash: string, fn: (...args: A) => Promise<T>) {
+  return async (...args: A) => {
+    const access = accessOf(client);
+    access.seq += 1;
+    const started = access.seq;
+    const data = await fn(...args);
+    if ((access.authorized.get(hash) ?? 0) < started) access.authorized.set(hash, started);
+    // An admin read started after the refusal succeeded: access is back (e.g. MFA re-enabled).
+    if (access.lost && started > access.gate) { access.lost = false; notify(access); }
+    return data;
+  };
+}
+function useAuthorized<Q extends { data: unknown; isError: boolean; error: unknown; errorUpdatedAt: number }>(client: QueryClient, api: ApiClient, accountKey: string, hash: string, query: Q): Q {
+  const access = useAccess(client);
   const { isError, error, errorUpdatedAt } = query;
   useEffect(() => {
-    if (!isError || !isAdminDenial(error)) return;
-    if ((denials(client).get(hash) ?? -1) < errorUpdatedAt) denials(client).set(hash, errorUpdatedAt);
-    const gate = gateOf(client);
-    if (accessDenial(error) && gate.at < errorUpdatedAt) {
-      gate.at = errorUpdatedAt;
-      for (const listener of gate.listeners) listener();
-      void client.invalidateQueries({ queryKey: ['account', accountKey, 'me'] });
-    }
-  }, [client, accountKey, hash, isError, error, errorUpdatedAt]);
-  const local = isError && isAdminDenial(error) ? errorUpdatedAt : (denials(client).get(hash) ?? -1);
-  return Math.max(local, gateAt);
+    if (!isError || !isAdminDenial(error) || access.seen.get(hash) === errorUpdatedAt) return;
+    access.seen.set(hash, errorUpdatedAt);
+    if (isAccessDenial(error)) { denyAdminAccess(client, api, accountKey); return; }
+    access.seq += 1;
+    access.denied.set(hash, access.seq);
+    notify(access);
+  }, [access, client, api, accountKey, hash, isError, error, errorUpdatedAt]);
+  const refusedAt = Math.max(access.gate, access.denied.get(hash) ?? 0);
+  const masked = refusedAt > 0 && (access.authorized.get(hash) ?? 0) < refusedAt;
+  return masked ? { ...query, data: undefined } : query;
 }
 function useAdminQuery<T>(parts: unknown[], fn: (api: ApiClient, signal: AbortSignal) => Promise<T>, enabled = true) {
   const { api, accountKey } = useAppData();
   const client = useQueryClient();
   const key = ['account', accountKey, ...adminKey(...parts)];
-  const query = useQuery({ queryKey: key, queryFn: ({ signal }) => fn(api, signal), enabled });
-  const refusedAt = useDenialMask(client, accountKey, key, query);
-  return refusedAt >= 0 && query.dataUpdatedAt <= refusedAt ? { ...query, data: undefined } : query;
+  const hash = JSON.stringify(key);
+  const query = useQuery({ queryKey: key, queryFn: authorizing(client, hash, ({ signal }: { signal: AbortSignal }) => fn(api, signal)), enabled });
+  return useAuthorized(client, api, accountKey, hash, query);
 }
 export const useAdminUsers = (enabled = true) => useAdminQuery(['users'], (api, signal) => api.adminUsers(signal), enabled);
 export const useAdminUserQuota = (userId: string | null) => useAdminQuery(['user-quota', userId], (api, signal) => api.adminUserQuota(userId ?? '', signal), userId !== null);
@@ -115,14 +151,14 @@ export function useAdminAudit() {
   const { api, accountKey } = useAppData();
   const client = useQueryClient();
   const key = ['account', accountKey, 'admin', 'audit'];
+  const hash = JSON.stringify(key);
   const query = useInfiniteQuery({
     queryKey: key,
     initialPageParam: null as string | null,
-    queryFn: ({ pageParam, signal }) => api.adminAudit(pageParam, signal),
+    queryFn: authorizing(client, hash, ({ pageParam, signal }: { pageParam: string | null; signal: AbortSignal }) => api.adminAudit(pageParam, signal)),
     getNextPageParam: (last: S['AuditRecordPage']) => last.next_cursor,
   });
-  const refusedAt = useDenialMask(client, accountKey, key, query);
-  return refusedAt >= 0 && query.dataUpdatedAt <= refusedAt ? { ...query, data: undefined } : query;
+  return useAuthorized(client, api, accountKey, hash, query);
 }
 
 /** The server refused an admin read itself (role, MFA, session): nothing of it, nor a secret shown beside it, may stay. */
@@ -149,6 +185,8 @@ export function useAdminWrite<B, R>(spec: {
   send: (api: ApiClient, body: B, key: string, token: string) => Promise<R>;
   /** Writes the confirmed reply into the affected projections before they are refetched (offline-safe). */
   apply?: (client: QueryClient, accountKey: string, result: R, body: B) => void;
+  /** Runs when the request is dispatched, before its outcome is known (e.g. withdrawing a token it supersedes). */
+  onDispatch?: (body: B) => void;
   onSuccess?: (result: R, body: B) => void;
 }) {
   const { api, accountKey, adminReauth = unavailableAdminReauth } = useAppData();
@@ -167,7 +205,11 @@ export function useAdminWrite<B, R>(spec: {
   const reply = useRef<{ value: R } | null>(null);
   // Only the operation name is the mutation's variable: body, key and proof stay in the intent ref, so the
   // proof never lands in the mutation cache.
+  // networkMode 'always': a transport failure returns to the explicit retry flow; nothing is paused and
+  // sent on reconnect after the administrator has left.
   const mutation = useMutation<null, unknown, AdminOperationId>({
+    networkMode: 'always',
+    retry: false,
     mutationFn: async () => {
       const intent = pending.current;
       if (!intent?.token) throw new Error('admin write without proof');
@@ -188,6 +230,7 @@ export function useAdminWrite<B, R>(spec: {
     // Registered before dispatch: a dialog opened while this request is in flight joins the same key.
     intentsOf(client).set(intent.slot, intent as Pending<unknown>);
     intent.sent = true;
+    spec.onDispatch?.(intent.body);
     setStage('sending'); setError(null);
     try {
       await mutation.mutateAsync(spec.operationId);
@@ -257,6 +300,8 @@ export function useAdminWrite<B, R>(spec: {
           } catch (sessionFailure) { setError(sessionFailure); }
           return;
         }
+        // A role or MFA refusal on reauthentication is an account-wide refusal like on any admin read.
+        if (failure instanceof AdminReauthError && (failure.kind === 'mfa' || failure.kind === 'forbidden')) denyAdminAccess(client, api, accountKey);
         setError(failure);
         return;
       }

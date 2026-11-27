@@ -105,6 +105,19 @@ test.describe('PR-11b operations console', () => {
     await expect(audit).not.toContainText('synthetic-password');
   });
 
+  test('an MFA refusal on reauthentication closes the console: dialog, list and data', async ({ page }) => {
+    await asAdmin(page);
+    await page.getByTestId(`admin-user-${B_ID}`).getByRole('button', { name: '停用' }).click();
+    await page.getByTestId('admin-action').getByLabel('操作理由').fill('合成：MFA 被撤销');
+    await page.getByRole('button', { name: '下一步：验证身份' }).click();
+    // MFA is withdrawn behind the open dialog (nothing is re-read yet).
+    await page.evaluate(() => (globalThis as unknown as { __classroomMock: { adminMfa: (enabled: boolean) => void } }).__classroomMock.adminMfa(false));
+    await verify(page);
+    await expect(page.getByTestId('admin-action')).toHaveCount(0);
+    await expect(page.getByTestId('admin-users')).toHaveCount(0);
+    await expect(page.getByTestId('admin-mfa-required')).toBeVisible();
+  });
+
   test('a lost reply keeps the same request: retry applies it once (idempotent replay)', async ({ page }) => {
     await asAdmin(page);
     await page.evaluate(id => localStorage.setItem('mock-test-drop-reply', `/admin/users/${id}`), B_ID);
@@ -198,11 +211,16 @@ test.describe('PR-11b operations console', () => {
     await verify(page);
     await expect(page.getByTestId('invite-token')).toContainText('新的一次性令牌');
     await expect(page.getByTestId(`admin-invitation-${EXPIRED}`)).toContainText('未使用');
-    // Revoking it while its token is still on screen withdraws the token too.
+    // Revoking it while its token is on screen withdraws the token as soon as the revoke is sent, even when
+    // its reply is lost.
+    await page.evaluate(id => localStorage.setItem('mock-test-drop-reply', `/admin/invitations/${id}/revoke`), EXPIRED);
     await page.getByTestId(`admin-invitation-${EXPIRED}`).getByRole('button', { name: '撤销' }).click();
     await page.getByTestId('admin-action').getByLabel('操作理由').fill('合成：不再需要');
     await page.getByRole('button', { name: '下一步：验证身份后撤销' }).click();
     await verify(page);
+    await expect(page.getByTestId('admin-unconfirmed')).toBeVisible();
+    await expect(page.getByTestId('invite-token')).toHaveCount(0);
+    await page.getByRole('button', { name: '放弃并刷新' }).click();
     await expect(page.getByTestId(`admin-invitation-${EXPIRED}`)).toContainText('已撤销');
     await expect(page.getByTestId('invite-token')).toHaveCount(0);
   });

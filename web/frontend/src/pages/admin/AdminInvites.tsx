@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import type { components } from '../../generated/openapi';
 import { invitationKindLabel, invitationRef, invitationStateLabel, reasonError } from '../../domain/admin';
 import { formatDateTime } from '../../domain/dashboard';
-import { isAdminDenial, useAdminInvitations, useAdminWrite } from '../../features/admin';
+import { isAdminDenial, useAdminAccessLost, useAdminInvitations, useAdminWrite } from '../../features/admin';
 import { ReadOnlyWhile, readableCache, useAppData } from '../../features/data';
 import { Badge, Empty } from '../common';
 import { AdminActionDialog, AdminData, AdminPage, ReasonField } from './AdminShell';
@@ -28,7 +28,8 @@ function InvitesBody() {
   const { accountKey } = useAppData();
   // A denial (or an ended session) withdraws the secret for good; a later transport failure cannot show it again.
   const denied = invitations.isError && isAdminDenial(invitations.error);
-  useEffect(() => { if (denied) setIssued(null); }, [denied]);
+  const lost = useAdminAccessLost();
+  useEffect(() => { if (denied || lost) { setIssued(null); setAction(null); setCreating(false); } }, [denied, lost]);
   // A successful list that no longer shows the token's invitation as the issued revision withdraws the token
   // for good: a later failed read cannot bring it back.
   const fresh = invitations.isSuccess ? invitations.data : undefined;
@@ -45,6 +46,8 @@ function InvitesBody() {
     client.setQueryData<S['InvitationPage']>(['account', accountKey, 'admin', 'invitations'], page => page && ({ ...page, items: page.items.some(item => item.id === created.invitation.id) ? page.items.map(item => item.id === created.invitation.id && item.revision <= created.invitation.revision ? created.invitation : item) : [created.invitation, ...page.items] }));
     setIssued({ ...created, reissued });
   };
+  // A revoke or reissue of the token's invitation withdraws the token as soon as it is sent, whatever its outcome.
+  const withdraw = (id: string) => setIssued(current => current?.invitation.id === id ? null : current);
   // A token is offered only while its invitation is still the issued revision the token belongs to.
   const listed = readableCache(invitations)?.items.find(item => item.id === issued?.invitation.id);
   const tokenCurrent = issued !== null && !denied && (listed === undefined || (listed.state === 'issued' && listed.revision === issued.invitation.revision));
@@ -68,8 +71,8 @@ function InvitesBody() {
       </AdminData>
     </section>
     {creating && <CreateDialog onClose={() => setCreating(false)} onIssued={created => { setCreating(false); issue(created, false); }} />}
-    {action?.kind === 'revoke' && <RevokeDialog key={action.invitation.id} invitation={action.invitation} onClose={() => setAction(null)} onRevoked={id => { setAction(null); setIssued(current => current?.invitation.id === id ? null : current); }} />}
-    {action?.kind === 'reissue' && <ReissueDialog key={action.invitation.id} invitation={action.invitation} onClose={() => setAction(null)} onIssued={created => { setAction(null); issue(created, true); }} />}
+    {action?.kind === 'revoke' && <RevokeDialog key={action.invitation.id} invitation={action.invitation} onClose={() => setAction(null)} onDispatch={withdraw} onRevoked={id => { setAction(null); withdraw(id); }} />}
+    {action?.kind === 'reissue' && <ReissueDialog key={action.invitation.id} invitation={action.invitation} onClose={() => setAction(null)} onDispatch={withdraw} onIssued={created => { setAction(null); issue(created, true); }} />}
   </ReadOnlyWhile>;
 }
 
@@ -102,11 +105,12 @@ function CreateDialog({ onClose, onIssued }: { onClose: () => void; onIssued: (c
     build={() => kind === 'email_bound' ? { kind, email: email.trim(), reason } : { kind, reason }} />;
 }
 
-function RevokeDialog({ invitation, onClose, onRevoked }: { invitation: S['Invitation']; onClose: () => void; onRevoked: (id: string) => void }) {
+function RevokeDialog({ invitation, onClose, onRevoked, onDispatch }: { invitation: S['Invitation']; onClose: () => void; onRevoked: (id: string) => void; onDispatch: (id: string) => void }) {
   const [reason, setReason] = useState('');
   const write = useAdminWrite<S['InvitationAction'], S['Invitation']>({
     operationId: 'adminRevokeInvitation', targetId: () => invitation.id,
     send: (api, body, key, token) => api.adminRevokeInvitation(invitation.id, body, key, token),
+    onDispatch: () => onDispatch(invitation.id),
     apply: (client, accountKey, revoked) => client.setQueryData<S['InvitationPage']>(['account', accountKey, 'admin', 'invitations'], page => page && ({ ...page, items: page.items.map(item => item.id === revoked.id && item.revision <= revoked.revision ? revoked : item) })),
     onSuccess: () => onRevoked(invitation.id),
   });
@@ -116,11 +120,12 @@ function RevokeDialog({ invitation, onClose, onRevoked }: { invitation: S['Invit
     prepareValid={reasonError(reason) === null} build={() => ({ reason })} confirmLabel="下一步：验证身份后撤销" />;
 }
 
-function ReissueDialog({ invitation, onClose, onIssued }: { invitation: S['Invitation']; onClose: () => void; onIssued: (created: Created) => void }) {
+function ReissueDialog({ invitation, onClose, onIssued, onDispatch }: { invitation: S['Invitation']; onClose: () => void; onIssued: (created: Created) => void; onDispatch: (id: string) => void }) {
   const [reason, setReason] = useState('');
   const write = useAdminWrite<S['InvitationAction'], S['InvitationCreated']>({
     operationId: 'adminReissueInvitation', targetId: () => invitation.id,
     send: (api, body, key, token) => api.adminReissueInvitation(invitation.id, body, key, token),
+    onDispatch: () => onDispatch(invitation.id),
     onSuccess: reply => onIssued(created(reply)),
   });
   return <AdminActionDialog open onClose={onClose} write={write} title="重新签发邀请"

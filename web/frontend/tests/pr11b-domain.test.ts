@@ -99,3 +99,11 @@ describe('PR-11b reauthentication operation (HTTP 0.4.0)', () => {
     expect(reauthOperation({ operationId: 'adminCreateInvitation', targetId: null, idempotencyKey: key, body: {} }, admin).target).toEqual({ kind: 'account', id: admin });
   });
 });
+
+describe('PR-11b mock: exact integers in the raw admin JSON', () => {
+  it('accepts exact integer spellings and rejects fractional ones before parsing rounds them', async () => {
+    const { rawIntegersOk } = await import('../src/mock/admin-backend');
+    for (const ok of ['{"additional_units":1}', '{"additional_units":1.0}', '{"base_revision":1e0}', '{"base_revision":10e-1}', '{"reason":"1.5"}']) expect(rawIntegersOk(ok)).toBe(true);
+    for (const bad of ['{"additional_units":1.0000000000000001}', '{"base_revision":1.5}', '{"base_revision":1e-1}', '{"operation":{"candidate_parameters":{"body":{"additional_units":2.25}}}}']) expect(rawIntegersOk(bad)).toBe(false);
+  });
+});

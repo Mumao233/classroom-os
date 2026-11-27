@@ -68,6 +68,19 @@ const isUuid = (value: unknown) => typeof value === 'string' && /^[0-9a-f]{8}-[0
 const REASON_VISIBLE = /[^\u0009-\u000D\u001C-\u0020\u0085\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF]/u;
 const reasonOk = (value: unknown) => typeof value === 'string' && [...value].length >= 1 && [...value].length <= 500 && REASON_VISIBLE.test(value) && !value.includes('\u0000');
 const MAX_SAFE = Number.MAX_SAFE_INTEGER;
+/**
+ * Exact integer check on the raw JSON text, before it is parsed into (rounded) JavaScript numbers, as the
+ * producer's strict_json does: `1.0` and `1e0` are integers, `1.0000000000000001` is not.
+ */
+export function rawIntegersOk(text: string, fields: readonly string[] = ['base_revision', 'additional_units']) {
+  const pattern = new RegExp(`"(?:${fields.join('|')})"\\s*:\\s*(-?)(\\d+)(?:\\.(\\d+))?(?:[eE]([+-]?\\d+))?`, 'g');
+  for (const match of text.matchAll(pattern)) {
+    const digits = match[2]! + (match[3] ?? '');
+    const point = match[2]!.length + Number(match[4] ?? 0);
+    if (point < digits.length && /[1-9]/.test(digits.slice(Math.max(0, point)))) return false;
+  }
+  return true;
+}
 const only = (body: Record<string, unknown>, keys: string[]) => Object.keys(body).every(key => keys.includes(key));
 /** identity_api.verify_auth: the verified factor is good for 120 s, and an admin proof never outlives it. */
 const PROOF_MS = 120_000;

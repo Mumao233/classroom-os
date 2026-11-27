@@ -1,8 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { components } from '../../generated/openapi';
 import { additionalUnits, bucketLabel, formatUnits, isDurationBucket, reasonError, roleLabel, statusLabel } from '../../domain/admin';
 import { formatDate, formatDateTime } from '../../domain/dashboard';
-import { useAdminUserQuota, useAdminUsers, useAdminWrite } from '../../features/admin';
+import { useAdminAccessLost, useAdminUserQuota, useAdminUsers, useAdminWrite } from '../../features/admin';
 import { ReadOnlyWhile, readableCache, useMe } from '../../features/data';
 import { Badge, Empty } from '../common';
 import { AdminActionDialog, AdminData, AdminPage, ReasonField } from './AdminShell';
@@ -21,6 +21,9 @@ function UsersBody() {
   const me = readableCache(useMe());
   const [statusTarget, setStatusTarget] = useState<S['User'] | null>(null);
   const [quotaUser, setQuotaUser] = useState<S['User'] | null>(null);
+  // A refused projection closes everything opened from it (selected records included).
+  const lost = useAdminAccessLost();
+  useEffect(() => { if (lost) { setStatusTarget(null); setQuotaUser(null); } }, [lost]);
   // A list kept after a failed refresh is read-only: no write is based on a projection marked stale.
   return <ReadOnlyWhile stale={users.isError}>
     <section className={styles.panel} aria-labelledby="admin-users-title"><h2 id="admin-users-title">账号</h2>

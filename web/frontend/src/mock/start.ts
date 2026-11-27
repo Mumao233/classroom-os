@@ -2,7 +2,7 @@ import { delay, http, HttpResponse, passthrough } from 'msw';
 import { setupWorker } from 'msw/browser';
 import { meta, unauthenticated } from './fixtures';
 import { createMockBackend, type MockAccountKey, type MockDataset } from './backend';
-import type { AdminHealthDev } from './admin-backend';
+import { rawIntegersOk, type AdminHealthDev } from './admin-backend';
 
 const headers = { 'Cache-Control': 'no-store' };
 // Development-only in-memory session identity; never a new HTTP field or real credential.
@@ -108,7 +108,12 @@ const worker = setupWorker(
       const toHex = (data: Uint8Array) => [...data].map(value => value.toString(16).padStart(2, '0')).join('');
       body = { byte_length: bytes.byteLength, sha256: toHex(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))), signature: toHex(bytes.slice(0, 16)) };
     } else if (request.method !== 'GET') {
-      try { body = await request.json(); } catch { body = undefined; }
+      const text = await request.text();
+      try { body = JSON.parse(text); } catch { body = undefined; }
+      // Admin integers are checked on the raw text, before JSON.parse rounds them.
+      if ((path.startsWith('/admin/') || path === '/auth/reauth') && !rawIntegersOk(text)) {
+        return HttpResponse.json({ error: { code: 'VALIDATION_FAILED', message: '整数字段必须是精确整数', request_id: crypto.randomUUID(), retryable: false, retry_after_seconds: null, current_revision: null, conflict_id: null, task_id: null } }, { status: 422, headers });
+      }
     }
     // Computed for the account that sent the request; a switch meanwhile is rejected by the client epoch.
     const reply = backend.handle(requestAccount, request.method, path, url.searchParams, body, request.headers.get('Idempotency-Key'), request.headers.get('X-Reauth-Token'), requestGeneration);
