@@ -1,5 +1,6 @@
 import type { components } from '../generated/openapi';
 import { advanceTask, ensureDemoClassroom, finishAsr, handleClassroom, expireManifestCursors, persistFinal, projectTask, recordDurable, releaseAccountLeases, releaseLease, revokeAudio, revokeClassroom, seedClassroom, seedHistoricalManifests, setManifestDev, setRetranscribeDev, activeVersionIds, type ClassroomHelpers, type ClassroomHost, type ClassroomStore, type TaskOutcome } from './classroom-backend';
+import { createAdminBackend, type AdminHealthDev, type AdminReauthBinding } from './admin-backend';
 import { addCandidate, handleReview, seedReview, type ReviewHelpers, type ReviewHost, type ReviewStore } from './review-backend';
 
 /**
@@ -9,7 +10,8 @@ import { addCandidate, handleReview, seedReview, type ReviewHelpers, type Review
  * network, disk or a real account, and it is excluded from production builds.
  */
 type S = components['schemas'];
-export type MockAccountKey = 'A' | 'B';
+/** A and B are students; C is the synthetic platform administrator (PR-11b). */
+export type MockAccountKey = 'A' | 'B' | 'C';
 export type MockDataset = 'seeded' | 'empty';
 export type MockReply = { status: number; body: unknown };
 type ErrorCode = S['Error']['error']['code'];
@@ -125,6 +127,18 @@ function seedB(): Store {
   };
 }
 
+/** PR-11b: the synthetic administrator. Admin data is platform metadata only; this tenant has no study records. */
+function seedC(): Store {
+  return {
+    user: { ...base('c9000000-0000-4000-8000-000000000001', '2026-08-20T08:00:00Z'), email: 'admin@example.invalid', nickname: '运营管理员（模拟）', school: '', major: '', role: 'admin', status: 'active', mfa_enabled: true },
+    preferences: { revision: 1, theme: 'system', reduced_effects: false, reading_font_px: 17, explanation_language: 'auto', automatic_explanation: false },
+    quota: quota(), deletedCourses: new Set(), deletedSemesters: new Set(), previews: new Map(), idempotency: new Map(),
+    semesters: [], courses: [], sessions: [], materials: [], documents: [], questions: [], notifications: [],
+    deviceSessions: [{ ...base('c1000000-0000-4000-8000-000000000001', '2026-10-28T07:50:00Z'), device_id: 'c2000000-0000-4000-8000-000000000001', device_name: '运营电脑（模拟）', last_active_at: FIXED_NOW, expires_at: '2026-10-28T15:50:00Z', is_current: true, revoked_at: null }],
+    devices: [],
+  };
+}
+
 function quota(): S['QuotaView'] {
   const period = { period_start: '2026-10-01T00:00:00Z', period_end: '2026-11-01T00:00:00Z' };
   return {
@@ -140,16 +154,54 @@ function quota(): S['QuotaView'] {
 }
 
 /** Pure request router over the in-memory store; MSW handlers and node tests share it. */
-export function createMockBackend(options: { now?: () => string; newId?: () => string } = {}) {
+export function createMockBackend(options: { now?: () => string; newId?: () => string; clockMs?: () => number } = {}) {
   const now = options.now ?? (() => FIXED_NOW);
   let counter = 0;
   const newId = options.newId ?? (() => uuid('99999999', ++counter));
-  const stores: Record<MockAccountKey, Store> = { A: seedA('seeded'), B: seedB() };
+  const stores: Record<MockAccountKey, Store> = { A: seedA('seeded'), B: seedB(), C: seedC() };
   const seededClassroom = () => seedClassroom({ ended: uuid('c0000000', 1), uploadFailed: uuid('c0000000', 4), unknownAi: uuid('c0000000', 6) });
   // Historical classrooms with retained audio also have their recorded epoch.
   const withHistory = (account: MockAccountKey, store: ClassroomStore) => seedHistoricalManifests(store, stores[account].sessions);
-  const classrooms: Record<MockAccountKey, ClassroomStore> = { A: withHistory('A', seededClassroom()), B: withHistory('B', seedClassroom(null)) };
-  const reviews: Record<MockAccountKey, ReviewStore> = { A: seedReview(true), B: seedReview(false) };
+  const classrooms: Record<MockAccountKey, ClassroomStore> = { A: withHistory('A', seededClassroom()), B: withHistory('B', seedClassroom(null)), C: withHistory('C', seedClassroom(null)) };
+  const reviews: Record<MockAccountKey, ReviewStore> = { A: seedReview(true), B: seedReview(false), C: seedReview(false) };
+  const accounts: MockAccountKey[] = ['A', 'B', 'C'];
+  /** Mock session generation per account: a sign-out or account switch retires the proofs issued before it. */
+  const generations: Record<MockAccountKey, number> = { A: 0, B: 0, C: 0 };
+  /** Accounts whose existing sessions an administrator ended; only a fresh sign-in (beginSession) admits them again. */
+  const revokedSessions = new Set<MockAccountKey>();
+  /** Accounts whose session history includes an administrator's revocation (kept across dataset reseeds). */
+  const adminRevoked = new Set<MockAccountKey>();
+  /** Live transcription streams admitted per account; a stream admitted while ASR was on keeps going. */
+  const admittedStreams: Record<MockAccountKey, Set<string>> = { A: new Set(), B: new Set(), C: new Set() };
+  // Scoped to the classroom and the capture run: a scripted stream reusing an ID in a later run is a new admission.
+  const asrAdmits = (account: MockAccountKey, classId: string, streamId: string, run = '') => {
+    const admission = `${classId}|${run}|${streamId}`;
+    if (admittedStreams[account].has(admission)) return true;
+    // Live ASR checks its own switch (and the billing master), not the group summary.
+    if (!admin.serviceEnabled('asr_streaming_enabled')) return false;
+    admittedStreams[account].add(admission);
+    return true;
+  };
+  const accountOf = (userId: string) => accounts.find(account => stores[account].user.id === userId) ?? null;
+  // The platform operations backend sees only each account's user record and quota buckets, never its study records.
+  const admin = createAdminBackend({
+    now, newId, clockMs: options.clockMs ?? (() => Date.now()),
+    accountUser: userId => { const account = accountOf(userId); return account ? stores[account].user : null; },
+    setAccountUser: user => { const account = accountOf(user.id); if (account) stores[account].user = user; },
+    accountQuota: userId => { const account = accountOf(userId); return account ? stores[account].quota : null; },
+    setAccountQuota: (userId, value) => { const account = accountOf(userId); if (account) stores[account].quota = value; },
+    applySwitches: () => { for (const account of accounts) stores[account].quota = admin.gate(stores[account].quota); },
+    sessionGeneration: userId => { const account = accountOf(userId); return account ? generations[account] : 0; },
+    revokeSessions: userId => {
+      const account = accountOf(userId);
+      if (!account) return;
+      generations[account] += 1;
+      revokedSessions.add(account);
+      adminRevoked.add(account);
+      stores[account].deviceSessions = stores[account].deviceSessions.map(item => item.revoked_at ? { ...item, is_current: false } : { ...item, is_current: false, revoked_at: now(), revision: item.revision + 1, updated_at: now() });
+    },
+  }, accounts.map(account => stores[account].user));
+  for (const account of accounts) stores[account].quota = admin.gate(stores[account].quota);
 
   const error = (status: number, code: ErrorCode, message: string, currentRevision: number | null = null): MockReply =>
     ({ status, body: { error: { code, message, request_id: newId(), retryable: false, retry_after_seconds: null, current_revision: currentRevision, conflict_id: null, task_id: null } } });
@@ -251,6 +303,7 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
       courseExists: id => Boolean(findCourse(store, id)),
       firstCourseId: () => liveCourses(store).find(course => !course.archived)?.id ?? null,
       quota: () => store.quota,
+      service: switch_ => admin.serviceEnabled(switch_),
       addQuestion: question => { store.questions = [...store.questions, question]; },
       updateQuestion: (taskId, change) => { store.questions = store.questions.map(item => item.task_id === taskId ? { ...item, ...change, revision: item.revision + 1, updated_at: now() } : item); },
       addDocument: document => { store.documents = [...store.documents, document]; },
@@ -288,16 +341,23 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
     return { now, newId, error, idempotent: (key, scope, body, run) => idempotent(stores[account], key, scope, body, run) };
   }
 
-  function handle(account: MockAccountKey, method: string, path: string, query: URLSearchParams, rawBody: unknown, key: string | null): MockReply | null {
+  function handle(account: MockAccountKey, method: string, path: string, query: URLSearchParams, rawBody: unknown, key: string | null, reauth: string | null = null, generation?: number): MockReply | null {
     const isId = (part: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(part);
     if (['POST', 'PATCH', 'PUT', 'DELETE'].includes(method) && (!key || !isId(key))) {
       return error(422, 'VALIDATION_FAILED', 'Idempotency-Key 必须为小写且带连字符的 UUID');
     }
     const store = stores[account];
+    // A request dispatched by a session that has since ended is refused, even if the account signed in again.
+    if (generation !== undefined && generation !== generations[account]) return error(401, 'UNAUTHENTICATED', '会话已失效');
+    // A disabled (or deleting) account's sessions are revoked: every request is unauthenticated from then on.
+    if (store.user.status !== 'active' || revokedSessions.has(account)) return error(401, 'UNAUTHENTICATED', '会话已失效');
     const body = (typeof rawBody === 'object' && rawBody !== null && !Array.isArray(rawBody) ? rawBody : {}) as Record<string, unknown>;
     const parts = path.split('/').filter(Boolean);
     const route = `${method} /${parts.map(part => (isId(part) ? ':id' : part)).join('/')}`;
     const id = parts.find(isId) ?? '';
+    if (parts[0] === 'admin') return admin.handle(store.user.id, method, parts, query, rawBody, key, reauth);
+    // HTTP 0.4.0: purpose-bound reauthentication for the admin writes (the Mock serves only those purposes).
+    if (method === 'POST' && path === '/auth/reauth') return admin.reauthenticate(store.user.id, rawBody);
 
     switch (route) {
       case 'GET /me': return ok(store.user);
@@ -490,10 +550,41 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
   return {
     handle,
     reset(account: MockAccountKey, dataset: MockDataset = 'seeded') {
-      stores[account] = account === 'A' ? seedA(dataset) : seedB();
+      // Learning fixtures are reseeded; admin-owned account state (status, switches, quota adjustments) stays.
+      const previous = stores[account];
+      const seeded = account === 'A' ? seedA(dataset) : account === 'B' ? seedB() : seedC();
+      stores[account] = { ...seeded, user: previous.user, quota: admin.reapply(previous.user.id, seeded.quota), deviceSessions: adminRevoked.has(account) ? previous.deviceSessions : seeded.deviceSessions };
       classrooms[account] = withHistory(account, account === 'A' && dataset === 'seeded' ? seededClassroom() : seedClassroom(null));
       reviews[account] = seedReview(account === 'A' && dataset === 'seeded');
     },
+    /** PR-11b development stand-in for the missing admin reauthentication purpose (contract gap §1); not an HTTP route. */
+    issueAdminProof: (account: MockAccountKey, binding: AdminReauthBinding, password: string, code: string) => admin.issueProof(stores[account].user.id, binding, password, code),
+    setAdminHealth: (value: AdminHealthDev) => admin.setHealthDev(value),
+    /** The account's Mock session ended (sign-out, switch, revocation): its admin proofs are no longer valid. */
+    retireSession: (account: MockAccountKey) => { generations[account] += 1; },
+    /**
+     * A fresh Mock sign-in. After an administrator ended the account's sessions it gets a new current session
+     * row; the revoked rows stay as history (a restore never revives them).
+     */
+    beginSession: (account: MockAccountKey) => {
+      // A sign-in attempt of a disabled account creates nothing; the revocation stays until a real sign-in.
+      if (stores[account].user.status !== 'active' || !revokedSessions.delete(account)) return;
+      const store = stores[account];
+      const device = store.deviceSessions[0]?.device_id ?? newId();
+      store.deviceSessions = [{ ...base(newId(), now()), device_id: device, device_name: '本机浏览器（模拟）', last_active_at: now(), expires_at: new Date(Date.parse(now()) + 30 * 86_400_000).toISOString().replace('.000Z', 'Z'), is_current: true, revoked_at: null }, ...store.deviceSessions.map(item => ({ ...item, is_current: false }))];
+    },
+    sessionGeneration: (account: MockAccountKey) => generations[account],
+    /** PR-11b: the platform ASR switch admits new live streams; a stream admitted before keeps going. */
+    asrAdmits,
+    /** Development panel: the administrator has (or has not) enrolled MFA. */
+    setAdminMfa: (enabled: boolean) => {
+      if (stores.C.user.mfa_enabled === enabled) return;
+      stores.C.user = { ...stores.C.user, mfa_enabled: enabled };
+      // A factor change advances the security epoch: proofs issued before it never regain authority.
+      generations.C += 1;
+    },
+    adminAudit: () => admin.audit(),
+    accountUser: (account: MockAccountKey) => stores[account].user,
     /** PR-10a development helpers; none of them is an HTTP route. */
     advanceTask: (account: MockAccountKey, taskId: string, outcome: TaskOutcome) => advanceTask(classrooms[account], classroomHost(account), classroomHelpers(account), taskId, outcome),
     finishAsr: (account: MockAccountKey, classId: string, state: 'succeeded' | 'failed' | 'unknown') => {
@@ -502,7 +593,12 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
       if (done && state === 'succeeded') classrooms[account].versions = classrooms[account].versions.map(item => item.class_session_id === classId && item.kind === 'realtime' && item.state === 'open' ? { ...item, state: 'sealed', revision: item.revision + 1, updated_at: now() } : item);
       return done;
     },
-    persistFinal: (account: MockAccountKey, input: Parameters<typeof persistFinal>[3]) => persistFinal(classrooms[account], classroomHost(account), classroomHelpers(account), input),
+    persistFinal: (account: MockAccountKey, input: Parameters<typeof persistFinal>[3]) => {
+      // A final belongs to a stream admitted by one of its runs (late finals of the original run included).
+      const admitted = [...admittedStreams[account]].some(item => item.startsWith(`${input.classId}|`) && item.endsWith(`|${input.streamId}`));
+      if (!admitted && !asrAdmits(account, input.classId, input.streamId)) return;
+      persistFinal(classrooms[account], classroomHost(account), classroomHelpers(account), input);
+    },
     ensureDemoClassroom: (account: MockAccountKey, input: Parameters<typeof ensureDemoClassroom>[3]) => ensureDemoClassroom(classrooms[account], classroomHost(account), classroomHelpers(account), input),
     setDurable: (account: MockAccountKey, classId: string, captureEpochId: string, seqs: number[]) => recordDurable(classrooms[account], classroomHost(account), classroomHelpers(account), classId, captureEpochId, seqs),
     releaseLease: (account: MockAccountKey, classId: string) => releaseLease(classrooms[account], classroomHost(account), classroomHelpers(account), classId),

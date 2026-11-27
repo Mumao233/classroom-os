@@ -4,6 +4,7 @@ import { ApiClientError, type ApiClient } from '../api/client';
 import type { CaptureView, LocalRisk } from '../domain/dashboard';
 import type { ClassroomShell } from './classroom';
 import type { RevocationLedger } from './revocation';
+import type { AdminReauthPort } from './admin';
 
 /**
  * Everything a page needs from the authenticated account shell. Pages never import fetch,
@@ -27,6 +28,13 @@ export type AppData = {
   classroom?: ClassroomShell;
   /** Account-shell revocation ledger: deletion receipts revoke cached content at once (REVOCATION-DESIGN.md). */
   revocation?: RevocationLedger;
+  /** PR-11b: purpose-bound reauthentication for admin writes; absent means admin writes are unavailable. */
+  adminReauth?: AdminReauthPort;
+  /**
+   * Connectivity itself, also while a stale projection makes the page read-only (`online` false). Only the
+   * replay of an already dispatched request (same key and body) may use it: it starts nothing new.
+   */
+  transportOnline?: boolean;
 };
 
 const Context = createContext<AppData | null>(null);
@@ -49,7 +57,7 @@ export function readableCache<T>(query: { data: T | undefined; isError: boolean;
 export function ReadOnlyWhile({ stale, children }: { stale: boolean; children: ReactNode }) {
   const app = useAppData();
   // Always the same provider element: switching read-only on or off must not remount (and reset) drafts below.
-  return <Context.Provider value={stale ? { ...app, online: false } : app}>{children}</Context.Provider>;
+  return <Context.Provider value={stale ? { ...app, online: false, transportOnline: app.transportOnline ?? app.online } : app}>{children}</Context.Provider>;
 }
 
 export function useAccountQuery<T>(parts: readonly unknown[], fn: (api: ApiClient, signal: AbortSignal) => Promise<T>, enabled = true) {

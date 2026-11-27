@@ -14,8 +14,8 @@
     "gen:contracts": "node scripts/gen-contracts.mjs",
     "typecheck": "node scripts/gen-contracts.mjs --check && tsc -b --pretty false",
     "lint": "eslint . --max-warnings 0",
-    "test:contract": "vitest run --config tests/vitest.config.ts tests/contract.test.ts tests/pr10a-contract.test.ts tests/pr10b-contract.test.ts",
-    "test:unit": "vitest run --config tests/vitest.config.ts tests/unit.test.ts tests/api.test.ts tests/pr09b-domain.test.ts tests/pr09b-backend.test.ts tests/pr10a-domain.test.ts tests/pr10a-backend.test.ts tests/pr10b-domain.test.ts tests/pr10b-backend.test.ts tests/revocation.test.ts",
+    "test:contract": "vitest run --config tests/vitest.config.ts tests/contract.test.ts tests/pr10a-contract.test.ts tests/pr10b-contract.test.ts tests/pr11b-contract.test.ts",
+    "test:unit": "vitest run --config tests/vitest.config.ts tests/unit.test.ts tests/api.test.ts tests/pr09b-domain.test.ts tests/pr09b-backend.test.ts tests/pr10a-domain.test.ts tests/pr10a-backend.test.ts tests/pr10b-domain.test.ts tests/pr10b-backend.test.ts tests/pr11b-domain.test.ts tests/pr11b-backend.test.ts tests/revocation.test.ts",
     "test:ui": "playwright test --config tests/playwright.config.ts",
     "build": "tsc -b --pretty false && vite build --mode production && node scripts/verify-build.mjs",
     "preview": "vite preview --mode production"

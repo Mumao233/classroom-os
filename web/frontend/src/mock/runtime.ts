@@ -9,7 +9,7 @@ type Asr = 'idle' | 'streaming' | 'catching_up' | 'draining' | 'succeeded' | 'fa
 type Ai = 'idle' | 'queued' | 'running' | 'succeeded' | 'failed' | 'unknown' | 'cancel_requested' | 'cancelled';
 type Sync = 'synced' | 'local_only' | 'syncing' | 'failed' | 'conflict';
 export type Flows = { capture: Capture; upload: Upload; asr: Asr; ai: Ai; sync: Sync };
-export type MockAccount = 'A' | 'B';
+export type MockAccount = 'A' | 'B' | 'C';
 /** A live transcript segment as delivered by events; time fields keep late results in place. */
 export type LiveSegment = { classroomId: string; streamId: string; segmentId: string; sequence: number; revision: number; text: string; status: 'partial' | 'final'; startMs: number | null; endMs: number | null; segmentRevisionId: string | null; versionId: string | null };
 type Projection = { portCaptureState: Capture; uploadPending: boolean; partial: string | null; finalText: string | null; finalRevision: number; frameReceived: boolean; chunkDurable: boolean; audioDeleted: boolean; classroomDeleted: boolean; leaseLost: boolean; mayHaveCharged: boolean; delivered: number };
@@ -202,6 +202,10 @@ export function createMockRuntime(options: { createVault?: () => MemoryVault } =
     if (!id) { id = crypto.randomUUID(); scriptEventIds.set(key, id); }
     return id;
   };
+  // PR-11b: the simulated server sends no captions for a stream its ASR admission refuses.
+  let admitTranscript: (classId: string, streamId: string, run: string) => boolean = () => true;
+  // The capture run (its epoch) is part of the admission: a later run reusing a scripted stream ID is admitted anew.
+  const transcriptAdmitted = (event: ClassroomOSWebV1EventEnvelope) => (event.type !== 'transcript.partial' && event.type !== 'transcript.final') || admitTranscript(event.data.class_session_id, event.data.stream_id, state.captureScope?.captureEpochId ?? '');
   const bindScriptEvent = (event: ClassroomOSWebV1EventEnvelope, scope = state.captureScope): ClassroomOSWebV1EventEnvelope => {
     if (!scope) return event;
     if (event.type === 'capture.lease_lost') return { ...event, event_id: scriptedId(`${event.type}:${event.event_id}:${scope.captureEpochId}:${scope.fenceToken}`), data: { ...event.data, class_session_id: scope.classSessionId, capture_epoch_id: scope.captureEpochId, fence_token: scope.fenceToken } };
@@ -339,15 +343,20 @@ export function createMockRuntime(options: { createVault?: () => MemoryVault } =
       if (!state.account) return false;
       // Keep the original connection reference so revocation destroys the rest of a script.
       const connection = events;
-      eventScripts[name].forEach(event => connection.emit(bindScriptEvent(event)));
+      eventScripts[name].forEach(event => { const bound = bindScriptEvent(event); if (transcriptAdmitted(bound)) connection.emit(bound); });
       return true;
     },
     runEventStep: (name: EventScriptName, index: number) => {
       const event = eventScripts[name][index];
       if (!state.account || !event) return false;
-      events.emit(bindScriptEvent(event));
+      const bound = bindScriptEvent(event);
+      if (transcriptAdmitted(bound)) events.emit(bound);
       return true;
     },
+    /** PR-11b: the simulated server's ASR admission, applied to every transcript event it delivers. */
+    setTranscriptAdmission: (admit: (classId: string, streamId: string, run: string) => boolean) => { admitTranscript = admit; },
+    /** Feed and scripts share one delivery check. */
+    deliverTranscript: (event: ClassroomOSWebV1EventEnvelope) => { if (state.account && transcriptAdmitted(event)) events.emit(event); },
     /**
      * The server answered that a classroom no longer exists or is no longer accessible (for example a
      * course cascade deletion). The Mock server's deletion event for it is delivered on the account

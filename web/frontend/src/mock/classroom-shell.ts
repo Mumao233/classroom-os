@@ -7,9 +7,9 @@ type MockRuntime = ReturnType<typeof createMockRuntime>;
 /** The PR-09a runtime numbers its synthetic chunks from 1; the contract's chunk sequence starts at 0. */
 const serverSeq = (runtimeSeq: number) => Math.max(0, runtimeSeq - 1);
 const LAYOUT_KEY = 'classroom-layout-v1';
-const DEVICE = { A: 'a2000000-0000-4000-8000-000000000001', B: 'b2000000-0000-4000-8000-000000000001' } as const;
+const DEVICE = { A: 'a2000000-0000-4000-8000-000000000001', B: 'b2000000-0000-4000-8000-000000000001', C: 'c2000000-0000-4000-8000-000000000001' } as const;
 /** Stable synthetic device identity of an account's browser profile (Mock). */
-export const mockDeviceId = (account: 'A' | 'B') => DEVICE[account];
+export const mockDeviceId = (account: 'A' | 'B' | 'C') => DEVICE[account];
 
 /**
  * Development adapter from the PR-09a in-page capture runtime to the PR-10a classroom shell.
