@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { NavLink, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router';
 import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from '@tanstack/react-query';
-import { IconBell, IconBook2, IconBooks, IconCards, IconChalkboard, IconChevronRight, IconCircleDot, IconHeadphones, IconLayoutDashboard, IconPlayerStop, IconSearch, IconSettings, IconShieldCheck, IconWaveSine } from '@tabler/icons-react';
+import { IconBell, IconBook2, IconBooks, IconCards, IconChalkboard, IconChevronRight, IconCircleDot, IconHeadphones, IconLayoutDashboard, IconMessageReport, IconPlayerStop, IconSearch, IconSettings, IconShieldCheck, IconWaveSine } from '@tabler/icons-react';
 import { Dashboard } from '../pages/Dashboard';
 import { Placeholder } from '../pages/Placeholder';
 import { CourseList } from '../pages/courses/CourseList';
@@ -35,6 +35,12 @@ import { AdminUsers } from '../pages/admin/AdminUsers';
 import { AdminInvites } from '../pages/admin/AdminInvites';
 import { AdminUsage } from '../pages/admin/AdminUsage';
 import { AdminRuntime } from '../pages/admin/AdminRuntime';
+import { SearchRoute } from '../pages/search/SearchRoute';
+import { NotificationsRoute } from '../pages/notifications/NotificationsRoute';
+import { FeedbackPage } from '../pages/feedback/FeedbackPage';
+import { ShellSearchPalette } from '../pages/search/ShellSearchPalette';
+import { forgetFeedbackContexts } from '../features/feedback/context';
+import { noticeMockLeaseLost, subscribeMockCreatedNotifications } from '../mock/start';
 import styles from './Shell.module.css';
 
 const baseNav = [
@@ -283,7 +289,15 @@ function MockWorkbenchContent({ runtime }: { runtime: ReturnType<typeof useMockR
   // A lost lease is no longer held by the server either, so it never blocks a later classroom; the
   // refreshed projection then offers an explicit new start.
   const lostClassId = runtime.state.eventProjection.leaseLost ? boundClassId : null;
-  useEffect(() => { if (lostClassId && releaseMockLease(lostClassId)) void queryClient.invalidateQueries(); }, [lostClassId, queryClient]);
+  const lostEpochId = lostClassId ? runtime.state.captureScope?.captureEpochId ?? null : null;
+  useEffect(() => {
+    if (!lostClassId) return;
+    if (!releaseMockLease(lostClassId)) return;
+    // PR-11c: only a lease the server actually held and lost records its capture-failure notice (one per
+    // capture epoch, for a live classroom) and announces it.
+    noticeMockLeaseLost(lostClassId, lostEpochId);
+    void queryClient.invalidateQueries();
+  }, [lostClassId, lostEpochId, queryClient]);
   // A bound classroom the server now refuses (it served it before) is revoked by the ledger's cache
   // guard, like a deletion event; the PR-09a demo classroom is unknown until it is registered.
   // The global AI indicator follows the bound classroom's tasks too; an unknown outcome always wins.
@@ -307,6 +321,44 @@ function MockWorkbenchContent({ runtime }: { runtime: ReturnType<typeof useMockR
       if (target && advanceMockTask(target.id, outcome)) void queryClient.invalidateQueries();
     }).catch(() => undefined);
   };
+  // PR-11c: the simulated server announces each notification as it creates it, on any page, on this
+  // account epoch's event stream (the subscription ends with the epoch). Both bridges follow the event
+  // client itself, which lives as long as the runtime, never the per-render runtime wrapper: a runtime
+  // update (e.g. the lease loss that creates a notice) must not leave a gap without listeners.
+  const eventClient = runtime.getEventClient();
+  useEffect(() => subscribeMockCreatedNotifications(item => eventClient.emit({ protocol_version: 1, type: 'notification.created',
+    sent_at: new Date(MOCK_NOW).toISOString(), event_id: crypto.randomUUID(), cursor: `mock-notification-${item.id}`,
+    data: { notification_id: item.id, severity: item.severity, message_code: item.message_code } })), [eventClient]);
+  // PR-11c: notification.created on this account epoch's stream reloads the notification centre and the dashboard card.
+  const [noticeToken, setNoticeToken] = useState(0);
+  useEffect(() => {
+    const stop = eventClient.subscribe(event => {
+      if (event.type !== 'notification.created') return;
+      setNoticeToken(value => value + 1);
+      void queryClient.invalidateQueries({ queryKey: ['account', `${account}:${epoch}`, 'notifications'] });
+    });
+    return () => { stop(); };
+  }, [eventClient, queryClient, account, epoch]);
+  // PR-11c: private feedback context (an excerpt) never outlives the account epoch that captured it.
+  useEffect(() => () => forgetFeedbackContexts(), [account, epoch]);
+  // PR-11c: the dashboard's notification snapshot may name revoked content; a confirmed revocation drops
+  // it before reading again (an offline refetch must not leave the old snapshot on screen).
+  useEffect(() => revocation.subscribe(() => queueMicrotask(() => {
+    void queryClient.resetQueries({ queryKey: ['account', `${account}:${epoch}`, 'notifications'] });
+  })), [revocation, queryClient, account, epoch]);
+  // PR-11c: Ctrl/⌘K opens the keyword search palette from anywhere in a signed-in account.
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  useEffect(() => {
+    if (!account) return;
+    const open = (event: KeyboardEvent) => {
+      if (event.isComposing || event.altKey || event.shiftKey || !(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'k') return;
+      event.preventDefault();
+      setPaletteOpen(true);
+    };
+    window.addEventListener('keydown', open);
+    return () => window.removeEventListener('keydown', open);
+  }, [account]);
+  const closePalette = useCallback(() => setPaletteOpen(false), []);
   const devAsr = (state: 'succeeded' | 'failed') => { if (routeClassId && finishMockAsr(routeClassId, state)) void queryClient.invalidateQueries(); };
   const failure = flows.upload === 'failed';
   const unknownRiskCount = Object.values(runtime.state.tasks).filter(task => task.mayHaveCharged).length;
@@ -315,11 +367,11 @@ function MockWorkbenchContent({ runtime }: { runtime: ReturnType<typeof useMockR
     <a className={styles.skipLink} href="#main-content">跳至主要内容</a>
     <header className={styles.header}><NavLink to="/dashboard" className={styles.brand} data-testid="brand" aria-label="Classroom OS 首页"><span className={styles.brandMark}/></NavLink>
       <nav className={styles.desktopNav} data-testid="desktop-nav" aria-label="主导航">{nav.map(({to,text,DesktopIcon}) => <NavLink key={to} to={to === '/classrooms' ? liveTarget : to} aria-label={text} title={text} className={({isActive}: {isActive: boolean}) => `${styles.navItem} ${isActive ? styles.navActive : ''}`}><DesktopIcon size={18}/></NavLink>)}</nav>
-      <div className={styles.headerActions} data-testid="header-actions"><LinkWithIcon to="/search" label="搜索"><IconSearch size={20}/></LinkWithIcon><LinkWithIcon to="/notifications" label="通知"><IconBell size={20}/></LinkWithIcon><NavLink className={styles.avatar} aria-label="外观设置" to="/settings/appearance">{account === 'A' ? '林' : account === 'B' ? '陈' : account === 'C' ? '管' : '·'}</NavLink></div>
+      <div className={styles.headerActions} data-testid="header-actions"><LinkWithIcon to="/search" label="搜索"><IconSearch size={20}/></LinkWithIcon><LinkWithIcon to="/notifications" label="通知"><IconBell size={20}/></LinkWithIcon><LinkWithIcon to="/feedback" label="问题反馈"><IconMessageReport size={20}/></LinkWithIcon><NavLink className={styles.avatar} aria-label="外观设置" to="/settings/appearance">{account === 'A' ? '林' : account === 'B' ? '陈' : account === 'C' ? '管' : '·'}</NavLink></div>
     </header>
     <div className={styles.devBanner}><span className={styles.devDot}/> 开发预览 · 合成数据 <span className={styles.devDivider}>/</span> <span>{apiStatus === 'ready' ? 'Mock API 已连接' : apiStatus === 'loading' ? 'Mock API 连接中' : apiStatus === 'revoked' ? '模拟会话已撤销' : 'Mock API 不可用'}</span><NavLink to="/__dev/catalog">组件目录 ↗</NavLink></div>
     {!account ? <main id="main-content" className={styles.page}><section className={`${styles.panel} ${styles.empty}`}><h1>模拟会话已撤销</h1><p>已清除模拟账号内容、事件订阅和采集状态。</p><button type="button" className={styles.primaryButton} onClick={() => loginAccount('A')}>进入模拟账号 A</button><button type="button" className={styles.secondaryButton} onClick={() => loginAccount('B')}>进入模拟账号 B</button><button type="button" className={styles.secondaryButton} onClick={() => loginAccount('C')}>进入模拟管理员 C</button></section></main> :
-    <AppDataProvider value={appData}><Routes><Route path="/" element={<Navigate to="/dashboard" replace/>}/><Route path="/dashboard" element={<Dashboard/>}/><Route path="/__dev/catalog" element={<main id="main-content" className={styles.page}><Catalog theme={theme === 'system' ? (systemNight ? 'night' : 'day') : theme} onThemeChange={setTheme} onStopCapture={active ? stopFromShell : undefined}/></main>}/><Route path="/settings" element={<Navigate to="/settings/appearance" replace/>}/><Route path="/settings/:section" element={<Settings theme={theme} setTheme={setTheme} effects={effects} setEffects={setEffects}/>}/><Route path="/courses" element={<CourseList/>}/><Route path="/courses/new" element={<CourseFormPage/>}/><Route path="/courses/:courseId/edit" element={<CourseFormPage/>}/><Route path="/courses/:courseId" element={<CourseRedirect/>}/><Route path="/courses/:courseId/:tab" element={<CourseDetail/>}/><Route path="/semesters/new" element={<SemesterFormPage/>}/><Route path="/semesters/:semesterId/edit" element={<SemesterFormPage/>}/><Route path="/classrooms" element={<ClassroomEntry/>}/><Route path="/classrooms/mock/live" element={<Navigate to={liveTarget} replace/>}/><Route path="/classrooms/:classId" element={<ClassroomRedirect/>}/><Route path="/classrooms/:classId/live" element={<PerClassroom page={ClassroomLive}/>}/><Route path="/classrooms/:classId/processing" element={<PerClassroom page={ClassroomProcessing}/>}/><Route path="/classrooms/:classId/record" element={<PerClassroom page={ClassroomRecord}/>}/><Route path="/classrooms/:classId/review" element={<PerClassroom page={ClassReview}/>}/><Route path="/review/items/:documentId" element={<PerDocument/>}/><Route path="/review/*" element={<ReviewHub notice={scenario === '10' ? <section className={styles.panel}><h2>模拟只读资料</h2><p>合成的学习资料示例：额度限制时，已有资料仍可阅读。</p><p>下方资料库照常可用。</p><p>只有需要新额度的操作（生成、重新转写）会被拒绝；阅读和标记理解状态不调用模型，也不会发起收费请求。</p></section> : undefined}/>}/><Route path="/admin" element={<Navigate to="/admin/users" replace/>}/><Route path="/admin/users" element={<AdminUsers/>}/><Route path="/admin/invites" element={<AdminInvites/>}/><Route path="/admin/usage" element={<AdminUsage/>}/><Route path="/admin/runtime" element={<AdminRuntime/>}/><Route path="/tasks" element={<Placeholder title="待处理" detail="查看需要关注的任务。"/>}/><Route path="/notifications" element={<Placeholder title="通知" detail="查看学习动态和提醒。"/>}/><Route path="/search" element={<Placeholder title="搜索" detail="搜索功能将在后续实现。"/>}/><Route path="*" element={<Placeholder title="页面不可用" detail="该页面不存在或尚未开放。"/>}/></Routes></AppDataProvider>}
+    <AppDataProvider value={appData}><Routes><Route path="/" element={<Navigate to="/dashboard" replace/>}/><Route path="/dashboard" element={<Dashboard/>}/><Route path="/__dev/catalog" element={<main id="main-content" className={styles.page}><Catalog theme={theme === 'system' ? (systemNight ? 'night' : 'day') : theme} onThemeChange={setTheme} onStopCapture={active ? stopFromShell : undefined}/></main>}/><Route path="/settings" element={<Navigate to="/settings/appearance" replace/>}/><Route path="/settings/:section" element={<Settings theme={theme} setTheme={setTheme} effects={effects} setEffects={setEffects}/>}/><Route path="/courses" element={<CourseList/>}/><Route path="/courses/new" element={<CourseFormPage/>}/><Route path="/courses/:courseId/edit" element={<CourseFormPage/>}/><Route path="/courses/:courseId" element={<CourseRedirect/>}/><Route path="/courses/:courseId/:tab" element={<CourseDetail/>}/><Route path="/semesters/new" element={<SemesterFormPage/>}/><Route path="/semesters/:semesterId/edit" element={<SemesterFormPage/>}/><Route path="/classrooms" element={<ClassroomEntry/>}/><Route path="/classrooms/mock/live" element={<Navigate to={liveTarget} replace/>}/><Route path="/classrooms/:classId" element={<ClassroomRedirect/>}/><Route path="/classrooms/:classId/live" element={<PerClassroom page={ClassroomLive}/>}/><Route path="/classrooms/:classId/processing" element={<PerClassroom page={ClassroomProcessing}/>}/><Route path="/classrooms/:classId/record" element={<PerClassroom page={ClassroomRecord}/>}/><Route path="/classrooms/:classId/review" element={<PerClassroom page={ClassReview}/>}/><Route path="/review/items/:documentId" element={<PerDocument/>}/><Route path="/review/*" element={<ReviewHub notice={scenario === '10' ? <section className={styles.panel}><h2>模拟只读资料</h2><p>合成的学习资料示例：额度限制时，已有资料仍可阅读。</p><p>下方资料库照常可用。</p><p>只有需要新额度的操作（生成、重新转写）会被拒绝；阅读和标记理解状态不调用模型，也不会发起收费请求。</p></section> : undefined}/>}/><Route path="/admin" element={<Navigate to="/admin/users" replace/>}/><Route path="/admin/users" element={<AdminUsers/>}/><Route path="/admin/invites" element={<AdminInvites/>}/><Route path="/admin/usage" element={<AdminUsage/>}/><Route path="/admin/runtime" element={<AdminRuntime/>}/><Route path="/tasks" element={<Placeholder title="待处理" detail="查看需要关注的任务。"/>}/><Route path="/notifications" element={<NotificationsRoute refreshToken={noticeToken}/>}/><Route path="/search" element={<SearchRoute/>}/><Route path="/feedback" element={<FeedbackPage/>}/><Route path="*" element={<Placeholder title="页面不可用" detail="该页面不存在或尚未开放。"/>}/></Routes></AppDataProvider>}
     {account && <aside className={styles.scenarioPanel} aria-label="开发模拟控制"><label htmlFor="scenario">模拟场景</label><select id="scenario" value={scenario} onChange={event => chooseScenario(event.target.value)}>{scenarioNames.map((name,index) => { const number = String(index + 1).padStart(2,'0'); return <option key={number} value={number}>MOCK-{number} · {name}</option>; })}</select><button onClick={switchAccount} type="button">切换模拟账号 {account} <IconChevronRight size={14}/></button><button onClick={revokeAccount} type="button">撤销模拟会话</button><label><input type="checkbox" checked={mockOffline} onChange={event => toggleOffline(event.target.checked)}/> 模拟离线</label><ScenarioNotice scenario={scenario}/><ScenarioView key={scenario} scenario={scenario} localWrite={runtime.state.localWriteResult} localRecord={runtime.state.mockLocalRecord} vaultLocked={runtime.state.vaultLocked} localHistory={runtime.state.localRecordHistory} writeLocal={runtime.simulateLocalWrite} reconcileLocal={runtime.reconcileLocalWrite} lockVault={runtime.lockMockVault} unlockVault={runtime.unlockMockVault} stopCapture={stopFromShell} checkRetry={runtime.requestAiRetry}/>
       <div className={styles.scenarioDetail}><label htmlFor="event-script">模拟事件脚本</label>{' '}<select id="event-script" value={eventScript} onChange={event => { setEventScript(event.target.value as EventScriptName); setEventStep(0); }}><option value="transcript">临时与正式转写</option><option value="upload">帧确认与持久上传</option><option value="taskUnknown">AI 结果未知</option><option value="deletion">原音撤权</option><option value="classroomDeletion">课堂撤权</option><option value="leaseLoss">采集租约失效</option><option value="revocation">会话撤销</option></select>{' '}<button type="button" onClick={runEventScript}>运行模拟事件</button>{' '}<button type="button" onClick={runEventStep}>模拟下一步事件</button>{runtime.state.eventProjection.leaseLost && !runtime.state.eventProjection.classroomDeleted && <button type="button" onClick={() => runtime.acquireMockLease()}>重新获取模拟租约</button>}<div role="region" aria-label="模拟事件结果" data-port-capture={runtime.state.eventProjection.portCaptureState} data-port-upload-pending={String(runtime.state.eventProjection.uploadPending)}><p>正式片段：{runtime.state.eventProjection.finalText ?? '无'}；临时片段：{runtime.state.eventProjection.partial ?? '无'}</p><p>帧确认：{runtime.state.eventProjection.frameReceived ? '已收到' : '未收到'}；持久上传：{runtime.state.eventProjection.chunkDurable ? '已确认' : '未确认'}</p><p>当前课堂 AI 结果：{flows.ai === 'unknown' ? '未知，可能已收费' : flows.ai}；原音撤权：{runtime.state.eventProjection.audioDeleted ? '已撤权' : '无'}；课堂撤权：{runtime.state.eventProjection.classroomDeleted ? '已撤权' : '无'}；采集租约：{runtime.state.eventProjection.leaseLost ? '已失效' : '正常'}</p><p>全部课堂的未知收费风险：{unknownRiskCount} 项{unknownRiskCount > 0 ? '，请先核对，不能自动重试' : ''}</p></div></div>
       <section className={styles.scenarioDetail} aria-label="课堂模拟控制"><strong>课堂模拟（PR-10a）</strong>
@@ -337,6 +389,7 @@ function MockWorkbenchContent({ runtime }: { runtime: ReturnType<typeof useMockR
       <section className={styles.scenarioDetail} aria-label="模拟上传历史"><strong>模拟上传历史</strong>{runtime.state.uploadHistory.length === 0 ? <p>暂无模拟分片。</p> : <ol>{runtime.state.uploadHistory.map(item => <li key={`${item.captureEpochId}:${item.chunkId}:${item.seq}`} data-chunk-id={item.chunkId} data-capture-epoch={item.captureEpochId} data-status={item.status}><span>分片 {item.seq} · {item.status === 'durable' ? '已持久确认' : item.canAccept ? '待持久确认' : '已失效，无法确认'} · 帧确认{item.frameReceived ? '已收到' : '未收到'}{item.chunkId === runtime.state.captureScope?.chunkId ? ' · 当前采集' : ' · 历史采集'}</span>{item.status === 'pending' && item.canAccept && item.chunkId !== runtime.state.captureScope?.chunkId && <> <button type="button" onClick={() => runtime.runHistoricalDurable(item.chunkId)}>模拟迟到持久回执</button></>}</li>)}</ol>}</section>
     </aside>}
     {active && <div className={styles.captureBar} role="region" aria-label="模拟课堂状态"><button type="button" onClick={() => navigate(liveTarget)} className={styles.captureTitle}><span className={styles.recordDot}/><span><strong>{flows.capture === 'paused' ? '模拟采集已暂停' : '模拟录音中'}</strong><small>{boundSession.data?.title || (account === 'A' ? '模拟课堂 · 线性代数' : '模拟课堂 B')}</small></span><IconWaveSine className={styles.wave} size={24}/><strong aria-label="采集时长">{formatClock(boundClassId ? classroomShell.capture.positionMs(boundClassId) : null)}</strong></button><div className={styles.flowList} aria-label="五流独立状态"><span>● 采集 · {flows.capture === 'recording' ? '录音中' : flows.capture === 'paused' ? '已暂停' : flows.capture}</span><span className={failure ? styles.flowWarning : ''}>{failure ? '！上传 · 失败' : flows.upload === 'durable' ? '✓ 上传 · 已确认' : '◌ 上传 · 待处理'}</span><span>◌ 转写 · {flows.asr === 'streaming' ? '进行中' : flows.asr === 'idle' ? '未开始' : flows.asr}</span><span>– AI · {aiFlow === 'idle' ? '无任务' : aiFlow === 'unknown' ? '结果未知' : aiFlow}</span><span className={flows.sync !== 'synced' ? styles.flowWarning : ''}>同步 · {syncLabel}</span></div><button type="button" className={styles.stopButton} onClick={stopFromShell}><IconPlayerStop size={17}/> 停止</button></div>}
+    {account && <AppDataProvider value={appData}><ShellSearchPalette open={paletteOpen} onClose={closePalette} onStopCapture={active ? stopFromShell : undefined}/></AppDataProvider>}
     <nav className={styles.mobileNav} data-testid="mobile-nav" aria-label="移动主导航"><span className={styles.mobileIndicator} data-testid="mobile-indicator" aria-hidden="true"/>{nav.slice(0,4).map(({to,text,Icon}) => <NavLink key={to} to={to === '/classrooms' ? liveTarget : to} className={({isActive}: {isActive: boolean}) => `${styles.mobileItem} ${isActive ? styles.mobileActive : ''}`}><Icon size={23}/><span>{text}</span></NavLink>)}</nav>
   </div>;
 }

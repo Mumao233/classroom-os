@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type UIEvent } from 'react';
-import { Link, useLocation, useNavigate, useParams } from 'react-router';
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { components } from '../../generated/openapi';
 import { ApiClientError } from '../../api/client';
@@ -12,6 +12,7 @@ import { personalEditorAccess } from '../../features/revocation';
 import { isDefinitiveRejection, useClassSession, useClassroomShell, useDraft, useMarks, useSlides } from '../../features/classroom';
 import { useClassSegments, useReadingMemory, useReviewDocument, useReviewRevisions, useSourceSnapshot } from '../../features/review';
 import { DataSourceNote, OfflineBanner } from '../common';
+import { FeedbackLink } from '../../features/feedback/FeedbackLink';
 import pages from '../pages.module.css';
 import styles from './review.module.css';
 
@@ -40,11 +41,24 @@ export function ReviewReader() {
   const session = useClassSession(doc?.class_session_id ?? '');
   const course = useCourse(session.data?.course_id ?? '', Boolean(session.data));
   const memory = useReadingMemory();
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  // PR-11c: a search hit opens the exact revision it matched (`?revision=`); an id that is not among the
+  // readable revisions simply falls back to the default revision, never to cached text.
+  const [searchParams] = useSearchParams();
+  const [selectedId, setSelectedId] = useState<string | null>(() => searchParams.get('revision'));
+  // A new navigation to a revision link (e.g. another hit while this reader stays mounted) selects it;
+  // navigating to the document without one (e.g. Back) returns to its default revision. A manual
+  // selection holds until the next navigation.
+  const linkedRevision = searchParams.get('revision');
+  const [appliedLink, setAppliedLink] = useState(location.key);
+  if (location.key !== appliedLink) {
+    setAppliedLink(location.key);
+    setSelectedId(linkedRevision);
+  }
   const [showSources, setShowSources] = useState(false);
   const [comparing, setComparing] = useState(false);
   const [notice, setNotice] = useState<{ tone: 'success' | 'warning' | 'danger'; text: string } | null>(null);
   const heading = useRef<HTMLHeadingElement>(null);
+  const page = useRef<HTMLElement>(null);
   useEffect(() => { heading.current?.focus({ preventScroll: true }); }, [documentId]);
 
   const readableRevisions = readableCache(revisions);
@@ -87,7 +101,7 @@ export function ReviewReader() {
 
   const role = shown ? revisionRole(doc, shown) : null;
   const sourceNote = sourceStatusText[doc.source_status];
-  return <main id="main-content" className={styles.page}>
+  return <main ref={page} id="main-content" className={styles.page}>
     <div className={pages.heading}>
       <div className={pages.wrap}>
         <p>{course.data?.name ?? '课程'} · {session.data?.title || '课堂'} · {kindLabel[doc.kind]}</p>
@@ -99,6 +113,7 @@ export function ReviewReader() {
         <Link className={pages.buttonSecondary} to={`/classrooms/${doc.class_session_id}/review`}>本课复习</Link>
         <button type="button" className={pages.buttonSecondary} aria-pressed={doc.understood} disabled={!online || understood.isPending} onClick={() => understood.mutate(!doc.understood)} data-testid="toggle-understood">
           {doc.understood ? '改回尚未理解' : '标记为已理解'}</button>
+        <FeedbackLink within={page} className={pages.buttonGhost} source={{ object_type: doc.kind === 'card' ? 'card' : 'review_document', object_id: doc.id, class_session_id: doc.class_session_id, locator: `review/${doc.id}`, revision_id: shown?.id ?? null }} />
       </div>
     </div>
     <DataSourceNote />

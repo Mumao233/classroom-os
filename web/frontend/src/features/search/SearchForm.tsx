@@ -10,6 +10,17 @@ export type SearchProps = {
   search: (query: SearchQuery, signal: AbortSignal) => Promise<SearchPageData>;
   /** Re-read the exact resource under current authorization before navigating. */
   openResult: (result: SearchResult, route: string, signal: AbortSignal) => Promise<void>;
+  /** Keyword from the address (`/search?q=…`), searched once when the form mounts. */
+  initialQuery?: string;
+  /** Reports each submitted keyword, so the page can keep it in its address. */
+  onSubmitQuery?: (query: string) => void;
+  /**
+   * Hits pointing into content this account has since confirmed revoked: hidden on every render, so a
+   * deletion event removes them at once and a reply still in flight cannot bring them back.
+   */
+  isRevoked?: (item: SearchResult) => boolean;
+  /** A change drops the held results and any reply in flight (a deletion whose effect on them is unknown). */
+  resetKey?: string | number;
 };
 
 const empty: SearchPageData = { items: [], next_cursor: null };
@@ -22,11 +33,11 @@ function isSearchTransportFailure(error: unknown): boolean {
 
 export function SearchForm(props: SearchProps & { inputRef?: Ref<HTMLInputElement> }) {
   // Unmount private results, query and in-flight requests when authorization or connectivity changes.
-  return <SearchSession key={JSON.stringify([props.accountKey, props.online])} {...props} />;
+  return <SearchSession key={JSON.stringify([props.accountKey, props.online, props.resetKey ?? null])} {...props} />;
 }
 
-function SearchSession({ online, search, openResult, inputRef }: SearchProps & { inputRef?: Ref<HTMLInputElement> }) {
-  const [input, setInput] = useState('');
+function SearchSession({ online, search, openResult, inputRef, initialQuery, onSubmitQuery, isRevoked }: SearchProps & { inputRef?: Ref<HTMLInputElement> }) {
+  const [input, setInput] = useState(initialQuery ?? '');
   const [page, setPage] = useState<SearchPageData>(empty);
   const [submitted, setSubmitted] = useState(false);
   const [pending, setPending] = useState(false);
@@ -35,10 +46,16 @@ function SearchSession({ online, search, openResult, inputRef }: SearchProps & {
   const form = useRef<HTMLFormElement>(null);
   const active = useRef<AbortController | null>(null);
   useEffect(() => () => active.current?.abort(), []);
+  // A keyword carried in the address is searched once per mount (the session remounts per account and connectivity).
+  useEffect(() => {
+    if (online && initialQuery && normalizeQuery(initialQuery)) void request();
+    return () => active.current?.abort();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function request(cursor?: string) {
     const query = normalizeQuery(input);
     if (!query) { setNotice('请输入 1 至 200 个字符的关键词。'); return; }
+    if (!cursor) onSubmitQuery?.(query);
     active.current?.abort();
     const run = new AbortController();
     active.current = run;
@@ -84,6 +101,7 @@ function SearchSession({ online, search, openResult, inputRef }: SearchProps & {
     }
   }
 
+  const visible = isRevoked ? page.items.filter(item => !isRevoked(item)) : page.items;
   const scope = searchScopeNotice(online);
   if (scope) return <p role="status">{scope}</p>;
   return <div className={styles.stack}>
@@ -97,9 +115,9 @@ function SearchSession({ online, search, openResult, inputRef }: SearchProps & {
       </div>
       <Button type="submit" disabled={pending}>搜索</Button>
     </form>
-    <div role="status" className={styles.status}>{notice || (pending ? '正在处理…' : submitted && !page.items.length ? '没有匹配的结果。' : '')}</div>
-    {page.items.length > 0 && <ul className={styles.results} aria-label="搜索结果" aria-busy={pending}>
-      {page.items.map(item => <li key={searchResultKey(item)}><Panel>
+    <div role="status" className={styles.status}>{notice || (pending ? '正在处理…' : submitted && !visible.length ? '没有匹配的结果。' : '')}</div>
+    {visible.length > 0 && <ul className={styles.results} aria-label="搜索结果" aria-busy={pending}>
+      {visible.map(item => <li key={searchResultKey(item)}><Panel>
         <Button variant="ghost" onClick={() => void open(item)} disabled={pending}>{item.title || '打开结果'}</Button>
         {item.snippet && item.snippet !== item.title && <p className={styles.snippet}>{item.snippet}</p>}
       </Panel></li>)}

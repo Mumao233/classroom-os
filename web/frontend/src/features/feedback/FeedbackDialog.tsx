@@ -20,7 +20,10 @@ export function FeedbackDialog({ open, onClose, ...props }: Props) {
   </Dialog>;
 }
 
-function FeedbackForm({ buildId, requestId, excerpt, submit }: Omit<Props, 'open' | 'onClose'>) {
+export type FeedbackFormProps = Omit<Props, 'open' | 'onClose'>;
+
+/** The form alone, for the `/feedback` page; remount it (key) per account and request context. */
+export function FeedbackForm({ buildId, requestId, excerpt, submit }: FeedbackFormProps) {
   const [category, setCategory] = useState<Feedback['category']>('bug');
   const [description, setDescription] = useState('');
   const [consentFor, setConsentFor] = useState<string | null>(null);

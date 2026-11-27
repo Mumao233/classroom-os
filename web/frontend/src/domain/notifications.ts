@@ -37,10 +37,15 @@ export const notificationMessages: Record<string, string> = {
   CAPTURE_LEASE_LOST: '采集已中断',
   SAVE_FAILED: '保存失败',
   PERMISSION_REVOKED: '访问权限已失效',
+  // Codes the development workbench's dashboard fixtures use (an upcoming expiry is not an expired one).
+  'review_summary.completed': '复习总结已生成',
+  'audio.expiring': '课堂原音即将到期',
+  'sync.conflict': '有一项同步冲突待处理',
 };
 
 const resolvedMessages: Record<string, string> = {
   SYNC_CONFLICT: '同步冲突已解决',
+  'sync.conflict': '同步冲突已解决',
 };
 
 /** Heading for a notification; a resolved item never reads as still pending. */

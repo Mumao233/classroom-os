@@ -17,6 +17,23 @@ BACKEND = ROOT / 'web/backend'
 FRONTEND = ROOT / 'web/frontend'
 WORK = ROOT / 'work/pr11c'
 OUTPUT = ROOT / 'outputs/pr11c'
+# Written to work/pr11c/; relative paths resolve from there. Same as tests/playwright.config.ts except
+# the system Chrome channel, replaced by the guest's locked Playwright Chromium, and one worker.
+BROWSER_CONFIG = """import { defineConfig, devices } from '../../web/frontend/node_modules/@playwright/test/index.mjs';
+export default defineConfig({
+  testDir: '../../web/frontend/tests', testMatch: '@MATCH@', workers: 1,
+  outputDir: './playwright',
+  reporter: [['line'], ['junit', { outputFile: '../../outputs/pr11c/playwright.xml' }]],
+  use: { ...devices['Desktop Chrome'], trace: 'off',
+         launchOptions: { args: ['--disable-gpu', '--disable-background-networking', '--no-first-run'] } },
+  webServer: [
+    { command: 'node node_modules/vite/bin/vite.js --mode mock --host 127.0.0.1 --port 19309 --strictPort',
+      cwd: '../../web/frontend', url: 'http://127.0.0.1:19309', reuseExistingServer: false },
+    { command: 'node node_modules/vite/bin/vite.js preview --mode production --host 127.0.0.1 --port 19310 --strictPort',
+      cwd: '../../web/frontend', url: 'http://127.0.0.1:19310', reuseExistingServer: false },
+  ],
+});
+"""
 CREATE_SUSPENDED = 0x00000004
 
 
@@ -127,6 +144,19 @@ def main():
         run('frontend-vitest', args.node, modules / 'vitest/vitest.mjs', 'run', '--config', 'tests/vitest.config.ts',
             '--reporter=default', '--reporter=junit', '--outputFile.junit=' + str(OUTPUT / 'vitest.xml'),
             *(frontend_args if args.suite == 'targeted' else []), cwd=FRONTEND, job_owned=True)
+        # Browser tests (tests/*.browser.spec.ts) against the Mock dev server and the production preview,
+        # with the locked Playwright Chromium provisioned in the guest, as the PR-11b guest runs do.
+        run('frontend-build', args.node, modules / 'vite/bin/vite.js', 'build', '--mode', 'production',
+            cwd=FRONTEND, job_owned=True)
+        config = WORK / 'browser.config.mts'
+        config.write_text(BROWSER_CONFIG.replace('@MATCH@', 'pr11c.browser.spec.ts' if args.suite == 'targeted'
+                                                 else '*.browser.spec.ts'), encoding='utf8')
+        run('frontend-ui', args.node, modules / '@playwright/test/cli.js', 'test', '--config', config,
+            cwd=FRONTEND, timeout=2400, job_owned=True)
+        # Failure page snapshots (accessibility tree, no request bodies) are kept with the evidence.
+        for number, context in enumerate(sorted((WORK / 'playwright').glob('*/error-context.md'))):
+            (OUTPUT / f'playwright-failure-{number:02d}.log').write_text(
+                context.parent.name + '\n' + context.read_text(encoding='utf8', errors='replace'), encoding='utf8')
 
         login = 'pr02a_pr11c_' + uuid4().hex[:16]
         with socket.socket() as listener:
@@ -155,8 +185,6 @@ def main():
 
         selected = ['tests/integration/test_pr11c_operations.py', 'tests/integration/test_pr11c_migrations.py']
         if args.suite == 'full':
-            run('frontend-build', args.node, modules / 'vite/bin/vite.js', 'build', '--mode', 'production',
-                cwd=FRONTEND, job_owned=True)
             # Keep the handle before start(): a failed readiness probe can leave the process
             # running, and the finally block below must still be able to stop it.
             media = ObjectService(WORK / 'objects', 'pr04a-media', access='pr04a-synthetic',
@@ -184,7 +212,7 @@ def main():
             if pg_log.is_file():
                 (OUTPUT / 'postgres.log').write_bytes(pg_log.read_bytes())
 
-    counts = {label: junit(OUTPUT / (label + '.xml')) for label in ('pytest', 'vitest')}
+    counts = {label: junit(OUTPUT / (label + '.xml')) for label in ('pytest', 'vitest', 'playwright')}
     passed = not failure and all(code == 0 for code in results.values()) and all(
         count and count['pr11c_tests'] and not any(count[name] for name in ('failures', 'errors', 'skips'))
         for count in counts.values())

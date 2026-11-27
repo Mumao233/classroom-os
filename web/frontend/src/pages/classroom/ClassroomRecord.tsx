@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef } from 'react';
-import { Link, useParams } from 'react-router';
+import { Link, useLocation, useParams, useSearchParams } from 'react-router';
 import { describeError, readableCache, ReadOnlyWhile, useAppData, useCourse } from '../../features/data';
 import { useClassQuestions, useClassSession, useClassroomShell, useMarks, useTranscript } from '../../features/classroom';
 import { buildTimeline, TASK_STATE_LABEL } from '../../domain/classroom';
 import { DataSourceNote } from '../common';
+import { FeedbackLink } from '../../features/feedback/FeedbackLink';
 import { TranscriptTimeline } from './TranscriptTimeline';
 import { SlidesPanel } from './SlidesPanel';
 import { FlowStrip } from './ClassroomLive';
@@ -24,7 +25,20 @@ export function ClassroomRecord() {
   const questions = useClassQuestions(classId);
   const live = shell.capture.liveSegments(classId);
   const entries = useMemo(() => buildTimeline(classId, transcript.data?.segments ?? [], live).filter(entry => entry.status === 'final'), [classId, transcript.data, live]);
+  // PR-11c: a search hit opens at its formal segment (`?transcriptVersion=&segment=&segmentRevision=`), highlighted
+  // only while the transcript shown from the server holds that exact version, segment and revision together (a
+  // live final retained from a superseded version never takes the highlight).
+  const [searchParams] = useSearchParams();
+  const focusVersion = searchParams.get('transcriptVersion');
+  const focusSegment = searchParams.get('segment');
+  const focusRevision = searchParams.get('segmentRevision');
+  const focusToken = useLocation().key;
+  const focusCurrent = !!focusVersion && !!focusSegment && !!focusRevision && !!transcript.data
+    && transcript.data.versions.some(version => version.id === focusVersion)
+    && transcript.data.segments.some(item => item.id === focusSegment && item.segment_revision_id === focusRevision && item.transcript_version_id === focusVersion);
+  const focus = useMemo(() => focusCurrent ? { segmentId: focusSegment!, segmentRevisionId: focusRevision, token: focusToken } : null, [focusCurrent, focusSegment, focusRevision, focusToken]);
   const heading = useRef<HTMLHeadingElement>(null);
+  const page = useRef<HTMLElement>(null);
   useEffect(() => { heading.current?.focus({ preventScroll: true }); }, [classId]);
   if (session.isPending) return <main id="main-content" className={styles.page}><p role="status" className={styles.muted}>正在读取课堂记录…</p></main>;
   // Only data the account still holds is shown, and only after a transport failure: a denial removed
@@ -36,16 +50,17 @@ export function ClassroomRecord() {
     : expires === null ? '原音不可用（已删除或未保存），字幕保留原时间位置，不能播放。'
       : expires <= app.now() ? '原音已过期，不能播放或重新识别；字幕保留原时间位置。'
         : `原音保留至 ${data.audio_expires_at!.slice(0, 10)}。开发预览不提供播放。`;
-  return <ReadOnlyWhile stale={session.isError}><main id="main-content" className={styles.page}>
+  return <ReadOnlyWhile stale={session.isError}><main ref={page} id="main-content" className={styles.page}>
     <header className={styles.header}>
       <div><p className={styles.eyebrow}>{course.data?.name ?? '课程'} · 课堂记录</p><h1 ref={heading} tabIndex={-1}>{data.title || '未命名课堂'}</h1><p className={`${styles.small} ${styles.muted}`} data-testid="audio-status">{audio}</p></div>
       <FlowStrip flows={data.flows} />
+      <FeedbackLink within={page} className={styles.buttonSecondary} source={{ object_type: 'class_session', object_id: classId, class_session_id: classId, locator: `classroom/${classId}` }} />
     </header>
     <DataSourceNote />
     {session.isError && <div className={`${styles.banner} ${styles.bannerWarning}`} role="status" data-testid="record-refresh-error"><div>{describeError(session.error)}</div></div>}
     <div className={styles.processingGrid}>
       <section className={styles.panel} aria-labelledby="record-transcript"><h2 id="record-transcript">正式字幕</h2>
-        {transcript.isError ? <p className={styles.error} role="alert">{describeError(transcript.error)}</p> : <TranscriptTimeline entries={entries} label="课堂正式字幕" emptyText="这节课没有正式字幕。" />}
+        {transcript.isError ? <p className={styles.error} role="alert">{describeError(transcript.error)}</p> : <TranscriptTimeline entries={entries} label="课堂正式字幕" emptyText="这节课没有正式字幕。" focus={focus} />}
       </section>
       <div className={styles.stack}>
         <section className={styles.panel} aria-labelledby="record-marks"><h2 id="record-marks">标记</h2>

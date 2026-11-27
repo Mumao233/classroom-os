@@ -176,7 +176,10 @@ export function handleReview(store: ReviewStore, host: ReviewHost, h: ReviewHelp
     }
     case 'GET /review-revisions/:id': {
       const revision = store.revisions.find(item => item.id === id);
-      return revision && findDocument(revision.document_id) ? ok(revision) : h.error(404, 'NOT_FOUND', '版本不存在');
+      if (!revision || !findDocument(revision.document_id)) return h.error(404, 'NOT_FOUND', '版本不存在');
+      // The same source-access check as the document's revision list: an exact read is no way around it.
+      if (store.deniedRevisionDocs?.has(revision.document_id)) return h.error(403, 'FORBIDDEN', '版本来源已不可访问');
+      return ok(revision);
     }
     case 'POST /review-documents/:id/personal-revisions': return h.idempotent(key, `personal:${id}`, body, () => {
       const doc = findDocument(id)!;

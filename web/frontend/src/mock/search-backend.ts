@@ -5,7 +5,12 @@ import { normalizeQuery, searchResultKey, type SearchResult } from '../domain/se
 
 type ErrorCode = components['schemas']['Error']['error']['code'];
 type Reply = { status: number; body: unknown; headers: { 'Cache-Control': 'no-store' } };
-type Hit = { courseId: string; result: SearchResult };
+/**
+ * `fields`: the object's full searchable text (the SQL search matches these, then excerpts the matching
+ * field). Without it the hit's own title and snippet are matched, as in the fixed fixtures.
+ */
+type Hit = { courseId: string; result: SearchResult; fields?: readonly string[] };
+export type SearchHit = Hit;
 type MockNotice = { item: Notification; sourceIds: string[] };
 type Account = {
   hits: Hit[];
@@ -55,12 +60,51 @@ export function seedSearchBackend() {
   return { accounts, cursors: new Map<string, MockCursor>() };
 }
 
-type Store = ReturnType<typeof seedSearchBackend>;
+/** `now`: the workbench clock (the standalone fixtures use a fixed time). */
+type Store = ReturnType<typeof seedSearchBackend> & { now?: () => string };
 
 function liveHits(account: Account) {
   return account.hits.filter(({ courseId, result }) => !account.revoked.has(courseId)
     && !account.revoked.has(result.object_id)
     && !(result.class_session_id && account.revoked.has(result.class_session_id)));
+}
+
+// As the SQL search: from 60 characters before the first match, at most 300 characters.
+const SNIPPET_BEFORE = 60;
+const SNIPPET_CHARS = 300;
+const fold = (value: string) => value.toLowerCase();
+function matches(hit: Hit, keyword: string) {
+  const needle = fold(keyword);
+  return (hit.fields ?? [hit.result.title, hit.result.snippet]).some(value => fold(value).includes(needle));
+}
+/**
+ * The code point where the folded keyword first matches in the original text. The match is found in the
+ * same whole-field folding `matches` uses (context-sensitive, e.g. a final sigma), then mapped back:
+ * folding can change a character's length (e.g. U+0130), but never depending on its context, so each
+ * code point's own folded length places it in the folded field.
+ */
+function matchStart(field: string, needle: string): number {
+  const at = fold(field).indexOf(needle);
+  if (at <= 0) return 0;
+  let offset = 0;
+  let index = 0;
+  for (const point of field) {
+    offset += fold(point).length;
+    if (at < offset) return index;
+    index++;
+  }
+  return index;
+}
+/** The snippet is cut around the first match in the first matching field (code points). */
+function excerpted(hit: Hit, keyword: string): SearchResult {
+  if (!hit.fields) return hit.result;
+  const needle = fold(keyword);
+  const field = hit.fields.find(value => fold(value).includes(needle));
+  if (field === undefined) return hit.result;
+  const points = [...field];
+  const at = matchStart(field, needle);
+  const start = Math.max(0, at - SNIPPET_BEFORE);
+  return { ...hit.result, snippet: points.slice(start, start + SNIPPET_CHARS).join('') };
 }
 
 export function revokeSearchFixture(store: Store, ownerId: string, objectId: string) {
@@ -69,7 +113,8 @@ export function revokeSearchFixture(store: Store, ownerId: string, objectId: str
 
 export function recordMockNotification(store: Store, ownerId: string, dedupeKey: string,
                                        values: Pick<Notification, 'kind' | 'severity' | 'object_id' | 'message_code'>,
-                                       source?: { semester_id?: string; course_id?: string; class_session_id?: string }) {
+                                       source?: { semester_id?: string; course_id?: string; class_session_id?: string },
+                                       exactSources?: readonly string[]) {
   const account = store.accounts.get(ownerId);
   if (!account) return null;
   const prior = account.notices.get(dedupeKey);
@@ -77,17 +122,57 @@ export function recordMockNotification(store: Store, ownerId: string, dedupeKey:
   const target = account.hits.find(hit => hit.result.object_id === values.object_id);
   const classroom = source?.class_session_id ?? target?.result.class_session_id;
   const classroomHit = account.hits.find(hit => hit.result.object_type === 'class_session' && hit.result.object_id === classroom);
-  const sourceIds = [ownerId, values.object_id, classroom, target?.courseId, classroomHit?.courseId,
+  // `exactSources`: the caller names what the notice depends on (a classroom follows its current course).
+  const sourceIds = exactSources ? [...exactSources] : [ownerId, values.object_id, classroom, target?.courseId, classroomHit?.courseId,
     source?.course_id, source?.semester_id]
     .filter((id): id is string => !!id);
-  const item = { ...values, id: crypto.randomUUID(), created_at: stamp, read_at: null, resolved_at: null };
+  const item = { ...values, id: crypto.randomUUID(), created_at: store.now?.() ?? stamp, read_at: null, resolved_at: null };
   account.notices.set(dedupeKey, { item, sourceIds });
   return item;
 }
 
+/** The list's own visibility rule for one stored notice (none of its sources revoked), independent of pagination. */
+export function mockNoticeVisible(store: Store, ownerId: string, dedupeKey: string) {
+  const account = store.accounts.get(ownerId);
+  const notice = account?.notices.get(dedupeKey);
+  return !!account && !!notice && !account.revoked.has(ownerId) && !notice.sourceIds.some(id => account.revoked.has(id));
+}
+
 export function resolveMockNotification(store: Store, ownerId: string, dedupeKey: string) {
   const item = store.accounts.get(ownerId)?.notices.get(dedupeKey)?.item;
-  if (item) item.resolved_at ??= stamp;
+  if (item) item.resolved_at ??= store.now?.() ?? stamp;
+}
+
+// ---- Phase 2: the development workbench serves these routes from its own account data. ----
+
+/** An empty store whose accounts are added by `ensureSearchAccount` (the workbench's synthetic users). */
+export function createSearchStore(now?: () => string): Store {
+  return { accounts: new Map<string, Account>(), cursors: new Map<string, MockCursor>(), now };
+}
+
+export function ensureSearchAccount(store: Store, ownerId: string): Account {
+  let account = store.accounts.get(ownerId);
+  if (!account) {
+    account = { hits: [], revoked: new Set(), notices: new Map(), feedback: new Map(), feedbackTimes: [], receipts: new Map() };
+    store.accounts.set(ownerId, account);
+  }
+  return account;
+}
+
+/** Replaces the searchable formal content with the account's current live records (deleted ones excluded). */
+export function setSearchHits(store: Store, ownerId: string, hits: Hit[]) {
+  ensureSearchAccount(store, ownerId).hits = hits;
+}
+
+/** Records whose deletion hides any notification that names them (the account itself is never in this set). */
+export function setSearchRevoked(store: Store, ownerId: string, ids: Iterable<string>) {
+  ensureSearchAccount(store, ownerId).revoked = new Set([...ids].filter(id => id !== ownerId));
+}
+
+/** Seeds an existing notification unchanged (its id and timestamps stay), deduplicated by its id. */
+export function importMockNotification(store: Store, ownerId: string, item: Notification, sourceIds: string[]) {
+  const account = ensureSearchAccount(store, ownerId);
+  if (!account.notices.has(item.id)) account.notices.set(item.id, { item: { ...item }, sourceIds });
 }
 
 function parseFeedback(value: unknown): Feedback | null {
@@ -152,11 +237,11 @@ export function handleSearchBackend(store: Store, input: MockRequest): Reply | n
         || (classroom && !hits.some(hit => hit.result.object_type === 'class_session' && hit.result.object_id === classroom))) {
       return error(404, 'NOT_FOUND');
     }
-    const selected = hits.filter(({ courseId, result }) => (!course || courseId === course)
+    const selected = hits.filter(hit => { const { courseId, result } = hit; return (!course || courseId === course)
       && (!classroom || result.class_session_id === classroom || (result.object_type === 'course'
         && hits.some(hit => hit.courseId === courseId && hit.result.class_session_id === classroom)))
-      && [result.title, result.snippet].some(value => value.toLowerCase().includes(keyword.toLowerCase())))
-      .map(hit => hit.result).sort((a, b) => searchResultKey(a).localeCompare(searchResultKey(b)));
+      && matches(hit, keyword); })
+      .map(hit => excerpted(hit, keyword)).sort((a, b) => searchResultKey(a).localeCompare(searchResultKey(b)));
     return page(store, query, [ownerId, 'search', keyword, course, classroom], selected, searchResultKey, (a, b) => a.localeCompare(b) > 0);
   }
   const live = [...account.notices.values()].filter(notice => !notice.sourceIds.some(id => account.revoked.has(id)))
@@ -176,7 +261,7 @@ export function handleSearchBackend(store: Store, input: MockRequest): Reply | n
     if (prior && prior.identity !== id) return error(409, 'IDEMPOTENCY_MISMATCH');
     const item = live.find(notice => notice.id === id);
     if (!item) return error(404, 'NOT_FOUND');
-    item.read_at ??= stamp;
+    item.read_at ??= store.now?.() ?? stamp;
     account.receipts.set(`read:${key}`, { fingerprint: id, identity: id });
     return response(200, { ...item });
   }

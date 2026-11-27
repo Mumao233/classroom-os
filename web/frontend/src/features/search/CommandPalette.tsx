@@ -1,10 +1,20 @@
 import { useRef } from 'react';
 import * as Modal from '@radix-ui/react-dialog';
-import { IconButton } from '../../ui';
+import { Button, IconButton } from '../../ui';
 import { SearchForm, type SearchProps } from './SearchForm';
 import styles from './search.module.css';
 
-export function CommandPalette({ open, onClose, ...props }: SearchProps & { open: boolean; onClose: () => void }) {
+type PaletteProps = SearchProps & {
+  open: boolean;
+  onClose: () => void;
+  /**
+   * While a capture is running the modal palette makes the rest of the page inert, so it carries
+   * the stop action itself: a capture can always be stopped (Aurora capture rule).
+   */
+  onStopCapture?: () => void;
+};
+
+export function CommandPalette({ open, onClose, onStopCapture, ...props }: PaletteProps) {
   const input = useRef<HTMLInputElement>(null);
   const trigger = useRef<HTMLElement | null>(null);
   return <Modal.Root open={open} onOpenChange={value => { if (!value) onClose(); }}>
@@ -21,6 +31,7 @@ export function CommandPalette({ open, onClose, ...props }: SearchProps & { open
           <Modal.Close asChild><IconButton aria-label="关闭搜索">×</IconButton></Modal.Close>
         </header>
         <Modal.Description>搜索课程、课堂和学习资料。</Modal.Description>
+        {onStopCapture && <Button variant="secondary" onClick={() => { onClose(); onStopCapture(); }}>停止采集</Button>}
         <SearchForm {...props} inputRef={input} />
       </Modal.Content>
     </Modal.Portal>

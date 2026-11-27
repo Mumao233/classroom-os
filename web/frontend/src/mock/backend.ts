@@ -1,7 +1,8 @@
 import type { components } from '../generated/openapi';
-import { advanceTask, ensureDemoClassroom, finishAsr, handleClassroom, expireManifestCursors, persistFinal, projectTask, recordDurable, releaseAccountLeases, releaseLease, revokeAudio, revokeClassroom, seedClassroom, seedHistoricalManifests, setManifestDev, setRetranscribeDev, activeVersionIds, type ClassroomHelpers, type ClassroomHost, type ClassroomStore, type TaskOutcome } from './classroom-backend';
+import { advanceTask, ensureDemoClassroom, finishAsr, handleClassroom, expireManifestCursors, persistFinal, projectTask, recordDurable, releaseAccountLeases, releaseLease, revokeAudio, revokeClassroom, seedClassroom, seedHistoricalManifests, setManifestDev, setRetranscribeDev, activeVersionIds, taskSourcesUnavailable, type ClassroomHelpers, type ClassroomHost, type ClassroomStore, type TaskOutcome } from './classroom-backend';
 import { createAdminBackend, type AdminHealthDev, type AdminReauthBinding } from './admin-backend';
 import { addCandidate, handleReview, seedReview, type ReviewHelpers, type ReviewHost, type ReviewStore } from './review-backend';
+import { createSearchStore, handleSearchBackend, importMockNotification, mockNoticeVisible, recordMockNotification, setSearchHits, setSearchRevoked, type SearchHit } from './search-backend';
 
 /**
  * Development-only, in-memory synthetic backend for endpoints that the real backend does not
@@ -216,6 +217,100 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
     const last = owned.map(item => item.started_at).filter((v): v is string => v !== null).sort().at(-1) ?? null;
     return { ...course, class_session_count: owned.length, last_class_session_at: last };
   }
+  // ---- PR-11c: search, notification centre and feedback over this account's own records. ----
+  const operations = createSearchStore(() => now());
+  /** Notifications the Mock created (task completions) that the page should announce as notification.created. */
+  const createdNotices: Record<MockAccountKey, S['Notification'][]> = { A: [], B: [], C: [] };
+  function seedOperations(account: MockAccountKey) {
+    const store = stores[account];
+    operations.accounts.delete(store.user.id);
+    setSearchHits(operations, store.user.id, []);
+    // Seeded notifications keep their ids; each is tied only to the record it names.
+    for (const item of store.notifications) importMockNotification(operations, store.user.id, item, item.object_id ? [item.object_id] : []);
+    createdNotices[account] = [];
+  }
+  /** Current formal content only: live courses and classrooms, adopted or latest personal review text, active transcript finals. */
+  function searchHits(account: MockAccountKey): SearchHit[] {
+    const store = stores[account];
+    const courses = new Map(liveCourses(store).map(course => [course.id, course]));
+    const sessions = new Map(liveSessions(store).filter(item => courses.has(item.course_id)).map(item => [item.id, item]));
+    const hits: SearchHit[] = [];
+    for (const course of courses.values()) hits.push({ courseId: course.id, fields: [course.name], result: { object_type: 'course', object_id: course.id,
+      class_session_id: null, title: course.name, snippet: '', revision_id: null, locator: `course/${course.id}` } });
+    for (const room of sessions.values()) hits.push({ courseId: room.course_id, fields: [room.title], result: { object_type: 'class_session', object_id: room.id,
+      class_session_id: room.id, title: room.title, snippet: '', revision_id: null, locator: `classroom/${room.id}` } });
+    const review = reviews[account];
+    const revisionsById = new Map(review.revisions.map(item => [item.id, item]));
+    for (const doc of store.documents) {
+      const room = sessions.get(doc.class_session_id);
+      if (!room || review.deniedRevisionDocs?.has(doc.id)) continue;
+      // Both the adopted revision and the latest personal revision are searchable; unadopted AI candidates are not.
+      for (const revisionId of new Set([doc.adopted_revision_id, doc.latest_personal_revision_id])) {
+        const found = revisionId ? revisionsById.get(revisionId) : undefined;
+        const revision = found?.document_id === doc.id ? found : undefined;
+        if (!revision || (revisionId !== doc.adopted_revision_id && revision.kind !== 'personal')) continue;
+        hits.push({ courseId: room.course_id,
+          fields: [revision.body_markdown, revision.personal_note, doc.title, ...structuredText(revision.structured_content)].filter(Boolean),
+          result: { object_type: doc.kind === 'card' ? 'card' : 'review_document', object_id: doc.id,
+            class_session_id: room.id, title: doc.title, snippet: '', revision_id: revision.id, locator: `review/${doc.id}/${revision.id}` } });
+      }
+    }
+    const transcripts = classrooms[account];
+    const active = new Map([...sessions.values()].map(room => [room.id, activeVersionIds(transcripts, room)]));
+    for (const segment of transcripts.segments) {
+      const room = sessions.get(segment.class_session_id);
+      if (!room || segment.status !== 'final' || !active.get(room.id)?.has(segment.transcript_version_id)) continue;
+      // A segment matches on its own text only, never on its classroom's title.
+      hits.push({ courseId: room.course_id, fields: [segment.text], result: { object_type: 'transcript_segment', object_id: segment.id,
+        class_session_id: room.id, title: room.title, snippet: '',
+        revision_id: segment.segment_revision_id, locator: `transcript/${room.id}/${segment.transcript_version_id}/${segment.id}` } });
+    }
+    return hits;
+  }
+  /**
+   * The structured fields the SQL search projects, in its match order: each note's title, body,
+   * supplement and missing-material notes, then each card's title, front, back, supplement, English
+   * term (and its meaning when there is one) and missing-material notes. Enums and source ids are not text.
+   */
+  function structuredText(value: unknown): string[] {
+    const content = value && typeof value === 'object' ? value as { notes?: unknown; cards?: unknown } : {};
+    const list = (items: unknown) => Array.isArray(items) ? items.filter((item): item is Record<string, unknown> => !!item && typeof item === 'object') : [];
+    const text = (values: unknown[]) => values.filter((item): item is string => typeof item === 'string');
+    const missing = (item: Record<string, unknown>) => Array.isArray(item.missing) ? item.missing : [];
+    return [
+      ...list(content.notes).flatMap(note => text([note.title, note.body, note.supplement, ...missing(note)])),
+      ...list(content.cards).flatMap(card => text([card.title, card.front, card.back, card.supplement, card.english,
+        ...(typeof card.english === 'string' && card.english !== '' ? [card.english_meaning] : []), ...missing(card)])),
+    ];
+  }
+  /**
+   * Deleted records hide every notification that names them; a classroom that is not live (deleted, or
+   * under a deleted course) hides the notices that depend on it, wherever it now belongs; a task whose
+   * frozen plan sources are no longer available hides its completion notice.
+   */
+  function syncNotices(account: MockAccountKey) {
+    const store = stores[account];
+    const liveCourseIds = new Set(liveCourses(store).map(course => course.id));
+    const sessionById = new Map(store.sessions.map(item => [item.id, item]));
+    const hiddenTasks = classrooms[account].tasks.filter(task => taskSourcesUnavailable(classrooms[account], task.id, now(),
+      task.class_session_id ? sessionById.get(task.class_session_id) : undefined)).map(task => task.id);
+    setSearchRevoked(operations, store.user.id, [...store.deletedCourses, ...store.deletedSemesters,
+      ...store.sessions.filter(item => item.deleted_at !== null || !liveCourseIds.has(item.course_id)).map(item => item.id), ...hiddenTasks]);
+  }
+  function syncOperations(account: MockAccountKey) {
+    setSearchHits(operations, stores[account].user.id, searchHits(account));
+    syncNotices(account);
+  }
+  /** Records a notice and queues it for announcement only if it is new and visible now (the list's own rule, not one page of it). */
+  function recordNotice(account: MockAccountKey, dedupeKey: string, values: Parameters<typeof recordMockNotification>[3], sources: string[]) {
+    syncNotices(account);
+    const owner = stores[account].user.id;
+    const existed = operations.accounts.get(owner)?.notices.has(dedupeKey) ?? false;
+    const item = recordMockNotification(operations, owner, dedupeKey, values, undefined, sources);
+    if (item && !existed && mockNoticeVisible(operations, owner, dedupeKey)) createdNotices[account].push(item);
+    return item;
+  }
+  for (const account of accounts) seedOperations(account);
   function findCourse(store: Store, id: string) { return liveCourses(store).find(course => course.id === id); }
   function findSemester(store: Store, id: string) { return store.semesters.find(item => item.id === id && !store.deletedSemesters.has(item.id)); }
   const str = (value: unknown, max: number, min = 0) => typeof value === 'string' && value.length <= max && value.trim().length >= min;
@@ -358,6 +453,13 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
     if (parts[0] === 'admin') return admin.handle(store.user.id, method, parts, query, rawBody, key, reauth);
     // HTTP 0.4.0: purpose-bound reauthentication for the admin writes (the Mock serves only those purposes).
     if (method === 'POST' && path === '/auth/reauth') return admin.reauthenticate(store.user.id, rawBody);
+    // PR-11c: keyword search, notification centre and feedback, over this account's current records.
+    // The transport checks the session's CSRF token for the two writes before dispatching here.
+    if (parts[0] === 'search' || parts[0] === 'notifications' || parts[0] === 'feedback') {
+      if (parts[0] === 'search') syncOperations(account); else syncNotices(account);
+      const reply = handleSearchBackend(operations, { ownerId: store.user.id, method, path, query, body: rawBody, key, csrfVerified: true });
+      if (reply) return { status: reply.status, body: reply.body };
+    }
 
     switch (route) {
       case 'GET /me': return ok(store.user);
@@ -541,7 +643,6 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
         const sessions = new Set(liveSessions(store).filter(item => findCourse(store, item.course_id)).map(item => item.id));
         return page(store.questions.filter(item => sessions.has(item.class_session_id) && (!sessionId || item.class_session_id === sessionId)));
       }
-      case 'GET /notifications': return page(store.notifications);
       default: return handleReview(reviews[account], reviewHost(account), reviewHelpers(account), method, route, id, query, body, key)
         ?? handleClassroom(classrooms[account], classroomHost(account), classroomHelpers(account), method, route, id, query, body, key);
     }
@@ -556,6 +657,7 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
       stores[account] = { ...seeded, user: previous.user, quota: admin.reapply(previous.user.id, seeded.quota), deviceSessions: adminRevoked.has(account) ? previous.deviceSessions : seeded.deviceSessions };
       classrooms[account] = withHistory(account, account === 'A' && dataset === 'seeded' ? seededClassroom() : seedClassroom(null));
       reviews[account] = seedReview(account === 'A' && dataset === 'seeded');
+      seedOperations(account);
     },
     /** PR-11b development stand-in for the missing admin reauthentication purpose (contract gap §1); not an HTTP route. */
     issueAdminProof: (account: MockAccountKey, binding: AdminReauthBinding, password: string, code: string) => admin.issueProof(stores[account].user.id, binding, password, code),
@@ -586,7 +688,26 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
     adminAudit: () => admin.audit(),
     accountUser: (account: MockAccountKey) => stores[account].user,
     /** PR-10a development helpers; none of them is an HTTP route. */
-    advanceTask: (account: MockAccountKey, taskId: string, outcome: TaskOutcome) => advanceTask(classrooms[account], classroomHost(account), classroomHelpers(account), taskId, outcome),
+    advanceTask: (account: MockAccountKey, taskId: string, outcome: TaskOutcome) => {
+      const task = advanceTask(classrooms[account], classroomHost(account), classroomHelpers(account), taskId, outcome);
+      // PR-11c: a completed task produces one deduplicated task_completed notification tied to its classroom.
+      if (task?.state === 'succeeded') {
+        recordNotice(account, `task:${task.id}`, { kind: 'task_completed', severity: 'info', object_id: task.id, message_code: 'TASK_COMPLETED' },
+          [task.id, ...(task.class_session_id ? [task.class_session_id] : [])]);
+      }
+      return task;
+    },
+    /** PR-11c: a lost capture lease records one classroom-scoped capture-failure notice per capture epoch. */
+    recordLeaseLost: (account: MockAccountKey, classId: string, captureEpochId: string | null) => {
+      // Only a live classroom of this account (not deleted, under a live course) can have lost a capture.
+      const store = stores[account];
+      const session = store.sessions.find(item => item.id === classId);
+      if (!session || session.deleted_at !== null || !liveCourses(store).some(course => course.id === session.course_id)) return null;
+      return recordNotice(account, `lease:${classId}:${captureEpochId ?? 'unknown'}`,
+        { kind: 'capture_failure', severity: 'warning', object_id: classId, message_code: 'CAPTURE_LEASE_LOST' }, [classId]);
+    },
+    /** PR-11c: notifications created since the last call, for the page's notification.created announcement. */
+    drainCreatedNotifications: (account: MockAccountKey) => { const items = createdNotices[account]; createdNotices[account] = []; return items; },
     finishAsr: (account: MockAccountKey, classId: string, state: 'succeeded' | 'failed' | 'unknown') => {
       const done = finishAsr(classroomHost(account), classroomHelpers(account), classId, state);
       // A finished realtime stream seals its versions, so they can be adopted (switched back to) later.
