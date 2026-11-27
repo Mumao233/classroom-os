@@ -2,15 +2,12 @@
 import hmac
 from uuid import UUID, uuid4
 
-from sqlalchemy import text
-
 from ..domain.auth import AuthRejected, AuthReply
 from ..domain.billing import BillingBlocked
 from ..domain.data import NotFound, Gone, InactiveOwner
 from ..domain.identity import AuthorizationDenied, normalize_email
 from ..domain.tasks import IdempotencyMismatch
 from ..infrastructure.auth_crypto import b64, digest, random_token, unb64
-from ..infrastructure.billing_repository import PgBillingRepository
 from .identity import token_digest
 
 
@@ -114,41 +111,45 @@ class BillingAdmin:
         return AuthReply(self.repository.call('read_admin', dict(token_hash=digest('session', ctx.session),
             kind=kind, period_start=period_start)))
 
-    def invitations(self, ctx, *, limit=50, cursor=None):
+    def list_metadata(self, ctx, kind, *, limit=50, cursor=None):
         principal = self._principal(ctx)
-        payload = dict(token_hash=digest('session', ctx.session), kind='invitations', limit=limit)
+        payload = dict(token_hash=digest('session', ctx.session), kind=kind, limit=limit)
+        cursor_domain = {'users': 'admin-users-created-asc-v1',
+                         'invitations': 'admin-invitations-created-desc-v1'}[kind]
 
-        def signature(created, invitation_id):
-            return self.auth.crypto.commitment('admin-invitations-created-desc-v1',
-                [str(principal.user_id), created, invitation_id])
+        def signature(created, row_id):
+            return self.auth.crypto.commitment(cursor_domain, [str(principal.user_id), created, row_id])
 
         if cursor is not None:
             try:
-                created, invitation_id, expected = unb64(cursor).decode('ascii').split('|')
-                if not hmac.compare_digest(signature(created, invitation_id), expected):
+                created, row_id, expected = unb64(cursor).decode('ascii').split('|')
+                if not hmac.compare_digest(signature(created, row_id), expected):
                     raise ValueError()
             except (AuthRejected, ValueError):
                 raise AuthRejected('VALIDATION_FAILED', 422) from None
-            payload.update(before_created=created, before_id=invitation_id)
+            if kind == 'users':
+                payload.update(after_created=created, after_id=row_id)
+            else:
+                payload.update(before_created=created, before_id=row_id)
         rows = self.repository.call('read_admin', payload)['items']
         next_cursor = None
         if len(rows) > limit:
             rows = rows[:limit]
-            created, invitation_id = rows[-1]['created_at'], rows[-1]['id']
-            next_cursor = b64('|'.join((created, invitation_id, signature(created, invitation_id))).encode('ascii'))
+            created, row_id = rows[-1]['created_at'], rows[-1]['id']
+            next_cursor = b64('|'.join((created, row_id, signature(created, row_id))).encode('ascii'))
         return AuthReply(dict(items=rows, next_cursor=next_cursor))
 
     def _quota(self, ctx, owner_id):
-        principal = self._principal(ctx)
-        with self.database.authorized_transaction(principal) as tx:
-            tx.connection.execute(text("SELECT set_config('app.owner_id',:owner,true)"), {'owner': str(owner_id)})
-            if not tx.connection.scalar(text('SELECT classroom_web_owner_active()')):
-                raise AuthRejected('NOT_FOUND', 404)
-            tx.connection.execute(text('SELECT classroom_web_lock_owner()'))
-            from types import SimpleNamespace
-            scoped = SimpleNamespace(connection=tx.connection, catalog=SimpleNamespace(owner_id=owner_id))
-            repository = PgBillingRepository(scoped)
-            return repository.quota()
+        if ctx.session is None:
+            raise AuthRejected()
+        try:
+            return self.database.admin_quota(digest('session', ctx.session), owner_id)
+        except AuthorizationDenied as error:
+            if error.code == 'FORBIDDEN':
+                raise AuthRejected('FORBIDDEN', 403) from None
+            raise AuthRejected() from None
+        except NotFound:
+            raise AuthRejected('NOT_FOUND', 404) from None
 
     def user_quota(self, ctx, user_id):
         try:

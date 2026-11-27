@@ -164,11 +164,12 @@ def test_concurrent_invitation_create_returns_one_secret_and_one_receipt(admin, 
     assert created.status_code == 201, created.text
     rejected(replay, 409, 'SECRET_ALREADY_ISSUED')
     token, row = created.json()['one_time_token'], created.json()['invitation']
+    assert replay.json()['error']['conflict_id'] == row['id']
     assert (row['state'], row['kind'], row['revision']) == ('issued', 'email_bound', 1)
     assert row['email_hint'] and row['email_hint'] != email
     rejected(write(admin, 'POST', '/admin/invitations', {**body, 'reason': '另一理由'}, credential),
              409, 'IDEMPOTENCY_MISMATCH')
-    assert token not in replay.text
+    assert token not in replay.text and token_digest(token).hex() not in replay.text
     with admin.c.pg.admin.connect() as db:
         invitation_row = db.execute(sa.text('SELECT token_hash,email_binding FROM invitations WHERE id=:id'),
                                     dict(id=row['id'])).one()
@@ -176,10 +177,13 @@ def test_concurrent_invitation_create_returns_one_secret_and_one_receipt(admin, 
         assert db.execute(sa.text('''SELECT secret,result FROM preauth_receipts WHERE context_hash=:actor AND
             operation='adminCreateInvitation' AND operation_key=:op'''),
             dict(actor=str(admin.a.uid), op=credential['Idempotency-Key'])).one() == (True, None)
+        assert db.execute(sa.text('''SELECT secret,result FROM preauth_receipts WHERE context_hash=:actor AND
+            operation='adminCreateInvitation:resource' AND operation_key=:op'''),
+            dict(actor=str(admin.a.uid), op=credential['Idempotency-Key'])).one() == (False, {'id': row['id']})
         stored_audit = db.scalar(sa.text('''SELECT row_to_json(a)::text FROM identity_control.identity_control_audit a
             WHERE actor_id=:actor AND target_id=:id AND action='adminCreateInvitation' '''),
             dict(actor=admin.a.uid, id=row['id']))
-    assert token not in stored_audit and email not in stored_audit
+    assert token not in stored_audit and token_digest(token).hex() not in stored_audit and email not in stored_audit
     rows = audit(admin, 'adminCreateInvitation', row['id'])
     assert len(rows) == 1 and rows[0]['reason'] == body['reason']
     phc = admin.a.crypto.hash(PASSWORD)
@@ -210,6 +214,7 @@ def test_invitation_rotation_and_revocation_use_the_registration_token(admin, re
     if action == 'reissue':
         token = changed.json()['one_time_token']
         rejected(replay, 409, 'SECRET_ALREADY_ISSUED')
+        assert replay.json()['error']['conflict_id'] == str(invite) and token_digest(token).hex() not in replay.text
         assert row['state'] == 'issued' and token != old_token and token not in replay.text
         with admin.c.pg.admin.connect() as db:
             assert db.execute(sa.text('''SELECT secret,result FROM preauth_receipts
@@ -267,12 +272,16 @@ def test_secret_receipt_requires_a_current_session_proof_and_consumes_a_fresh_on
     body = dict(kind='single_use', reason='Synthetic lost response')
     credential = proof(admin, 'adminCreateInvitation', body, 'account', admin.a.uid)
     path, key = '/admin/invitations', credential['Idempotency-Key']
-    assert write(admin, 'POST', path, body, credential).status_code == 201
+    created = write(admin, 'POST', path, body, credential)
+    assert created.status_code == 201
+    invite_id = created.json()['invitation']['id']
     with admin.c.pg.admin.begin() as db:
         db.execute(sa.text("""UPDATE reauth_proofs SET verified_at=clock_timestamp()-interval '3 minutes',
             expires_at=clock_timestamp()-interval '1 second' WHERE owner_id=:actor AND operation_key=:key"""),
             dict(actor=admin.a.uid, key=key))
-    rejected(write(admin, 'POST', path, body, credential), 403, 'REAUTH_REQUIRED')
+    expired = write(admin, 'POST', path, body, credential)
+    rejected(expired, 403, 'REAUTH_REQUIRED')
+    assert expired.json()['error']['conflict_id'] is None
     assert admin.client.post(BASE + '/auth/logout', json={}, headers=headers(admin.session)).status_code == 200
     with admin.c.pg.admin.begin() as db:
         db.execute(sa.text("""UPDATE mfa_credentials SET state='revoked',revoked_at=clock_timestamp()
@@ -280,8 +289,19 @@ def test_secret_receipt_requires_a_current_session_proof_and_consumes_a_fresh_on
     admin.session, admin.seed = sign_in(admin, administrator=True)
     rejected(write(admin, 'POST', path, body, credential), 403, 'REAUTH_REQUIRED')
     fresh = prove(admin, admin.session, admin.seed, 'adminCreateInvitation', body, key)
-    rejected(write(admin, 'POST', path, body, fresh), 409, 'SECRET_ALREADY_ISSUED')
+    replay = write(admin, 'POST', path, body, fresh)
+    rejected(replay, 409, 'SECRET_ALREADY_ISSUED')
+    assert replay.json()['error']['conflict_id'] == invite_id
     with admin.c.pg.admin.connect() as db:
         assert db.execute(sa.text('''SELECT count(*),count(consumed_at) FROM reauth_proofs
             WHERE owner_id=:owner AND operation_key=:key'''), dict(owner=admin.a.uid, key=key)).one() == (2, 2)
         assert db.scalar(sa.text('SELECT count(*) FROM invitations WHERE created_by=:id'), {'id': admin.a.uid}) == 1
+
+    # The previous SQL revision recorded only the marker. A legacy create cannot be identified.
+    with admin.c.pg.admin.begin() as db:
+        db.execute(sa.text("""DELETE FROM preauth_receipts WHERE context_hash=:actor
+            AND operation='adminCreateInvitation:resource' AND operation_key=:key"""),
+            dict(actor=str(admin.a.uid), key=key))
+    legacy = write(admin, 'POST', path, body, fresh)
+    rejected(legacy, 409, 'SECRET_ALREADY_ISSUED')
+    assert legacy.json()['error']['conflict_id'] is None

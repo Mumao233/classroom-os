@@ -2648,6 +2648,25 @@
       "reason": "A different target kind cannot authorize this purpose."
     },
     {
+      "name": "pr11b_invitation_secret_replay",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/Error",
+      "expected_valid": true,
+      "value": {
+        "error": {
+          "code": "SECRET_ALREADY_ISSUED",
+          "message": "Invitation token already issued.",
+          "request_id": "11111111-1111-4111-8111-111111111111",
+          "retryable": false,
+          "retry_after_seconds": null,
+          "current_revision": null,
+          "conflict_id": "44444444-4444-4444-8444-444444444444",
+          "task_id": null
+        }
+      },
+      "reason": "An authorized replay of invitation creation or reissue identifies the invitation by its non-secret UUID."
+    },
+    {
       "name": "pr11b_adminCreateInvitation",
       "schema_file": "openapi.json",
       "schema_pointer": "#/components/schemas/ReauthOperation",

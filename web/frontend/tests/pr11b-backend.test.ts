@@ -91,7 +91,7 @@ describe('PR-11b admin writes need a purpose-bound, single-use proof', () => {
     expect(err(call('C', 'PATCH', `/admin/users/${B_ID}`, patch, '', key, late.token))).toBe('REAUTH_REQUIRED');
     const first = write('adminUpdateUser', B_ID, 'PATCH', `/admin/users/${B_ID}`, patch);
     expect(first.reply.status).toBe(200);
-    // Same key and body: the stored reply, never a second write. An expired proof no longer authorises the
+    // Same key and body: recover the current user without a second write. An expired proof cannot authorise the
     // replay; a fresh proof bound to the same write does.
     advance(600_000);
     expect(err(call('C', 'PATCH', `/admin/users/${B_ID}`, patch, '', first.key, first.token))).toBe('REAUTH_REQUIRED');
@@ -101,6 +101,18 @@ describe('PR-11b admin writes need a purpose-bound, single-use proof', () => {
     expect(err(call('C', 'PATCH', `/admin/users/${B_ID}`, { ...patch, reason: '改过' }, '', first.key, first.token))).toBe('IDEMPOTENCY_MISMATCH');
     // A used proof cannot authorise a new request.
     expect(err(call('C', 'PATCH', `/admin/users/${B_ID}`, { ...patch, base_revision: 2, status: 'active' }, '', newKey(), first.token))).toBe('REAUTH_REQUIRED');
+  });
+
+  it('replays the original disable against the restored account with a fresh bound proof', () => {
+    const { backend, write } = harness();
+    const path = `/admin/users/${B_ID}`;
+    const first = write('adminUpdateUser', B_ID, 'PATCH', path, patch);
+    expect(first.reply.body).toMatchObject({ status: 'disabled', revision: 2 });
+    const restored = write('adminUpdateUser', B_ID, 'PATCH', path, { base_revision: 2, status: 'active', reason: '恢复' });
+    expect(restored.reply.body).toMatchObject({ status: 'active', revision: 3 });
+    const replay = write('adminUpdateUser', B_ID, 'PATCH', path, patch, first.key);
+    expect(replay.reply).toEqual(restored.reply);
+    expect(backend.adminAudit().filter(item => item.target_id === B_ID)).toHaveLength(2);
   });
 });
 
@@ -166,13 +178,17 @@ describe('PR-11b user status, quota and switches', () => {
 describe('PR-11b invitations', () => {
   it('creation shows the one-time token once; a replay never shows it again; the audit has no token', () => {
     const { backend, call, write } = harness();
-    const created = write('adminCreateInvitation', null, 'POST', '/admin/invitations', { kind: 'email_bound', email: 'new-student@example.invalid', reason: '合成：新同学' });
+    const request = { kind: 'email_bound', email: 'new-student@example.invalid', reason: '合成：新同学' };
+    const created = write('adminCreateInvitation', null, 'POST', '/admin/invitations', request);
     expect(created.reply.status).toBe(201);
     const body = created.reply.body as S['InvitationCreated'];
     expect(body.one_time_token).toMatch(/^[A-Za-z0-9_-]{43}$/);
     expect(body.invitation).toMatchObject({ kind: 'email_bound', email_hint: 'n***@example.invalid', state: 'issued' });
-    const replay = call('C', 'POST', '/admin/invitations', { kind: 'email_bound', email: 'new-student@example.invalid', reason: '合成：新同学' }, '', created.key, created.token);
-    expect(err(replay)).toBe('SECRET_ALREADY_ISSUED');
+    const second = write('adminCreateInvitation', null, 'POST', '/admin/invitations', request);
+    expect(second.reply.status).toBe(201);
+    expect((second.reply.body as S['InvitationCreated']).invitation.id).not.toBe(body.invitation.id);
+    const replay = call('C', 'POST', '/admin/invitations', request, '', created.key, created.token);
+    expect(replay).toMatchObject({ status: 409, body: { error: { code: 'SECRET_ALREADY_ISSUED', conflict_id: body.invitation.id } } });
     expect(JSON.stringify(replay.body)).not.toContain(body.one_time_token);
     expect(JSON.stringify(backend.adminAudit())).not.toContain(body.one_time_token);
     expect(JSON.stringify(call('C', 'GET', '/admin/invitations').body)).not.toContain('new-student');
@@ -183,11 +199,18 @@ describe('PR-11b invitations', () => {
     const { write } = harness();
     expect(err(write('adminRevokeInvitation', CONSUMED, 'POST', `/admin/invitations/${CONSUMED}/revoke`, { reason: '合成' }).reply)).toBe('INVITATION_UNAVAILABLE');
     expect(err(write('adminReissueInvitation', CONSUMED, 'POST', `/admin/invitations/${CONSUMED}/reissue`, { reason: '合成' }).reply)).toBe('INVITATION_UNAVAILABLE');
-    const reissued = write('adminReissueInvitation', EXPIRED, 'POST', `/admin/invitations/${EXPIRED}/reissue`, { reason: '合成' }).reply.body as S['InvitationCreated'];
+    const reissuePath = `/admin/invitations/${EXPIRED}/reissue`;
+    const first = write('adminReissueInvitation', EXPIRED, 'POST', reissuePath, { reason: '合成' });
+    const reissued = first.reply.body as S['InvitationCreated'];
     expect(reissued.invitation).toMatchObject({ state: 'issued', revision: 2 });
     expect(Date.parse(reissued.invitation.expires_at)).toBeGreaterThan(Date.parse('2026-10-28T08:00:00Z'));
-    const revoked = write('adminRevokeInvitation', ISSUED, 'POST', `/admin/invitations/${ISSUED}/revoke`, { reason: '合成' }).reply.body as S['Invitation'];
-    expect(revoked.state).toBe('revoked');
+    const replay = write('adminReissueInvitation', EXPIRED, 'POST', reissuePath, { reason: '合成' }, first.key);
+    expect(replay.reply).toMatchObject({ status: 409, body: { error: { code: 'SECRET_ALREADY_ISSUED', conflict_id: EXPIRED } } });
+    expect(JSON.stringify(replay.reply)).not.toContain(reissued.one_time_token);
+    const revokePath = `/admin/invitations/${ISSUED}/revoke`;
+    const revoked = write('adminRevokeInvitation', ISSUED, 'POST', revokePath, { reason: '合成' });
+    expect(revoked.reply.body).toMatchObject({ id: ISSUED, state: 'revoked' });
+    expect(write('adminRevokeInvitation', ISSUED, 'POST', revokePath, { reason: '合成' }, revoked.key).reply).toEqual(revoked.reply);
     expect(err(write('adminReissueInvitation', ISSUED, 'POST', `/admin/invitations/${ISSUED}/reissue`, { reason: '合成' }).reply)).toBe('INVITATION_UNAVAILABLE');
   });
 });

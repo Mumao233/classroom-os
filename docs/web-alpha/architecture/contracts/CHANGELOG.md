@@ -15,6 +15,8 @@
 - 采集准入接入前，开关视图返回 `new_capture_enabled` 的存储值，PATCH 尝试改变该值时整笔返回 `503 SERVICE_DISABLED`。开关快照按管理员、操作和写入键重放。课前准备页按额度桶展示月度余额，组摘要仅用于提示整组暂停。
 - PR-11b 后端对齐 35 个已实现写操作的 `Idempotency-Key`。采集、媒体、删除、导入导出、转写、任务、复习和同步中使用 `IdempotencyKeyV4` 的操作要求规范小写 UUIDv4。客户端可继续使用 `crypto.randomUUID()`。管理写入和 `POST /auth/reauth` 等使用通用头的操作继续接受规范 UUIDv7。`reconcileTask` 的 Filetrans 核对分支也接受该格式。
 
+- 邀请创建和重签成功后，以有效绑定凭证重放原操作会得到 `409 SECRET_ALREADY_ISSUED`。已有错误字段 `error.conflict_id` 携带该操作对应的邀请 UUID。无法定位的历史创建回执仍返回 null。HTTP 保持 0.4.0。
+
 [三项裁决、兼容窗口和验证](../../coordination/PR11B-CONTRACT-DECISION-20261124.md)
 
 ## 0.3.0 · 2026-11-22 · PR-10a 音频清单与 PR-06c → PR-10b 错误细分

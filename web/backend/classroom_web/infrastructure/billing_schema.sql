@@ -317,4 +317,4 @@ END $f$;
 ALTER FUNCTION billing_api.adjust_quota(uuid,uuid,uuid,bigint,text) OWNER TO classroom_billing_control;
 REVOKE ALL ON FUNCTION billing_api.adjust_quota(uuid,uuid,uuid,bigint,text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION billing_api.adjust_quota(uuid,uuid,uuid,bigint,text) TO classroom_billing_operator;
-COMMENT ON FUNCTION billing_api.adjust_quota(uuid,uuid,uuid,bigint,text) IS 'classroom-admin-0.4.0-sql-2';
+COMMENT ON FUNCTION billing_api.adjust_quota(uuid,uuid,uuid,bigint,text) IS 'classroom-admin-0.4.0-sql-3';

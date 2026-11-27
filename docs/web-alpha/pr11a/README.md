@@ -92,7 +92,7 @@ unknown 和 submitted 的 hold 依据最终计量核对。释放入口会锁定�
 
 ### HTTP 0.4.0 管理路由的安装检查与重建
 
-显式注入 `BillingAdmin` 时，应用工厂用配置的受限网关读取 `billing_api.adjust_quota(uuid,uuid,uuid,bigint,text)` 和 `billing_api.apply_admin(jsonb)` 两个函数的版本注释。基础账本和 HTTP 事务都须由 `classroom-admin-0.4.0-sql-2` 这一版安装脚本写入。此版包含恢复账号的容量检查、邀请列表读取和额度调整的用户锁顺序。旧安装、只安装一份 SQL 或数据库不可达都会阻止挂载。给旧函数手工补注释会误报能力。
+显式注入 `BillingAdmin` 时，应用工厂用配置的受限网关读取 `billing_api.adjust_quota(uuid,uuid,uuid,bigint,text)` 和 `billing_api.apply_admin(jsonb)` 两个函数的版本注释。基础账本和 HTTP 事务都须由 `classroom-admin-0.4.0-sql-3` 这一版安装脚本写入。此版增加管理用户列表、邀请重放的资源引用，并让调额后的回读和独立额度读取与状态写入遵循同一用户锁序。旧安装、只安装一份 SQL 或数据库不可达都会阻止挂载。给旧函数手工补注释会误报能力。
 
 **先核对已有候选库。** 下例中的 `old_billing_candidate` 和 `new_billing_candidate` 是两个不同的 libpq 测试连接名，执行时替换为环境中已配置的名称。使用能检查所有租户的迁移身份，安排写入暂停窗口。脚本只读检查 `public.quota_periods`，持有表锁至事务结束。若发现上限超过 `9007199254740991`，脚本报错并退出。负责人需在受限副本中核对相应额度行、调整记录和业务依据，显式决定每行的处理并留存记录，然后重新运行检查。
 

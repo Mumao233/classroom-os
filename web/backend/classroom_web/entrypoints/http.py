@@ -269,7 +269,8 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
                 target_id = params.get('user_id') or params.get('invitation_id')
                 return billing_admin.apply(ctx,operation_id,body,key,target_id=target_id)
             if path=='/admin/users/{user_id}/quota':return billing_admin.user_quota(ctx,params['user_id'])
-            if operation_id == 'adminListInvitations':return billing_admin.invitations(ctx, **params)
+            if operation_id == 'adminListUsers':return billing_admin.list_metadata(ctx, 'users', **params)
+            if operation_id == 'adminListInvitations':return billing_admin.list_metadata(ctx, 'invitations', **params)
             if path=='/admin/usage':return billing_admin.read(ctx,'usage',params.get('period_start'))
             if path=='/admin/switches':return billing_admin.read(ctx,'switches')
         if path in reads:return reads[path](ctx,params)
@@ -330,7 +331,7 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
     if billing_admin is not None:
         admin_paths.update(('/admin/switches', '/admin/usage', '/admin/quota-adjustments', '/admin/users/{user_id}/quota'))
         if contract_version == '0.4.0':
-            admin_paths.update(('/admin/users/{user_id}', '/admin/invitations', '/admin/invitations/{invitation_id}/revoke',
+            admin_paths.update(('/admin/users', '/admin/users/{user_id}', '/admin/invitations', '/admin/invitations/{invitation_id}/revoke',
                                 '/admin/invitations/{invitation_id}/reissue'))
     selected.update(admin_paths)
     selected.update(deletion_routes)
@@ -359,7 +360,7 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
                         if item.get('in') == 'path':
                             check(item['schema'], params[item['name']])
                 if (path in review_paths or path in sync_paths or path in asr_paths or path in filetrans_paths
-                        or operation['operationId'] == 'adminListInvitations') and method == 'get':
+                        or operation['operationId'] in ('adminListUsers', 'adminListInvitations')) and method == 'get':
                     query_schemas = {item['name']: item['schema'] for item in operation.get('parameters', [])
                                      if item.get('in') == 'query'}
                     pairs = list(request.query_params.multi_items())

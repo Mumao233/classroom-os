@@ -303,10 +303,37 @@ BEGIN
 END $f$;
 ALTER FUNCTION billing_api.issue_admin_proof(jsonb) OWNER TO classroom_web_session_writer;
 
+-- The projection and adjustment take both user locks before the session
+-- validator locks the actor's device and session.
+CREATE FUNCTION billing_api.lock_quota_users(session_hash text, recipient uuid) RETURNS boolean
+LANGUAGE sql SET search_path=pg_catalog AS $f$
+  SELECT coalesce(bool_or(locked.id=recipient),false) FROM (
+    SELECT u.id FROM public.users u JOIN public.auth_sessions sess ON u.id IN (sess.owner_id,recipient)
+      WHERE sess.token_hash=session_hash AND sess.role='admin' AND sess.revoked_at IS NULL
+      ORDER BY u.id FOR SHARE OF u
+  ) locked
+$f$;
+ALTER FUNCTION billing_api.lock_quota_users(text,uuid) OWNER TO classroom_web_session_writer;
+
+CREATE FUNCTION billing_api.authorize_quota(session_hash text, recipient uuid) RETURNS text
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog AS $f$
+DECLARE s jsonb; recipient_locked boolean;
+BEGIN
+  recipient_locked:=billing_api.lock_quota_users(session_hash,recipient);
+  s:=identity_api.validate_session(jsonb_build_object('token_hash',session_hash,'touch',false));
+  IF s IS NULL OR NOT EXISTS(SELECT 1 FROM public.users WHERE id=(s->>'owner_id')::uuid
+      AND normalized_email IS NOT NULL AND password_hash IS NOT NULL) THEN RETURN 'UNAUTHENTICATED';END IF;
+  IF s->>'role'<>'admin' OR s->>'mfa_level'<>'totp' THEN RETURN 'FORBIDDEN';END IF;
+  IF NOT recipient_locked THEN RETURN 'NOT_FOUND';END IF;
+  RETURN 'AUTHORIZED';
+END $f$;
+ALTER FUNCTION billing_api.authorize_quota(text,uuid) OWNER TO classroom_web_session_writer;
+GRANT EXECUTE ON FUNCTION billing_api.authorize_quota(text,uuid) TO classroom_web_runtime;
+
 CREATE FUNCTION billing_api.apply_admin(p jsonb) RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog AS $f$
 DECLARE s jsonb;r public.reauth_proofs%ROWTYPE;old public.preauth_receipts%ROWTYPE;
-  legacy public.preauth_receipts%ROWTYPE;adjusted boolean;
+  legacy public.preauth_receipts%ROWTYPE;adjusted boolean; quota_recipient_locked boolean;
   answer jsonb;n timestamptz;uid uuid;action text:=p->>'purpose';b jsonb:=p->'body';q uuid;
   receipt_context text;receipt_result jsonb;op uuid:=(p->>'operation_key')::uuid;target uuid:=(p->>'target_id')::uuid;
   secret boolean:=action IN ('adminCreateInvitation','adminReissueInvitation');
@@ -322,9 +349,7 @@ BEGIN
     -- A new bucket takes an FK lock on its recipient. Take both user locks
     -- in status-update order before validate_session locks the actor.
     -- SHARE remains compatible with the operator's actor FK.
-    PERFORM u.id FROM public.users u JOIN public.auth_sessions sess ON u.id IN (sess.owner_id,(b->>'user_id')::uuid)
-      WHERE sess.token_hash=p->>'token_hash' AND sess.role='admin' AND sess.revoked_at IS NULL
-      ORDER BY u.id FOR SHARE OF u;
+    quota_recipient_locked:=billing_api.lock_quota_users(p->>'token_hash',(b->>'user_id')::uuid);
     s:=identity_api.validate_session(p);
   ELSE
     s:=identity_api.lock_account(p);
@@ -387,7 +412,17 @@ BEGIN
       END IF;
       RETURN old.result;
     END IF;
-    IF old.secret THEN RETURN jsonb_build_object('error','SECRET_ALREADY_ISSUED');END IF;
+    IF old.secret THEN
+      IF action='adminCreateInvitation' THEN
+        -- Older creates have no resource reference. Never infer it from an invitation list.
+        SELECT ref.result->'id' INTO receipt_result FROM public.preauth_receipts ref
+          WHERE ref.context_hash=old.context_hash AND ref.operation='adminCreateInvitation:resource'
+            AND ref.operation_key=op AND ref.commitment=old.commitment AND NOT ref.secret;
+      ELSIF action='adminReissueInvitation' THEN
+        receipt_result:=to_jsonb(target); -- The replay proof binds the invitation path.
+      END IF;
+      RETURN jsonb_build_object('error','SECRET_ALREADY_ISSUED','conflict_id',receipt_result);
+    END IF;
     IF action='adminUpdateUser' THEN RETURN billing_api.admin_user_state((old.result->>'id')::uuid,NULL);END IF;
     IF action='adminRevokeInvitation' THEN
       RETURN billing_api.admin_invitation_state(uid,(old.result->>'id')::uuid,NULL,NULL);END IF;
@@ -396,6 +431,7 @@ BEGIN
     answer:=billing_api.apply_switch_body(uid,op,b);
     IF answer ? 'error' THEN RETURN answer;END IF;
   ELSIF action='adminAdjustQuota' THEN
+    IF NOT quota_recipient_locked THEN RETURN jsonb_build_object('error','NOT_FOUND');END IF;
     PERFORM set_config('app.owner_id',b->>'user_id',true);
     q:=billing_api.adjustment_period(b);
     IF q IS NULL THEN RETURN jsonb_build_object('error','NOT_FOUND');END IF;
@@ -419,9 +455,33 @@ BEGIN
     ELSE answer END;
   INSERT INTO public.preauth_receipts(context_hash,operation,operation_key,commitment,secret,result)
     VALUES(receipt_context,action,op,p->>'commitment',secret,receipt_result);
+  IF action='adminCreateInvitation' THEN
+    -- Secret receipts must have NULL results. Keep the ID-only reference in the same transaction.
+    INSERT INTO public.preauth_receipts(context_hash,operation,operation_key,commitment,result)
+      VALUES(receipt_context,'adminCreateInvitation:resource',op,p->>'commitment',jsonb_build_object('id',answer->'id'));
+  END IF;
   RETURN answer;
 END $f$;
 ALTER FUNCTION billing_api.apply_admin(jsonb) OWNER TO classroom_web_session_writer;
+
+-- A pending registration has no user row until activation. Project its immutable
+-- public metadata only while both registration and invitation can still be used.
+GRANT SELECT(created_at,normalized_email,profile) ON public.pending_registrations TO classroom_web_session_writer;
+CREATE VIEW billing_api.user_metadata AS
+  SELECT u.id,u.revision,u.created_at,u.updated_at,u.normalized_email AS email,
+    coalesce(u.profile->>'nickname','') AS nickname,coalesce(u.profile->>'school','') AS school,
+    coalesce(u.profile->>'major','') AS major,u.role,
+    CASE WHEN u.state='erasing' THEN 'deleting' ELSE u.state END AS status,
+    EXISTS (SELECT 1 FROM public.mfa_credentials f WHERE f.owner_id=u.id AND f.state='active') AS mfa_enabled
+  FROM public.users u WHERE u.deleted_at IS NULL AND u.state<>'erased' AND u.normalized_email IS NOT NULL
+  UNION ALL
+  SELECT r.id,1,r.created_at,r.created_at,r.normalized_email,coalesce(r.profile->>'nickname',''),
+    coalesce(r.profile->>'school',''),coalesce(r.profile->>'major',''),'student','pending',false
+  FROM public.pending_registrations r JOIN public.invitations i ON i.id=r.invitation_id
+  WHERE r.consumed_at IS NULL AND r.expires_at>statement_timestamp()
+    AND i.status='open' AND i.expires_at>statement_timestamp()
+    AND NOT EXISTS (SELECT 1 FROM public.users u WHERE u.normalized_email=r.normalized_email);
+ALTER VIEW billing_api.user_metadata OWNER TO classroom_web_session_writer;
 
 CREATE FUNCTION billing_api.read_admin(p jsonb) RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog AS $f$
@@ -429,13 +489,20 @@ DECLARE s jsonb; page_size integer; items jsonb;
 BEGIN
   s:=identity_api.validate_session(p);
   IF s IS NULL OR s->>'role'<>'admin' OR s->>'mfa_level'<>'totp' THEN RETURN jsonb_build_object('error','FORBIDDEN');END IF;
-  IF p->>'kind'='invitations' THEN
+  IF p->>'kind' IN ('users','invitations') THEN
     page_size:=(p->>'limit')::integer;
     IF page_size IS NULL OR page_size NOT BETWEEN 1 AND 100 THEN RETURN jsonb_build_object('error','VALIDATION_FAILED');END IF;
-    SELECT coalesce(jsonb_agg(to_jsonb(m) ORDER BY m.created_at DESC,m.id DESC),'[]'::jsonb) INTO items
-    FROM (SELECT * FROM billing_api.invitation_metadata
-          WHERE p->>'before_id' IS NULL OR (created_at,id)<((p->>'before_created')::timestamptz,(p->>'before_id')::uuid)
-          ORDER BY created_at DESC,id DESC LIMIT page_size+1) m;
+    IF p->>'kind'='users' THEN
+      SELECT coalesce(jsonb_agg(to_jsonb(m) ORDER BY m.created_at,m.id),'[]'::jsonb) INTO items
+      FROM (SELECT * FROM billing_api.user_metadata
+            WHERE p->>'after_id' IS NULL OR (created_at,id)>((p->>'after_created')::timestamptz,(p->>'after_id')::uuid)
+            ORDER BY created_at,id LIMIT page_size+1) m;
+    ELSE
+      SELECT coalesce(jsonb_agg(to_jsonb(m) ORDER BY m.created_at DESC,m.id DESC),'[]'::jsonb) INTO items
+      FROM (SELECT * FROM billing_api.invitation_metadata
+            WHERE p->>'before_id' IS NULL OR (created_at,id)<((p->>'before_created')::timestamptz,(p->>'before_id')::uuid)
+            ORDER BY created_at DESC,id DESC LIMIT page_size+1) m;
+    END IF;
     RETURN jsonb_build_object('items',items);
   END IF;
   IF p->>'kind'='switches' THEN RETURN billing_api.switch_view();END IF;
@@ -490,4 +557,4 @@ BEGIN
     END IF;
 END
 $filetrans$;
-COMMENT ON FUNCTION billing_api.apply_admin(jsonb) IS 'classroom-admin-0.4.0-sql-2';
+COMMENT ON FUNCTION billing_api.apply_admin(jsonb) IS 'classroom-admin-0.4.0-sql-3';

@@ -12,7 +12,7 @@ from .auth_deadlines import remaining
 
 class PgBillingAdminRepository:
     OPERATIONS = frozenset(('issue_admin_proof', 'apply_admin', 'read_admin'))
-    SQL_REVISION = 'classroom-admin-0.4.0-sql-2'
+    SQL_REVISION = 'classroom-admin-0.4.0-sql-3'
 
     def __init__(self, url):
         parsed = make_url(url)
@@ -75,7 +75,9 @@ class PgBillingAdminRepository:
                 committing = True
             # A secret replay commits consumption of any fresh proof before answering 409.
             if result.get('error') == 'SECRET_ALREADY_ISSUED':
-                raise AuthRejected('SECRET_ALREADY_ISSUED', 409)
+                error = AuthRejected('SECRET_ALREADY_ISSUED', 409)
+                error.conflict_id = result.get('conflict_id')
+                raise error
             return result
         except sa.exc.DBAPIError as error:
             state = getattr(error.orig, 'sqlstate', '') or ''
