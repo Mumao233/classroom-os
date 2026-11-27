@@ -45,14 +45,7 @@ class Database:
         self.cursor_secret = cursor_secret
 
     @contextmanager
-    def transaction(self, context: OwnerContext, *, isolation_level='READ COMMITTED'):
-        """Commit once; any exception, including deferred constraints, rolls back."""
-        from .repositories import PgCatalogRepository, PgTombstoneRepository
-        from .task_events import PgEventRepository, PgReceiptRepository
-        from .task_repository import PgTaskRepository
-
-        if not isinstance(context, OwnerContext):
-            raise TypeError("an authenticated OwnerContext is required")
+    def _runtime_connection(self, isolation_level='READ COMMITTED'):
         if isolation_level not in ('READ COMMITTED', 'REPEATABLE READ'):
             raise ValueError('unsupported transaction isolation')
         with self.engine.connect().execution_options(isolation_level=isolation_level) as connection, connection.begin():
@@ -86,6 +79,19 @@ class Database:
             from .auth_deadlines import remaining
             left=remaining();ms=15000 if left is None else max(1,min(15000,int(left*1000)))
             connection.execute(text("SELECT set_config('statement_timeout',:statement,true),set_config('lock_timeout',:lock,true)"),{'statement':str(ms),'lock':str(min(5000,ms))})
+            yield connection
+            remaining()
+
+    @contextmanager
+    def transaction(self, context: OwnerContext, *, isolation_level='READ COMMITTED'):
+        """Commit once; any exception, including deferred constraints, rolls back."""
+        from .repositories import PgCatalogRepository, PgTombstoneRepository
+        from .task_events import PgEventRepository, PgReceiptRepository
+        from .task_repository import PgTaskRepository
+
+        if not isinstance(context, OwnerContext):
+            raise TypeError("an authenticated OwnerContext is required")
+        with self._runtime_connection(isolation_level) as connection:
             connection.execute(text("SELECT set_config('app.owner_id', :owner, true)"),
                                {"owner": str(context.owner_id)})
             if not connection.scalar(text("SELECT classroom_web_owner_active()")):
@@ -105,7 +111,26 @@ class Database:
             yield UnitOfWork(connection, catalog, PgTombstoneRepository(catalog),
                              PgTaskRepository(connection, context.owner_id, catalog, events, receipts),
                              events, receipts)
-            remaining()
+
+    def admin_quota(self, session_hash, recipient_id):
+        """Read only the quota projection while the verified session and both users are locked."""
+        from types import SimpleNamespace
+        from ..domain.data import NotFound
+        from ..domain.identity import AuthorizationDenied
+        from .billing_repository import PgBillingRepository
+
+        with self._runtime_connection() as connection:
+            decision = connection.scalar(text('SELECT billing_api.authorize_quota(:session_hash,:recipient)'),
+                                         dict(session_hash=session_hash, recipient=recipient_id))
+            if decision == 'NOT_FOUND':
+                raise NotFound()
+            if decision != 'AUTHORIZED':
+                raise AuthorizationDenied(decision)
+            connection.execute(text("SELECT set_config('app.owner_id',:owner,true)"), {'owner': str(recipient_id)})
+            if not connection.scalar(text('SELECT classroom_web_owner_active()')):
+                raise NotFound()
+            scoped = SimpleNamespace(connection=connection, catalog=SimpleNamespace(owner_id=recipient_id))
+            return PgBillingRepository(scoped).quota()
 
     def dispose(self):
         self.engine.dispose()

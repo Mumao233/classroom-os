@@ -204,6 +204,8 @@ export function createMockRuntime(options: { createVault?: () => MemoryVault } =
   };
   // PR-11b: the simulated server sends no captions for a stream its ASR admission refuses.
   let admitTranscript: (classId: string, streamId: string, run: string) => boolean = () => true;
+  let admitCapture: (classId: string, epochId: string, fence: number) => boolean = () => true;
+  const canBind = (scope: CaptureScope) => admitCapture(scope.classSessionId, scope.captureEpochId, scope.fenceToken);
   // The capture run (its epoch) is part of the admission: a later run reusing a scripted stream ID is admitted anew.
   const transcriptAdmitted = (event: ClassroomOSWebV1EventEnvelope) => (event.type !== 'transcript.partial' && event.type !== 'transcript.final') || admitTranscript(event.data.class_session_id, event.data.stream_id, state.captureScope?.captureEpochId ?? '');
   const bindScriptEvent = (event: ClassroomOSWebV1EventEnvelope, scope = state.captureScope): ClassroomOSWebV1EventEnvelope => {
@@ -226,8 +228,9 @@ export function createMockRuntime(options: { createVault?: () => MemoryVault } =
     subscribe: (listener: () => void) => { listeners.add(listener); return () => listeners.delete(listener); },
     start: () => {
       if (!state.account || state.active || !state.leaseValid || !state.captureScope || state.captureScope.classSessionId !== state.currentClassroomId || deletedClassrooms.has(state.captureScope.classSessionId)) return false;
+      const scope = capture.state === 'ended' ? freshScope(state.currentClassroomId) : state.captureScope;
+      if (!canBind(scope)) return false;
       if (capture.state === 'ended') {
-        const scope = freshScope(state.currentClassroomId);
         resetPorts(); registerUpload(scope);
         update({ ...state, captureScope: scope, flows: { ...state.flows, upload: 'pending' }, eventProjection: { ...state.eventProjection, frameReceived: false, chunkDurable: false, uploadPending: true, audioDeleted: false, leaseLost: false, portCaptureState: 'idle' } });
       }
@@ -241,7 +244,7 @@ export function createMockRuntime(options: { createVault?: () => MemoryVault } =
       return true;
     },
     resume: () => {
-      if (!state.account || !state.active || capture.state !== 'paused' || !capture.command('recording')) return false;
+      if (!state.account || !state.active || !state.captureScope || !canBind(state.captureScope) || capture.state !== 'paused' || !capture.command('recording')) return false;
       update({ ...state, flows: { ...state.flows, capture: 'recording' }, eventProjection: { ...state.eventProjection, portCaptureState: capture.state } });
       return true;
     },
@@ -251,6 +254,7 @@ export function createMockRuntime(options: { createVault?: () => MemoryVault } =
       const current = state.captureScope;
       if (!state.account || !state.active || capture.state !== 'paused' || !current) return false;
       const scope = { ...current, captureEpochId: lease.captureEpochId, fenceToken: lease.fenceToken, chunkId: crypto.randomUUID() };
+      if (!canBind(scope)) return false;
       upload = new MockUploadPort(); upload.stage(1); registerUpload(scope);
       update({ ...state, captureScope: scope, flows: { ...state.flows, upload: 'pending' }, eventProjection: { ...state.eventProjection, frameReceived: false, chunkDurable: false, uploadPending: true } });
       return true;
@@ -259,6 +263,7 @@ export function createMockRuntime(options: { createVault?: () => MemoryVault } =
       if (!state.account || state.active || deletedClassrooms.has(classroomId)) return false;
       // A server-issued lease (PR-10a Mock API) is adopted as-is; resource IDs never come from the route.
       const scope = lease ? { classSessionId: classroomId, captureEpochId: lease.captureEpochId, fenceToken: lease.fenceToken, chunkId: crypto.randomUUID() } : freshScope(classroomId);
+      if (!canBind(scope)) return false;
       resetPorts(); registerUpload(scope);
       update({ ...state, captureScope: scope, currentClassroomId: classroomId, leaseValid: true, flows: { ...state.flows, capture: 'idle', upload: 'pending', ai: taskProjection(classroomId).ai }, eventProjection: { ...state.eventProjection, leaseLost: false, portCaptureState: 'idle', finalRevision: Math.max(0, ...[...finalSegments.values()].filter(item => item.classroomId === classroomId).map(item => item.revision)), frameReceived: false, chunkDurable: false, uploadPending: true, audioDeleted: false, classroomDeleted: false, partial: partialText(classroomId), finalText: [...finalSegments.values()].filter(item => item.classroomId === classroomId).sort((a, b) => a.sequence - b.sequence).map(item => item.text).join(' / ') || null } });
       return true;
@@ -281,13 +286,14 @@ export function createMockRuntime(options: { createVault?: () => MemoryVault } =
       const scope = freshScope(mockCaptureScope().classSessionId);
       if (options.isRevoked?.(scope.classSessionId)) deletedClassrooms.add(scope.classSessionId);
       const revoked = deletedClassrooms.has(scope.classSessionId);
+      const admitted = !revoked && canBind(scope);
       // A revoked classroom gets no staged upload at all (it could never be acknowledged).
       if (revoked) { for (const item of uploadRecords.values()) if (item.entry.classSessionId === scope.classSessionId) item.canAccept = false; }
-      else registerUpload(scope);
-      const recording = !revoked && ['03', '04', '05'].includes(scenario);
+      else if (admitted) registerUpload(scope);
+      const recording = admitted && ['03', '04', '05'].includes(scenario);
       if (recording) capture.command('recording');
       const projected = taskProjection(scope.classSessionId);
-      update({ ...state, scenario, currentClassroomId: scope.classSessionId, captureScope: scope, leaseValid: !revoked, tasks: Object.fromEntries(tasks), eventProjection: { ...emptyProjection(), mayHaveCharged: projected.risk, portCaptureState: capture.state, uploadPending: !revoked && upload.pending(1), classroomDeleted: revoked }, active: recording, flows: {
+      update({ ...state, scenario, currentClassroomId: scope.classSessionId, captureScope: scope, leaseValid: admitted, tasks: Object.fromEntries(tasks), eventProjection: { ...emptyProjection(), mayHaveCharged: projected.risk, portCaptureState: capture.state, uploadPending: admitted && upload.pending(1), classroomDeleted: revoked }, active: recording, flows: {
         capture: recording ? 'recording' : 'idle',
         upload: scenario === '04' ? 'failed' : 'pending',
         asr: recording ? 'streaming' : 'idle',
@@ -296,7 +302,7 @@ export function createMockRuntime(options: { createVault?: () => MemoryVault } =
       } });
       connectEvents();
       // This synthetic durable fixture uses the same receipt path as user-triggered events.
-      if (scenario === '03' && !revoked) events.emit(bindScriptEvent(eventScripts.upload[1]));
+      if (scenario === '03' && admitted) events.emit(bindScriptEvent(eventScripts.upload[1]));
       if (scenario === '06' && !revoked && ![...tasks.values()].some(task => task.classroomId === scope.classSessionId && task.state === 'unknown' && task.mayHaveCharged)) {
         const event = eventScripts.taskUnknown[0];
         events.emit({ ...event, event_id: crypto.randomUUID(), data: { ...event.data, task_id: crypto.randomUUID(), class_session_id: scope.classSessionId } });
@@ -355,6 +361,7 @@ export function createMockRuntime(options: { createVault?: () => MemoryVault } =
     },
     /** PR-11b: the simulated server's ASR admission, applied to every transcript event it delivers. */
     setTranscriptAdmission: (admit: (classId: string, streamId: string, run: string) => boolean) => { admitTranscript = admit; },
+    setCaptureAdmission: (admit: typeof admitCapture) => { admitCapture = admit; },
     /** Feed and scripts share one delivery check. */
     deliverTranscript: (event: ClassroomOSWebV1EventEnvelope) => { if (state.account && transcriptAdmitted(event)) events.emit(event); },
     /**

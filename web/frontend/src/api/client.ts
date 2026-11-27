@@ -37,6 +37,12 @@ export class ApiClientError extends Error {
     const revision = (this.detail as ErrorBody).error.current_revision;
     return typeof revision === 'number' ? revision : null;
   }
+  /** The resource an error refers to (e.g. the invitation an already-issued create made), when the server names one. */
+  get conflictId(): string | null {
+    if (!this.code) return null;
+    const id = (this.detail as ErrorBody).error.conflict_id;
+    return typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id) ? id.toLowerCase() : null;
+  }
 }
 
 export type ApiOptions = {

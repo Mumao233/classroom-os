@@ -34,6 +34,14 @@
 
 [账本浏览器服务](../../../web/backend/classroom_web/application/billing_browser.py) · [受限账本网关](../../../web/backend/classroom_web/infrastructure/billing_control.py) · [签发与消费事务](../../../web/backend/classroom_web/infrastructure/billing_integration.sql) · [HTTP 组合入口](../../../web/backend/classroom_web/entrypoints/http.py)
 
+**2026-11-27 后端接入。** 显式注入管理服务的 HTTP 0.4.0 应用现已挂载表中的六项写入。四项新增用途沿用上表中的目标、写入键和 DTO。创建邮箱邀请在核验因子前按注册服务的规则检查邮箱，原始拼写参与操作承诺。用户状态更新校验版本，停用同时推进安全 epoch 并撤销会话。创建与重签返回的随机令牌只在首次成功响应出现；同键同操作再试取得 `409 SECRET_ALREADY_ISSUED`。重签保留邀请 ID，换发新令牌，并使源自前一令牌的待激活注册失效。用户和邀请的成功写入、受限审计、凭证消费与回执一同提交。HTTP 字段和版本沿用 0.4.0。
+
+### 2026-11-27 · 邀请创建和重签丢响应后的定位
+
+两个管理员可以同时创建外观相同的单次邀请。按创建时间或邮箱提示挑选记录，可能使另一管理员的有效令牌失效。新建邀请在同一事务中把邀请 UUID 作为非秘密引用关联到管理员、操作和幂等键。数据库继续要求秘密回执的结果为空，引用由配对的非秘密回执保存。重签直接使用凭证绑定的邀请 UUID。令牌及其摘要均不写入回执、审计或普通日志。
+
+持有效绑定凭证重放创建或重签时，服务返回 `409 SECRET_ALREADY_ISSUED`，`error.conflict_id` 标识本次操作对应的邀请。管理员可对该 ID 明确发起新的重签。历史创建回执缺少引用时仍返回 null，客户端无法据此自动选择邀请。撤销操作成功重放时读取该邀请的当前元数据。沿用 HTTP 0.4.0 和既有错误结构，旧客户端可忽略该字段，新客户端可同时处理 UUID 和 null。依照此前同结构的语义补充，在契约变更记录登记。
+
 ## 二、邀请操作的理由
 
 **问题与选项。** 创建只收 kind/email，撤销与重签使用 `Empty`。可选理由能接纳历史请求，却允许新操作只留下固定动作名。04-CONTRACTS-FLOWS 的运营行已要求“记理由”，AUTH-07 要求管理操作 MFA 与审计，现有用户、额度和开关写入都带操作者理由。因此三项均**必填**，无需新增产品规则。
@@ -66,6 +74,30 @@
 - **Codex / PR-11b 后端**补齐用户更新和三项邀请写入的鉴权、并发、幂等、同事务审计、单次秘密响应以及对应的真实 HTTP 与 PostgreSQL 验收。现有 03a 邀请内部端口不足以直接挂载。
 - **Claude / Draft #38** 按表中映射对接可用生产者，更新未挂载态与 Mock。等待独立复审和同版联调后再开放相应操作。
 - PR-10a 先前把 PR-07a 引用字段暂排在 0.4.0 窗口。本次仅交付这三项后台裁决，引用字段仍由独立候选负责，公开版本号待该批实际冻结时分配。
+
+### 后续 · 关闭新采集后的租约处理（2026-11-27）
+
+首次采集和停止后的再次采集会创建 epoch。现有接管同样创建 epoch，并按账号锁定未释放的租约，在 `confirm_takeover` 为真且 `expected_lease_id` 匹配时替换它。持有旧租约的设备可以在租约过期后接管，也可以接管到另一课堂。暂停后恢复会在同一事务中释放原租约并创建新 epoch。续租、有效回执重放和已采集数据的读取各有独立路径。
+
+两种处理会产生不同的用户可见结果。保留全部既有接管时，关闸后持有旧租约的用户仍可以开始另一课堂的采集。仅保留同课堂、未过期租约的接管时，这两类原本有效的接管会被拒绝。建议关闸后允许同课堂有效租约续租、接管和暂停恢复，阻止新课堂采集与过期租约重新开始；该例外范围待负责人确认。确认前沿用额外复审的保护，GET 返回存储值，PATCH 尝试改变 `new_capture_enabled` 时整笔返回 `503 SERVICE_DISABLED`；同值 PATCH 沿用 CAS。此次未改采集准入或公开契约。
+
+[创建、接管与暂停恢复](../../../web/backend/classroom_web/application/capture.py) · [租约锁与课堂范围](../../../web/backend/classroom_web/infrastructure/capture_repository.py) · [采集回归](../../../web/backend/tests/integration/test_capture_recovery.py)
+
+### 负责人裁决 2026-11-27：方案 A
+
+林珈诚选择 A。关闭 `new_capture_enabled` 的目的是暂停新的采集，同时让已在上课的用户续租、换设备或从暂停中恢复。延续的依据是同一账号在目标课堂内仍持有未释放且未过期的租约。接管仍须显式确认并匹配原租约 ID，续租和恢复仍须通过设备、围栏及同意校验。首次申请、跨课堂接管、过期或停止后再申请均受关闸限制，采集申请返回既有的 `503 SERVICE_DISABLED`。向已过期的租约发送续租或恢复命令沿用 `409 STALE_FENCE`。有效回执按原有规则重放。重新开闸即恢复原准入规则。
+
+**并发与权限。** 采集端在创建 epoch 的同一 PostgreSQL 事务内调用无参函数 `billing_api.new_capture_enabled()`。函数只返回布尔值，复用 `lock_switches()` 对开关单例行的 `FOR SHARE` 锁；管理写入用 `FOR UPDATE` 锁同一行。两种锁都持有至事务结束。在 READ COMMITTED 下，管理写入先取得锁且提交时，随后获锁的采集请求读到关闭值；采集先取得锁时，关闸写入等该次采集结束后才可提交。账号和租约锁串行化同一账号的接管与恢复。恢复在释放原租约前核验其有效性，在同一事务中创建下一 epoch。
+
+业务层只依赖采集仓库提供的准入判断。数据库函数以固定搜索路径和定义者权限执行，采集调用方无需开关表读写权限、管理员凭证或收费服务。独立 PR-05b 库尚无 `billing_api` 时，沿用其原采集策略。首次接入账本或升级旧库时，按既有安装流程暂停写入、等待在途事务结束，再切换到配套 SQL。装有账本却缺少新版读取接口时，拒绝新采集。候选库保留原开关值，原先存为 false 的库升级后立即关闸。
+
+**兼容与交接。** 管理 PATCH 将开关、修订号、原因审计、成功回执和绑定凭证消费一并提交。HTTP 0.4.0 已覆盖所需载荷与错误；本次更正已有字段语义，沿用该版本。合成库配套安装 `classroom-admin-0.4.0-sql-4` 的两份 SQL。Mock 与共享样例按同一行为更新；管理页面的编辑控件由 Claude Code 接手。[SQL 安装说明](../pr11a/README.md) · [契约变更记录](../architecture/contracts/CHANGELOG.md)
+
+**方案 A 验证记录。** 基于 `cf46afd` 的工作树共 1,031 个送测文件。2026-11-27 VMware 作业 `b11b-r1-b2dbe34235` 于 20:59–21:24 UTC 执行，传输成功，来宾退出 1。宿主 18 项静态检查通过。来宾冻结契约 9 项、07b 候选 116 项、生成校验 1 项、前端契约 245 项、全量 Vitest 705 项通过。PostgreSQL 17.11 的管理/账本 139 项、身份 243 项、采集/媒体 159 项（含方案 A 的 8 项及双向锁等待）、ASR 147 项、学习流程 324 项通过。
+
+PR-08c 移植包组 15 项通过、1 项失败。5 GB 导入池用例在并发填充对象时，`PortableLifecycle.stage()` 调用 `classroom_web_portable_admit()`，等待 `pg_advisory_xact_lock(41006,21)` 超时。后端累计 1,027 项通过、1 项失败、0 错误、0 跳过，60 个集成模块中 47 个出现在 JUnit。首错停止使该组余项和 foundation 组未执行。真实供应商调用为 0。当时按停止条件保留修改，未提交。原始证据在本工作树 `outputs/pr11b-backend/b11b-r1-b2dbe34235/`。证据 ZIP 的 SHA-256 为 `fe98ec9dbbd9bba8c03d3b05f9284b2b3630d6e079107e2b08ea614d1955667b`，送测源码 ZIP 为 `10ed6b10720b0d1371ddc087aa9278fe86cbb6cf222144f79f4ebcfff41b7dee`。验后仅补入本验证记录。
+
+**复验与对照（2026-11-27）。** 同一工作树原样重跑（作业 `b11b-r1-89f5384d83`，证据 `a983ad394d186247d1f62805f7502f316cb6d3828927dab5bbfce8a4b6a3d00c`）在同一导入池用例、同一把锁上再次超时，其余门禁与首轮一致。随后只跑 portable 组做对照，打开锁等待和慢语句日志（`outputs/pr11b-backend/portable-ab-20261127/REPORT.md`，清单 `81115bcf6b96d750dda6dc55e39a8d4b3b6978cb400224ada5badca0fb781d42`）：干净 `cf46afd` 两轮、带改动两轮，四轮都没有复现 `(41006,21)` 超时，持锁事务都在 `COMMIT` 等待 WAL 写入，持锁不超过 0.4 秒。带改动的两轮在 `_put()` 写对象时返回 `503 STORAGE_UNAVAILABLE`；干净基线两轮的 export 用例出现同类 503，两边整组都有失败（基线 42/2，改动 40/4、42/2）。方案 A 的改动不触及 portable 准入、对象存储或该锁。结论：PR-08c 的 5 GB 池用例在当前 VMware 来宾的 I/O 条件下不稳定，基线同样失败，不归因于方案 A；方案 A 据此提交，池用例的环境不稳定作为遗留问题单独跟进。
 
 [HTTP 契约](../architecture/contracts/openapi.json) · [合成正反例](../architecture/contracts/examples.json) · [上次契约裁决](PR10A-CONTRACT-DECISION-20261122.md)
 
@@ -107,7 +139,7 @@
 | 公开字段 | GET / PATCH 的含义 |
 |---|---|
 | `billing_enabled` | 收费总闸。关闭会阻止新的计费准入，保留各分项原配置。 |
-| `new_capture_enabled` | 新采集的独立配置位。2026-11-26 额外复审后，GET 显示存储值，采集准入接入前，PATCH 改变该值返回 503。 |
+| `new_capture_enabled` | GET 显示当前准入值。PATCH 通过 CAS 更新，关闭后仅同课堂有效租约可续租、显式接管和暂停恢复。见上文负责人裁决。 |
 | `asr_streaming_enabled`、`asr_filetrans_enabled` | 分别控制实时 ASR、文件重转写。 |
 | `ai_interaction_enabled`、`ai_summary_enabled` | 分别控制 AI 互动（问答、讲解）和总结。 |
 | `asr_enabled`、`ai_enabled` | 读取为对应组两项配置的 OR。两项都关才显示关，一开一关应按分项显示“部分开启”。PATCH 显式写组字段会把两项都设为该值。 |
@@ -144,6 +176,8 @@ PATCH 只提交有意更改的项，省略项保持原值。一个请求至少�
 
 ## 额外复审核实 · 2026-11-26
 
+下表第 1 项记录当日的临时保护。2026-11-27 的负责人裁决用方案 A 替代了该保护和当时的前端只读建议。
+
 复审输入为 `14201d2080f9014b8656525c527e2170ead77467`。逐项核对生产者、消费者和实际路由后，六项均成立。以下更新仍属未发布的 HTTP 0.4.0。
 
 | 发现 | 原代码依据 | 本轮裁决与回归 |
@@ -156,6 +190,13 @@ PATCH 只提交有意更改的项，省略项保持原值。一个请求至少�
 | 6 · 邀请类型与邮箱（P2） | `InvitationCreate` 原先允许两种类型都省略或附带 email。`IdentityService.create_invitation` 已按 kind 检查邮箱是否存在。 | 共享 DTO 改为两个互斥分支。`email_bound` 必填有效 email，`single_use` 必须省略 email。两分支均必填理由。写入 DTO、再认证嵌套样例、生成的 TypeScript 联合类型及因子前拒绝回归同步。四项尚未挂载的管理写入仍按原裁决处理。 |
 
 [采集策略](../../../web/backend/classroom_web/infrastructure/capture_repository.py) · [租约创建](../../../web/backend/classroom_web/application/capture.py) · [开关事务与回执](../../../web/backend/classroom_web/infrastructure/billing_integration.sql) · [HTTP 入站校验](../../../web/backend/classroom_web/entrypoints/http.py) · [课前准备页](../../../web/frontend/src/pages/classroom/ClassroomLive.tsx) · [邀请处理](../../../web/backend/classroom_web/application/identity.py)
+
+## PR #40 已有安装的兼容处理 · 2026-11-27
+
+1. **管理路由挂载。** 显式注入管理服务时，应用用该服务的受限数据库连接，分别读取计费基础 SQL 和管理事务 SQL 的安装版本。两者在 `3e62d61` 均须为 `classroom-admin-0.4.0-sql-1`。本轮后端修复将两份安装脚本同时升至 `classroom-admin-0.4.0-sql-2`，HTTP 仍为 0.4.0。缺失、旧版或无法核验时，应用工厂在注册路由前拒绝这次组合。仅挂载普通认证的应用可继续使用原入口。安装检查及合成库重建步骤见 [11a 迁移说明](../pr11a/README.md)。
+2. **额度调整重试。** 新回执的主键由管理员 ID、操作和写入键组成。服务从当前会话复核身份和凭证，以完整操作的原始 HMAC 承诺区分重试和改写。同一时刻的不同 `period_start` 文本是不同请求。旧会话回执按原管理员归属查找；原承诺可确定时，同键异体返回 `409 IDEMPOTENCY_MISMATCH`。缺少原承诺或历史记录互相冲突时，以 `503 RESULT_UNKNOWN` 暂停该操作，交由核对账本，禁止再次加额。
+3. **UUIDv4 写入头。** 公开契约将 35 个已实现写操作的 `Idempotency-Key` 指向 `IdempotencyKeyV4`，覆盖采集、媒体、删除、导入导出、转写、任务、复习和同步。客户端须使用规范小写、带连字符的 UUIDv4，既有缓存解锁继续使用专用 v4 头。登录、再认证和六项管理写入继续支持规范小写的其他 UUID 版本；`reconcileTask` 的 Filetrans 分支也接受通用键。共享 v7 正例限定在适用的接口。HTTP 保持 0.4.0。
+4. **存量额度。** 旧安装在升级前须核对所有租户的 `quota_periods.limit_value`。超出 9,007,199,254,740,991 的历史额度由负责人核定处理，保留原账本依据，复核通过后再启用管理路由。新安装在数据库层约束同一上限。
 
 ## VERIFICATION · 2026-11-24
 

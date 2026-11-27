@@ -18,7 +18,6 @@ type SwitchConfig = Omit<S['AdminSwitches'], 'asr_enabled' | 'ai_enabled'>;
 export type ServiceSwitch = 'asr_streaming_enabled' | 'asr_filetrans_enabled' | 'ai_interaction_enabled' | 'ai_summary_enabled';
 /** Proof target per operation (decision PR11B-CONTRACT-DECISION-20261124 §1). */
 const ACCOUNT_TARGETED: ReadonlySet<AdminOperationId> = new Set(['adminAdjustQuota', 'adminUpdateSwitches', 'adminCreateInvitation']);
-const BILLING_WRITES: ReadonlySet<AdminOperationId> = new Set(['adminAdjustQuota', 'adminUpdateSwitches']);
 export const proofTarget = (operationId: AdminOperationId, actorId: string, pathId: string | null) =>
   ACCOUNT_TARGETED.has(operationId) ? { kind: 'account', id: actorId } : { kind: operationId === 'adminUpdateUser' ? 'user' : 'invitation', id: pathId ?? '' };
 const CANONICAL_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -151,11 +150,11 @@ export function createAdminBackend(host: AdminHost, accountUsers: S['User'][]) {
   period(beijingMonthStart(host.now(), 1), { budget_microyuan: '500000000', fixed_and_accrued_microyuan: '100000000', settled_microyuan: '168000000', reserved_microyuan: '0', unknown_microyuan: '0', safety_reserve_microyuan: '100000000' }, '2026-10-01T02:00:00Z');
   let healthDev: AdminHealthDev = 'healthy';
   const proofs = new Map<string, { binding: string; actor: string; generation: number; expires: number; used: boolean }>();
-  const receipts = new Map<string, { body: string; reply: AdminReply }>();
-  const SECRET_ISSUED: AdminReply = { status: 0, body: null };
+  type Receipt = { body: string } & ({ invitationId: string } | { reply: AdminReply });
+  const receipts = new Map<string, Receipt>();
 
-  const fail = (status: number, code: ErrorCode, message: string, currentRevision: number | null = null): AdminReply =>
-    ({ status, body: { error: { code, message, request_id: host.newId(), retryable: false, retry_after_seconds: null, current_revision: currentRevision, conflict_id: null, task_id: null } } });
+  const fail = (status: number, code: ErrorCode, message: string, currentRevision: number | null = null, conflictId: string | null = null): AdminReply =>
+    ({ status, body: { error: { code, message, request_id: host.newId(), retryable: false, retry_after_seconds: null, current_revision: currentRevision, conflict_id: conflictId, task_id: null } } });
   const ok = (body: unknown, status = 200): AdminReply => ({ status, body });
   const touch = <T extends { revision: number; updated_at: string }>(value: T): T => ({ ...value, revision: value.revision + 1, updated_at: host.now() });
   /** billing_state() over the current month of the platform ledger (the same numbers the usage page shows). */
@@ -295,18 +294,20 @@ export function createAdminBackend(host: AdminHost, accountUsers: S['User'][]) {
       // original one or a fresh one). It is answered from the receipt and never applied again.
       if (!proofValid(true)) return fail(403, 'REAUTH_REQUIRED', '请重新验证密码和验证码');
       if (proof && !proof.used) proof.used = true;
-      // A secret-bearing success is never replayed: only its non-secret status was kept.
-      if (prior.reply === SECRET_ISSUED) return fail(409, 'SECRET_ALREADY_ISSUED', '该操作已完成，一次性令牌不会再次显示');
+      if ('invitationId' in prior) return fail(409, 'SECRET_ALREADY_ISSUED', '该操作已完成，一次性令牌不会再次显示', null, prior.invitationId);
       // Applied once; what is returned now is rechecked against current access (as BillingAdmin.apply does).
       return replayed && prior.reply.status < 300 ? replayed(prior.reply) : prior.reply;
     }
     if (!proofValid(false) || !proof) return fail(403, 'REAUTH_REQUIRED', '请重新验证密码和验证码');
     const reply = run();
-    // A rejected billing write is rolled back by the producer: the proof stays unused and no receipt exists.
-    if (BILLING_WRITES.has(operationId) && reply.status >= 400) return reply;
+    // A rejected admin write is rolled back by the producer (billing_api.apply_admin returns before consuming the
+    // proof or storing a receipt): the proof stays usable and a retry with the same key is checked afresh.
+    if (reply.status >= 400) return reply;
     proof.used = true;
     // The one-time token of an invitation is never kept in a receipt (frozen endpoint rule).
-    receipts.set(scope, { body: serialized, reply: secret && reply.status < 300 ? SECRET_ISSUED : reply });
+    receipts.set(scope, secret
+      ? { body: serialized, invitationId: (reply.body as S['InvitationCreated']).invitation.id }
+      : { body: serialized, reply });
     return reply;
   }
   function record(actorId: string, operation: AdminOperationId, targetType: string, targetId: string | null, reason: string) {
@@ -353,6 +354,11 @@ export function createAdminBackend(host: AdminHost, accountUsers: S['User'][]) {
           if (next.status === 'disabled') host.revokeSessions(next.id);
           record(actorId, 'adminUpdateUser', 'user', next.id, body.reason as string);
           return ok(next);
+        }, () => {
+          const current = user(id);
+          if (!current) return fail(404, 'NOT_FOUND', '用户不存在');
+          if (current.status === 'deleting') return fail(410, 'GONE', '该账号正在注销');
+          return ok(current);
         });
       }
       case 'GET /admin/invitations': return paged('i', [...invitations].sort((a, b) => b.created_at.localeCompare(a.created_at) || a.id.localeCompare(b.id)), query);
@@ -378,6 +384,9 @@ export function createAdminBackend(host: AdminHost, accountUsers: S['User'][]) {
           invitations = invitations.map(item => item.id === id ? next : item);
           record(actorId, reissue ? 'adminReissueInvitation' : 'adminRevokeInvitation', 'invitation', id, body.reason as string);
           return reissue ? ok({ invitation: next, one_time_token: token() } satisfies S['InvitationCreated']) : ok(next);
+        }, () => {
+          const current = invitations.find(item => item.id === id);
+          return current ? ok(current) : fail(404, 'NOT_FOUND', '邀请不存在');
         });
       }
       case 'POST /admin/quota-adjustments': {
@@ -415,8 +424,6 @@ export function createAdminBackend(host: AdminHost, accountUsers: S['User'][]) {
         return write(actorId, 'adminUpdateSwitches', null, key, reauth, body, false, () => {
           if (switches.revision !== body.base_revision) return fail(409, 'REVISION_CONFLICT', '平台开关已被其他管理员更新', switches.revision);
           if ('max_active_users' in body && body.max_active_users !== switches.max_active_users) return fail(503, 'SERVICE_DISABLED', '活跃用户阶段切换尚未开放');
-          // Capture lease admission does not enforce this setting yet (0.4.0): changing it is refused.
-          if ('new_capture_enabled' in body && body.new_capture_enabled !== switches.new_capture_enabled) return fail(503, 'SERVICE_DISABLED', '新采集开关暂未接入采集准入');
           const change: Partial<SwitchConfig> = {};
           for (const field of ['registration_enabled', 'billing_enabled', 'new_capture_enabled', 'asr_streaming_enabled', 'asr_filetrans_enabled', 'ai_interaction_enabled', 'ai_summary_enabled'] as const) if (field in body) change[field] = body[field] as boolean;
           if ('max_active_users' in body) change.max_active_users = body.max_active_users as SwitchConfig['max_active_users'];

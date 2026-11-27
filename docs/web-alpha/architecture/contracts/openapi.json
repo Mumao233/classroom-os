@@ -1757,7 +1757,7 @@
         "x-idempotency-scope": "authenticated owner + operationId + Idempotency-Key; auth public routes use preauth-session + operationId + key",
         "parameters": [
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -2878,7 +2878,7 @@
             }
           },
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -3328,7 +3328,7 @@
             }
           },
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -3901,7 +3901,7 @@
             }
           },
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -4036,7 +4036,7 @@
             }
           },
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -4061,7 +4061,7 @@
         "tags": [
           "class-sessions"
         ],
-        "description": "Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics.",
+        "description": "When new_capture_enabled is false, a new acquisition returns 503 SERVICE_DISABLED. An explicit takeover of the owner's current, unreleased, unexpired lease in this class session remains available with confirm_takeover and a matching expected_lease_id. Starting another class session, restarting after expiry or stop, and first acquisition are disabled. A valid idempotent replay preserves its existing lease checks.",
         "responses": {
           "201": {
             "description": "Success",
@@ -4112,7 +4112,7 @@
             }
           },
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -4137,7 +4137,7 @@
         "tags": [
           "class-sessions"
         ],
-        "description": "Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics.",
+        "description": "The current device can renew its valid lease in this class session while new_capture_enabled is false. An expired lease or stale fence still returns 409 STALE_FENCE.",
         "responses": {
           "200": {
             "description": "Success",
@@ -4188,7 +4188,7 @@
             }
           },
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -4264,7 +4264,7 @@
             }
           },
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -4289,7 +4289,7 @@
         "tags": [
           "class-sessions"
         ],
-        "description": "Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics.",
+        "description": "The current device can resume a paused epoch with its valid lease in this class session while new_capture_enabled is false. Resume creates the successor epoch in the same transaction. An expired lease or stale fence still returns 409 STALE_FENCE.",
         "responses": {
           "200": {
             "description": "Success",
@@ -4340,7 +4340,7 @@
             }
           },
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -4416,7 +4416,7 @@
             }
           },
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -4492,7 +4492,7 @@
             }
           },
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -4654,7 +4654,7 @@
             }
           },
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -4740,7 +4740,7 @@
             }
           },
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -4826,7 +4826,7 @@
             }
           },
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -4961,7 +4961,7 @@
             }
           },
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -5345,7 +5345,7 @@
             }
           },
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -5412,7 +5412,7 @@
         "x-idempotency-scope": "authenticated owner + operationId + Idempotency-Key; auth public routes use preauth-session + operationId + key",
         "parameters": [
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -5488,7 +5488,7 @@
             }
           },
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -5565,7 +5565,7 @@
             }
           },
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -5641,7 +5641,7 @@
             }
           },
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -6091,7 +6091,7 @@
             }
           },
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -6167,7 +6167,7 @@
             }
           },
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -6327,7 +6327,7 @@
             }
           },
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -6498,7 +6498,7 @@
             }
           },
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -6975,7 +6975,7 @@
             }
           },
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -7051,7 +7051,7 @@
             }
           },
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -7446,7 +7446,7 @@
         "x-idempotency-scope": "authenticated owner + operationId + Idempotency-Key; auth public routes use preauth-session + operationId + key",
         "parameters": [
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -7589,7 +7589,7 @@
             }
           },
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -7743,7 +7743,7 @@
             }
           },
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -7819,7 +7819,7 @@
             }
           },
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -7886,7 +7886,7 @@
         "x-idempotency-scope": "authenticated owner + operationId + Idempotency-Key; auth public routes use preauth-session + operationId + key",
         "parameters": [
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -8206,7 +8206,7 @@
             }
           },
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -8273,7 +8273,7 @@
         "x-idempotency-scope": "authenticated owner + operationId + Idempotency-Key; auth public routes use preauth-session + operationId + key",
         "parameters": [
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -8340,7 +8340,7 @@
         "x-idempotency-scope": "authenticated owner + operationId + Idempotency-Key; auth public routes use preauth-session + operationId + key",
         "parameters": [
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -8407,7 +8407,7 @@
         "x-idempotency-scope": "authenticated owner + operationId + Idempotency-Key; auth public routes use preauth-session + operationId + key",
         "parameters": [
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -9083,7 +9083,7 @@
         "tags": [
           "admin"
         ],
-        "description": "Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Secret is displayed only in first response, never saved in generic receipts. Lost-response retry returns 409 SECRET_ALREADY_ISSUED; reauthenticate then explicitly rotate/reissue with new operation, invalidating old secret. Use a single-use proof for adminCreateInvitation. The authenticated administrator creating the invitation. Bind the future write key and exact request body, including the reason.",
+        "description": "Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Secret is displayed only in first response, never saved in generic receipts. Lost-response retry returns 409 SECRET_ALREADY_ISSUED; reauthenticate then explicitly rotate/reissue with new operation, invalidating old secret. Use a single-use proof for adminCreateInvitation. The authenticated administrator creating the invitation. Bind the future write key and exact request body, including the reason. After an authorized same-key replay, error.conflict_id identifies the invitation created by that operation. A legacy receipt without an invitation ID returns null.",
         "responses": {
           "201": {
             "description": "Success",
@@ -9239,7 +9239,7 @@
         "tags": [
           "admin"
         ],
-        "description": "Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Secret is displayed only in first response, never saved in generic receipts. Lost-response retry returns 409 SECRET_ALREADY_ISSUED; reauthenticate then explicitly rotate/reissue with new operation, invalidating old secret. Use a single-use proof for adminReissueInvitation. The invitation_id path parameter of the future write. Bind the future write key and exact request body, including the reason.",
+        "description": "Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Secret is displayed only in first response, never saved in generic receipts. Lost-response retry returns 409 SECRET_ALREADY_ISSUED; reauthenticate then explicitly rotate/reissue with new operation, invalidating old secret. Use a single-use proof for adminReissueInvitation. The invitation_id path parameter of the future write. Bind the future write key and exact request body, including the reason. After an authorized same-key replay, error.conflict_id identifies the invitation whose token was reissued.",
         "responses": {
           "200": {
             "description": "Success",
@@ -9554,7 +9554,7 @@
         "tags": [
           "admin"
         ],
-        "description": "Resource ownership, tombstones and active account checked on the server. See 04-CONTRACTS-FLOWS.md for transaction semantics. Use a single-use proof for adminUpdateSwitches. The authenticated administrator updating the platform switches. Bind the future write key and exact request body, including the reason.",
+        "description": "The authenticated administrator updates platform switches using a single-use proof bound to the write key and exact body, including the reason. Changing new_capture_enabled uses the same revision check, audit and idempotent receipt as other switch updates. Capture admission observes the change at commit.",
         "responses": {
           "200": {
             "description": "Success",
@@ -10160,6 +10160,14 @@
         "description": "Existing X-Reauth-Token header, carrying an opaque server-issued proof for the exact purpose, target, candidate parameters and future Idempotency-Key. R3 at most 120 seconds from real verified_at and single-use; R1/R2 use the documented role window. Recheck current session/device/epoch and deadline after all locks. This header cannot grant ordinary admin permissions or authorize an unreviewed operation. Producer generates at least 32 random bytes, canonical unpadded base64url, 43..256 characters; parser decodes/re-encodes and rejects noncanonical or insufficient-byte values. Same token is accepted by control StudentExecutorEvidence via its Secret envelope; shape alone does not prove entropy or authorization."
       },
       "CacheIdempotencyKey": {
+        "name": "Idempotency-Key",
+        "in": "header",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/CanonicalUuidV4"
+        }
+      },
+      "IdempotencyKeyV4": {
         "name": "Idempotency-Key",
         "in": "header",
         "required": true,
@@ -16098,7 +16106,7 @@
           },
           "new_capture_enabled": {
             "type": "boolean",
-            "description": "Stored new-capture configuration. Capture lease admission does not currently enforce this setting."
+            "description": "Allows new capture. When false, only renewal, explicit takeover and resume of a valid lease in the same class session can continue capture."
           },
           "asr_streaming_enabled": {
             "type": "boolean",
@@ -16222,7 +16230,7 @@
           },
           "new_capture_enabled": {
             "type": "boolean",
-            "description": "Changing the stored value returns 503 SERVICE_DISABLED until capture lease admission enforces this setting. Sending its current value follows normal PATCH revision checks."
+            "description": "Set false to block new capture, including cross-class takeover and restart after expiry or stop. Renewal, explicit takeover and resume of a valid lease in the same class session remain available."
           },
           "asr_streaming_enabled": {
             "type": "boolean",

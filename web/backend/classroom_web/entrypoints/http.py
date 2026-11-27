@@ -157,6 +157,8 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
     sync_paths = SYNC_PATHS if sync is not None else set()
     if billing_admin is not None and auth.admin_reauth is not None and auth.admin_reauth is not billing_admin:
         raise ValueError('an existing admin reauth delegate must be coordinated')
+    if billing_admin is not None:
+        billing_admin.require_current_schema()
     workers=ThreadPoolExecutor(max_workers=64,thread_name_prefix='auth-ingress');slots=threading.BoundedSemaphore(64)
     @asynccontextmanager
     async def lifespan(app):
@@ -263,11 +265,14 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
         if path=='/me/quota' and billing is not None:return billing.quota(ctx)
         if path=='/tasks/{task_id}/cancel' and billing is not None:return billing.cancel(ctx,params['task_id'],key)
         if billing_admin is not None:
+            if operation_id in billing_admin.PURPOSES:
+                target_id = params.get('user_id') or params.get('invitation_id')
+                return billing_admin.apply(ctx,operation_id,body,key,target_id=target_id)
             if path=='/admin/users/{user_id}/quota':return billing_admin.user_quota(ctx,params['user_id'])
+            if operation_id == 'adminListUsers':return billing_admin.list_metadata(ctx, 'users', **params)
+            if operation_id == 'adminListInvitations':return billing_admin.list_metadata(ctx, 'invitations', **params)
             if path=='/admin/usage':return billing_admin.read(ctx,'usage',params.get('period_start'))
-            if path=='/admin/switches':
-                return billing_admin.read(ctx,'switches') if method=='get' else billing_admin.apply(ctx,'adminUpdateSwitches',body,key)
-            if path=='/admin/quota-adjustments':return billing_admin.apply(ctx,'adminAdjustQuota',body,key)
+            if path=='/admin/switches':return billing_admin.read(ctx,'switches')
         if path in reads:return reads[path](ctx,params)
         if path=='/auth/login':return auth.login(ctx,body)
         if path=='/auth/login/mfa':return auth.login_mfa(ctx,body,key)
@@ -322,7 +327,13 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
     selected.update(filetrans_paths)
     if portable is not None:selected.add('/imports/preview')
     if billing is not None:selected.update(('/me/quota','/tasks/{task_id}/cancel'))
-    if billing_admin is not None:selected.update(('/admin/switches','/admin/usage','/admin/quota-adjustments','/admin/users/{user_id}/quota'))
+    admin_paths = set()
+    if billing_admin is not None:
+        admin_paths.update(('/admin/switches', '/admin/usage', '/admin/quota-adjustments', '/admin/users/{user_id}/quota'))
+        if contract_version == '0.4.0':
+            admin_paths.update(('/admin/users', '/admin/users/{user_id}', '/admin/invitations', '/admin/invitations/{invitation_id}/revoke',
+                                '/admin/invitations/{invitation_id}/reissue'))
+    selected.update(admin_paths)
     selected.update(deletion_routes)
     if cache is not None:
         selected.add('/me/cache-unlock')
@@ -344,7 +355,12 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
             entered=time.monotonic();deadline=entered+(120 if path == '/imports/preview' and portable_jobs is not None else 5);deadline_token=DEADLINE.set(deadline);dispatched=False
             try:
                 secure(request,write=method!='get');ctx=request_context(request);key=None;body={};params=dict(request.path_params)
-                if (path in review_paths or path in sync_paths or path in asr_paths or path in filetrans_paths) and method == 'get':
+                if path in admin_paths:
+                    for item in operation.get('parameters', []):
+                        if item.get('in') == 'path':
+                            check(item['schema'], params[item['name']])
+                if (path in review_paths or path in sync_paths or path in asr_paths or path in filetrans_paths
+                        or operation['operationId'] in ('adminListUsers', 'adminListInvitations')) and method == 'get':
                     query_schemas = {item['name']: item['schema'] for item in operation.get('parameters', [])
                                      if item.get('in') == 'query'}
                     pairs = list(request.query_params.multi_items())
@@ -460,7 +476,7 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
         if path not in contract['paths']:raise ValueError('route absent from approved contract: '+path)
         for method,operation in contract['paths'][path].items():
             if (method in ('get','post')
-                    or (path=='/admin/switches' and method=='patch' and billing_admin is not None)
+                    or (path in admin_paths and method=='patch')
                     or (path in review_paths and method=='patch')
                     or (path in sync_paths and method=='patch')):
                 app.add_api_route(PREFIX+path,endpoint(path,method,operation),methods=[method.upper()])

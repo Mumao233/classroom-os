@@ -1,7 +1,7 @@
 import { createDraftStore } from '../domain/classroom';
 import type { BoundCapture, ClassroomShell, PendingCommand, PendingStop } from '../features/classroom';
 import type { createMockRuntime } from './runtime';
-import { ensureMockDemoClassroom, setMockDurable } from './start';
+import { ensureMockDemoClassroom, mockCaptureAdmits, setMockDurable } from './start';
 
 type MockRuntime = ReturnType<typeof createMockRuntime>;
 /** The PR-09a runtime numbers its synthetic chunks from 1; the contract's chunk sequence starts at 0. */
@@ -16,6 +16,7 @@ export const mockDeviceId = (account: 'A' | 'B' | 'C') => DEVICE[account];
  * One instance per account epoch: drafts and pending stops never cross an account change.
  */
 export function createMockClassroomShell(runtime: MockRuntime, now: () => number): ClassroomShell {
+  runtime.setCaptureAdmission(mockCaptureAdmits);
   const drafts = createDraftStore();
   const pendingStops = new Map<string, PendingStop>();
   const pendingCommands = new Map<string, PendingCommand>();

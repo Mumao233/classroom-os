@@ -2648,6 +2648,25 @@
       "reason": "A different target kind cannot authorize this purpose."
     },
     {
+      "name": "pr11b_invitation_secret_replay",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/Error",
+      "expected_valid": true,
+      "value": {
+        "error": {
+          "code": "SECRET_ALREADY_ISSUED",
+          "message": "Invitation token already issued.",
+          "request_id": "11111111-1111-4111-8111-111111111111",
+          "retryable": false,
+          "retry_after_seconds": null,
+          "current_revision": null,
+          "conflict_id": "44444444-4444-4444-8444-444444444444",
+          "task_id": null
+        }
+      },
+      "reason": "An authorized replay of invitation creation or reissue identifies the invitation by its non-secret UUID."
+    },
+    {
       "name": "pr11b_adminCreateInvitation",
       "schema_file": "openapi.json",
       "schema_pointer": "#/components/schemas/ReauthOperation",
@@ -3209,6 +3228,37 @@
       "reason": "AI interaction is enabled."
     },
     {
+      "name": "pr11b_close_new_capture",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/AdminSwitchesPatch",
+      "expected_valid": true,
+      "value": {
+        "base_revision": 2,
+        "new_capture_enabled": false,
+        "reason": "Pause new capture during the synthetic maintenance window"
+      },
+      "reason": "An administrator can close capture admission with the observed revision."
+    },
+    {
+      "name": "pr11b_new_capture_while_closed",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/schemas/Error",
+      "expected_valid": true,
+      "value": {
+        "error": {
+          "code": "SERVICE_DISABLED",
+          "message": "Request could not be completed.",
+          "request_id": "11111111-1111-4111-8111-111111111111",
+          "retryable": true,
+          "retry_after_seconds": null,
+          "current_revision": null,
+          "conflict_id": null,
+          "task_id": null
+        }
+      },
+      "reason": "A first acquisition while admission is closed returns the existing HTTP 503 error."
+    },
+    {
       "name": "pr11b_r2_fine_patch",
       "schema_file": "openapi.json",
       "schema_pointer": "#/components/schemas/AdminSwitchesPatch",
@@ -3504,7 +3554,23 @@
       "schema_pointer": "#/components/parameters/IdempotencyKey/schema",
       "expected_valid": true,
       "value": "abcdabcd-abcd-7def-8abc-abcdefabcdef",
-      "reason": "The version restriction applies only to cache writes."
+      "reason": "A canonical UUIDv7 is valid on routes using the general IdempotencyKey header, including POST /auth/reauth."
+    },
+    {
+      "name": "pr11b_v4_write_header_accepts_v4",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/parameters/IdempotencyKeyV4/schema",
+      "expected_valid": true,
+      "value": "abcdabcd-abcd-4def-8abc-abcdefabcdef",
+      "reason": "Capture acquisition and media upload creation accept a canonical RFC UUIDv4 write key."
+    },
+    {
+      "name": "pr11b_v4_write_header_rejects_v7",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/parameters/IdempotencyKeyV4/schema",
+      "expected_valid": false,
+      "value": "abcdabcd-abcd-7def-8abc-abcdefabcdef",
+      "reason": "Routes with the UUIDv4 write header reject a canonical UUIDv7."
     },
     {
       "name": "pr11b_r3_invite_bound",

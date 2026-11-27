@@ -74,7 +74,7 @@ unknown 和 submitted 的 hold 依据最终计量核对。释放入口会锁定�
 | 任务 worker／scheduler／repository | 付费发送前调用预算授权；ASR 新帧调用一次性许可；取消、超时、撤权和迟到 usage 联动费用状态；保留现有模拟 worker 的行为 |
 | 周期调度 | 根据已配置阶段打开新周期，旧期风险与账单持续核对。新周期缺配置时收费准入拒绝 |
 | 通知／事件 | 消费持久阈值记录，接入既有 outbox 和通知投影，已读状态独立于持续预算风险 |
-| OpenAPI 与 fixtures | HTTP 0.4.0 公开总闸、存储的新采集配置与四个用途开关。采集准入接入前，改变新采集配置返回 503。ASR/AI 的组读数取 OR，组 PATCH 同时设两项，详见 [PR-11b 裁决](../coordination/PR11B-CONTRACT-DECISION-20261124.md) |
+| OpenAPI 与 fixtures | HTTP 0.4.0 公开总闸、新采集与四个用途开关。关闭新采集时，仅同课堂有效租约可续租、接管和暂停恢复。ASR/AI 的组读数取 OR，组 PATCH 同时设两项。见 [PR-11b 裁决](../coordination/PR11B-CONTRACT-DECISION-20261124.md)。 |
 | PR-09b | 个人配额页面消费既有 QuotaView，页面实现归 Claude；收费总闸开启且至少一项分项开启时，对应组可用 |
 | 迁移链与依赖锁 | 协调分配 revision/down_revision 和接入顺序；本包复用现有依赖 |
 
@@ -89,6 +89,24 @@ unknown 和 submitted 的 hold 依据最终计量核对。释放入口会锁定�
 候选 DDL 在独立数据库中、现有 head 后事务安装。协调聊天分配正式增量迁移编号后，冻结 SQL 内容并纳入单链。旧任务和操作回执保留，历史缺失费用继续保留未知事实。回退通过停止新收费、保留账本和前滚修复实现。
 
 需要接入前确认的逻辑模型映射包括配额计数投影、实际 SQL 列名和一次性发送许可表。当前实现从分配/回执账本计算用户计数，平台风险保留受限汇总，避免把累计 usage 重复相加。
+
+### HTTP 0.4.0 管理路由的安装检查与重建
+
+显式注入 `BillingAdmin` 时，应用工厂用配置的受限网关读取 `billing_api.adjust_quota(uuid,uuid,uuid,bigint,text)` 和 `billing_api.apply_admin(jsonb)` 两个函数的版本注释。基础账本和 HTTP 事务都须由 `classroom-admin-0.4.0-sql-4` 安装脚本写入。sql-4 为采集提供在事务内持有共享行锁的布尔读取函数，同时开放管理员对新采集开关的 CAS 写入。升级后当前存储值立即生效，包括此前已关闭的库。sql-3 引入的管理用户列表、邀请重放的资源引用和用户锁序继续有效。旧安装、只安装一份 SQL 或数据库不可达都会阻止挂载。给旧函数手工补注释会误报能力。
+
+**先核对已有候选库。** 下例中的 `old_billing_candidate` 和 `new_billing_candidate` 是两个不同的 libpq 测试连接名，执行时替换为环境中已配置的名称。使用能检查所有租户的迁移身份，安排写入暂停窗口。脚本只读检查 `public.quota_periods`，持有表锁至事务结束。若发现上限超过 `9007199254740991`，脚本报错并退出。负责人需在受限副本中核对相应额度行、调整记录和业务依据，显式决定每行的处理并留存记录，然后重新运行检查。
+
+```powershell
+psql -X --set=ON_ERROR_STOP=1 --single-transaction --dbname='service=old_billing_candidate' -f tools/pr11a/check_quota_upgrade.sql
+```
+
+**重建合成库。** 保留旧库和恢复副本，另建独立的空白合成库并按后端既有流程迁至当前 Alembic head。下列命令从仓库根目录执行；两份候选 SQL 同次提交。验收用例 `test_billing_integration.py` 的 `fee_control` 展示了受限网关的授权方式：无角色成员关系的 `LOGIN NOINHERIT` 账号，授予 `billing_api` 的 `USAGE` 及 `issue_admin_proof(jsonb)`、`apply_admin(jsonb)`、`read_admin(jsonb)` 的 `EXECUTE`。新库通过来宾门禁后，才将合成应用的连接配置指向它。
+
+```powershell
+psql -X --set=ON_ERROR_STOP=1 --single-transaction --dbname='service=new_billing_candidate' -f web/backend/classroom_web/infrastructure/billing_schema.sql -f web/backend/classroom_web/infrastructure/billing_integration.sql
+```
+
+带历史账本、回执或未结费用的库继续保留原记录。正式原地升级须将本版函数、权限、索引和额度约束作为前向迁移，在同一维护事务内重新执行全表检查并验证约束。超限额度、无法归属的历史回执和未知费用均需保留供核对。当前候选的重建命令适用于新建合成库。
 
 ## 验收矩阵与证据
 

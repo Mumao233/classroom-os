@@ -94,7 +94,7 @@ class CaptureService:
         with self.transaction(context, classroom) as (repo, principal, policy):
             return self.acquire_in_transaction(repo, principal, policy, classroom, key, body)
 
-    def acquire_in_transaction(self, repo, principal, policy, classroom, key, body):
+    def acquire_in_transaction(self, repo, principal, policy, classroom, key, body, *, resuming=False):
         if identifier(body['device_id']) != principal.device_id:
             raise AuthRejected('FORBIDDEN', 403)
         for kind in ('microphone', 'recovery', 'asr'):
@@ -108,7 +108,15 @@ class CaptureService:
             repo.consents(epoch, policy)
             lease = self.active(repo, principal, epoch, epoch['fence_token'])
             return lease_dto(lease, epoch, policy)
+        new_capture_enabled = repo.lock_new_capture_enabled()
+        # A switch writer may have held the row while this transaction waited.
         now = repo.now()
+        continuing = (current is not None and current['released_at'] is None
+                      and current['class_session_id'] == identifier(classroom) and current['expires_at'] > now)
+        if resuming and not continuing:
+            raise AuthRejected('STALE_FENCE', 409)
+        if not new_capture_enabled and not continuing:
+            raise AuthRejected('SERVICE_DISABLED', 503)
         if current and current['released_at'] is None:
             if not body['confirm_takeover'] or body.get('expected_lease_id') != str(current['id']):
                 raise CaptureLeaseConflict(current['id'])
@@ -116,7 +124,7 @@ class CaptureService:
             raise CaptureLeaseConflict(current['id'] if current else None)
         fence = current['fence_token'] + 1 if current else 1
         lost_event = None
-        if current and current['released_at'] is None:
+        if current and current['released_at'] is None and not resuming:
             repo.execute("""UPDATE capture_epochs SET status='retired',wall_ended_at=:now
                 WHERE owner_id=:owner AND id=:id""", id=current['capture_epoch_id'], now=now)
             retired = dict(id=current['capture_epoch_id'], class_session_id=current['class_session_id'])
@@ -196,10 +204,12 @@ class CaptureService:
                     seq=body['last_local_seq'] if body['last_sample'] else None, sample=body['last_sample'])
                 repo.execute("""UPDATE capture_gaps SET wall_end=:now WHERE owner_id=:owner AND capture_epoch_id=:id
                     AND kind='pause' AND wall_end IS NULL""", id=epoch['id'], now=now)
-                repo.execute('UPDATE capture_leases SET released_at=:now WHERE owner_id=:owner', now=now)
-                acquisition = dict(device_id=str(principal.device_id), confirm_takeover=False, expected_lease_id=str(lease['id']),
+                # Keep the paused lease intact for admission; the epoch and lease
+                # are replaced together, without emitting a takeover gap or event.
+                acquisition = dict(device_id=str(principal.device_id), confirm_takeover=True, expected_lease_id=str(lease['id']),
                     **{kind+'_consent_version':policy[kind+'_consent_version'] for kind in ('microphone','recovery','asr')})
-                result = self.acquire_in_transaction(repo,principal,policy,classroom,str(uuid4()),acquisition)
+                result = self.acquire_in_transaction(repo, principal, policy, classroom, str(uuid4()), acquisition,
+                                                     resuming=True)
                 repo.remember(operation,identifier(key),digest,'class_session',identifier(classroom),
                               {'capture_epoch_id':result['capture_epoch_id']},200)
                 return result

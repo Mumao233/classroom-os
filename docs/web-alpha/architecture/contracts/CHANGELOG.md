@@ -1,5 +1,11 @@
 # Classroom OS契约变更记录
 
+## 0.4.0 补充 · 2026-11-27 · 新采集开关
+
+负责人林珈诚确认方案 A（AUTH-07、REC-01）。`adminUpdateSwitches` 可通过 CAS 改变 `new_capture_enabled`，GET 与回执继续返回原结构。关闸后首次采集、跨课堂接管、租约过期或停止后的重新申请均返回 `503 SERVICE_DISABLED`。同一课堂内的有效租约仍可续租、显式接管或暂停后恢复。开闸后原有租约、凭证、同意和幂等检查继续生效。
+
+本次更新 `AdminSwitches`、`AdminSwitchesPatch` 和 acquire、renew、resume 的描述、样例、生成类型及 Mock。请求、响应、封闭枚举和最低客户端能力均沿用 HTTP 0.4.0。旧客户端能够解析关闸错误，旧管理页面需由前端更新控件才能切换该项。两份 SQL 候选须配套安装到 sql-4，原存储值立即用于准入。[负责人裁决与数据库锁序](../../coordination/PR11B-CONTRACT-DECISION-20261124.md#负责人裁决-2026-11-27方案-a)
+
 ## 0.4.0 · 2026-11-24 · PR-11b 运营后台写入和用量
 
 负责人林珈诚。关联 AUTH-07、AUTH-02、QUOTA-01、COST-01/02。邀请创建、撤销、重签改为必填操作者理由，旧请求在新版本下返回 422。六种敏感写入进入封闭的 `ReauthOperation`，因此本次按 Alpha 破坏性次版本交接。HTTP 路径前缀沿用 `/api/web/v1`。
@@ -13,6 +19,9 @@
 - 缓存解锁及候选恢复凭证的设备目标和正文 `device_id` 共用规范小写 UUIDv4，匹配既有缓存写入校验。设备撤销继续按路径原文绑定。
 - 额外复审收紧了 0.4.0 的三个输入规则。缓存解锁和候选恢复的未来写入键与实际写入头均须为规范小写 UUIDv4。`email_bound` 邀请必填 email，`single_use` 邀请须省略 email。管理修订号与额度增量按 JSON 数字的精确十进制值校验，整值小数和指数写法可与整数重放同一操作。
 - 采集准入接入前，开关视图返回 `new_capture_enabled` 的存储值，PATCH 尝试改变该值时整笔返回 `503 SERVICE_DISABLED`。开关快照按管理员、操作和写入键重放。课前准备页按额度桶展示月度余额，组摘要仅用于提示整组暂停。
+- PR-11b 后端对齐 35 个已实现写操作的 `Idempotency-Key`。采集、媒体、删除、导入导出、转写、任务、复习和同步中使用 `IdempotencyKeyV4` 的操作要求规范小写 UUIDv4。客户端可继续使用 `crypto.randomUUID()`。管理写入和 `POST /auth/reauth` 等使用通用头的操作继续接受规范 UUIDv7。`reconcileTask` 的 Filetrans 核对分支也接受该格式。
+
+- 邀请创建和重签成功后，以有效绑定凭证重放原操作会得到 `409 SECRET_ALREADY_ISSUED`。已有错误字段 `error.conflict_id` 携带该操作对应的邀请 UUID。无法定位的历史创建回执仍返回 null。HTTP 保持 0.4.0。
 
 [三项裁决、兼容窗口和验证](../../coordination/PR11B-CONTRACT-DECISION-20261124.md)
 

@@ -1,4 +1,5 @@
 import type { components } from '../generated/openapi';
+import v4WriteKeys from '../generated/uuid-v4-write-keys.json';
 import { advanceTask, ensureDemoClassroom, finishAsr, handleClassroom, expireManifestCursors, persistFinal, projectTask, recordDurable, releaseAccountLeases, releaseLease, revokeAudio, revokeClassroom, seedClassroom, seedHistoricalManifests, setManifestDev, setRetranscribeDev, activeVersionIds, type ClassroomHelpers, type ClassroomHost, type ClassroomStore, type TaskOutcome } from './classroom-backend';
 import { createAdminBackend, type AdminHealthDev, type AdminReauthBinding } from './admin-backend';
 import { addCandidate, handleReview, seedReview, type ReviewHelpers, type ReviewHost, type ReviewStore } from './review-backend';
@@ -17,6 +18,8 @@ export type MockReply = { status: number; body: unknown };
 type ErrorCode = S['Error']['error']['code'];
 
 const FIXED_NOW = '2026-10-28T08:00:00Z';
+const v4WriteRoutes = new Set(v4WriteKeys.routes);
+const uuidV4 = new RegExp(v4WriteKeys.pattern);
 const ids = {
   fall: '11111111-1111-4111-8111-111111111111', spring: '11111111-1111-4111-8111-111111111112',
   la: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1', ds: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2', mp: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3',
@@ -203,8 +206,9 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
   }, accounts.map(account => stores[account].user));
   for (const account of accounts) stores[account].quota = admin.gate(stores[account].quota);
 
-  const error = (status: number, code: ErrorCode, message: string, currentRevision: number | null = null): MockReply =>
-    ({ status, body: { error: { code, message, request_id: newId(), retryable: false, retry_after_seconds: null, current_revision: currentRevision, conflict_id: null, task_id: null } } });
+  const error = (status: number, code: ErrorCode, message: string, currentRevision: number | null = null,
+    details?: Partial<Pick<S['Error']['error'], 'retryable' | 'conflict_id'>>): MockReply =>
+    ({ status, body: { error: { code, message, request_id: newId(), retryable: false, retry_after_seconds: null, current_revision: currentRevision, conflict_id: null, task_id: null, ...details } } });
   const ok = (body: unknown, status = 200): MockReply => ({ status, body });
   const page = <T>(items: T[]) => ok({ items, next_cursor: null });
   const touch = <T extends { revision: number; updated_at: string }>(value: T): T => ({ ...value, revision: value.revision + 1, updated_at: now() });
@@ -303,6 +307,7 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
       courseExists: id => Boolean(findCourse(store, id)),
       firstCourseId: () => liveCourses(store).find(course => !course.archived)?.id ?? null,
       quota: () => store.quota,
+      newCaptureEnabled: () => admin.switches().new_capture_enabled,
       service: switch_ => admin.serviceEnabled(switch_),
       addQuestion: question => { store.questions = [...store.questions, question]; },
       updateQuestion: (taskId, change) => { store.questions = store.questions.map(item => item.task_id === taskId ? { ...item, ...change, revision: item.revision + 1, updated_at: now() } : item); },
@@ -341,8 +346,20 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
     return { now, newId, error, idempotent: (key, scope, body, run) => idempotent(stores[account], key, scope, body, run) };
   }
 
+  // The demo runtime can bind a server-issued lease after closure. It cannot mint its own epoch.
+  function canBindCapture(account: MockAccountKey, classId: string, epochId: string, fence: number) {
+    if (admin.switches().new_capture_enabled) return true;
+    const lease = classrooms[account].leases.get(classId);
+    return lease?.capture_epoch_id === epochId && lease.fence_token === fence && Date.parse(lease.expires_at) > Date.parse(now());
+  }
+
   function handle(account: MockAccountKey, method: string, path: string, query: URLSearchParams, rawBody: unknown, key: string | null, reauth: string | null = null, generation?: number): MockReply | null {
     const isId = (part: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(part);
+    const parts = path.split('/').filter(Boolean);
+    const route = `${method} /${parts.map(part => (isId(part) ? ':id' : part)).join('/')}`;
+    if (v4WriteRoutes.has(route) && (!key || !uuidV4.test(key))) {
+      return error(422, 'VALIDATION_FAILED', 'Idempotency-Key 必须为规范小写 UUIDv4');
+    }
     if (['POST', 'PATCH', 'PUT', 'DELETE'].includes(method) && (!key || !isId(key))) {
       return error(422, 'VALIDATION_FAILED', 'Idempotency-Key 必须为小写且带连字符的 UUID');
     }
@@ -352,8 +369,6 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
     // A disabled (or deleting) account's sessions are revoked: every request is unauthenticated from then on.
     if (store.user.status !== 'active' || revokedSessions.has(account)) return error(401, 'UNAUTHENTICATED', '会话已失效');
     const body = (typeof rawBody === 'object' && rawBody !== null && !Array.isArray(rawBody) ? rawBody : {}) as Record<string, unknown>;
-    const parts = path.split('/').filter(Boolean);
-    const route = `${method} /${parts.map(part => (isId(part) ? ':id' : part)).join('/')}`;
     const id = parts.find(isId) ?? '';
     if (parts[0] === 'admin') return admin.handle(store.user.id, method, parts, query, rawBody, key, reauth);
     // HTTP 0.4.0: purpose-bound reauthentication for the admin writes (the Mock serves only those purposes).
@@ -599,7 +614,9 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
       if (!admitted && !asrAdmits(account, input.classId, input.streamId)) return;
       persistFinal(classrooms[account], classroomHost(account), classroomHelpers(account), input);
     },
-    ensureDemoClassroom: (account: MockAccountKey, input: Parameters<typeof ensureDemoClassroom>[3]) => ensureDemoClassroom(classrooms[account], classroomHost(account), classroomHelpers(account), input),
+    canBindCapture,
+    ensureDemoClassroom: (account: MockAccountKey, input: Parameters<typeof ensureDemoClassroom>[3]) =>
+      canBindCapture(account, input.classId, input.captureEpochId, input.fenceToken) && ensureDemoClassroom(classrooms[account], classroomHost(account), classroomHelpers(account), input),
     setDurable: (account: MockAccountKey, classId: string, captureEpochId: string, seqs: number[]) => recordDurable(classrooms[account], classroomHost(account), classroomHelpers(account), classId, captureEpochId, seqs),
     releaseLease: (account: MockAccountKey, classId: string) => releaseLease(classrooms[account], classroomHost(account), classroomHelpers(account), classId),
     releaseAccountLeases: (account: MockAccountKey) => releaseAccountLeases(classrooms[account], classroomHost(account), classroomHelpers(account)),

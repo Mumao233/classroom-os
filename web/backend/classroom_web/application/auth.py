@@ -201,6 +201,7 @@ class AuthService:
                 raise AuthRejected('FORBIDDEN', 403)
             if admin_handler is None or purpose not in admin_handler.PURPOSES:
                 raise AuthRejected('SERVICE_DISABLED', 503)
+            admin_handler.validate_operation(s['owner_id'], operation)
         # Unsupported cross-package/control operations remain explicitly closed.
         if purpose in ('trustDevice','deleteAccount') or (purpose.startswith('student_recovery_') and self.control_deployment_id is None):raise AuthRejected('SERVICE_DISABLED',503)
         row=self._need(self._call('locate_auth',dict(lookup='session',token_hash=digest('session',ctx.session)),verifier=True))

@@ -85,7 +85,10 @@ class PgIdentityRepository:
         if not connection.scalar(sa.text("SELECT classroom_web_identity_admin_valid(:uid,:epoch)"),
                                  {"uid": principal.user_id, "epoch": principal.security_epoch}):
             raise AuthorizationDenied()
-        now = self._now(connection)
+        self._require_fresh_admin(principal, window, self._now(connection))
+
+    @staticmethod
+    def _require_fresh_admin(principal, window, now):
         if principal.expires_at <= now or principal.reauthenticated_at is None or not (
                 now - window <= principal.reauthenticated_at <= now):
             raise AuthorizationDenied()
@@ -130,14 +133,17 @@ class PgIdentityRepository:
 
     def set_capacity(self, principal, capacity, window):
         with self._transaction() as connection:
-            control = self._control(connection)
             self._admin(connection, principal, window)
+            control = self._control(connection)
             count = self._admitted(connection, control)
+            # The admin row is still locked, but the capacity wait can outlast reauthentication.
+            now = self._now(connection)
+            self._require_fresh_admin(principal, window, now)
             if count > capacity:
                 raise IdentityRejected("CAPACITY_FULL")
             table = tables["identity_capacity"]
             connection.execute(table.update().where(table.c.id == 1).values(max_active_users=capacity,
-                activated_count=count, revision=table.c.revision+1, updated_at=self._now(connection)))
+                activated_count=count, revision=table.c.revision+1, updated_at=now))
             self._audit(connection, "capacity_changed", actor=principal.user_id)
 
     def _invite(self, connection, *, digest=None, uid=None):

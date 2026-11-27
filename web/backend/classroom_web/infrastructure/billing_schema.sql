@@ -35,7 +35,7 @@ CREATE TABLE public.quota_periods(
   id uuid PRIMARY KEY,owner_id uuid NOT NULL REFERENCES public.users(id),
   resource text NOT NULL CHECK(resource IN ('asr_month_ms','asr_day_ms','retranscribe_month_ms','interactive_month_count','summary_month_count')),
   period_start timestamptz NOT NULL,period_end timestamptz NOT NULL,
-  limit_value bigint NOT NULL CHECK(limit_value>=0),
+  limit_value bigint NOT NULL CONSTRAINT quota_limit_safe_integer CHECK(limit_value BETWEEN 0 AND 9007199254740991),
   created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
   UNIQUE(owner_id,id),UNIQUE(owner_id,resource,period_start),CHECK(period_end>period_start)
 );
@@ -85,8 +85,9 @@ CREATE INDEX billing_usage_reservation ON public.usage_receipts(owner_id,reserva
 CREATE TABLE public.quota_adjustments(
   id uuid PRIMARY KEY,owner_id uuid NOT NULL,quota_period_id uuid NOT NULL,
   delta bigint NOT NULL CHECK(delta>0),reason text NOT NULL CHECK(length(reason) BETWEEN 1 AND 500),
-  admin_actor_id uuid NOT NULL REFERENCES public.users(id),op_id uuid NOT NULL UNIQUE,
+  admin_actor_id uuid NOT NULL REFERENCES public.users(id),op_id uuid NOT NULL,
   created_at timestamptz NOT NULL DEFAULT clock_timestamp(),
+  UNIQUE(admin_actor_id,op_id),
   FOREIGN KEY(owner_id,quota_period_id) REFERENCES public.quota_periods(owner_id,id)
 );
 CREATE TABLE billing_control.platform_budgets(
@@ -113,7 +114,8 @@ CREATE TABLE billing_control.audit(
   detail jsonb NOT NULL,created_at timestamptz NOT NULL DEFAULT clock_timestamp()
 );
 CREATE UNIQUE INDEX billing_switch_audit_op ON billing_control.audit(actor_id,op_id) WHERE action='switches';
-CREATE UNIQUE INDEX billing_other_audit_op ON billing_control.audit(op_id) WHERE action<>'switches';
+CREATE UNIQUE INDEX billing_quota_audit_op ON billing_control.audit(actor_id,op_id) WHERE action='quota_adjustment';
+CREATE UNIQUE INDEX billing_other_audit_op ON billing_control.audit(op_id) WHERE action NOT IN ('switches','quota_adjustment');
 CREATE TABLE billing_control.alerts(
   period_start timestamptz NOT NULL REFERENCES billing_control.platform_budgets(period_start),
   threshold integer NOT NULL CHECK(threshold IN (60,80,100)),
@@ -174,6 +176,11 @@ BEGIN
   SELECT * INTO STRICT s FROM billing_control.switches WHERE singleton FOR SHARE;
   RETURN jsonb_build_object('revision',s.revision,'flags',s.flags);
 END $f$;
+-- Epoch admission reads one bit and holds the switch row's shared lock until commit.
+CREATE FUNCTION billing_api.new_capture_enabled() RETURNS boolean
+LANGUAGE sql SECURITY DEFINER SET search_path=pg_catalog AS $f$
+  SELECT (billing_api.lock_switches()->'flags'->>'new_capture')::boolean
+$f$;
 CREATE FUNCTION billing_api.sync_exposure(p_id uuid,p_admit boolean DEFAULT false) RETURNS void
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,billing_control AS $f$
 DECLARE r public.quota_reservations%ROWTYPE;b jsonb;h bigint:=0;u bigint:=0;s bigint:=0;old_risk bigint:=0;new_risk bigint;
@@ -200,6 +207,8 @@ END $f$;
 REVOKE ALL ON ALL FUNCTIONS IN SCHEMA billing_api FROM PUBLIC;
 ALTER FUNCTION billing_api.lock_budget(timestamptz) OWNER TO classroom_billing_control;
 ALTER FUNCTION billing_api.lock_switches() OWNER TO classroom_billing_control;
+ALTER FUNCTION billing_api.new_capture_enabled() OWNER TO classroom_billing_control;
+GRANT EXECUTE ON FUNCTION billing_api.new_capture_enabled() TO classroom_web_runtime;
 ALTER FUNCTION billing_api.sync_exposure(uuid,boolean) OWNER TO classroom_billing_control;
 GRANT EXECUTE ON FUNCTION billing_api.lock_budget(timestamptz),billing_api.lock_switches(),billing_api.sync_exposure(uuid,boolean)
   TO classroom_web_runtime,classroom_billing_reconciler;
@@ -238,7 +247,7 @@ BEGIN
   -- explicitly opened future cycle until the product approves another policy.
   PERFORM 1 FROM billing_control.switches WHERE singleton FOR UPDATE;
   detail:=jsonb_build_object('period_start',p_start,'stage',p_stage);
-  SELECT * INTO old FROM billing_control.audit WHERE action<>'switches' AND op_id=p_op;
+  SELECT * INTO old FROM billing_control.audit WHERE action NOT IN ('switches','quota_adjustment') AND op_id=p_op;
   IF FOUND THEN
     IF old.actor_id<>p_actor OR old.reason<>p_reason OR old.detail<>detail THEN RAISE EXCEPTION 'IDEMPOTENCY_MISMATCH';END IF;
     RETURN;
@@ -275,22 +284,33 @@ REVOKE ALL ON FUNCTION billing_api.guard_reservation() FROM PUBLIC;
 CREATE TRIGGER reservation_identity BEFORE UPDATE ON public.quota_reservations
   FOR EACH ROW EXECUTE FUNCTION billing_api.guard_reservation();
 
+-- Operator and HTTP share the same operation scope, including requests that
+-- select different owners, quota rows or budget periods with one key.
+CREATE FUNCTION billing_api.lock_adjustment_key(p_actor uuid,p_op uuid) RETURNS boolean
+LANGUAGE plpgsql STRICT SECURITY DEFINER SET search_path=pg_catalog AS $f$
+BEGIN
+  PERFORM pg_advisory_xact_lock(hashtextextended('quota_adjustment:'||p_actor::text||':'||p_op::text,0));
+  RETURN EXISTS(SELECT 1 FROM billing_control.audit WHERE actor_id=p_actor AND action='quota_adjustment' AND op_id=p_op);
+END $f$;
+ALTER FUNCTION billing_api.lock_adjustment_key(uuid,uuid) OWNER TO classroom_billing_control;
+REVOKE ALL ON FUNCTION billing_api.lock_adjustment_key(uuid,uuid) FROM PUBLIC;
+
 CREATE FUNCTION billing_api.adjust_quota(p_actor uuid,p_op uuid,p_quota uuid,p_delta bigint,p_reason text) RETURNS void
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,billing_control AS $f$
 DECLARE q public.quota_periods%ROWTYPE;old billing_control.audit%ROWTYPE;detail jsonb;
 BEGIN
-  IF p_actor IS NULL OR p_delta IS NULL OR p_delta<=0 OR p_reason IS NULL OR length(p_reason) NOT BETWEEN 1 AND 500 THEN
+  IF p_actor IS NULL OR p_op IS NULL OR p_delta IS NULL OR p_delta<=0 OR p_reason IS NULL OR length(p_reason) NOT BETWEEN 1 AND 500 THEN
     RAISE EXCEPTION 'invalid quota adjustment';END IF;
   -- Caller sets only a verified target owner scope. Runtime has no EXECUTE.
   SELECT * INTO STRICT q FROM public.quota_periods WHERE id=p_quota;
-  PERFORM billing_api.lock_budget(date_trunc('month',q.period_start AT TIME ZONE 'Asia/Shanghai') AT TIME ZONE 'Asia/Shanghai');
-  SELECT * INTO STRICT q FROM public.quota_periods WHERE id=p_quota FOR UPDATE;
   detail:=jsonb_build_object('quota_id',p_quota,'delta',p_delta);
-  SELECT * INTO old FROM billing_control.audit WHERE action<>'switches' AND op_id=p_op;
-  IF FOUND THEN
-    IF old.actor_id<>p_actor OR old.reason<>p_reason OR old.detail<>detail THEN RAISE EXCEPTION 'IDEMPOTENCY_MISMATCH';END IF;
+  IF billing_api.lock_adjustment_key(p_actor,p_op) THEN
+    SELECT * INTO STRICT old FROM billing_control.audit WHERE action='quota_adjustment' AND actor_id=p_actor AND op_id=p_op;
+    IF old.reason<>p_reason OR old.detail<>detail THEN RAISE EXCEPTION 'IDEMPOTENCY_MISMATCH';END IF;
     RETURN;
   END IF;
+  PERFORM billing_api.lock_budget(date_trunc('month',q.period_start AT TIME ZONE 'Asia/Shanghai') AT TIME ZONE 'Asia/Shanghai');
+  SELECT * INTO STRICT q FROM public.quota_periods WHERE id=p_quota FOR UPDATE;
   -- The public quota uses JSON safe integers. Check headroom while holding the row lock.
   IF p_delta > 9007199254740991 - q.limit_value THEN
     RAISE EXCEPTION 'QUOTA_LIMIT_OUT_OF_RANGE' USING ERRCODE='22003';
@@ -304,3 +324,4 @@ END $f$;
 ALTER FUNCTION billing_api.adjust_quota(uuid,uuid,uuid,bigint,text) OWNER TO classroom_billing_control;
 REVOKE ALL ON FUNCTION billing_api.adjust_quota(uuid,uuid,uuid,bigint,text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION billing_api.adjust_quota(uuid,uuid,uuid,bigint,text) TO classroom_billing_operator;
+COMMENT ON FUNCTION billing_api.adjust_quota(uuid,uuid,uuid,bigint,text) IS 'classroom-admin-0.4.0-sql-4';

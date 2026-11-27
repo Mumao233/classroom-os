@@ -19,6 +19,7 @@ export type ClassroomHost = {
   courseExists: (id: string) => boolean;
   firstCourseId: () => string | null;
   quota: () => S['QuotaView'];
+  newCaptureEnabled: () => boolean;
   /** PR-11b (0.4.0): whether a service may admit new billable work (billing master and its own switch). */
   service?: (switch_: 'asr_streaming_enabled' | 'asr_filetrans_enabled' | 'ai_interaction_enabled' | 'ai_summary_enabled') => boolean;
   addQuestion: (question: S['Question']) => void;
@@ -31,7 +32,8 @@ export type ClassroomHost = {
 export type ClassroomHelpers = {
   now: () => string;
   newId: () => string;
-  error: (status: number, code: ErrorCode, message: string, currentRevision?: number | null) => ClassroomReply;
+  error: (status: number, code: ErrorCode, message: string, currentRevision?: number | null,
+    details?: Partial<Pick<S['Error']['error'], 'retryable' | 'conflict_id'>>) => ClassroomReply;
   idempotent: (key: string | null, scope: string, body: unknown, run: () => ClassroomReply) => ClassroomReply;
 };
 
@@ -282,6 +284,16 @@ export function handleClassroom(store: ClassroomStore, host: ClassroomHost, h: C
   const findSession = (classId: string) => host.sessions().find(item => item.id === classId && item.deleted_at === null && host.courseExists(item.course_id));
   const touchSession = (session: S['ClassSession'], change: Partial<S['ClassSession']>) => { const next = { ...session, ...change, revision: session.revision + 1, updated_at: h.now() }; host.saveSession(next); return next; };
   const notFound = () => h.error(404, 'NOT_FOUND', '课堂不存在');
+  const leaseTime = route.startsWith('POST /class-sessions/:id/capture/') ? Date.parse(h.now()) : 0;
+  const expired = (lease: S['CaptureLease']) => Date.parse(lease.expires_at) <= leaseTime;
+  const staleFence = () => h.error(409, 'STALE_FENCE', '采集租约已失效');
+  const leaseDeadline = () => iso(leaseTime + 30_000);
+  // A receipt never authorises an expired or replaced lease to restart capture after closure.
+  const leaseChecked = (reply: ClassroomReply) => {
+    if (reply.status >= 300 || host.newCaptureEnabled()) return reply;
+    const lease = store.leases.get(id);
+    return lease && lease.id === (reply.body as S['CaptureLease']).id && !expired(lease) ? ok(lease, reply.status) : staleFence();
+  };
   // A stop receipt names an epoch's manifest: its current readability is rechecked, also on replay.
   const stopChecked = (reply: ClassroomReply) => reply.status === 200 && unreadable(manifestOf(store, id, (reply.body as S['AudioManifest']).capture_epoch_id)) ? h.error(410, 'GONE', '这次采集的原音已过保留期限或已删除') : reply;
   const unreadable = (manifest: S['AudioManifest']) => store.revokedAudio.has(manifest.capture_epoch_id) || (manifest.audio_expires_at !== null && Date.parse(manifest.audio_expires_at) <= Date.parse(h.now()));
@@ -318,50 +330,68 @@ export function handleClassroom(store: ClassroomStore, host: ClassroomHost, h: C
       return ok(session, 201);
     }));
 
-    case 'POST /class-sessions/:id/capture/acquire': return h.idempotent(key, `acquire:${id}`, body, () => {
+    case 'POST /class-sessions/:id/capture/acquire': return leaseChecked(h.idempotent(key, `acquire:${id}`, body, () => {
       const session = findSession(id); if (!session) return notFound();
       if (!only(body, ['device_id', 'microphone_consent_version', 'recovery_consent_version', 'asr_consent_version', 'confirm_takeover', 'expected_lease_id'])
         || !isUuid(body.device_id) || typeof body.confirm_takeover !== 'boolean'
         || !['microphone_consent_version', 'recovery_consent_version', 'asr_consent_version'].every(name => typeof body[name] === 'string' && (body[name] as string).length > 0)) return h.error(400, 'VALIDATION_FAILED', '采集请求无效');
+      const holder = [...store.leases.values()].find(item => !expired(item));
+      if (!host.newCaptureEnabled() && holder?.class_session_id !== id) return h.error(503, 'SERVICE_DISABLED', '新采集已暂停', null, { retryable: true });
       if (session.capture_ended_at !== null) return h.error(409, 'LEASE_CONFLICT', '该课堂的采集已结束');
-      for (const [classId, item] of store.leases) if (Date.parse(item.expires_at) <= Date.parse(h.now())) store.leases.delete(classId);
-      const holder = [...store.leases.values()][0];
+      for (const [classId, item] of store.leases) if (expired(item)) store.leases.delete(classId);
       if (holder) {
-        if (body.confirm_takeover !== true || body.expected_lease_id !== holder.id) return h.error(409, 'LEASE_CONFLICT', '已有课堂正在采集；接管需要明确确认');
+        if (body.confirm_takeover !== true || body.expected_lease_id !== holder.id) return h.error(409, 'LEASE_CONFLICT', '已有课堂正在采集；接管需要明确确认', null, { conflict_id: holder.id });
         store.leases.delete(holder.class_session_id);
       }
       const previous = holder?.class_session_id === id ? holder : undefined;
       const lease: S['CaptureLease'] = { id: h.newId(), class_session_id: id, capture_epoch_id: h.newId(), fence_token: (previous?.fence_token ?? 0) + 1,
-        expires_at: iso(Date.parse(h.now()) + 30_000), renew_after_seconds: 10, timeline_offset_ms: timelineEnd(id, session), sample_rate: 16000, channel_count: 1, encoding: 'pcm_s16le' };
+        expires_at: leaseDeadline(), renew_after_seconds: 10, timeline_offset_ms: timelineEnd(id, session), sample_rate: 16000, channel_count: 1, encoding: 'pcm_s16le' };
       store.leases.set(id, lease);
       store.epochs.set(lease.capture_epoch_id, id);
       store.epochOrder.set(lease.capture_epoch_id, { offset: lease.timeline_offset_ms, fence: lease.fence_token, expires: epochDeadline(), samples: 0 });
       touchSession(session, { started_at: session.started_at ?? h.now(), flows: { ...session.flows, capture: 'recording' } });
       return ok(lease, 201);
-    });
+    }));
 
+    case 'POST /class-sessions/:id/capture/renew':
     case 'POST /class-sessions/:id/capture/pause':
-    case 'POST /class-sessions/:id/capture/resume': return h.idempotent(key, `${route}:${id}`, body, () => {
+    case 'POST /class-sessions/:id/capture/resume': return leaseChecked(h.idempotent(key, `${route}:${id}`, body, () => {
       const session = findSession(id); if (!session) return notFound();
       const lease = store.leases.get(id);
       if (!only(body, CAPTURE_KEYS) || !isUuid(body.capture_epoch_id) || !CAPTURE_KEYS.slice(1).every(name => nonNegative(body[name]))) return h.error(400, 'VALIDATION_FAILED', '采集命令无效');
-      if (!lease || lease.capture_epoch_id !== body.capture_epoch_id || lease.fence_token !== body.fence_token) return h.error(409, 'STALE_FENCE', '采集租约已失效');
+      const renewing = route.endsWith('/renew');
+      if (!lease || lease.capture_epoch_id !== body.capture_epoch_id || lease.fence_token !== body.fence_token
+        || ((renewing || !host.newCaptureEnabled()) && expired(lease))) return staleFence();
+      if (renewing) {
+        const renewed = { ...lease, expires_at: leaseDeadline() };
+        observe(lease.capture_epoch_id, body.last_sample as number);
+        store.leases.set(id, renewed);
+        return ok(renewed);
+      }
       const paused = route.endsWith('/pause');
       if (paused !== (session.flows.capture === 'recording')) return h.error(409, 'LEASE_CONFLICT', paused ? '采集未在进行' : '采集未暂停');
       touchSession(session, { flows: { ...session.flows, capture: paused ? 'paused' : 'recording' } });
       observe(lease.capture_epoch_id, body.last_sample as number);
-      if (paused) return ok(lease);
+      if (paused) {
+        if (!host.newCaptureEnabled()) {
+          const renewed = { ...lease, expires_at: leaseDeadline() };
+          store.leases.set(id, renewed);
+          return ok(renewed);
+        }
+        return ok(lease);
+      }
       // Same as the capture service: resuming retires the paused epoch and issues a new epoch and fence.
       store.captured.set(id, (store.captured.get(id) ?? 0) + (body.last_sample as number));
       const retiredExpected = (body.last_sample as number) > 0 ? body.last_local_seq as number : null;
       store.retired.set(id, [...(store.retired.get(id) ?? []), { epochId: lease.capture_epoch_id, expected: retiredExpected }]);
       sealEpoch(store, id, lease.capture_epoch_id, retiredExpected, store.epochOrder.get(lease.capture_epoch_id)?.expires ?? null, false);
-      const next: S['CaptureLease'] = { ...lease, id: h.newId(), capture_epoch_id: h.newId(), fence_token: lease.fence_token + 1, timeline_offset_ms: Math.floor((store.captured.get(id) ?? 0) / 16) };
+      const next: S['CaptureLease'] = { ...lease, id: h.newId(), capture_epoch_id: h.newId(), fence_token: lease.fence_token + 1, timeline_offset_ms: Math.floor((store.captured.get(id) ?? 0) / 16),
+        expires_at: host.newCaptureEnabled() ? lease.expires_at : leaseDeadline() };
       store.leases.set(id, next);
       store.epochs.set(next.capture_epoch_id, id);
       store.epochOrder.set(next.capture_epoch_id, { offset: next.timeline_offset_ms, fence: next.fence_token, expires: epochDeadline(), samples: 0 });
       return ok(next);
-    });
+    }));
 
     case 'POST /class-sessions/:id/capture/stop': return stopChecked(h.idempotent(key, `stop:${id}`, body, () => {
       const session = findSession(id); if (!session) return notFound();
