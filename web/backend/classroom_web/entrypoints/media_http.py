@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from ..application.media import identifier
 from ..domain.auth import AuthRejected
 from ..infrastructure.auth_deadlines import DEADLINE
+from .asgi_paths import path_under
 
 
 class MediaRequestLifecycle:
@@ -24,7 +25,7 @@ class MediaRequestLifecycle:
         self.budget = budget
 
     async def __call__(self, scope, receive, send):
-        if scope['type'] != 'http' or not scope.get('path', '').startswith('/api/web/v1/media/'):
+        if scope['type'] != 'http' or not path_under(scope, '/api/web/v1/media/'):
             await self.app(scope, receive, send)
             return
 

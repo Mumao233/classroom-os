@@ -101,12 +101,15 @@ def failure(error,request_id):
         headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'})
 
 
-def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admission=None,cache=None,media=None,media_spool_directory=None,billing=None,billing_admin=None,qa=None,review=None,deletion=None,capture=None,sync=None,portable=None,portable_transfers=None,portable_jobs=None,asr=None,asr_worker=None,filetrans=None,filetrans_worker=None):
+def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admission=None,cache=None,media=None,media_spool_directory=None,billing=None,billing_admin=None,qa=None,review=None,deletion=None,capture=None,sync=None,portable=None,portable_transfers=None,portable_jobs=None,asr=None,asr_worker=None,filetrans=None,filetrans_worker=None,operations=None):
     parsed=urlsplit(origin)
     if parsed.scheme!='https' or not parsed.netloc or parsed.path or parsed.query or parsed.fragment or parsed.username:raise ValueError('one exact HTTPS origin is required')
     contract_version = contract.get('info', {}).get('version')
     if contract_version not in ('0.2.0', '0.2.1', '0.3.0', '0.4.0'):
         raise ValueError('approved contract 0.2.0, 0.2.1, 0.3.0 or 0.4.0 required')
+    from .operations_http import OperationsRoutes, SearchQueryRedaction
+    from .asgi_paths import route_path
+    operation_routes = OperationsRoutes(operations, auth, contract, deletion, business, asr, filetrans, review)
     if asr is not None and (asr.capture is not capture or asr.auth is not auth):
         raise ValueError('ASR requires the same capture and auth services')
     if asr_worker is not None and (asr is None or asr_worker.service is not asr or not asr.enabled):
@@ -188,12 +191,14 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
 
     async def body_for(request,schema,*,operation_id=None):
         if request.headers.get('content-type','').split(';')[0].strip().lower()!='application/json' or request.headers.get('content-encoding','identity')!='identity':raise AuthRejected('VALIDATION_FAILED',422)
-        limit=32768 if request.url.path==PREFIX+'/auth/reauth' else 16384
-        if review is not None and (request.url.path == PREFIX+'/review-documents'
-                or re.fullmatch(re.escape(PREFIX)+r'/review-documents/[0-9a-fA-F-]{36}/personal-revisions', request.url.path)):
+        # Route-relative path: under an ASGI root_path, request.url.path carries the mount prefix.
+        route=route_path(request.scope)
+        limit=131072 if route==PREFIX+'/feedback' else 32768 if route==PREFIX+'/auth/reauth' else 16384
+        if review is not None and (route == PREFIX+'/review-documents'
+                or re.fullmatch(re.escape(PREFIX)+r'/review-documents/[0-9a-fA-F-]{36}/personal-revisions', route)):
             limit=2_000_000
-        if sync is not None and (request.url.path == PREFIX+'/sync/operations'
-                or re.fullmatch(re.escape(PREFIX)+r'/sync/conflicts/[0-9a-fA-F-]{36}/resolve', request.url.path)):
+        if sync is not None and (route == PREFIX+'/sync/operations'
+                or re.fullmatch(re.escape(PREFIX)+r'/sync/conflicts/[0-9a-fA-F-]{36}/resolve', route)):
             limit=8_000_000
         capacity_limited = limit == 8_000_000
         length=request.headers.get('content-length')
@@ -225,6 +230,8 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
     } if asr is not None else set()
 
     def dispatch(path,ctx,body,key,params,method,operation_id):
+        if path in operation_routes.paths:
+            return operation_routes.dispatch(operation_id,ctx,body,key,params)
         if path in filetrans_paths:
             try:
                 return filetrans.dispatch(operation_id,ctx,body,key,params)
@@ -344,6 +351,8 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
             entered=time.monotonic();deadline=entered+(120 if path == '/imports/preview' and portable_jobs is not None else 5);deadline_token=DEADLINE.set(deadline);dispatched=False
             try:
                 secure(request,write=method!='get');ctx=request_context(request);key=None;body={};params=dict(request.path_params)
+                if path in operation_routes.paths:
+                    params.update(operation_routes.query(request, operation, method, check))
                 if (path in review_paths or path in sync_paths or path in asr_paths or path in filetrans_paths) and method == 'get':
                     query_schemas = {item['name']: item['schema'] for item in operation.get('parameters', [])
                                      if item.get('in') == 'query'}
@@ -423,8 +432,16 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
                     except (ValueError,TypeError,AttributeError):raise AuthRejected('VALIDATION_FAILED',422) from None
                     if key_validator is not None and not key_validator.is_valid(key):
                         raise AuthRejected('VALIDATION_FAILED', 422)
-                    async with asyncio.timeout(max(0,entered+1-time.monotonic())):
-                        body=await body_for(request,schema,operation_id=operation['operationId'])
+                    if schema is not None or path not in operation_routes.paths:
+                        async with asyncio.timeout(max(0,entered+1-time.monotonic())):
+                            body=await body_for(request,schema,operation_id=operation['operationId'])
+                    else:
+                        async with asyncio.timeout(max(0,entered+1-time.monotonic())):
+                            if request.headers.get('content-length') not in (None, '0'):
+                                raise AuthRejected('VALIDATION_FAILED',422)
+                            async for chunk in request.stream():
+                                if chunk:
+                                    raise AuthRejected('VALIDATION_FAILED',422)
                 dispatched=True
                 # Cancellation detaches the reply, not the actual worker/hash.
                 # Cross-process slots stay held until computation really exits;
@@ -439,7 +456,7 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
                 async with asyncio.timeout(max(0,deadline-time.monotonic())):
                     reply=await asyncio.shield(asyncio.wrap_future(future))
                 value=reply.body
-                if response_schema.get('$ref','').endswith('/Acknowledged'):value=dict(accepted=True,request_id=request_id)
+                if response_schema.get('$ref','').endswith('/Acknowledged') and path != '/feedback':value=dict(accepted=True,request_id=request_id)
                 check(response_schema,value,response=True)
                 response=JSONResponse(value,status_code=int(success),headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'})
                 for kind in COOKIES:
@@ -464,6 +481,7 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
                     or (path in review_paths and method=='patch')
                     or (path in sync_paths and method=='patch')):
                 app.add_api_route(PREFIX+path,endpoint(path,method,operation),methods=[method.upper()])
+    operation_routes.register(app, PREFIX, endpoint)
 
     if deletion is not None:
         # Covers every API route, including media and the event socket.
@@ -488,6 +506,10 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
         from .capture_ws import register_capture_ws
         register_capture_ws(app,capture=capture,auth=auth,admission=websocket_admission,
                             secure=secure,request_context=request_context)
+
+    event_feed = asr.events if asr is not None and asr.enabled else operations
+    poll_events = (partial(asr.events.poll, include_notifications=operations is not None)
+                   if asr is not None and asr.enabled else operations.poll if operations is not None else None)
 
     @app.websocket(PREFIX+'/ws/events')
     async def events(ws:WebSocket):
@@ -516,8 +538,8 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
             event_cursor, partial_cursor = (None, 0)
             connection_sequence = 0
             replay_pending = False
-            if asr is not None and asr.enabled:
-                event_cursor, partial_cursor = await run_in_threadpool(asr.events.watermark, ctx)
+            if event_feed is not None:
+                event_cursor, partial_cursor = await run_in_threadpool(event_feed.watermark, ctx)
             while True:
                 try:
                     message=await asyncio.wait_for(ws.receive_text(),timeout=0.25 if event_cursor is not None else 1)
@@ -533,17 +555,19 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
                 except asyncio.TimeoutError:
                     pass
                 await run_in_threadpool(auth.ws_current,ctx)
+                if operations is not None and not deletion.ready:
+                    raise AuthRejected('SERVICE_DISABLED',503)
                 if event_cursor is not None:
                     from ..domain.tasks import ResyncRequired
                     try:
                         event_cursor,partial_cursor,durable,partial,caught_up=await run_in_threadpool(
-                            asr.events.poll,ctx,event_cursor,partial_cursor)
+                            poll_events,ctx,event_cursor,partial_cursor)
                     except ResyncRequired:
                         connection_sequence+=1
                         await ws.send_json({'protocol_version':1,'type':'resync.required',
                             'sent_at':datetime.now(timezone.utc).isoformat(),'connection_seq':connection_sequence,
                             'data':{'reason':'cursor_expired','snapshot_path':'/api/web/v1/sync/bootstrap'}})
-                        event_cursor,partial_cursor=await run_in_threadpool(asr.events.watermark,ctx)
+                        event_cursor,partial_cursor=await run_in_threadpool(event_feed.watermark,ctx)
                         replay_pending=False
                         continue
                     for message in durable:
@@ -564,4 +588,5 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
             except (RuntimeError,WebSocketDisconnect):pass
         finally:
             if permit:permit.__exit__(None,None,None)
+    app.add_middleware(SearchQueryRedaction, path=PREFIX+'/search')
     return app

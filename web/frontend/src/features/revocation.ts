@@ -43,6 +43,9 @@ export type RevocationHooks = {
   onUnauthenticated?: () => void;
 };
 
+/** `revision_id`: the exact review revision a hit (or an excerpt) came from, when it names one. */
+export type SearchHitRef = { object_type: string; object_id: string; class_session_id: string | null; locator: string; revision_id?: string | null };
+
 export type RevocationLedger = {
   /** Before submitting a scope deletion: list a cascade's children fresh (else resolve the bound classroom's course and semester). */
   prepareScopeDeletion(scope: { kind: ScopeKind; id: string; mode?: DeleteMode }): Promise<PreparedDeletion>;
@@ -57,6 +60,36 @@ export type RevocationLedger = {
   reset(): void;
   /** Subscribe to the query cache (late responses, reverts, refetch denials). Returns the unsubscribe. */
   install(): () => void;
+  /**
+   * PR-11c: a search hit points at content this account has confirmed revoked (its course, classroom,
+   * review document or transcript version). Search views hold hits outside the query cache, so they
+   * filter them through this on every render and re-render on `subscribe`.
+   */
+  isSearchHitRevoked(hit: SearchHitRef): boolean;
+  /**
+   * One membership snapshot for filtering a whole result list (an empty ledger revokes nothing and
+   * reads no cache). Take a new filter whenever `version` changes.
+   */
+  searchHitFilter(): (hit: SearchHitRef) => boolean;
+  /**
+   * Hits a search returned name resources the server served this account: a later denial of one of
+   * them (e.g. its classroom refused when a hit is opened) revokes it, so every hit depending on it
+   * disappears, not only the one that was opened. A review revision a later fresh revision list omits
+   * is hidden the same way, in every view.
+   */
+  recordSearchServed(hits: readonly SearchHitRef[]): void;
+  /** Notified after every revocation sweep and reset. Returns the unsubscribe. */
+  subscribe(listener: () => void): () => void;
+  /** Changes whenever revocations change (for `useSyncExternalStore`). */
+  version(): number;
+  /**
+   * Changes when held search results can no longer be judged hit by hit: a cascade deletion (whose
+   * membership may be unknown), an ambiguous deletion, or a replaced data set. Search views then drop
+   * their results and in-flight replies; only a search started afterwards fills them again.
+   */
+  searchEpoch(): number;
+  /** A request made outside the query cache was refused: a 401 retires the account epoch like any other read. */
+  observeError(error: unknown): void;
 };
 
 /** What the deletion dialog submitted; the receipt is applied with exactly these values. */
@@ -249,6 +282,31 @@ export function createRevocationLedger({ client, accountKey, api, hooks = {} }: 
   let droppedQueries = new WeakSet<Query>();
   let unauthenticated = false;
   /**
+   * Documents whose revision list the server refused (403/404/410) while their metadata may still be
+   * readable: search snippets of their revisions are hidden until a later list read succeeds.
+   */
+  const deniedRevisionDocs = new Set<string>();
+  /**
+   * Review revisions this account epoch saw served per document (in search hits or a fresh revision list),
+   * and those a later fresh, complete revision list no longer offers while the document itself stays
+   * readable: hits and excerpts of exactly those revisions are hidden everywhere, their siblings stay.
+   */
+  const knownRevisions = new Map<string, Set<string>>();
+  const missingRevisions = new Map<string, Set<string>>();
+  const knowRevision = (docId: string, revisionId: string) => { const known = knownRevisions.get(docId) ?? new Set<string>(); known.add(revisionId); knownRevisions.set(docId, known); };
+  /** A fresh complete list of the document's revisions: what it omits of the known ones is missing now. Returns whether that changed. */
+  const offerRevisions = (docId: string, offered: ReadonlySet<string>) => {
+    const before = missingRevisions.get(docId) ?? new Set<string>();
+    const missing = new Set([...(knownRevisions.get(docId) ?? [])].filter(revisionId => !offered.has(revisionId)));
+    for (const revisionId of offered) knowRevision(docId, revisionId);
+    if (missing.size) missingRevisions.set(docId, missing); else missingRevisions.delete(docId);
+    return missing.size !== before.size || [...missing].some(revisionId => !before.has(revisionId));
+  };
+  let searchResets = 0;
+  const listeners = new Set<() => void>();
+  let changes = 0;
+  const changed = () => { changes++; for (const listener of [...listeners]) listener(); };
+  /**
    * Non-zero while the ledger itself writes to the cache (a sweep, or judging one arrival). The cache events
    * those writes cause synchronously are its own intermediate results: learning from them could turn a
    * half-applied sweep (or a tentative scope) into permanent revocations. Every such write was judged already.
@@ -259,7 +317,7 @@ export function createRevocationLedger({ client, accountKey, api, hooks = {} }: 
   const hasSemesterCascade = () => [...semesters.values()].includes('cascade');
   const hasCascade = () => hasSemesterCascade() || [...courses.values()].includes('cascade');
   const follow = (moves: Map<string, string>, id: string) => { let current = id; for (let hops = 0; hops < 32 && moves.has(current); hops++) current = moves.get(current)!; return current; };
-  const isEmpty = () => !semesters.size && !courses.size && !classes.size && !documents.size && !versions.size && !audio.size;
+  const isEmpty = () => !semesters.size && !courses.size && !classes.size && !documents.size && !versions.size && !audio.size && !deniedRevisionDocs.size && !missingRevisions.size;
   const distrusted = (id: string, marks: Set<string>, strict: Strict) => marks.has(id) || (strict?.distrust === true && !strict.verified.has(id));
 
   // `strict` (applying a new revocation): a membership it could affect that cannot be established counts as affected.
@@ -423,6 +481,7 @@ export function createRevocationLedger({ client, accountKey, api, hooks = {} }: 
         apply(query, judge(query, m, strict), tentative);
       }
     });
+    changed();
     if (tentative) return;
     for (const classId of classes) notifyClass(classId);
     // A bound capture whose classroom cannot be placed outside the newly deleted scope stops capturing
@@ -500,6 +559,7 @@ export function createRevocationLedger({ client, accountKey, api, hooks = {} }: 
       }
       // A resource the server served before (in a detail, a list, or content naming it) is now refused:
       // stop showing it, and revoke what it identifies.
+      if (kind === 'review-revisions' && typeof id === 'string' && id && !deniedRevisionDocs.has(id)) { deniedRevisionDocs.add(id); changed(); }
       const servedBefore = state.data !== undefined || (resourceKey !== null && served.has(resourceKey));
       if (state.data !== undefined) quietly(() => query.setState({ data: undefined, dataUpdatedAt: 0 }));
       revokedQueries.set(query, error);
@@ -515,6 +575,13 @@ export function createRevocationLedger({ client, accountKey, api, hooks = {} }: 
     if (success && state.status === 'success') recordServed(query);
     // Checked before anything else (even with an empty ledger, e.g. after an ambiguous deletion restored it):
     // a mutation reply that predates the revocation which dropped this projection needs a fresh read instead.
+    if (success && !manual && kind === 'review-revisions' && typeof id === 'string' && id) {
+      // A fresh server read of the whole list (every page): the document's revisions are readable again,
+      // except the known ones it no longer offers.
+      const offered = new Set((items(state.data) ?? []).flatMap(item => { const revisionId = str(record(item)?.id); return revisionId ? [revisionId] : []; }));
+      const lifted = deniedRevisionDocs.delete(id);
+      if (offerRevisions(id, offered) || lifted) changed();
+    }
     if (success && manual && droppedQueries.has(query)) { quietly(() => reset(query)); return; }
     // A reply to a read in flight when a revocation was applied is judged strictly (once, by that read).
     const strict = success ? strictOnArrival.get(query) ?? null : null;
@@ -552,6 +619,26 @@ export function createRevocationLedger({ client, accountKey, api, hooks = {} }: 
     if (kind === 'transcript-segments') return versions.has(id);
     return false;
   };
+
+  function searchHitFilter(): (hit: SearchHitRef) => boolean {
+    if (isEmpty()) return () => false;
+    const m = readMembership(client);
+    return hit => {
+      const classId = hit.class_session_id ?? undefined;
+      switch (hit.object_type) {
+        case 'course': return courseGone(hit.object_id, m, null) === true;
+        case 'class_session': return classGone(hit.object_id, m, null) === true;
+        case 'transcript_segment': {
+          const versionId = hit.locator.split('/')[2];
+          return (versionId !== undefined && versions.has(versionId)) || (classId !== undefined && classGone(classId, m, null) === true);
+        }
+        case 'review_document': case 'card': return deniedRevisionDocs.has(hit.object_id)
+          || (!!hit.revision_id && missingRevisions.get(hit.object_id)?.has(hit.revision_id) === true)
+          || docGone(hit.object_id, m, null, classId) === true;
+        default: return false;
+      }
+    };
+  }
 
   const retireOnce = () => { if (!unauthenticated) { unauthenticated = true; queueMicrotask(() => hooks.onUnauthenticated?.()); } };
   /** A write refused with 401 means the session is gone just as much as a read refused with 401. */
@@ -682,6 +769,7 @@ export function createRevocationLedger({ client, accountKey, api, hooks = {} }: 
       }
     },
     applyScopeReceipt(scope, prepared) {
+      if (scope.mode === 'cascade') searchResets++;
       const members = listedMembers(scope, prepared);
       recordScope(scope, members);
       if (members) { sweep({ strict: listedStrict(prepared) }); return; }
@@ -690,6 +778,7 @@ export function createRevocationLedger({ client, accountKey, api, hooks = {} }: 
       sweep({ strict: scopeStrict(scope, prepared) });
     },
     applyAmbiguousScopeDeletion(scope, prepared) {
+      searchResets++;
       // Judge as if confirmed, but keep nothing in the ledger: a later read decides what really happened.
       const saved = { courses: new Map(courses), semesters: new Map(semesters), movedCourse: new Map(movedCourse), movedSemester: new Map(movedSemester), classes: new Set(classes) };
       const members = listedMembers(scope, prepared);
@@ -715,7 +804,27 @@ export function createRevocationLedger({ client, accountKey, api, hooks = {} }: 
       semesters.clear(); courses.clear(); classes.clear(); documents.clear(); versions.clear(); audio.clear();
       notified.clear(); movedCourse.clear(); movedSemester.clear(); served.clear(); unverified.clear(); unverifiedCourses.clear();
       strictOnArrival = new WeakMap(); revokedQueries = new WeakMap(); droppedQueries = new WeakSet(); unauthenticated = false;
+      deniedRevisionDocs.clear(); knownRevisions.clear(); missingRevisions.clear();
+      searchResets++;
+      changed();
     },
+    isSearchHitRevoked: hit => searchHitFilter()(hit),
+    searchHitFilter,
+    recordSearchServed(hits) {
+      for (const hit of hits) {
+        if (hit.class_session_id) served.add(`class-session:${hit.class_session_id}`);
+        if (hit.object_type === 'course') served.add(`course:${hit.object_id}`);
+        else if (hit.object_type === 'class_session') served.add(`class-session:${hit.object_id}`);
+        else if (hit.object_type === 'review_document' || hit.object_type === 'card') {
+          served.add(`review-document:${hit.object_id}`);
+          if (hit.revision_id) knowRevision(hit.object_id, hit.revision_id);
+        }
+      }
+    },
+    subscribe(listener) { listeners.add(listener); return () => { listeners.delete(listener); }; },
+    version: () => changes,
+    searchEpoch: () => searchResets,
+    observeError(error) { if (isUnauthenticated(error)) retireOnce(); },
     install() {
       const stopQueries = client.getQueryCache().subscribe(onCacheEvent);
       const stopMutations = client.getMutationCache().subscribe(onMutationEvent);

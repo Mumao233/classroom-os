@@ -127,6 +127,13 @@ export function seedClassroom(sessionIds: { ended: string; uploadFailed: string;
     anchor: { kind: 'source', source_ref: { kind: 'transcript_segment', id: uuid('73000000', 3), revision_id: uuid('73100000', 3), content_sha256: hex(3) } } });
   store.slides.push({ id: uuid('76000000', 1), revision: 1, created_at: created, updated_at: created, class_session_id: sessionIds.ended, asset_id: uuid('77000000', 1), version_id: uuid('76100000', 1), title: '板书：特征多项式（合成）', start_ms: 40_000, end_ms: null, rotation: '0', removed: false });
   store.tasks.push(task({ id: uuid('78000000', 1), classId: sessionIds.unknownAi, kind: 'review_summary', state: 'unknown', created: '2026-10-24T03:00:00Z', mayHaveCharged: true, providerOutcome: 'unknown', snapshotId: uuid('79000000', 1) }));
+  // Its frozen plan, so the snapshot resolves (a completion notice stays visible while its sources do). It froze
+  // no segment or slide of the synthetic classroom; its task link stays unset so retries and results are unchanged.
+  const frozen: S['SourceSnapshot'] = { id: uuid('79000000', 1), class_session_id: sessionIds.unknownAi, snapshot_sha256: hex(4095), source_refs: [], start_ms: 0, end_ms: 0, scope_complete: true, missing_reasons: [], created_at: '2026-10-24T03:00:00Z' };
+  const seededPlan: S['GenerationPlan'] = { id: uuid('79100000', 1), class_session_id: sessionIds.unknownAi, kind: 'review_summary', plan_sha256: hex(8191), source_snapshot: frozen, audio_manifest_sha256: null, audio_chunk_ids: [],
+    destination: MOCK_DESTINATION, prompt_version: 'mock-prompt-1', output_schema_version: 'mock-output-1', price_version: 'mock-price-1', estimated_batches: 1, maximum_cost_microyuan: '120000', quota_units: 1,
+    expires_at: '2026-10-24T03:10:00Z', source_status: 'unchanged', contains_images: false };
+  store.plans.set(seededPlan.id, { plan: seededPlan, request: { kind: 'review_summary', scope: 'all' } as unknown as S['GenerationPlanRequest'], taskId: null });
   return store;
 }
 
@@ -635,6 +642,20 @@ function syncAi(store: ClassroomStore, host: ClassroomHost, h: ClassroomHelpers,
 }
 
 /** Transcript versions generation reads: the adopted one, else every realtime/imported version (never an unadopted retranscription). */
+/**
+ * PR-11c: a task whose frozen plan sources are no longer available. Its completion notice is not
+ * visible (the server's `notification_visible` re-checks the task's snapshot on every read and replay).
+ */
+export function taskSourcesUnavailable(store: ClassroomStore, taskId: string, now: string, session?: S['ClassSession']): boolean {
+  const task = store.tasks.find(item => item.id === taskId);
+  if (!task?.source_snapshot_id) return false;
+  for (const record of store.plans.values()) {
+    if (record.plan.source_snapshot?.id === task.source_snapshot_id) return sourceStatus(store, record.plan, now, session) === 'unavailable';
+  }
+  // A declared snapshot the server cannot resolve verifies nothing: fail closed.
+  return true;
+}
+
 export function activeVersionIds(store: ClassroomStore, session: S['ClassSession']): Set<string | null> {
   const versions = store.versions.filter(item => item.class_session_id === session.id);
   const adopted = session.adopted_transcript_version_id ?? versions.find(item => item.adopted)?.id ?? null;

@@ -39,6 +39,8 @@ if (os.environ.get("PR04B_DELETION_INTEGRATION") != "1"
 # PR-08b's VMware runner supplies the native browser and two owned object services.
 if os.environ.get("PR08B_SYNC_INTEGRATION") != "1":
     collect_ignore.append("test_pr08b_browser.py")
+if os.environ.get("PR11C_OPERATIONS_INTEGRATION") != "1":
+    collect_ignore.append("test_pr11c_operations.py")
 # Manual recovery talks to its control plane over a Windows named pipe authenticated by the
 # kernel (recovery_transport_windows.py), and every case in that module needs it. The feature
 # is Windows-only and stays disabled; on other systems the module is likewise not collected.

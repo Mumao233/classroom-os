@@ -60,7 +60,10 @@ def test_only_required_tables_and_contract_columns_exist(pg):
     from classroom_web.infrastructure.sync_repository import SYNC_TABLES
     asr_tables = {'asr_streams', 'asr_dispatches', 'asr_final_segments'}
     filetrans_tables = {'filetrans_approvals', 'filetrans_runs', 'filetrans_versions', 'filetrans_segments'}
-    assert set(inspector.get_table_names()) == expected | set(task_tables) | set(identity_tables) | auth_tables | media_tables | set(QA_TABLES) | set(REVIEW_TABLES) | deletion_tables | cache_tables | capture_tables | set(SYNC_TABLES) | PORTABLE_TABLES | asr_tables | filetrans_tables | {"alembic_version"}
+    operations_tables = {'notifications', 'feedback_reports'}
+    # PR-11c SQL-managed indexes on legacy tables; test_pr11c_operations checks their real definitions.
+    operations_indexes = {'pr11c_course_name_trgm', 'pr11c_class_title_trgm', 'pr11c_feedback_rate'}
+    assert set(inspector.get_table_names()) == expected | set(task_tables) | set(identity_tables) | auth_tables | media_tables | set(QA_TABLES) | set(REVIEW_TABLES) | deletion_tables | cache_tables | capture_tables | set(SYNC_TABLES) | PORTABLE_TABLES | asr_tables | filetrans_tables | operations_tables | {"alembic_version"}
     assert {column['name'] for column in inspector.get_columns('asr_streams')} == {
         'id','owner_id','class_session_id','capture_epoch_id','task_id','attempt_id','originating_attempt_id',
         'provider_task_id','provider_request_id','version_id','auth_session_id','device_id','security_epoch',
@@ -77,8 +80,8 @@ def test_only_required_tables_and_contract_columns_exist(pg):
     with pg.admin.connect() as connection:
         owner_tables = connection.execute(sa.text('''SELECT relname,relrowsecurity,relforcerowsecurity
             FROM pg_class WHERE relnamespace='public'::regnamespace AND relname=ANY(:names)'''),
-            {'names': list(PORTABLE_TABLES | asr_tables | filetrans_tables)}).all()
-        assert {row.relname for row in owner_tables} == PORTABLE_TABLES | asr_tables | filetrans_tables
+            {'names': list(PORTABLE_TABLES | asr_tables | filetrans_tables | operations_tables)}).all()
+        assert {row.relname for row in owner_tables} == PORTABLE_TABLES | asr_tables | filetrans_tables | operations_tables
         assert all(row.relrowsecurity and row.relforcerowsecurity for row in owner_tables)
     cache_columns = {column['name']: column['nullable'] for column in inspector.get_columns('cache_keys')}
     assert cache_columns == {'id': False, 'created_at': False, 'owner_id': False, 'device_id': False,
@@ -100,7 +103,7 @@ def test_only_required_tables_and_contract_columns_exist(pg):
     with pg.admin.connect() as connection:
         # This original gate still compares every legacy metadata object.
         # SQL-managed objects have independent real-PG columns/constraints/ACL checks.
-        differences = compare_metadata(MigrationContext.configure(connection,opts={'include_object':lambda obj,name,kind,reflected,compare_to:not(kind=='table' and name in auth_tables|media_tables|deletion_tables|cache_tables|capture_tables|SYNC_TABLES|PORTABLE_TABLES|asr_tables|filetrans_tables)}), metadata)
+        differences = compare_metadata(MigrationContext.configure(connection,opts={'include_object':lambda obj,name,kind,reflected,compare_to:not(kind=='index' and name in operations_indexes) and not(kind=='table' and name in auth_tables|media_tables|deletion_tables|cache_tables|capture_tables|SYNC_TABLES|PORTABLE_TABLES|asr_tables|filetrans_tables|operations_tables)}), metadata)
     assert not differences, repr(differences)
 
 

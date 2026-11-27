@@ -58,6 +58,11 @@ class Database:
         with self.engine.connect().execution_options(isolation_level=isolation_level) as connection, connection.begin():
             unsafe = connection.scalar(text("""
                 SELECT r.rolsuper OR r.rolbypassrls OR EXISTS (
+                    SELECT 1 FROM pg_roles reader
+                    WHERE reader.rolname IN ('classroom_web_feedback_admin','classroom_web_feedback_excerpt')
+                      AND (pg_has_role(current_user, reader.oid, 'MEMBER')
+                           OR pg_has_role(session_user, reader.oid, 'MEMBER'))
+                ) OR EXISTS (
                     SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
                     WHERE n.nspname='public' AND c.relname IN (
                       'users','semesters','courses','course_material_versions',
@@ -75,12 +80,13 @@ class Database:
                       'filetrans_approvals','filetrans_runs','filetrans_versions','filetrans_segments',
                       'sync_operations','sync_conflicts','sync_resolutions','sync_preferences','sync_marks',
                       'portable_transfers','portable_transfer_media','portable_export_sources','portable_slots',
-                      'portable_imported_classrooms','portable_import_assets','portable_task_bindings','portable_export_dependencies')
+                      'portable_imported_classrooms','portable_import_assets','portable_task_bindings','portable_export_dependencies',
+                      'notifications','feedback_reports')
                     AND pg_has_role(current_user, c.relowner, 'USAGE')
                 ) FROM pg_roles r WHERE r.rolname=current_user
             """))
             if unsafe is not False:
-                raise PermissionError("runtime must not be superuser, BYPASSRLS or table owner")
+                raise PermissionError("runtime must not be superuser, BYPASSRLS, table owner or a feedback reader")
             connection.execute(text("SET LOCAL search_path = public, pg_temp"))
             connection.execute(text("SET LOCAL timezone = 'UTC'"))
             from .auth_deadlines import remaining

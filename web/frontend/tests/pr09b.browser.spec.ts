@@ -96,6 +96,11 @@ test.describe('PR-09b Dashboard', () => {
     await page.getByRole('button', { name: '切换模拟账号 B' }).click();
     const todos = page.getByTestId('todo-list');
     await expect(todos.locator('li[data-kind="failed"]').first()).toBeVisible();
+    // Unresolved questions are read per classroom after the core lists: count only once both seeded ones
+    // (classrooms 1 and 7) are in.
+    await page.getByRole('button', { name: /^显示全部 \d+ 项$/ }).click();
+    await expect(todos.locator('li[data-kind="not_understood"]')).toHaveCount(2);
+    await page.getByRole('button', { name: '收起' }).click();
     const toggle = page.getByRole('button', { name: /^显示全部 \d+ 项$/ });
     await expect(toggle).toHaveAttribute('aria-expanded', 'false');
     const total = Number((await toggle.innerText()).match(/\d+/)![0]);
@@ -226,6 +231,8 @@ test.describe('PR-09b Courses', () => {
     await page.getByLabel('结束日期').fill('2020-01-15');
     await page.getByRole('button', { name: '保存' }).click();
     await expect(page).toHaveURL(/\/courses\?semester=/);
+    // The address changes before the router's transition commits: wait for the semester form to leave.
+    await expect(page.getByRole('form', { name: '学期信息' })).toHaveCount(0);
     await expect(page.getByLabel('学期')).toContainText('2019 秋季（历史）');
   });
 

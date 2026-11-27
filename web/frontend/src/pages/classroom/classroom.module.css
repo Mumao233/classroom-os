@@ -58,6 +58,8 @@
 .entry { display: grid; grid-template-columns: auto 1fr; gap: .55rem; padding: .35rem .5rem; border-radius: var(--radius-small); border: 1px solid transparent; overflow-wrap: anywhere; }
 .entryTime { font-variant-numeric: tabular-nums; color: var(--color-text-secondary); font-size: .82em; padding-top: .15em; white-space: nowrap; }
 .entryPartial { border-style: dashed; border-color: var(--color-control-border); font-style: italic; color: var(--color-text-secondary); }
+/* PR-11c: the formal segment a search hit opened. */
+.entryFocused { border-color: var(--color-primary); }
 .entryLabel { display: inline-block; margin-right: .35rem; padding: 0 .35rem; border-radius: 6px; border: 1px solid currentColor; font-size: .72em; font-style: normal; font-weight: 700; }
 .jumpLatest { position: sticky; bottom: .4rem; margin: .4rem auto 0; display: flex; }
 .focusTranscript .timeline { max-height: min(72vh, 900px); }

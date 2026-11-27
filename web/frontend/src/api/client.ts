@@ -198,6 +198,17 @@ export function createApiClient(scope: Scope, transportOrOptions: typeof fetch |
     questions: (classSessionId: string, signal?: AbortSignal) => get<S['QuestionPage']>('/questions', { class_session_id: classSessionId, limit: 100 }, signal),
     notifications: (signal?: AbortSignal) => get<S['NotificationPage']>('/notifications', { limit: 50 }, signal),
 
+    // PR-11c search, notification centre and feedback. Keyword search only: never a model call.
+    search: (query: { q: string; cursor?: string; limit?: number; course_id?: string; class_session_id?: string }, signal?: AbortSignal) =>
+      get<S['SearchResultPage']>('/search', query, signal),
+    notificationPage: (cursor: string | null, signal?: AbortSignal) => get<S['NotificationPage']>('/notifications', { limit: 30, cursor }, signal),
+    /** Marks read only; resolution comes from the underlying state, never from this call. */
+    readNotification: (id: string, key: string, signal?: AbortSignal) =>
+      request<S['Notification']>('POST', withQuery(`/notifications/${segment(id)}/read`), { read: true } satisfies S['NotificationRead'], signal, key),
+    /** An excerpt is sent only with explicit confirmation; the server rejects it otherwise. */
+    submitFeedback: (body: S['Feedback'], key: string, signal?: AbortSignal) =>
+      request<S['Acknowledged']>('POST', withQuery('/feedback'), body, signal, key),
+
     // PR-10a classroom, capture and processing. Owner always comes from the server session.
     classSession: (id: string, signal?: AbortSignal) => get<S['ClassSession']>(`/class-sessions/${segment(id)}`, undefined, signal),
     createClassSession: (body: S['ClassSessionCreate'], key?: string) => post<S['ClassSession']>('/class-sessions', body, key),

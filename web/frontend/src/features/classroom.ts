@@ -101,13 +101,14 @@ export const useClassQuestions = (id: string) => useAccountQuery(['questions', i
  * Durable machine segments of the classroom's displayed transcript: the adopted version, or the
  * realtime version(s) while nothing is adopted. Unadopted retranscriptions stay out of the timeline.
  */
-export const useTranscript = (id: string) => useAccountQuery(['transcript', id], async (api, signal) => {
+export async function readTranscript(api: ApiClient, id: string, signal: AbortSignal) {
   const versions = await api.transcriptVersions(id, signal);
   const adopted = versions.items.filter(version => version.adopted);
   const shown = adopted.length ? adopted : versions.items.filter(version => version.kind === 'realtime');
   const pages = await Promise.all(shown.map(version => api.transcriptSegments(version.id, signal)));
   return { versions: shown, segments: pages.flatMap(page => page.items) };
-});
+}
+export const useTranscript = (id: string) => useAccountQuery(['transcript', id], (api, signal) => readTranscript(api, id, signal));
 
 // --------------------------------------------------------------------------- capture commands
 

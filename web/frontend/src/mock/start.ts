@@ -32,7 +32,12 @@ export function bumpMockRecord(kind: 'semester' | 'course' | 'class_session' | '
   if (mockAccount) backend.bumpElsewhere(mockAccount, kind, id, change);
 }
 /** PR-10a development panel: a worker reports a later task state (no model is called). */
-export function advanceMockTask(taskId: string, outcome: 'running' | 'succeeded' | 'failed' | 'unknown') { return mockAccount ? backend.advanceTask(mockAccount, taskId, outcome) : null; }
+export function advanceMockTask(taskId: string, outcome: 'running' | 'succeeded' | 'failed' | 'unknown') {
+  if (!mockAccount) return null;
+  const task = backend.advanceTask(mockAccount, taskId, outcome);
+  announceCreatedNotifications();
+  return task;
+}
 /** PR-10a development panel: the stopped class finishes (or fails) its transcription backlog. */
 export function finishMockAsr(classId: string, state: 'succeeded' | 'failed' | 'unknown') { return mockAccount ? backend.finishAsr(mockAccount, classId, state) : false; }
 /** Final transcript events observed by the page runtime are also stored by the Mock server. */
@@ -43,6 +48,12 @@ export function ensureMockDemoClassroom(input: Parameters<typeof backend.ensureD
 export function setMockDurable(classId: string, captureEpochId: string, seqs: number[]) { if (mockAccount) backend.setDurable(mockAccount, classId, captureEpochId, seqs); }
 
 export function releaseMockLease(classId: string) { return mockAccount ? backend.releaseLease(mockAccount, classId) : false; }
+/** PR-11c: the server's capture-failure notice for a lost lease (one per capture epoch), announced at once. */
+export function noticeMockLeaseLost(classId: string, captureEpochId: string | null) {
+  if (!mockAccount) return;
+  backend.recordLeaseLost(mockAccount, classId, captureEpochId);
+  announceCreatedNotifications();
+}
 
 /** Account teardown: the outgoing account's leases are retired explicitly (the transport may already point elsewhere). */
 export function releaseMockAccountLeases(account: MockAccountKey) { return backend.releaseAccountLeases(account); }
@@ -61,11 +72,28 @@ export function setMockRetranscribe(value: { classId?: string; audio?: 'ok' | 'e
 /** Browser-test hook: a document's revision reads are refused from now on (its metadata stays readable). */
 export function denyMockReviewRevisions(documentId: string) { if (mockAccount) backend.denyReviewRevisions(mockAccount, documentId); }
 
+type CreatedNotification = ReturnType<typeof backend.drainCreatedNotifications>[number];
+const createdListeners = new Set<(item: CreatedNotification) => void>();
+/**
+ * PR-11c: the simulated server announces each notification as it creates it, whatever page is open;
+ * the shell forwards it as notification.created on the signed-in account's event stream.
+ */
+export function subscribeMockCreatedNotifications(listener: (item: CreatedNotification) => void) {
+  createdListeners.add(listener);
+  return () => { createdListeners.delete(listener); };
+}
+function announceCreatedNotifications() {
+  if (!mockAccount) return;
+  for (const item of backend.drainCreatedNotifications(mockAccount)) for (const listener of [...createdListeners]) listener(item);
+}
+
 /** PR-11b development panel: runtime health readings and whether the administrator has MFA. */
 export function setMockAdminHealth(value: AdminHealthDev) { backend.setAdminHealth(value); }
 export function setMockAdminMfa(enabled: boolean) { backend.setAdminMfa(enabled); }
 
-(globalThis as { __classroomMock?: unknown }).__classroomMock = { bump: bumpMockRecord, advanceTask: advanceMockTask, finishAsr: finishMockAsr, manifestDev: setMockManifestDev, retranscribe: setMockRetranscribe, denyRevisions: denyMockReviewRevisions, adminHealth: setMockAdminHealth, adminMfa: setMockAdminMfa };
+(globalThis as { __classroomMock?: unknown }).__classroomMock = { bump: bumpMockRecord, advanceTask: advanceMockTask, finishAsr: finishMockAsr, manifestDev: setMockManifestDev, retranscribe: setMockRetranscribe, denyRevisions: denyMockReviewRevisions, adminHealth: setMockAdminHealth, adminMfa: setMockAdminMfa,
+  // PR-11c browser tests: a classroom deleted elsewhere after it was found by search.
+  revokeClassroom: revokeMockClassroom };
 function viteAsset(request: Request) {
   const url = new URL(request.url);
   return url.origin === location.origin && request.method === 'GET' &&
@@ -93,8 +121,10 @@ const worker = setupWorker(
     // Browser-test-only: hold reads under a path prefix, so a page can be observed while its re-read is pending.
     const slowGet = localStorage.getItem('mock-test-delay-get');
     if (slowGet && request.method === 'GET' && path.startsWith(slowGet)) await delay(1500);
-    // Admin writes and reauthentication require the session-bound CSRF token; a stale session's token is refused.
-    if (request.method !== 'GET' && (path.startsWith('/admin/') || path === '/auth/reauth') && request.headers.get('X-CSRF-Token') !== mockCsrf) {
+    // Admin writes, reauthentication and the PR-11c writes (mark-read, feedback) require the session-bound
+    // CSRF token; a stale session's token is refused.
+    const csrfBound = path.startsWith('/admin/') || path === '/auth/reauth' || path === '/feedback' || /^\/notifications\/[^/]+\/read$/.test(path);
+    if (request.method !== 'GET' && csrfBound && request.headers.get('X-CSRF-Token') !== mockCsrf) {
       return HttpResponse.json({ error: { code: 'FORBIDDEN', message: '请求校验失败，请刷新页面后重试', request_id: crypto.randomUUID(), retryable: false, retry_after_seconds: null, current_revision: null, conflict_id: null, task_id: null } }, { status: 403, headers });
     }
     // Same rule as the media service: raw upload bytes must be sent as application/octet-stream.

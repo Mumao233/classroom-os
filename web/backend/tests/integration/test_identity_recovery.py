@@ -751,7 +751,12 @@ def test_local_result_transition_failure_rolls_back_every_write_before_one_succe
     assert final["state"] == "succeeded" and final["may_have_charged"] is True
     assert final["revision"] == before["tasks"][0]["revision"] + 1
     assert final["lease_token"] == before["tasks"][0]["lease_token"] + 1
-    assert len(persisted(pg, "outbox_events", owner_id=owners.a.owner_id)) == len(before["outbox_events"]) + 1
+    events = persisted(pg, "outbox_events", owner_id=owners.a.owner_id)
+    notices = [event for event in events if event["event_type"] == "notification.created"]
+    previous_notices = [event for event in before["outbox_events"] if event["event_type"] == "notification.created"]
+    # PR-11c adds one task_completed notification event beside the original single task event.
+    assert len(events) - len(notices) == len(before["outbox_events"]) - len(previous_notices) + 1
+    assert len(notices) == len(previous_notices) + 1
     assert persisted(pg, "operation_receipts", owner_id=owners.a.owner_id) == before["operation_receipts"]
     assert state.provider.calls == 1 and state.provider.evidence == state.evidence
 
