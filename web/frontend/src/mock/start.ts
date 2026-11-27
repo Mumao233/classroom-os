@@ -1,14 +1,27 @@
 import { delay, http, HttpResponse, passthrough } from 'msw';
 import { setupWorker } from 'msw/browser';
 import { meta, unauthenticated } from './fixtures';
-import { createMockBackend, type MockDataset } from './backend';
+import { createMockBackend, type MockAccountKey, type MockDataset } from './backend';
+import { rawIntegersOk, type AdminHealthDev } from './admin-backend';
 
 const headers = { 'Cache-Control': 'no-store' };
 // Development-only in-memory session identity; never a new HTTP field or real credential.
-let mockAccount: 'A' | 'B' | null = 'A';
+let mockAccount: MockAccountKey | null = 'A';
 let mockOffline = false;
 const backend = createMockBackend();
-export function setMockAccount(account: 'A' | 'B' | null) { mockAccount = account; }
+export function setMockAccount(account: MockAccountKey | null) {
+  // Every call is a session change (sign-in, switch, sign-out): the outgoing session ends here, also on a
+  // repeated sign-in of the same account, so proofs it obtained cannot authorise a write that arrives later.
+  if (mockAccount) backend.retireSession(mockAccount);
+  if (account) backend.beginSession(account);
+  mockAccount = account;
+  mockCsrf = account ? `mock-csrf-${crypto.randomUUID()}` : null;
+}
+/** Synthetic CSRF token bound to the current Mock session (rotated on every session change). */
+let mockCsrf: string | null = `mock-csrf-${crypto.randomUUID()}`;
+export function mockCsrfToken() { return mockCsrf; }
+/** PR-11b: whether the platform ASR switch admits a live stream (new streams are refused while it is off). */
+export function mockAsrAdmits(classId: string, streamId: string, run = '') { return mockAccount ? backend.asrAdmits(mockAccount, classId, streamId, run) : false; }
 /** Simulated loss of connectivity: every business request fails like a network error. */
 export function setMockOffline(offline: boolean) { mockOffline = offline; }
 export function isMockOffline() { return mockOffline; }
@@ -32,7 +45,7 @@ export function setMockDurable(classId: string, captureEpochId: string, seqs: nu
 export function releaseMockLease(classId: string) { return mockAccount ? backend.releaseLease(mockAccount, classId) : false; }
 
 /** Account teardown: the outgoing account's leases are retired explicitly (the transport may already point elsewhere). */
-export function releaseMockAccountLeases(account: 'A' | 'B') { return backend.releaseAccountLeases(account); }
+export function releaseMockAccountLeases(account: MockAccountKey) { return backend.releaseAccountLeases(account); }
 
 export function projectMockTask(input: Parameters<typeof backend.projectTask>[1]) { return mockAccount ? backend.projectTask(mockAccount, input) : false; }
 
@@ -48,7 +61,11 @@ export function setMockRetranscribe(value: { classId?: string; audio?: 'ok' | 'e
 /** Browser-test hook: a document's revision reads are refused from now on (its metadata stays readable). */
 export function denyMockReviewRevisions(documentId: string) { if (mockAccount) backend.denyReviewRevisions(mockAccount, documentId); }
 
-(globalThis as { __classroomMock?: unknown }).__classroomMock = { bump: bumpMockRecord, advanceTask: advanceMockTask, finishAsr: finishMockAsr, manifestDev: setMockManifestDev, retranscribe: setMockRetranscribe, denyRevisions: denyMockReviewRevisions };
+/** PR-11b development panel: runtime health readings and whether the administrator has MFA. */
+export function setMockAdminHealth(value: AdminHealthDev) { backend.setAdminHealth(value); }
+export function setMockAdminMfa(enabled: boolean) { backend.setAdminMfa(enabled); }
+
+(globalThis as { __classroomMock?: unknown }).__classroomMock = { bump: bumpMockRecord, advanceTask: advanceMockTask, finishAsr: finishMockAsr, manifestDev: setMockManifestDev, retranscribe: setMockRetranscribe, denyRevisions: denyMockReviewRevisions, adminHealth: setMockAdminHealth, adminMfa: setMockAdminMfa };
 function viteAsset(request: Request) {
   const url = new URL(request.url);
   return url.origin === location.origin && request.method === 'GET' &&
@@ -61,6 +78,8 @@ const worker = setupWorker(
     if (mockOffline) return HttpResponse.error();
     const requestAccount = mockAccount;
     if (!requestAccount) return HttpResponse.json(unauthenticated, { status: 401, headers });
+    // The session that dispatched this request; a later session (even of the same account) never adopts it.
+    const requestGeneration = backend.sessionGeneration(requestAccount);
     const url = new URL(request.url);
     const path = url.pathname.slice('/api/web/v1'.length);
     // Browser-test-only timing control; it never changes the HTTP contract.
@@ -74,6 +93,10 @@ const worker = setupWorker(
     // Browser-test-only: hold reads under a path prefix, so a page can be observed while its re-read is pending.
     const slowGet = localStorage.getItem('mock-test-delay-get');
     if (slowGet && request.method === 'GET' && path.startsWith(slowGet)) await delay(1500);
+    // Admin writes and reauthentication require the session-bound CSRF token; a stale session's token is refused.
+    if (request.method !== 'GET' && (path.startsWith('/admin/') || path === '/auth/reauth') && request.headers.get('X-CSRF-Token') !== mockCsrf) {
+      return HttpResponse.json({ error: { code: 'FORBIDDEN', message: '请求校验失败，请刷新页面后重试', request_id: crypto.randomUUID(), retryable: false, retry_after_seconds: null, current_revision: null, conflict_id: null, task_id: null } }, { status: 403, headers });
+    }
     // Same rule as the media service: raw upload bytes must be sent as application/octet-stream.
     if (request.method === 'PUT' && request.headers.get('Content-Type') !== 'application/octet-stream') {
       return HttpResponse.json({ error: { code: 'VALIDATION_FAILED', message: '上传内容类型必须为 application/octet-stream', request_id: crypto.randomUUID(), retryable: false, retry_after_seconds: null, current_revision: null, conflict_id: null, task_id: null } }, { status: 422, headers });
@@ -85,10 +108,15 @@ const worker = setupWorker(
       const toHex = (data: Uint8Array) => [...data].map(value => value.toString(16).padStart(2, '0')).join('');
       body = { byte_length: bytes.byteLength, sha256: toHex(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))), signature: toHex(bytes.slice(0, 16)) };
     } else if (request.method !== 'GET') {
-      try { body = await request.json(); } catch { body = undefined; }
+      const text = await request.text();
+      try { body = JSON.parse(text); } catch { body = undefined; }
+      // Admin integers are checked on the raw text, before JSON.parse rounds them.
+      if ((path.startsWith('/admin/') || path === '/auth/reauth') && !rawIntegersOk(text)) {
+        return HttpResponse.json({ error: { code: 'VALIDATION_FAILED', message: '整数字段必须是精确整数', request_id: crypto.randomUUID(), retryable: false, retry_after_seconds: null, current_revision: null, conflict_id: null, task_id: null } }, { status: 422, headers });
+      }
     }
     // Computed for the account that sent the request; a switch meanwhile is rejected by the client epoch.
-    const reply = backend.handle(requestAccount, request.method, path, url.searchParams, body, request.headers.get('Idempotency-Key'));
+    const reply = backend.handle(requestAccount, request.method, path, url.searchParams, body, request.headers.get('Idempotency-Key'), request.headers.get('X-Reauth-Token'), requestGeneration);
     if (!reply) return HttpResponse.error();
     // Browser-test-only: the server processed the request but its reply is lost once (path suffix match).
     const drop = localStorage.getItem('mock-test-drop-reply');
@@ -107,6 +135,8 @@ const worker = setupWorker(
 /** Must be awaited before app render. Unmatched requests fail, never bypass. */
 export async function startMock(): Promise<void> {
   await worker.start({
+    // No request/response logging: admin traffic carries reauthentication proofs and one-time tokens.
+    quiet: true,
     serviceWorker: { url: '/mockServiceWorker.js' },
     onUnhandledRequest(request, print) {
       // Only the Vite development server's own public assets may pass through.

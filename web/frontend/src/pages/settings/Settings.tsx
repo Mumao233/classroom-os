@@ -26,7 +26,7 @@ export function Settings({ theme, setTheme, effects, setEffects }: { theme: Them
   return <main id="main-content" className={shell.page} tabIndex={-1} data-testid="settings">
     <PageHeading title={current.label} detail="设置" focusKey={section} />
     <div className={styles.settingsLayout}>
-      <nav className={styles.settingsNav} aria-label="设置分区">{sections.map(item => <NavLink key={item.key} to={`/settings/${item.key}`}>{item.label}</NavLink>)}</nav>
+      <nav className={styles.settingsNav} aria-label="设置分区">{sections.map(item => <NavLink key={item.key} to={`/settings/${item.key}`}>{item.label}</NavLink>)}<AdminEntry /></nav>
       <div className={styles.stack}>
         <OfflineBanner scope="设置只读。" /><DataSourceNote />
         {section === 'profile' && <Profile />}
@@ -43,6 +43,12 @@ export function Settings({ theme, setTheme, effects, setEffects }: { theme: Them
       </div>
     </div>
   </main>;
+}
+
+/** PR-11b: administrators also reach the operations console from here (the phone nav has four fixed places). */
+function AdminEntry() {
+  const me = useMe();
+  return me.data?.role === 'admin' && !me.isError ? <NavLink to="/admin/users">运营后台</NavLink> : null;
 }
 
 function NotYet({ title, pr, text }: { title: string; pr: string; text: string }) {

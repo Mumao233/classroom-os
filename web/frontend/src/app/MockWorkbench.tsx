@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { NavLink, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router';
 import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from '@tanstack/react-query';
-import { IconBell, IconBook2, IconBooks, IconCards, IconChalkboard, IconChevronRight, IconCircleDot, IconHeadphones, IconLayoutDashboard, IconPlayerStop, IconSearch, IconSettings, IconWaveSine } from '@tabler/icons-react';
+import { IconBell, IconBook2, IconBooks, IconCards, IconChalkboard, IconChevronRight, IconCircleDot, IconHeadphones, IconLayoutDashboard, IconPlayerStop, IconSearch, IconSettings, IconShieldCheck, IconWaveSine } from '@tabler/icons-react';
 import { Dashboard } from '../pages/Dashboard';
 import { Placeholder } from '../pages/Placeholder';
 import { CourseList } from '../pages/courses/CourseList';
@@ -29,15 +29,23 @@ import type { ClassroomOSWebV1EventEnvelope } from '../generated/events';
 import { isMockOffline, setMockAccount, setMockDataset, setMockOffline } from '../mock/start';
 import { eventScripts, type EventScriptName } from '../mock/event-scripts';
 import { createApiClient } from '../api/client';
+import { createHttpAdminReauth } from '../features/admin';
+import { mockAsrAdmits, mockCsrfToken, setMockAdminHealth, setMockAdminMfa } from '../mock/start';
+import { AdminUsers } from '../pages/admin/AdminUsers';
+import { AdminInvites } from '../pages/admin/AdminInvites';
+import { AdminUsage } from '../pages/admin/AdminUsage';
+import { AdminRuntime } from '../pages/admin/AdminRuntime';
 import styles from './Shell.module.css';
 
-const nav = [
+const baseNav = [
   { to: '/dashboard', text: '首页', Icon: IconLayoutDashboard, DesktopIcon: IconLayoutDashboard },
   { to: '/courses', text: '课程', Icon: IconBook2, DesktopIcon: IconBooks },
   { to: '/classrooms', text: '课堂', Icon: IconHeadphones, DesktopIcon: IconChalkboard },
   { to: '/review', text: '复习', Icon: IconCards, DesktopIcon: IconCards },
   { to: '/settings/appearance', text: '设置', Icon: IconSettings, DesktopIcon: IconSettings },
 ];
+/** Shown only when the server says the signed-in user is an administrator (AUTH-07, FE-13). */
+const adminNav = { to: '/admin/users', text: '运营', Icon: IconShieldCheck, DesktopIcon: IconShieldCheck };
 const scenarioNames = ['首次使用 · 空课程', '合成的最近记录', '模拟课堂跨页面', '模拟上传失败', '离线与暂存状态', 'AI 结果未知', '候选与个人稿', '版本冲突', '来源不可用', '额度限制', '账号切换', '组件状态'];
 
 /** Fixed synthetic clock so mock dates, weeks and expiry warnings are reproducible. */
@@ -54,7 +62,7 @@ export default function MockWorkbench() {
   // Every account-epoch teardown (switch, revoke button, AUTH_REVOKED event) retires the leases the
   // outgoing account still holds, including a locally stopped capture whose stop was never confirmed.
   const account = runtime.state.account;
-  const outgoing = useRef<{ account: 'A' | 'B' | null; epoch: number }>({ account, epoch: scopeEpoch });
+  const outgoing = useRef<{ account: 'A' | 'B' | 'C' | null; epoch: number }>({ account, epoch: scopeEpoch });
   useEffect(() => {
     const previous = outgoing.current;
     if (previous.epoch !== scopeEpoch && previous.account) releaseMockAccountLeases(previous.account);
@@ -78,7 +86,7 @@ function MockWorkbenchContent({ runtime }: { runtime: ReturnType<typeof useMockR
   // service is reachable (02 §9 ConnectivityPort). Real reachability is per request.
   const { scenario, active, account, epoch, flows } = runtime.state;
   const { acceptAccountResponse, isCurrent } = runtime;
-  const api = useMemo(() => createApiClient({ epoch, isCurrent }), [epoch, isCurrent]);
+  const api = useMemo(() => createApiClient({ epoch, isCurrent }, { csrfToken: mockCsrfToken }), [epoch, isCurrent]);
   // This component remounts per account epoch, so drafts, pending stops and the feed never cross accounts.
   const [classroomShell] = useState(() => createMockClassroomShell(runtime, () => MOCK_NOW));
   const [feed] = useState(createTranscriptFeed);
@@ -137,6 +145,13 @@ function MockWorkbenchContent({ runtime }: { runtime: ReturnType<typeof useMockR
       return data;
     },
   });
+  // Same cache entry as the pages' useMe: the role decides whether the operations entry exists at all.
+  const me = useQuery({ queryKey: ['account', `${account}:${epoch}`, 'me'], enabled: account !== null, queryFn: ({ signal }) => api.me(signal) });
+  const nav = me.data?.role === 'admin' && !me.isError ? [...baseNav, adminNav] : baseNav;
+  const adminId = me.data?.role === 'admin' && !me.isError ? me.data.id : null;
+  const adminIdRef = useRef(adminId);
+  adminIdRef.current = adminId;
+  const adminReauth = useMemo(() => createHttpAdminReauth(api, () => adminIdRef.current), [api]);
   const apiStatus = !account ? 'revoked' : coursesQuery.isPending ? 'loading' : coursesQuery.isError ? 'error' : 'ready';
   // MOCK-01 is a first-time account with no records; every other scenario uses the seeded records.
   const dataset = scenario === '01' ? 'empty' : 'seeded';
@@ -166,6 +181,8 @@ function MockWorkbenchContent({ runtime }: { runtime: ReturnType<typeof useMockR
     onQuickStart: () => start(), classroomRevoked: runtime.state.eventProjection.classroomDeleted,
     classroom: classroomShell,
     revocation,
+    // HTTP 0.4.0: POST /auth/reauth with the admin purpose, answered by the Mock like the real service.
+    adminReauth,
   };
   const start = () => {
     // The demo quick start always uses the PR-09a demo classroom, never a PR-10a classroom bound earlier.
@@ -185,7 +202,7 @@ function MockWorkbenchContent({ runtime }: { runtime: ReturnType<typeof useMockR
   const clearQueries = () => { void queryClient.cancelQueries(); queryClient.clear(); };
   const switchAccount = () => { runtime.switchAccount(); setMockAccount(runtime.getState().account); clearQueries(); navigate('/dashboard'); };
   const revokeAccount = () => { runtime.revokeAccount(); setMockAccount(null); clearQueries(); navigate('/dashboard'); };
-  const loginAccount = (next: 'A' | 'B') => { runtime.loginAccount(next); setMockAccount(next); clearQueries(); navigate('/dashboard'); };
+  const loginAccount = (next: 'A' | 'B' | 'C') => { runtime.loginAccount(next); setMockAccount(next); clearQueries(); navigate('/dashboard'); };
   const runEventScript = () => {
     runtime.runEventScript(eventScript);
     setEventStep(0);
@@ -196,8 +213,13 @@ function MockWorkbenchContent({ runtime }: { runtime: ReturnType<typeof useMockR
   };
   const emitFeed = (event: ClassroomOSWebV1EventEnvelope | null) => {
     if (!event) return;
+    // Transcript events pass the simulated server's ASR admission, like scripted ones.
+    if (event.type === 'transcript.partial' || event.type === 'transcript.final') { runtime.deliverTranscript(event); return; }
     runtime.getEventClient().emit(event);
   };
+  // One admission rule for the feed and the event scripts: the platform ASR switch (PR-11b).
+  const { setTranscriptAdmission } = runtime;
+  useEffect(() => { setTranscriptAdmission(mockAsrAdmits); }, [setTranscriptAdmission]);
   const feedClassId = active ? boundClassId : null;
   // Durable receipts, including ones that arrive after the stop, reach the Mock server per epoch.
   const durableUploads = runtime.state.durableUploads;
@@ -293,11 +315,11 @@ function MockWorkbenchContent({ runtime }: { runtime: ReturnType<typeof useMockR
     <a className={styles.skipLink} href="#main-content">跳至主要内容</a>
     <header className={styles.header}><NavLink to="/dashboard" className={styles.brand} data-testid="brand" aria-label="Classroom OS 首页"><span className={styles.brandMark}/></NavLink>
       <nav className={styles.desktopNav} data-testid="desktop-nav" aria-label="主导航">{nav.map(({to,text,DesktopIcon}) => <NavLink key={to} to={to === '/classrooms' ? liveTarget : to} aria-label={text} title={text} className={({isActive}: {isActive: boolean}) => `${styles.navItem} ${isActive ? styles.navActive : ''}`}><DesktopIcon size={18}/></NavLink>)}</nav>
-      <div className={styles.headerActions} data-testid="header-actions"><LinkWithIcon to="/search" label="搜索"><IconSearch size={20}/></LinkWithIcon><LinkWithIcon to="/notifications" label="通知"><IconBell size={20}/></LinkWithIcon><NavLink className={styles.avatar} aria-label="外观设置" to="/settings/appearance">{account === 'A' ? '林' : account === 'B' ? '陈' : '·'}</NavLink></div>
+      <div className={styles.headerActions} data-testid="header-actions"><LinkWithIcon to="/search" label="搜索"><IconSearch size={20}/></LinkWithIcon><LinkWithIcon to="/notifications" label="通知"><IconBell size={20}/></LinkWithIcon><NavLink className={styles.avatar} aria-label="外观设置" to="/settings/appearance">{account === 'A' ? '林' : account === 'B' ? '陈' : account === 'C' ? '管' : '·'}</NavLink></div>
     </header>
     <div className={styles.devBanner}><span className={styles.devDot}/> 开发预览 · 合成数据 <span className={styles.devDivider}>/</span> <span>{apiStatus === 'ready' ? 'Mock API 已连接' : apiStatus === 'loading' ? 'Mock API 连接中' : apiStatus === 'revoked' ? '模拟会话已撤销' : 'Mock API 不可用'}</span><NavLink to="/__dev/catalog">组件目录 ↗</NavLink></div>
-    {!account ? <main id="main-content" className={styles.page}><section className={`${styles.panel} ${styles.empty}`}><h1>模拟会话已撤销</h1><p>已清除模拟账号内容、事件订阅和采集状态。</p><button type="button" className={styles.primaryButton} onClick={() => loginAccount('A')}>进入模拟账号 A</button><button type="button" className={styles.secondaryButton} onClick={() => loginAccount('B')}>进入模拟账号 B</button></section></main> :
-    <AppDataProvider value={appData}><Routes><Route path="/" element={<Navigate to="/dashboard" replace/>}/><Route path="/dashboard" element={<Dashboard/>}/><Route path="/__dev/catalog" element={<main id="main-content" className={styles.page}><Catalog theme={theme === 'system' ? (systemNight ? 'night' : 'day') : theme} onThemeChange={setTheme} onStopCapture={active ? stopFromShell : undefined}/></main>}/><Route path="/settings" element={<Navigate to="/settings/appearance" replace/>}/><Route path="/settings/:section" element={<Settings theme={theme} setTheme={setTheme} effects={effects} setEffects={setEffects}/>}/><Route path="/courses" element={<CourseList/>}/><Route path="/courses/new" element={<CourseFormPage/>}/><Route path="/courses/:courseId/edit" element={<CourseFormPage/>}/><Route path="/courses/:courseId" element={<CourseRedirect/>}/><Route path="/courses/:courseId/:tab" element={<CourseDetail/>}/><Route path="/semesters/new" element={<SemesterFormPage/>}/><Route path="/semesters/:semesterId/edit" element={<SemesterFormPage/>}/><Route path="/classrooms" element={<ClassroomEntry/>}/><Route path="/classrooms/mock/live" element={<Navigate to={liveTarget} replace/>}/><Route path="/classrooms/:classId" element={<ClassroomRedirect/>}/><Route path="/classrooms/:classId/live" element={<PerClassroom page={ClassroomLive}/>}/><Route path="/classrooms/:classId/processing" element={<PerClassroom page={ClassroomProcessing}/>}/><Route path="/classrooms/:classId/record" element={<PerClassroom page={ClassroomRecord}/>}/><Route path="/classrooms/:classId/review" element={<PerClassroom page={ClassReview}/>}/><Route path="/review/items/:documentId" element={<PerDocument/>}/><Route path="/review/*" element={<ReviewHub notice={scenario === '10' ? <section className={styles.panel}><h2>模拟只读资料</h2><p>合成的学习资料示例：额度限制时，已有资料仍可阅读。</p><p>下方资料库照常可用。</p><p>只有需要新额度的操作（生成、重新转写）会被拒绝；阅读和标记理解状态不调用模型，也不会发起收费请求。</p></section> : undefined}/>}/><Route path="/tasks" element={<Placeholder title="待处理" detail="查看需要关注的任务。"/>}/><Route path="/notifications" element={<Placeholder title="通知" detail="查看学习动态和提醒。"/>}/><Route path="/search" element={<Placeholder title="搜索" detail="搜索功能将在后续实现。"/>}/><Route path="*" element={<Placeholder title="页面不可用" detail="该页面不存在或尚未开放。"/>}/></Routes></AppDataProvider>}
+    {!account ? <main id="main-content" className={styles.page}><section className={`${styles.panel} ${styles.empty}`}><h1>模拟会话已撤销</h1><p>已清除模拟账号内容、事件订阅和采集状态。</p><button type="button" className={styles.primaryButton} onClick={() => loginAccount('A')}>进入模拟账号 A</button><button type="button" className={styles.secondaryButton} onClick={() => loginAccount('B')}>进入模拟账号 B</button><button type="button" className={styles.secondaryButton} onClick={() => loginAccount('C')}>进入模拟管理员 C</button></section></main> :
+    <AppDataProvider value={appData}><Routes><Route path="/" element={<Navigate to="/dashboard" replace/>}/><Route path="/dashboard" element={<Dashboard/>}/><Route path="/__dev/catalog" element={<main id="main-content" className={styles.page}><Catalog theme={theme === 'system' ? (systemNight ? 'night' : 'day') : theme} onThemeChange={setTheme} onStopCapture={active ? stopFromShell : undefined}/></main>}/><Route path="/settings" element={<Navigate to="/settings/appearance" replace/>}/><Route path="/settings/:section" element={<Settings theme={theme} setTheme={setTheme} effects={effects} setEffects={setEffects}/>}/><Route path="/courses" element={<CourseList/>}/><Route path="/courses/new" element={<CourseFormPage/>}/><Route path="/courses/:courseId/edit" element={<CourseFormPage/>}/><Route path="/courses/:courseId" element={<CourseRedirect/>}/><Route path="/courses/:courseId/:tab" element={<CourseDetail/>}/><Route path="/semesters/new" element={<SemesterFormPage/>}/><Route path="/semesters/:semesterId/edit" element={<SemesterFormPage/>}/><Route path="/classrooms" element={<ClassroomEntry/>}/><Route path="/classrooms/mock/live" element={<Navigate to={liveTarget} replace/>}/><Route path="/classrooms/:classId" element={<ClassroomRedirect/>}/><Route path="/classrooms/:classId/live" element={<PerClassroom page={ClassroomLive}/>}/><Route path="/classrooms/:classId/processing" element={<PerClassroom page={ClassroomProcessing}/>}/><Route path="/classrooms/:classId/record" element={<PerClassroom page={ClassroomRecord}/>}/><Route path="/classrooms/:classId/review" element={<PerClassroom page={ClassReview}/>}/><Route path="/review/items/:documentId" element={<PerDocument/>}/><Route path="/review/*" element={<ReviewHub notice={scenario === '10' ? <section className={styles.panel}><h2>模拟只读资料</h2><p>合成的学习资料示例：额度限制时，已有资料仍可阅读。</p><p>下方资料库照常可用。</p><p>只有需要新额度的操作（生成、重新转写）会被拒绝；阅读和标记理解状态不调用模型，也不会发起收费请求。</p></section> : undefined}/>}/><Route path="/admin" element={<Navigate to="/admin/users" replace/>}/><Route path="/admin/users" element={<AdminUsers/>}/><Route path="/admin/invites" element={<AdminInvites/>}/><Route path="/admin/usage" element={<AdminUsage/>}/><Route path="/admin/runtime" element={<AdminRuntime/>}/><Route path="/tasks" element={<Placeholder title="待处理" detail="查看需要关注的任务。"/>}/><Route path="/notifications" element={<Placeholder title="通知" detail="查看学习动态和提醒。"/>}/><Route path="/search" element={<Placeholder title="搜索" detail="搜索功能将在后续实现。"/>}/><Route path="*" element={<Placeholder title="页面不可用" detail="该页面不存在或尚未开放。"/>}/></Routes></AppDataProvider>}
     {account && <aside className={styles.scenarioPanel} aria-label="开发模拟控制"><label htmlFor="scenario">模拟场景</label><select id="scenario" value={scenario} onChange={event => chooseScenario(event.target.value)}>{scenarioNames.map((name,index) => { const number = String(index + 1).padStart(2,'0'); return <option key={number} value={number}>MOCK-{number} · {name}</option>; })}</select><button onClick={switchAccount} type="button">切换模拟账号 {account} <IconChevronRight size={14}/></button><button onClick={revokeAccount} type="button">撤销模拟会话</button><label><input type="checkbox" checked={mockOffline} onChange={event => toggleOffline(event.target.checked)}/> 模拟离线</label><ScenarioNotice scenario={scenario}/><ScenarioView key={scenario} scenario={scenario} localWrite={runtime.state.localWriteResult} localRecord={runtime.state.mockLocalRecord} vaultLocked={runtime.state.vaultLocked} localHistory={runtime.state.localRecordHistory} writeLocal={runtime.simulateLocalWrite} reconcileLocal={runtime.reconcileLocalWrite} lockVault={runtime.lockMockVault} unlockVault={runtime.unlockMockVault} stopCapture={stopFromShell} checkRetry={runtime.requestAiRetry}/>
       <div className={styles.scenarioDetail}><label htmlFor="event-script">模拟事件脚本</label>{' '}<select id="event-script" value={eventScript} onChange={event => { setEventScript(event.target.value as EventScriptName); setEventStep(0); }}><option value="transcript">临时与正式转写</option><option value="upload">帧确认与持久上传</option><option value="taskUnknown">AI 结果未知</option><option value="deletion">原音撤权</option><option value="classroomDeletion">课堂撤权</option><option value="leaseLoss">采集租约失效</option><option value="revocation">会话撤销</option></select>{' '}<button type="button" onClick={runEventScript}>运行模拟事件</button>{' '}<button type="button" onClick={runEventStep}>模拟下一步事件</button>{runtime.state.eventProjection.leaseLost && !runtime.state.eventProjection.classroomDeleted && <button type="button" onClick={() => runtime.acquireMockLease()}>重新获取模拟租约</button>}<div role="region" aria-label="模拟事件结果" data-port-capture={runtime.state.eventProjection.portCaptureState} data-port-upload-pending={String(runtime.state.eventProjection.uploadPending)}><p>正式片段：{runtime.state.eventProjection.finalText ?? '无'}；临时片段：{runtime.state.eventProjection.partial ?? '无'}</p><p>帧确认：{runtime.state.eventProjection.frameReceived ? '已收到' : '未收到'}；持久上传：{runtime.state.eventProjection.chunkDurable ? '已确认' : '未确认'}</p><p>当前课堂 AI 结果：{flows.ai === 'unknown' ? '未知，可能已收费' : flows.ai}；原音撤权：{runtime.state.eventProjection.audioDeleted ? '已撤权' : '无'}；课堂撤权：{runtime.state.eventProjection.classroomDeleted ? '已撤权' : '无'}；采集租约：{runtime.state.eventProjection.leaseLost ? '已失效' : '正常'}</p><p>全部课堂的未知收费风险：{unknownRiskCount} 项{unknownRiskCount > 0 ? '，请先核对，不能自动重试' : ''}</p></div></div>
       <section className={styles.scenarioDetail} aria-label="课堂模拟控制"><strong>课堂模拟（PR-10a）</strong>
@@ -307,6 +329,10 @@ function MockWorkbenchContent({ runtime }: { runtime: ReturnType<typeof useMockR
         <div aria-label="重新转写模拟（PR-10b）"><strong>重新转写（PR-10b）</strong>{' '}<button type="button" disabled={!routeClassId} onClick={() => routeClassId && setMockRetranscribe({ classId: routeClassId, audio: 'ok' })}>原音正常</button>{' '}<button type="button" disabled={!routeClassId} onClick={() => routeClassId && setMockRetranscribe({ classId: routeClassId, audio: 'expired' })}>原音到期</button>{' '}<button type="button" disabled={!routeClassId} onClick={() => routeClassId && setMockRetranscribe({ classId: routeClassId, audio: 'deleted' })}>原音撤权</button>
           {' '}<button type="button" onClick={() => setMockRetranscribe({ quota: 'ok' })}>额度正常</button>{' '}<button type="button" onClick={() => setMockRetranscribe({ quota: 'session' })}>本课需审批</button>{' '}<button type="button" onClick={() => setMockRetranscribe({ quota: 'month' })}>本月额度不足</button>{' '}<button type="button" disabled={!routeClassId} onClick={() => routeClassId && setMockRetranscribe({ classId: routeClassId, approve: true })}>批准追加一次</button></div>
         <p>只作用于当前采集或当前页面的课堂；不调用任何真实服务。</p>
+        <div aria-label="运营后台模拟（PR-11b）"><strong>运营后台（PR-11b）</strong>{' '}<button type="button" onClick={() => loginAccount('C')}>登录模拟管理员 C</button>{' '}<button type="button" onClick={() => loginAccount('A')}>回到学生 A</button>
+          {' '}<button type="button" onClick={() => { setMockAdminHealth('healthy'); void queryClient.invalidateQueries(); }}>运行正常</button>{' '}<button type="button" onClick={() => { setMockAdminHealth('degraded'); void queryClient.invalidateQueries(); }}>部分降级</button>{' '}<button type="button" onClick={() => { setMockAdminHealth('stalled'); void queryClient.invalidateQueries(); }}>处理停滞</button>
+          {' '}<button type="button" onClick={() => { setMockAdminMfa(false); void queryClient.invalidateQueries(); }}>管理员未启用 MFA</button>{' '}<button type="button" onClick={() => { setMockAdminMfa(true); void queryClient.invalidateQueries(); }}>管理员已启用 MFA</button></div>
+        <p>再认证使用合成凭据：任意非空密码，任意 6 位验证码（000000 表示验证码错误）。</p>
       </section>
       <section className={styles.scenarioDetail} aria-label="模拟上传历史"><strong>模拟上传历史</strong>{runtime.state.uploadHistory.length === 0 ? <p>暂无模拟分片。</p> : <ol>{runtime.state.uploadHistory.map(item => <li key={`${item.captureEpochId}:${item.chunkId}:${item.seq}`} data-chunk-id={item.chunkId} data-capture-epoch={item.captureEpochId} data-status={item.status}><span>分片 {item.seq} · {item.status === 'durable' ? '已持久确认' : item.canAccept ? '待持久确认' : '已失效，无法确认'} · 帧确认{item.frameReceived ? '已收到' : '未收到'}{item.chunkId === runtime.state.captureScope?.chunkId ? ' · 当前采集' : ' · 历史采集'}</span>{item.status === 'pending' && item.canAccept && item.chunkId !== runtime.state.captureScope?.chunkId && <> <button type="button" onClick={() => runtime.runHistoricalDurable(item.chunkId)}>模拟迟到持久回执</button></>}</li>)}</ol>}</section>
     </aside>}
