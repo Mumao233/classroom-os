@@ -44,16 +44,17 @@ function Health() {
 
 /**
  * Editable configured switches (HTTP 0.4.0). Only members are edited, never the ASR/AI group fields, so a
- * PATCH never mixes a group with its member. `new_capture_enabled` and the active-user stage are shown
- * read-only: the service refuses changing them for now (503).
+ * PATCH never mixes a group with its member. `new_capture_enabled` is enforced at capture admission
+ * (decision A, 2026-11-27); the active-user stage stays read-only (the service refuses changing it, 503).
  */
-const switchKeys = ['billing_enabled', 'registration_enabled', 'asr_streaming_enabled', 'asr_filetrans_enabled', 'ai_interaction_enabled', 'ai_summary_enabled'] as const;
+const switchKeys = ['billing_enabled', 'registration_enabled', 'new_capture_enabled', 'asr_streaming_enabled', 'asr_filetrans_enabled', 'ai_interaction_enabled', 'ai_summary_enabled'] as const;
 type SwitchDraft = Pick<S['AdminSwitches'], typeof switchKeys[number]>;
 /** Only the editable fields: the server revision is tracked apart from the draft and never edited. */
 const draftOf = (value: S['AdminSwitches']): SwitchDraft => Object.fromEntries(switchKeys.map(key => [key, value[key]])) as SwitchDraft;
 const switchFields: ReadonlyArray<{ key: typeof switchKeys[number]; label: string; hint: string }> = [
   { key: 'billing_enabled', label: '收费总闸', hint: '关闭后不再接收任何新的收费任务（转写、重新转写和 AI）；已提交的任务按原规则核对，已有内容仍可阅读。' },
   { key: 'registration_enabled', label: '开放邀请注册', hint: '关闭后已发出的邀请也不能注册新账号，已有账号不受影响。' },
+  { key: 'new_capture_enabled', label: '新采集', hint: '关闭后不能开始新的课堂采集，也不能换到其他课堂或在中断过久后重新开始；正在进行的这节课可以继续、换设备接着采集或暂停后恢复。' },
   { key: 'asr_streaming_enabled', label: '实时转写', hint: '关闭后不再开始新的实时转写；已在进行的流按服务端规则结束，已有字幕保留。' },
   { key: 'asr_filetrans_enabled', label: '重新转写', hint: '关闭后不再接收新的重新转写任务。' },
   { key: 'ai_interaction_enabled', label: 'AI 问答与讲解', hint: '关闭后不再接收新的提问和讲解请求；已生成的内容仍可阅读。' },
@@ -86,7 +87,6 @@ function Switches() {
         <span><strong>{field.label}</strong><br /><span className={styles.hint}>{field.hint}</span></span>
       </label>)}
       <dl className={styles.dl}>
-        <dt>新采集</dt><dd data-testid="new-capture-switch">{shown.new_capture_enabled ? '开' : '关'}（暂不可修改：采集准入尚未接入这个开关）</dd>
         <dt>活跃用户阶段</dt><dd data-testid="active-user-stage">{shown.max_active_users} 人</dd>
         <dt>转写 / AI 汇总</dt><dd data-testid="switch-groups">转写{groupState(shown.asr_streaming_enabled, shown.asr_filetrans_enabled)} · AI {groupState(shown.ai_interaction_enabled, shown.ai_summary_enabled)}</dd>
       </dl>
