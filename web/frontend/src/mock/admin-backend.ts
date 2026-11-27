@@ -18,7 +18,6 @@ type SwitchConfig = Omit<S['AdminSwitches'], 'asr_enabled' | 'ai_enabled'>;
 export type ServiceSwitch = 'asr_streaming_enabled' | 'asr_filetrans_enabled' | 'ai_interaction_enabled' | 'ai_summary_enabled';
 /** Proof target per operation (decision PR11B-CONTRACT-DECISION-20261124 §1). */
 const ACCOUNT_TARGETED: ReadonlySet<AdminOperationId> = new Set(['adminAdjustQuota', 'adminUpdateSwitches', 'adminCreateInvitation']);
-const BILLING_WRITES: ReadonlySet<AdminOperationId> = new Set(['adminAdjustQuota', 'adminUpdateSwitches']);
 export const proofTarget = (operationId: AdminOperationId, actorId: string, pathId: string | null) =>
   ACCOUNT_TARGETED.has(operationId) ? { kind: 'account', id: actorId } : { kind: operationId === 'adminUpdateUser' ? 'user' : 'invitation', id: pathId ?? '' };
 const CANONICAL_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -302,8 +301,9 @@ export function createAdminBackend(host: AdminHost, accountUsers: S['User'][]) {
     }
     if (!proofValid(false) || !proof) return fail(403, 'REAUTH_REQUIRED', '请重新验证密码和验证码');
     const reply = run();
-    // A rejected billing write is rolled back by the producer: the proof stays unused and no receipt exists.
-    if (BILLING_WRITES.has(operationId) && reply.status >= 400) return reply;
+    // A rejected admin write is rolled back by the producer (billing_api.apply_admin returns before consuming the
+    // proof or storing a receipt): the proof stays usable and a retry with the same key is checked afresh.
+    if (reply.status >= 400) return reply;
     proof.used = true;
     // The one-time token of an invitation is never kept in a receipt (frozen endpoint rule).
     receipts.set(scope, { body: serialized, reply: secret && reply.status < 300 ? SECRET_ISSUED : reply });

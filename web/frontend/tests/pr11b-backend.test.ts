@@ -539,3 +539,22 @@ describe('PR-11b #38 review round 1 regressions (mock)', () => {
     expect(backend.asrAdmits('A', ROOM, STREAM, 'run-2')).toBe(false);
   });
 });
+
+describe('PR-11b rejected identity writes are rolled back like the producer', () => {
+  it('a revision conflict keeps the proof and stores no receipt, so a retry reports the latest revision', () => {
+    const { backend, call, write, newKey } = harness();
+    const key = newKey();
+    const body = { base_revision: 5, status: 'disabled', reason: '合成：冲突重试' };
+    const proof = backend.issueAdminProof('C', { operationId: 'adminUpdateUser', targetId: B_ID, idempotencyKey: key, body }, 'synthetic-password', '123456');
+    if ('error' in proof) throw new Error(proof.error);
+    const first = call('C', 'PATCH', `/admin/users/${B_ID}`, body, '', key, proof.token);
+    expect(err(first)).toBe('REVISION_CONFLICT');
+    expect((first.body as S['Error']).error.current_revision).toBe(1);
+    // Another administrator changes the user in between.
+    expect(write('adminUpdateUser', B_ID, 'PATCH', `/admin/users/${B_ID}`, { base_revision: 1, status: 'disabled', reason: '合成：中间修改' }).reply.status).toBe(200);
+    // Same key, body and still-unused proof: evaluated afresh against the current revision, not a cached conflict.
+    const retry = call('C', 'PATCH', `/admin/users/${B_ID}`, body, '', key, proof.token);
+    expect(err(retry)).toBe('REVISION_CONFLICT');
+    expect((retry.body as S['Error']).error.current_revision).toBe(2);
+  });
+});
