@@ -69,6 +69,14 @@
 - **Claude / Draft #38** 按表中映射对接可用生产者，更新未挂载态与 Mock。等待独立复审和同版联调后再开放相应操作。
 - PR-10a 先前把 PR-07a 引用字段暂排在 0.4.0 窗口。本次仅交付这三项后台裁决，引用字段仍由独立候选负责，公开版本号待该批实际冻结时分配。
 
+### 后续 · 关闭新采集后的租约处理（2026-11-27）
+
+首次采集和停止后的再次采集会创建 epoch。现有接管同样创建 epoch，并按账号锁定未释放的租约，在 `confirm_takeover` 为真且 `expected_lease_id` 匹配时替换它。持有旧租约的设备可以在租约过期后接管，也可以接管到另一课堂。暂停后恢复会在同一事务中释放原租约并创建新 epoch。续租、有效回执重放和已采集数据的读取各有独立路径。
+
+两种处理会产生不同的用户可见结果。保留全部既有接管时，关闸后持有旧租约的用户仍可以开始另一课堂的采集。仅保留同课堂、未过期租约的接管时，这两类原本有效的接管会被拒绝。建议关闸后允许同课堂有效租约续租、接管和暂停恢复，阻止新课堂采集与过期租约重新开始；该例外范围待负责人确认。确认前沿用额外复审的保护，GET 返回存储值，PATCH 尝试改变 `new_capture_enabled` 时整笔返回 `503 SERVICE_DISABLED`；同值 PATCH 沿用 CAS。此次未改采集准入或公开契约。
+
+[创建、接管与暂停恢复](../../../web/backend/classroom_web/application/capture.py) · [租约锁与课堂范围](../../../web/backend/classroom_web/infrastructure/capture_repository.py) · [采集回归](../../../web/backend/tests/integration/test_capture_recovery.py)
+
 [HTTP 契约](../architecture/contracts/openapi.json) · [合成正反例](../architecture/contracts/examples.json) · [上次契约裁决](PR10A-CONTRACT-DECISION-20261122.md)
 
 ## 第 0 轮独立复审核实 · 2026-11-24
