@@ -157,6 +157,8 @@ def create_app(*,auth,contract,origin,identity=None,business=None,websocket_admi
     sync_paths = SYNC_PATHS if sync is not None else set()
     if billing_admin is not None and auth.admin_reauth is not None and auth.admin_reauth is not billing_admin:
         raise ValueError('an existing admin reauth delegate must be coordinated')
+    if billing_admin is not None:
+        billing_admin.require_current_schema()
     workers=ThreadPoolExecutor(max_workers=64,thread_name_prefix='auth-ingress');slots=threading.BoundedSemaphore(64)
     @asynccontextmanager
     async def lifespan(app):

@@ -1,4 +1,5 @@
 """Fixed-function billing gateways. No caller receives secret-table grants."""
+from contextlib import contextmanager
 import json
 import os
 
@@ -11,6 +12,7 @@ from .auth_deadlines import remaining
 
 class PgBillingAdminRepository:
     OPERATIONS = frozenset(('issue_admin_proof', 'apply_admin', 'read_admin'))
+    SQL_REVISION = 'classroom-admin-0.4.0-sql-1'
 
     def __init__(self, url):
         parsed = make_url(url)
@@ -19,24 +21,44 @@ class PgBillingAdminRepository:
                 or any(key.upper().startswith('PG') for key in os.environ)):
             raise ValueError('an explicit restricted billing gateway URL is required')
         self.engine = sa.create_engine(parsed, pool_size=2, max_overflow=0, pool_timeout=1,
-                                       hide_parameters=True, pool_pre_ping=True)
+                                       hide_parameters=True, pool_pre_ping=True, connect_args={'connect_timeout': 5})
+
+    @contextmanager
+    def _connection(self):
+        with self.engine.begin() as connection:
+            connection.execute(sa.text("SET LOCAL statement_timeout='5s'"))
+            connection.execute(sa.text("SET LOCAL lock_timeout='1s'"))
+            safe = connection.scalar(sa.text('''SELECT NOT(rolsuper OR rolbypassrls OR rolcreatedb OR rolcreaterole OR rolinherit)
+                AND NOT EXISTS(SELECT FROM pg_auth_members WHERE member=r.oid)
+                AND NOT EXISTS(SELECT FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+                  WHERE n.nspname IN ('public','identity_control','billing_control') AND c.relkind IN ('r','p')
+                    AND pg_has_role(current_user,c.relowner,'MEMBER'))
+                FROM pg_roles r WHERE rolname=current_user'''))
+            if safe is not True:
+                raise PermissionError('billing gateway requires a separate restricted NOINHERIT login')
+            yield connection
+
+    def require_current_schema(self):
+        """Both SQL assets must be installed before any HTTP admin consumer is mounted."""
+        try:
+            with self._connection() as connection:
+                current = connection.scalar(sa.text("""
+                    SELECT pg_catalog.obj_description(pg_catalog.to_regprocedure(
+                        'billing_api.adjust_quota(uuid,uuid,uuid,bigint,text)'), 'pg_proc') = :revision
+                       AND pg_catalog.obj_description(pg_catalog.to_regprocedure(
+                        'billing_api.apply_admin(jsonb)'), 'pg_proc') = :revision
+                """), {'revision': self.SQL_REVISION})
+        except sa.exc.SQLAlchemyError:
+            current = False
+        if current is not True:
+            raise ValueError(f'Billing admin requires installed SQL revision {self.SQL_REVISION}. See docs/web-alpha/pr11a/README.md')
 
     def call(self, operation, payload):
         if operation not in self.OPERATIONS:
             raise ValueError('unsupported billing gateway operation')
         committing = False
         try:
-            with self.engine.begin() as connection:
-                safe = connection.scalar(sa.text('''SELECT NOT(rolsuper OR rolbypassrls OR rolcreatedb OR rolcreaterole OR rolinherit)
-                    AND NOT EXISTS(SELECT FROM pg_auth_members WHERE member=r.oid)
-                    AND NOT EXISTS(SELECT FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
-                      WHERE n.nspname IN ('public','identity_control','billing_control') AND c.relkind IN ('r','p')
-                        AND pg_has_role(current_user,c.relowner,'MEMBER'))
-                    FROM pg_roles r WHERE rolname=current_user'''))
-                if safe is not True:
-                    raise PermissionError('billing gateway requires a separate restricted NOINHERIT login')
-                connection.execute(sa.text("SET LOCAL statement_timeout='5s'"))
-                connection.execute(sa.text("SET LOCAL lock_timeout='1s'"))
+            with self._connection() as connection:
                 result = connection.scalar(sa.text(f'SELECT billing_api.{operation}(cast(:payload AS jsonb))'),
                                            {'payload': json.dumps(payload)})
                 remaining()

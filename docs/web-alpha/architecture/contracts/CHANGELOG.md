@@ -13,6 +13,7 @@
 - 缓存解锁及候选恢复凭证的设备目标和正文 `device_id` 共用规范小写 UUIDv4，匹配既有缓存写入校验。设备撤销继续按路径原文绑定。
 - 额外复审收紧了 0.4.0 的三个输入规则。缓存解锁和候选恢复的未来写入键与实际写入头均须为规范小写 UUIDv4。`email_bound` 邀请必填 email，`single_use` 邀请须省略 email。管理修订号与额度增量按 JSON 数字的精确十进制值校验，整值小数和指数写法可与整数重放同一操作。
 - 采集准入接入前，开关视图返回 `new_capture_enabled` 的存储值，PATCH 尝试改变该值时整笔返回 `503 SERVICE_DISABLED`。开关快照按管理员、操作和写入键重放。课前准备页按额度桶展示月度余额，组摘要仅用于提示整组暂停。
+- PR-11b 后端对齐 35 个已实现写操作的 `Idempotency-Key`。采集、媒体、删除、导入导出、转写、任务、复习和同步中使用 `IdempotencyKeyV4` 的操作要求规范小写 UUIDv4。客户端可继续使用 `crypto.randomUUID()`。管理写入和 `POST /auth/reauth` 等使用通用头的操作继续接受规范 UUIDv7。`reconcileTask` 的 Filetrans 核对分支也接受该格式。
 
 [三项裁决、兼容窗口和验证](../../coordination/PR11B-CONTRACT-DECISION-20261124.md)
 

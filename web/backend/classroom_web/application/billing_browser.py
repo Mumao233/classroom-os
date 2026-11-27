@@ -77,6 +77,9 @@ class BillingAdmin:
     def __init__(self, auth, database, repository):
         self.auth, self.database, self.repository = auth, database, repository
 
+    def require_current_schema(self):
+        self.repository.require_current_schema()
+
     def _principal(self, ctx, *, write=False):
         if write:
             self.auth.require_csrf(ctx, 'session')

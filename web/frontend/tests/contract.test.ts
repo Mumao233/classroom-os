@@ -28,6 +28,51 @@ describe('approved PR-01 contract examples', () => {
   }
 });
 
+describe('UUIDv4 write keys', () => {
+  type Operation = { operationId: string; parameters?: Array<{ $ref?: string }> };
+  const routes = Object.entries(openapi.paths as Record<string, Record<string, Operation>>)
+    .flatMap(([path, methods]) => Object.entries(methods).map(([method, operation]) => ({
+      path, method: method.toUpperCase(), operation,
+      header: operation.parameters?.map(parameter => openapi.components.parameters[parameter.$ref?.split('/').pop() ?? ''])
+        .find(parameter => parameter?.in === 'header' && parameter.name === 'Idempotency-Key'),
+    })));
+
+  it('matches the writers that enforce UUIDv4 in the backend', () => {
+    const actual = routes.filter(route => route.header?.schema.$ref === '#/components/schemas/CanonicalUuidV4')
+      .map(route => route.operation.operationId);
+    expect(actual.sort()).toEqual([
+      'unlockCache', 'acquireCapture', 'renewCapture', 'pauseCapture', 'resumeCapture', 'stopCapture',
+      'authorizeRecovery', 'prepareAudioChunk', 'putAudioChunk', 'createMediaUpload', 'putMediaUpload',
+      'completeMediaUpload', 'issueMediaAccess', 'deleteSemester', 'deleteCourse', 'deleteClassSession', 'deleteAudio',
+      'createExport', 'previewImport', 'commitImport', 'createAsrStream', 'finishAsrStream', 'prepareGeneration',
+      'executeGeneration', 'retryTask', 'cancelTask', 'adoptTranscriptVersion', 'createPersonalNote',
+      'updateReviewDocument', 'writePersonalRevision', 'adoptReviewRevision', 'createMark', 'updateMark',
+      'updatePreferences', 'syncOperations', 'resolveConflict',
+    ].sort());
+    const backend = createMockBackend();
+    const v4 = 'abcdabcd-abcd-4def-8abc-abcdefabcdef';
+    const v7 = 'abcdabcd-abcd-7def-8abc-abcdefabcdef';
+    for (const { path, method, header } of routes) {
+      if (!header) continue;
+      const validate = ajv.compile({ $ref: 'https://classroom.invalid/openapi' + header.schema.$ref });
+      for (const key of [v4, v7]) {
+        // A stale session stops the request immediately after key validation, before any business handler.
+        const response = backend.handle('A', method, path.replace(/\{[^}]+\}/g, v4), new URLSearchParams(), {}, key, null, -1);
+        expect(response?.status, method + ' ' + path).toBe(validate(key) ? 401 : 422);
+      }
+    }
+  });
+
+  it('binds each future HTTP write key to the same schema as its header', () => {
+    for (const { properties } of openapi.components.schemas.ReauthOperation.oneOf) {
+      const key = properties.candidate_parameters.properties.idempotency_key;
+      if (!key) continue; // The separate student recovery control protocol binds op_id.
+      const route = routes.find(item => item.operation.operationId === properties.purpose.const);
+      expect(key, properties.purpose.const).toEqual(route?.header?.schema);
+    }
+  });
+});
+
 describe('PR-11b admin write and reauthentication contracts', () => {
   it.each([
     ['/admin/users/{user_id}', 'patch', 'adminUpdateUser', 'user'],

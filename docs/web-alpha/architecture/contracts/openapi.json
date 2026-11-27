@@ -1757,7 +1757,7 @@
         "x-idempotency-scope": "authenticated owner + operationId + Idempotency-Key; auth public routes use preauth-session + operationId + key",
         "parameters": [
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -2878,7 +2878,7 @@
             }
           },
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -3328,7 +3328,7 @@
             }
           },
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -3901,7 +3901,7 @@
             }
           },
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -4036,7 +4036,7 @@
             }
           },
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -4112,7 +4112,7 @@
             }
           },
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -4188,7 +4188,7 @@
             }
           },
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -4264,7 +4264,7 @@
             }
           },
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -4340,7 +4340,7 @@
             }
           },
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -4416,7 +4416,7 @@
             }
           },
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -4492,7 +4492,7 @@
             }
           },
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -4654,7 +4654,7 @@
             }
           },
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -4740,7 +4740,7 @@
             }
           },
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -4826,7 +4826,7 @@
             }
           },
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -4961,7 +4961,7 @@
             }
           },
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -5345,7 +5345,7 @@
             }
           },
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -5412,7 +5412,7 @@
         "x-idempotency-scope": "authenticated owner + operationId + Idempotency-Key; auth public routes use preauth-session + operationId + key",
         "parameters": [
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -5488,7 +5488,7 @@
             }
           },
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -5565,7 +5565,7 @@
             }
           },
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -5641,7 +5641,7 @@
             }
           },
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -6091,7 +6091,7 @@
             }
           },
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -6167,7 +6167,7 @@
             }
           },
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -6327,7 +6327,7 @@
             }
           },
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -6498,7 +6498,7 @@
             }
           },
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -6975,7 +6975,7 @@
             }
           },
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -7051,7 +7051,7 @@
             }
           },
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -7446,7 +7446,7 @@
         "x-idempotency-scope": "authenticated owner + operationId + Idempotency-Key; auth public routes use preauth-session + operationId + key",
         "parameters": [
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -7589,7 +7589,7 @@
             }
           },
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -7743,7 +7743,7 @@
             }
           },
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -7819,7 +7819,7 @@
             }
           },
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -7886,7 +7886,7 @@
         "x-idempotency-scope": "authenticated owner + operationId + Idempotency-Key; auth public routes use preauth-session + operationId + key",
         "parameters": [
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -8206,7 +8206,7 @@
             }
           },
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -8273,7 +8273,7 @@
         "x-idempotency-scope": "authenticated owner + operationId + Idempotency-Key; auth public routes use preauth-session + operationId + key",
         "parameters": [
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -8340,7 +8340,7 @@
         "x-idempotency-scope": "authenticated owner + operationId + Idempotency-Key; auth public routes use preauth-session + operationId + key",
         "parameters": [
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -8407,7 +8407,7 @@
         "x-idempotency-scope": "authenticated owner + operationId + Idempotency-Key; auth public routes use preauth-session + operationId + key",
         "parameters": [
           {
-            "$ref": "#/components/parameters/IdempotencyKey"
+            "$ref": "#/components/parameters/IdempotencyKeyV4"
           },
           {
             "$ref": "#/components/parameters/CsrfToken"
@@ -10160,6 +10160,14 @@
         "description": "Existing X-Reauth-Token header, carrying an opaque server-issued proof for the exact purpose, target, candidate parameters and future Idempotency-Key. R3 at most 120 seconds from real verified_at and single-use; R1/R2 use the documented role window. Recheck current session/device/epoch and deadline after all locks. This header cannot grant ordinary admin permissions or authorize an unreviewed operation. Producer generates at least 32 random bytes, canonical unpadded base64url, 43..256 characters; parser decodes/re-encodes and rejects noncanonical or insufficient-byte values. Same token is accepted by control StudentExecutorEvidence via its Secret envelope; shape alone does not prove entropy or authorization."
       },
       "CacheIdempotencyKey": {
+        "name": "Idempotency-Key",
+        "in": "header",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/CanonicalUuidV4"
+        }
+      },
+      "IdempotencyKeyV4": {
         "name": "Idempotency-Key",
         "in": "header",
         "required": true,

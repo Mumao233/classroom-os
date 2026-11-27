@@ -137,7 +137,8 @@ ALTER FUNCTION billing_api.usage_view(timestamptz) OWNER TO classroom_billing_co
 -- Existing identity owner is the only bridge allowed to inspect or consume
 -- password/MFA attestation and bound reauth rows. Gateway logins see JSON only.
 GRANT EXECUTE ON FUNCTION billing_api.with_switch_summaries(jsonb),billing_api.switch_view(),billing_api.apply_switch_body(uuid,uuid,jsonb),
-  billing_api.adjust_quota(uuid,uuid,uuid,bigint,text),billing_api.usage_view(timestamptz) TO classroom_web_session_writer;
+  billing_api.lock_adjustment_key(uuid,uuid),billing_api.adjust_quota(uuid,uuid,uuid,bigint,text),
+  billing_api.usage_view(timestamptz) TO classroom_web_session_writer;
 GRANT INSERT ON public.quota_periods TO classroom_billing_control;
 CREATE FUNCTION billing_api.adjustment_period(b jsonb) RETURNS uuid
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog AS $f$
@@ -289,6 +290,7 @@ ALTER FUNCTION billing_api.issue_admin_proof(jsonb) OWNER TO classroom_web_sessi
 CREATE FUNCTION billing_api.apply_admin(p jsonb) RETURNS jsonb
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog AS $f$
 DECLARE s jsonb;r public.reauth_proofs%ROWTYPE;old public.preauth_receipts%ROWTYPE;
+  legacy public.preauth_receipts%ROWTYPE;adjusted boolean;
   answer jsonb;n timestamptz;uid uuid;action text:=p->>'purpose';b jsonb:=p->'body';q uuid;
   receipt_context text;receipt_result jsonb;op uuid:=(p->>'operation_key')::uuid;target uuid:=(p->>'target_id')::uuid;
   secret boolean:=action IN ('adminCreateInvitation','adminReissueInvitation');
@@ -300,7 +302,14 @@ BEGIN
       WHERE sess.token_hash=p->>'token_hash' AND sess.role='admin' AND sess.revoked_at IS NULL
       ORDER BY u.id FOR UPDATE OF u;
   END IF;
-  s:=identity_api.lock_account(p);
+  IF action='adminAdjustQuota' THEN
+    -- A quota write never changes the actor. validate_session holds the user
+    -- FOR SHARE, compatible with the operator's actor FK; the per-operation
+    -- lock below serializes different sessions even if they select different buckets.
+    s:=identity_api.validate_session(p);
+  ELSE
+    s:=identity_api.lock_account(p);
+  END IF;
   IF s IS NULL OR s->>'role'<>'admin' OR s->>'mfa_level'<>'totp' THEN RETURN jsonb_build_object('error','FORBIDDEN');END IF;
   uid:=(s->>'owner_id')::uuid;
   IF action IS NULL OR target IS NULL OR op IS NULL
@@ -309,7 +318,8 @@ BEGIN
     RETURN jsonb_build_object('error','VALIDATION_FAILED');END IF;
   IF action IN ('adminUpdateSwitches','adminAdjustQuota','adminCreateInvitation') AND target<>uid THEN
     RETURN jsonb_build_object('error','REAUTH_REQUIRED');END IF;
-  receipt_context:=CASE WHEN action='adminAdjustQuota' THEN p->>'token_hash' ELSE uid::text END;
+  IF action='adminAdjustQuota' THEN adjusted:=billing_api.lock_adjustment_key(uid,op);END IF;
+  receipt_context:=uid::text;
   SELECT * INTO old FROM public.preauth_receipts WHERE context_hash=receipt_context AND operation=action
     AND operation_key=op;
   IF NOT FOUND AND action='adminUpdateSwitches' THEN
@@ -318,10 +328,27 @@ BEGIN
     SELECT pr.* INTO old FROM public.auth_sessions sessions JOIN public.preauth_receipts pr
       ON pr.context_hash=sessions.token_hash WHERE sessions.owner_id=uid AND pr.operation=action AND pr.operation_key=op
       ORDER BY pr.created_at,pr.context_hash LIMIT 1;
+  ELSIF action='adminAdjustQuota' THEN
+    -- An old producer could attach another wire commitment to the same ledger
+    -- adjustment from a later session. Never choose a receipt by matching the
+    -- incoming body. Disagreement needs explicit reconciliation.
+    FOR legacy IN SELECT pr.* FROM public.auth_sessions sessions JOIN public.preauth_receipts pr
+        ON pr.context_hash=sessions.token_hash WHERE sessions.owner_id=uid AND pr.operation=action AND pr.operation_key=op
+    LOOP
+      IF old.operation_key IS NULL THEN old:=legacy;
+      ELSIF old.commitment IS DISTINCT FROM legacy.commitment OR old.result IS DISTINCT FROM legacy.result
+          OR old.secret IS DISTINCT FROM legacy.secret THEN
+        RETURN jsonb_build_object('error','RESULT_UNKNOWN');
+      END IF;
+    END LOOP;
+    IF adjusted IS DISTINCT FROM (old.operation_key IS NOT NULL) THEN
+      -- The operator port has no HTTP commitment; a receipt without its ledger
+      -- is also insufficient evidence. Neither case authorizes another write.
+      RETURN jsonb_build_object('error','RESULT_UNKNOWN');
+    END IF;
   END IF;
   IF old.operation_key IS NOT NULL THEN
     IF old.commitment IS DISTINCT FROM p->>'commitment' THEN RETURN jsonb_build_object('error','IDEMPOTENCY_MISMATCH');END IF;
-    IF action='adminAdjustQuota' THEN RETURN old.result;END IF;
   END IF;
   SELECT * INTO r FROM public.reauth_proofs WHERE token_hash=p->>'reauth_hash' AND owner_id=uid FOR UPDATE;
   n:=clock_timestamp();
@@ -332,6 +359,15 @@ BEGIN
     RETURN jsonb_build_object('error','REAUTH_REQUIRED');END IF;
   IF old.operation_key IS NOT NULL THEN
     IF r.consumed_at IS NULL THEN UPDATE public.reauth_proofs SET consumed_at=n WHERE id=r.id;END IF;
+    IF action='adminAdjustQuota' THEN
+      IF old.secret OR old.result IS DISTINCT FROM jsonb_build_object('user_id',b->>'user_id') THEN
+        RETURN jsonb_build_object('error','RESULT_UNKNOWN');END IF;
+      IF old.context_hash<>receipt_context THEN
+        INSERT INTO public.preauth_receipts(context_hash,operation,operation_key,commitment,result,created_at)
+          VALUES(receipt_context,action,op,old.commitment,old.result,old.created_at);
+      END IF;
+      RETURN old.result;
+    END IF;
     IF old.secret THEN RETURN jsonb_build_object('error','SECRET_ALREADY_ISSUED');END IF;
     IF action='adminUpdateUser' THEN RETURN billing_api.admin_user_state((old.result->>'id')::uuid,NULL);END IF;
     IF action='adminRevokeInvitation' THEN
@@ -426,3 +462,4 @@ BEGIN
     END IF;
 END
 $filetrans$;
+COMMENT ON FUNCTION billing_api.apply_admin(jsonb) IS 'classroom-admin-0.4.0-sql-1';

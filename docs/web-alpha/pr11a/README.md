@@ -90,6 +90,24 @@ unknown 和 submitted 的 hold 依据最终计量核对。释放入口会锁定�
 
 需要接入前确认的逻辑模型映射包括配额计数投影、实际 SQL 列名和一次性发送许可表。当前实现从分配/回执账本计算用户计数，平台风险保留受限汇总，避免把累计 usage 重复相加。
 
+### HTTP 0.4.0 管理路由的安装检查与重建
+
+显式注入 `BillingAdmin` 时，应用工厂用配置的受限网关读取 `billing_api.adjust_quota(uuid,uuid,uuid,bigint,text)` 和 `billing_api.apply_admin(jsonb)` 两个函数的版本注释。基础账本和 HTTP 事务都须由 `classroom-admin-0.4.0-sql-1` 这一版安装脚本写入。旧安装、只安装一份 SQL 或数据库不可达都会阻止挂载。给旧函数手工补注释会误报能力。
+
+**先核对已有候选库。** 下例中的 `old_billing_candidate` 和 `new_billing_candidate` 是两个不同的 libpq 测试连接名，执行时替换为环境中已配置的名称。使用能检查所有租户的迁移身份，安排写入暂停窗口。脚本只读检查 `public.quota_periods`，持有表锁至事务结束。若发现上限超过 `9007199254740991`，脚本报错并退出。负责人需在受限副本中核对相应额度行、调整记录和业务依据，显式决定每行的处理并留存记录，然后重新运行检查。
+
+```powershell
+psql -X --set=ON_ERROR_STOP=1 --single-transaction --dbname='service=old_billing_candidate' -f tools/pr11a/check_quota_upgrade.sql
+```
+
+**重建合成库。** 保留旧库和恢复副本，另建独立的空白合成库并按后端既有流程迁至当前 Alembic head。下列命令从仓库根目录执行；两份候选 SQL 同次提交。验收用例 `test_billing_integration.py` 的 `fee_control` 展示了受限网关的授权方式：无角色成员关系的 `LOGIN NOINHERIT` 账号，授予 `billing_api` 的 `USAGE` 及 `issue_admin_proof(jsonb)`、`apply_admin(jsonb)`、`read_admin(jsonb)` 的 `EXECUTE`。新库通过来宾门禁后，才将合成应用的连接配置指向它。
+
+```powershell
+psql -X --set=ON_ERROR_STOP=1 --single-transaction --dbname='service=new_billing_candidate' -f web/backend/classroom_web/infrastructure/billing_schema.sql -f web/backend/classroom_web/infrastructure/billing_integration.sql
+```
+
+带历史账本、回执或未结费用的库继续保留原记录。正式原地升级须将本版函数、权限、索引和额度约束作为前向迁移，在同一维护事务内重新执行全表检查并验证约束。超限额度、无法归属的历史回执和未知费用均需保留供核对。当前候选的重建命令适用于新建合成库。
+
 ## 验收矩阵与证据
 
 | 检查组 | 覆盖 |

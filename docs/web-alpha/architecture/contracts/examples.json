@@ -3504,7 +3504,23 @@
       "schema_pointer": "#/components/parameters/IdempotencyKey/schema",
       "expected_valid": true,
       "value": "abcdabcd-abcd-7def-8abc-abcdefabcdef",
-      "reason": "The version restriction applies only to cache writes."
+      "reason": "A canonical UUIDv7 is valid on routes using the general IdempotencyKey header, including POST /auth/reauth."
+    },
+    {
+      "name": "pr11b_v4_write_header_accepts_v4",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/parameters/IdempotencyKeyV4/schema",
+      "expected_valid": true,
+      "value": "abcdabcd-abcd-4def-8abc-abcdefabcdef",
+      "reason": "Capture acquisition and media upload creation accept a canonical RFC UUIDv4 write key."
+    },
+    {
+      "name": "pr11b_v4_write_header_rejects_v7",
+      "schema_file": "openapi.json",
+      "schema_pointer": "#/components/parameters/IdempotencyKeyV4/schema",
+      "expected_valid": false,
+      "value": "abcdabcd-abcd-7def-8abc-abcdefabcdef",
+      "reason": "Routes with the UUIDv4 write header reject a canonical UUIDv7."
     },
     {
       "name": "pr11b_r3_invite_bound",

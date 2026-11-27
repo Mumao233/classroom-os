@@ -167,6 +167,13 @@ PATCH 只提交有意更改的项，省略项保持原值。一个请求至少�
 
 [采集策略](../../../web/backend/classroom_web/infrastructure/capture_repository.py) · [租约创建](../../../web/backend/classroom_web/application/capture.py) · [开关事务与回执](../../../web/backend/classroom_web/infrastructure/billing_integration.sql) · [HTTP 入站校验](../../../web/backend/classroom_web/entrypoints/http.py) · [课前准备页](../../../web/frontend/src/pages/classroom/ClassroomLive.tsx) · [邀请处理](../../../web/backend/classroom_web/application/identity.py)
 
+## PR #40 已有安装的兼容处理 · 2026-11-27
+
+1. **管理路由挂载。** 显式注入管理服务时，应用用该服务的受限数据库连接，分别读取计费基础 SQL 和管理事务 SQL 的安装版本。两者均须为 `classroom-admin-0.4.0-sql-1`。缺失、旧版或无法核验时，应用工厂在注册路由前拒绝这次组合。仅挂载普通认证的应用可继续使用原入口。安装检查及合成库重建步骤见 [11a 迁移说明](../pr11a/README.md)。
+2. **额度调整重试。** 新回执的主键由管理员 ID、操作和写入键组成。服务从当前会话复核身份和凭证，以完整操作的原始 HMAC 承诺区分重试和改写。同一时刻的不同 `period_start` 文本是不同请求。旧会话回执按原管理员归属查找；原承诺可确定时，同键异体返回 `409 IDEMPOTENCY_MISMATCH`。缺少原承诺或历史记录互相冲突时，以 `503 RESULT_UNKNOWN` 暂停该操作，交由核对账本，禁止再次加额。
+3. **UUIDv4 写入头。** 公开契约将 35 个已实现写操作的 `Idempotency-Key` 指向 `IdempotencyKeyV4`，覆盖采集、媒体、删除、导入导出、转写、任务、复习和同步。客户端须使用规范小写、带连字符的 UUIDv4，既有缓存解锁继续使用专用 v4 头。登录、再认证和六项管理写入继续支持规范小写的其他 UUID 版本；`reconcileTask` 的 Filetrans 分支也接受通用键。共享 v7 正例限定在适用的接口。HTTP 保持 0.4.0。
+4. **存量额度。** 旧安装在升级前须核对所有租户的 `quota_periods.limit_value`。超出 9,007,199,254,740,991 的历史额度由负责人核定处理，保留原账本依据，复核通过后再启用管理路由。新安装在数据库层约束同一上限。
+
 ## VERIFICATION · 2026-11-24
 
 **初版提交 `57fc07e` 的指定门禁已全部通过。** 以下三轮使用同一源码包。第三轮通过冻结检查、候选组合检查、生成物检查、前端契约测试、全量 Vitest 和后端定向 PostgreSQL 测试。前两轮因来宾启动脚本和日志编码中断。第 0 轮复审后的修复另行验证，见本节末尾。

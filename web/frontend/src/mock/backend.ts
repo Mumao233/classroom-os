@@ -1,4 +1,5 @@
 import type { components } from '../generated/openapi';
+import v4WriteKeys from '../generated/uuid-v4-write-keys.json';
 import { advanceTask, ensureDemoClassroom, finishAsr, handleClassroom, expireManifestCursors, persistFinal, projectTask, recordDurable, releaseAccountLeases, releaseLease, revokeAudio, revokeClassroom, seedClassroom, seedHistoricalManifests, setManifestDev, setRetranscribeDev, activeVersionIds, type ClassroomHelpers, type ClassroomHost, type ClassroomStore, type TaskOutcome } from './classroom-backend';
 import { createAdminBackend, type AdminHealthDev, type AdminReauthBinding } from './admin-backend';
 import { addCandidate, handleReview, seedReview, type ReviewHelpers, type ReviewHost, type ReviewStore } from './review-backend';
@@ -17,6 +18,8 @@ export type MockReply = { status: number; body: unknown };
 type ErrorCode = S['Error']['error']['code'];
 
 const FIXED_NOW = '2026-10-28T08:00:00Z';
+const v4WriteRoutes = new Set(v4WriteKeys.routes);
+const uuidV4 = new RegExp(v4WriteKeys.pattern);
 const ids = {
   fall: '11111111-1111-4111-8111-111111111111', spring: '11111111-1111-4111-8111-111111111112',
   la: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1', ds: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2', mp: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3',
@@ -343,6 +346,11 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
 
   function handle(account: MockAccountKey, method: string, path: string, query: URLSearchParams, rawBody: unknown, key: string | null, reauth: string | null = null, generation?: number): MockReply | null {
     const isId = (part: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(part);
+    const parts = path.split('/').filter(Boolean);
+    const route = `${method} /${parts.map(part => (isId(part) ? ':id' : part)).join('/')}`;
+    if (v4WriteRoutes.has(route) && (!key || !uuidV4.test(key))) {
+      return error(422, 'VALIDATION_FAILED', 'Idempotency-Key 必须为规范小写 UUIDv4');
+    }
     if (['POST', 'PATCH', 'PUT', 'DELETE'].includes(method) && (!key || !isId(key))) {
       return error(422, 'VALIDATION_FAILED', 'Idempotency-Key 必须为小写且带连字符的 UUID');
     }
@@ -352,8 +360,6 @@ export function createMockBackend(options: { now?: () => string; newId?: () => s
     // A disabled (or deleting) account's sessions are revoked: every request is unauthenticated from then on.
     if (store.user.status !== 'active' || revokedSessions.has(account)) return error(401, 'UNAUTHENTICATED', '会话已失效');
     const body = (typeof rawBody === 'object' && rawBody !== null && !Array.isArray(rawBody) ? rawBody : {}) as Record<string, unknown>;
-    const parts = path.split('/').filter(Boolean);
-    const route = `${method} /${parts.map(part => (isId(part) ? ':id' : part)).join('/')}`;
     const id = parts.find(isId) ?? '';
     if (parts[0] === 'admin') return admin.handle(store.user.id, method, parts, query, rawBody, key, reauth);
     // HTTP 0.4.0: purpose-bound reauthentication for the admin writes (the Mock serves only those purposes).

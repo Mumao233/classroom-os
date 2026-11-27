@@ -4440,6 +4440,7 @@ export interface components {
         /** @description Existing X-Reauth-Token header, carrying an opaque server-issued proof for the exact purpose, target, candidate parameters and future Idempotency-Key. R3 at most 120 seconds from real verified_at and single-use; R1/R2 use the documented role window. Recheck current session/device/epoch and deadline after all locks. This header cannot grant ordinary admin permissions or authorize an unreviewed operation. Producer generates at least 32 random bytes, canonical unpadded base64url, 43..256 characters; parser decodes/re-encodes and rejects noncanonical or insufficient-byte values. Same token is accepted by control StudentExecutorEvidence via its Secret envelope; shape alone does not prove entropy or authorization. */
         ReauthToken: string;
         CacheIdempotencyKey: components["schemas"]["CanonicalUuidV4"];
+        IdempotencyKeyV4: components["schemas"]["CanonicalUuidV4"];
     };
     requestBodies: never;
     headers: never;
@@ -5324,7 +5325,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                "Idempotency-Key": components["parameters"]["IdempotencyKeyV4"];
                 /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
@@ -5918,7 +5919,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                "Idempotency-Key": components["parameters"]["IdempotencyKeyV4"];
                 /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
@@ -6146,7 +6147,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                "Idempotency-Key": components["parameters"]["IdempotencyKeyV4"];
                 /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
@@ -6448,7 +6449,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                "Idempotency-Key": components["parameters"]["IdempotencyKeyV4"];
                 /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
@@ -6522,7 +6523,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                "Idempotency-Key": components["parameters"]["IdempotencyKeyV4"];
                 /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
@@ -6563,7 +6564,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                "Idempotency-Key": components["parameters"]["IdempotencyKeyV4"];
                 /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
@@ -6604,7 +6605,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                "Idempotency-Key": components["parameters"]["IdempotencyKeyV4"];
                 /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
@@ -6645,7 +6646,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                "Idempotency-Key": components["parameters"]["IdempotencyKeyV4"];
                 /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
@@ -6686,7 +6687,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                "Idempotency-Key": components["parameters"]["IdempotencyKeyV4"];
                 /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
@@ -6727,7 +6728,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                "Idempotency-Key": components["parameters"]["IdempotencyKeyV4"];
                 /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
@@ -6768,7 +6769,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                "Idempotency-Key": components["parameters"]["IdempotencyKeyV4"];
                 /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
@@ -6854,7 +6855,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                "Idempotency-Key": components["parameters"]["IdempotencyKeyV4"];
                 /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
                 /** @description Required for a fenced/retired epoch; authorization binds owner/epoch/manifest/range and is upload-only. */
@@ -6897,7 +6898,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                "Idempotency-Key": components["parameters"]["IdempotencyKeyV4"];
                 /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
                 "Content-Digest": string;
@@ -6939,7 +6940,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                "Idempotency-Key": components["parameters"]["IdempotencyKeyV4"];
                 /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
@@ -7013,7 +7014,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                "Idempotency-Key": components["parameters"]["IdempotencyKeyV4"];
                 /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
@@ -7208,7 +7209,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                "Idempotency-Key": components["parameters"]["IdempotencyKeyV4"];
                 /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
@@ -7249,7 +7250,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                "Idempotency-Key": components["parameters"]["IdempotencyKeyV4"];
                 /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
@@ -7288,7 +7289,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                "Idempotency-Key": components["parameters"]["IdempotencyKeyV4"];
                 /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
@@ -7329,7 +7330,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                "Idempotency-Key": components["parameters"]["IdempotencyKeyV4"];
                 /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
@@ -7370,7 +7371,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                "Idempotency-Key": components["parameters"]["IdempotencyKeyV4"];
                 /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
@@ -7600,7 +7601,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                "Idempotency-Key": components["parameters"]["IdempotencyKeyV4"];
                 /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
@@ -7676,7 +7677,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                "Idempotency-Key": components["parameters"]["IdempotencyKeyV4"];
                 /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
@@ -7717,7 +7718,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                "Idempotency-Key": components["parameters"]["IdempotencyKeyV4"];
                 /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
@@ -7801,7 +7802,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                "Idempotency-Key": components["parameters"]["IdempotencyKeyV4"];
                 /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
@@ -8046,7 +8047,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                "Idempotency-Key": components["parameters"]["IdempotencyKeyV4"];
                 /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
@@ -8107,7 +8108,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                "Idempotency-Key": components["parameters"]["IdempotencyKeyV4"];
                 /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
@@ -8296,7 +8297,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                "Idempotency-Key": components["parameters"]["IdempotencyKeyV4"];
                 /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
@@ -8371,7 +8372,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                "Idempotency-Key": components["parameters"]["IdempotencyKeyV4"];
                 /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
@@ -8448,7 +8449,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                "Idempotency-Key": components["parameters"]["IdempotencyKeyV4"];
                 /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
@@ -8489,7 +8490,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                "Idempotency-Key": components["parameters"]["IdempotencyKeyV4"];
                 /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
@@ -8530,7 +8531,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                "Idempotency-Key": components["parameters"]["IdempotencyKeyV4"];
                 /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
@@ -8702,7 +8703,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                "Idempotency-Key": components["parameters"]["IdempotencyKeyV4"];
                 /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
@@ -8743,7 +8744,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                "Idempotency-Key": components["parameters"]["IdempotencyKeyV4"];
                 /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
@@ -8782,7 +8783,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                "Idempotency-Key": components["parameters"]["IdempotencyKeyV4"];
                 /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
@@ -8821,7 +8822,7 @@ export interface operations {
         parameters: {
             query?: never;
             header: {
-                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+                "Idempotency-Key": components["parameters"]["IdempotencyKeyV4"];
                 /** @description Bound to the specific full session, public preauth or restricted recovery context selected by the route; these contexts cannot substitute for one another. Browser writes also require exact configured Origin/Fetch Metadata. */
                 "X-CSRF-Token": components["parameters"]["CsrfToken"];
             };
